@@ -51,6 +51,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -125,10 +126,10 @@ void verify_cb_config(
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
-            if (!mesh_device->is_local(coord)) {
+            if (!mesh_device->impl().is_local(coord)) {
                 continue;
             }
-            auto* device = mesh_device->get_device(coord);
+            auto* device = mesh_device->impl().get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
                 for (const auto& core_coord : core_range) {
@@ -256,8 +257,8 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
-            if (mesh_device_->is_local(device_coord)) {
-                IDevice* device = mesh_device_->get_device(device_coord);
+            if (mesh_device_->impl().is_local(device_coord)) {
+                IDevice* device = mesh_device_->impl().get_device(device_coord);
                 auto programs = utils::create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
@@ -767,18 +768,18 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     Finish(mesh_device_->mesh_command_queue());
 
     for (const auto& device_coord : devices_0) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_0);
     }
 
     for (const auto& device_coord : devices_1) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
 }

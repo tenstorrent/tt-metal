@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([1, 1, 32, 64], "HC", 0),
         # ([1, 1, 32, 64],    "HC", 0),  # duplicate
         ([1, 16, 32, 512], "HC", 0),
-        ([32, 1, 16, 64], "CN", None),
+        ([32, 1, 16, 64], "CN", 0),
         ([1, 32, 16, 576], "HC", 0),
         ([1, 128, 32, 576], "HC", 0),
         # ([1, 1, 32, 64],    "HC", 0),  # duplicate

@@ -25,7 +25,7 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
-from models.common.modules.tensor_utils import TILE_SIZE
+from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 

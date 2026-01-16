@@ -31,7 +31,7 @@ from models.common.utility_functions import is_blackhole
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 47000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 47000000}],
     indirect=True,
 )
 def test_qwenimage_pipeline_performance(
@@ -216,9 +216,9 @@ def test_qwenimage_pipeline_performance(
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "total_encoding_time": 0.35,
-            "denoising_steps_time": 73.0,
+            "denoising_steps_time": 72.0,
             "vae_decoding_time": 0.65,
-            "total_time": 77,
+            "total_time": 75,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
@@ -285,9 +285,7 @@ def test_qwenimage_pipeline_performance(
             )
             pass_perf_check = False
 
-    # don't fail the test on perf - we're diagnosing
-    if not pass_perf_check:
-        logger.warning("\n".join(assert_msgs))
+    assert pass_perf_check, "\n".join(assert_msgs)
 
     # synchronize all devices
     pipeline.synchronize_devices()

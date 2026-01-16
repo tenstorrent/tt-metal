@@ -11,7 +11,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
-// Include fmt formatting support
 #include <fmt/format.h>
 
 namespace tt::tt_fabric {
@@ -135,6 +134,7 @@ namespace tt::tt_metal {
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using ASICPosition = std::pair<TrayID, ASICLocation>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;

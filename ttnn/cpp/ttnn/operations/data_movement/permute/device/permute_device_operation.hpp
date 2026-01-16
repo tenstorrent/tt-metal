@@ -20,7 +20,7 @@ struct PermuteDeviceOperation {
     struct operation_attributes_t {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
-        const std::optional<float> pad_value;
+        const float pad_value = 0.0f;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -180,5 +180,5 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<float>& pad_value = std::nullopt);
+    float pad_value = 0.0f);
 }  // namespace ttnn::prim

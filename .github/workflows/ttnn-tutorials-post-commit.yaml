@@ -111,7 +111,7 @@ jobs:
         timeout-minutes: 10
         run: |
           cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
-          uv pip install -r tutorials-dev.txt
+          uv pip install --index-strategy unsafe-best-match --no-cache -r tutorials-dev.txt
 
       - name: 🛠️ Install testing utils
         timeout-minutes: 10
@@ -126,7 +126,7 @@ jobs:
           apt-get install -y curl
           source /opt/venv/bin/activate
           ./scripts/install_debugger.sh
-          uv pip install -r ./tools/triage/requirements.txt
+          uv pip install --index-strategy unsafe-best-match --no-cache -r ./tools/triage/requirements.txt
 
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}

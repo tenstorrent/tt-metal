@@ -63,6 +63,7 @@ jobs:
             { name: "tools", cmd: './tests/scripts/run_tools_tests.sh && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=* && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=*', nightly: true, auto-triage: false },  # Only runs on Nightly-L2
             { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor', nightly: true, auto-triage: true },
             { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true, auto-triage: true },
+            { name: "Nightly TTNN university lab examples", cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary', nightly: true, auto-triage: true },
           ]]
     steps:
       - name: Compute tests

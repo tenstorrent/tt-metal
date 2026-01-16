@@ -39,6 +39,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -357,7 +358,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
             for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
                 for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-                    if (!mesh_device_->is_local(MeshCoordinate(logical_y, logical_x))) {
+                    if (!mesh_device_->impl().is_local(MeshCoordinate(logical_y, logical_x))) {
                         continue;
                     }
                     std::vector<uint32_t> dst_vec = {};

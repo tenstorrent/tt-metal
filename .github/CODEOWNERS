@@ -148,9 +148,11 @@ ttnn/ttnn/operations/matmul.py @tenstorrent/metalium-developers-mmfusedreduce @t
 ttnn/ttnn/operations/activations.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/normalization.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/reduction.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
-ttnn/**/kernels/ @tenstorrent/codeowner-bypass # Removes the owners above from owning kernels unless specified afterwards
+ttnn/**/kernels/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass # Removes the owners above from owning kernels unless specified afterwards
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+
+ttnn/examples/**/kernels/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 
 ttnn/cpp/ttnn/deprecated/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @tenstorrent/codeowner-bypass
 

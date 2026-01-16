@@ -83,9 +83,18 @@ class MeshDeviceBinaryStatus:
 
 
 @dataclass
+class MeshWorkloadRuntimeIdEntry:
+    workloadId: int
+    runtimeId: int
+
+
+@dataclass
 class MeshWorkloadData:
     meshWorkloadId: int
     programs: list[MeshWorkloadProgramData]
+    binary_status_per_mesh_device: dict[int, BinaryStatus]
+    name: str = ""
+    parameters: str = ""
 
     @cached_property
     def binaryStatusPerMeshDevice(self) -> list[MeshDeviceBinaryStatus]:
@@ -93,8 +102,6 @@ class MeshWorkloadData:
             MeshDeviceBinaryStatus(meshId=mesh_id, status=status)
             for mesh_id, status in self.binary_status_per_mesh_device.items()
         ]
-
-    binary_status_per_mesh_device: dict[int, BinaryStatus]
 
     def get_device_binary_status(self, mesh_id: int) -> BinaryStatus:
         return self.binary_status_per_mesh_device.get(mesh_id, "notSent")
@@ -334,6 +341,8 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
                 meshWorkloadId=mesh_workload_id,
                 programs=[],
                 binary_status_per_mesh_device={},
+                name="",
+                parameters="",
             )
             if verbose:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
@@ -370,6 +379,17 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
                 startup.print_log(
                     int(info.get("timestamp_ns")),
                     f"Mesh workload {mesh_workload_id} binary status changed to {info.get('status')}",
+                )
+        elif "mesh_workload_set_metadata" in entry:
+            info = entry["mesh_workload_set_metadata"]
+            mesh_workload_id = int(info.get("mesh_workload_id"))
+            if mesh_workload_id in mesh_workloads:
+                mesh_workloads[mesh_workload_id].name = info.get("name", "")
+                mesh_workloads[mesh_workload_id].parameters = info.get("parameters", "")
+            if verbose:
+                startup.print_log(
+                    int(info.get("timestamp_ns")),
+                    f"Mesh workload {mesh_workload_id} metadata set: {info.get('name')}",
                 )
     if verbose:
         print()
@@ -431,11 +451,32 @@ class InspectorLogsData:
 
     @cached_property
     def mesh_workloads(self):
-        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads"])
-        return GetMeshWorkloadResults(meshWorkloads=list(get_mesh_workloads(self.log_directory).values()))
+        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads", "runtimeIds"])
+        return GetMeshWorkloadResults(
+            meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_ids()
+        )
+
+    def _get_runtime_ids(self) -> list[MeshWorkloadRuntimeIdEntry]:
+        """Parse runtime IDs from logs"""
+        yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
+        data = read_yaml(yaml_path)
+        runtime_ids = []
+        for entry in data:
+            if "workload_runtime_id" in entry:
+                info = entry["workload_runtime_id"]
+                runtime_ids.append(
+                    MeshWorkloadRuntimeIdEntry(
+                        workloadId=int(info.get("mesh_workload_id")), runtimeId=int(info.get("runtime_id"))
+                    )
+                )
+        return runtime_ids
 
     def getMeshWorkloads(self):
         return self.mesh_workloads
+
+    def getMeshWorkloadsRuntimeIds(self):
+        GetMeshWorkloadsRuntimeIdsResults = namedtuple("GetMeshWorkloadsRuntimeIdsResults", ["runtimeIds"])
+        return GetMeshWorkloadsRuntimeIdsResults(runtimeIds=self._get_runtime_ids())
 
     @cached_property
     def kernels(self) -> dict[int, KernelData]:
@@ -502,9 +543,11 @@ def main():
     print()
 
     mesh_workloads = get_mesh_workloads(log_directory, verbose=True)
-    print("Mesh Workloads:")
+    print(f"Mesh Workloads: {len(mesh_workloads)} found {mesh_workloads.keys()}")
     for mesh_workload in mesh_workloads.values():
         print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
+        print(f"    Operation Name: {mesh_workload.name}")
+        print(f"    Operation Parameters: {mesh_workload.parameters}")
         print(f"    Programs:")
         for program in mesh_workload.programs:
             print(f"      {program.programId}: {program.coordinates}")

@@ -7,6 +7,10 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
 
 
@@ -152,75 +156,55 @@ class RMSNormSingleCore:
         out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-        # Reader kernel
-        # Note: input_cb and gamma_cb are backed by sharded tensors
-        reader_compile_time_args = [
-            input_cb,
-            scalars_cb,
-            gamma_cb,
-            num_tiles,
-            num_faces,
+        # Named compile-time args for NCRISC (reader)
+        ncrisc_named_compile_time_args = [
+            ("rmsnorm_input_cb", input_cb),
+            ("rmsnorm_scalars_cb", scalars_cb),
+            ("rmsnorm_gamma_cb", gamma_cb),
+            ("rmsnorm_num_tiles", num_tiles),
+            ("rmsnorm_num_faces", num_faces),
         ]
 
-        # Runtime args: epsilon + scalar (no buffer addresses since CBs are backed by sharded tensors)
-        reader_rt_args = []
-        reader_rt_args.append((core, [scalar_packed]))
-
-        reader_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_reader.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=core_grid,
-            compile_time_args=reader_compile_time_args,
-            runtime_args=reader_rt_args,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-
-        # Writer kernel
-        # Note: output_cb is backed by sharded tensor
-        writer_compile_time_args = [
-            output_cb,
-            num_tiles,
+        # Named compile-time args for TRISC (compute)
+        trisc_named_compile_time_args = [
+            ("rmsnorm_input_cb", input_cb),
+            ("rmsnorm_scalars_cb", scalars_cb),
+            ("rmsnorm_interm_cb", interm_cb),
+            ("rmsnorm_gamma_cb", gamma_cb),
+            ("rmsnorm_output_cb", output_cb),
+            ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
+            ("rmsnorm_num_tiles", num_tiles),
+            ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
         ]
 
-        writer_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_writer.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        # Unified kernel descriptor
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_kernel.cpp",
             core_ranges=core_grid,
-            compile_time_args=writer_compile_time_args,
-            config=ttnn.WriterConfigDescriptor(),
-        )
-
-        # Compute kernel
-        compute_compile_time_args = [
-            input_cb,
-            scalars_cb,
-            interm_cb,
-            gamma_cb,
-            output_cb,
-            1 if fp32_dest_acc_en else 0,
-            num_tiles,
-            1 if rsqrt_fast_approx else 0,
-        ]
-        compute_rt_args = []
-        compute_rt_args.append((core, [epsilon_packed]))
-
-        compute_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_compute.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=core_grid,
-            compile_time_args=compute_compile_time_args,
-            runtime_args=compute_rt_args,
-            config=ttnn.ComputeConfigDescriptor(
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_named_compile_time_args=[],
+            trisc_named_compile_time_args=trisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[scalar_packed],
+            trisc_common_runtime_args=[epsilon_packed],
+            trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
             ),
+            unified_compile_time_core_descriptors=[
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_active_core",
+                    core_range=core_grid,
+                    value=1,
+                    other_value=0,
+                ),
+            ],
         )
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=[reader_kernel_descriptor, writer_kernel_descriptor, compute_kernel_descriptor],
+            kernels=unified_kernel.get_kernel_descriptors(),
             cbs=[in_cb_descriptor, scalars_cb_descriptor, interm_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor],
         )
 

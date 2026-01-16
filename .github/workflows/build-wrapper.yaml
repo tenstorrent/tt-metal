@@ -18,16 +18,16 @@ jobs:
       matrix:
         config:
           - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Debug"
           - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
           - version: "24.04"

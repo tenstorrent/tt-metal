@@ -1290,8 +1290,8 @@ void MetalContext::initialize_firmware(
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [build_idx, num_build_states] =
-                    BuildEnvManager::get_instance().get_build_index_and_state_count(core_type_idx, processor_class);
+                auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
+                    core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
                     auto fw_path = BuildEnvManager::get_instance()
                                        .get_firmware_build_state(device_id, core_type_idx, processor_class, riscv_id)

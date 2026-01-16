@@ -40,7 +40,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       publish-artifact:
         required: false
@@ -150,7 +150,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       profile:
         required: false

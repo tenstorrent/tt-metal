@@ -8,6 +8,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "test_one_to_all.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -19,8 +20,8 @@ namespace unit_tests::dm::core_to_all::multicast_schemes {
 
 uint32_t determine_max_grid_dimension(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     uint32_t smaller_dimension =
-        min(mesh_device->get_device(0)->compute_with_storage_grid_size().x,
-            mesh_device->get_device(0)->compute_with_storage_grid_size().y);
+        min(mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x,
+            mesh_device->impl().get_device(0)->compute_with_storage_grid_size().y);
     return (smaller_dimension - 1);
 }
 
@@ -222,7 +223,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle
     bool loopback = false;
     NOC noc_id = NOC::NOC_0;
     uint32_t sub_grid_dimension_size =
-        mesh_device->get_device(0)->arch() == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
+        mesh_device->impl().get_device(0)->arch() == ARCH::WORMHOLE_B0 ? 7 : 9;  // Adjust based on architecture
     unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType multicast_scheme =
         unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType::SenderInGridTopRight;
 

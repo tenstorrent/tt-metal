@@ -87,9 +87,12 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
 std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_position_pinnings(size_t board_size) {
     std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
     // Top left corner: index 0
-    fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+    fixed_asic_position_pinnings.push_back(
+        {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}}, FabricNodeId(MeshId{0}, 0)});
     // Bottom right corner: last device index
-    fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
+    fixed_asic_position_pinnings.push_back(
+        {AsicPosition{tt::tt_metal::TrayID{4}, tt::tt_metal::ASICLocation{1}},
+         FabricNodeId(MeshId{0}, board_size - 1)});
     return fixed_asic_position_pinnings;
 }
 
@@ -449,6 +452,7 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
+        // TODO: Remove this when preferred pinnings are supported
         // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
         // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
         // bisect a device.
@@ -463,6 +467,13 @@ void ControlPlane::init_control_plane(
             distributed_size == 1) {  // Using full board size for UBB Galaxy
             fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
         }
+
+        // Add MGD pinnings to the topology mapper
+        const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+        for (const auto& [pos, fabric_node] : pinnings) {
+            fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
+        }
+
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
@@ -1211,7 +1222,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
         case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
         case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
         case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
-        case RoutingDirection::Z: return static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION);
+        case RoutingDirection::Z: dir = eth_chan_directions::Z; break;
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
     return dir;
@@ -2473,15 +2484,16 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                     continue;
                 }
 
-                port_id_t port_id = {port_direction, logical_chan_id};
+                // Override direction to Z BEFORE creating port_id if needed
+                RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
+                port_id_t port_id = {final_direction, logical_chan_id};
                 // Assign this port id to the exit node if it is not already assigned
-                bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
-                                       curr_exit_node_direction.at(exit_node_hash) == port_direction;
+                bool valid_direction =
+                    !curr_exit_node_direction.contains(exit_node_hash) ||
+                    curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    // Override direction to Z if this is a Z channel on BLACKHOLE or should assign Z direction
-                    RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
                     exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
                     curr_exit_node_direction[exit_node_hash] = final_direction;

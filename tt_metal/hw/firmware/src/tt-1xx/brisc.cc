@@ -33,7 +33,9 @@
 
 // clang-format on
 
+// Global so triage can see these values.
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -368,7 +370,6 @@ int main() {
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
-    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     trigger_sync_register_init();

@@ -4,16 +4,51 @@
 
 #include "fabric.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
+    nb::class_<tt::tt_fabric::MeshId>(mod, "MeshId", R"(
+        Mesh identifier wrapping a uint32_t value.
+        Used to identify different meshes in a multi-mesh fabric topology.
+    )")
+        .def(nb::init<uint32_t>(), nb::arg("value"), "Create a MeshId from an integer value.")
+        .def(
+            "__int__", [](const tt::tt_fabric::MeshId& id) { return *id; }, "Convert MeshId to integer.")
+        .def(
+            "__eq__",
+            [](const tt::tt_fabric::MeshId& lhs, const tt::tt_fabric::MeshId& rhs) { return lhs == rhs; },
+            nb::arg("other"))
+        .def("__repr__", [](const tt::tt_fabric::MeshId& id) { return fmt::format("MeshId({})", *id); });
+
+    nb::class_<tt::tt_fabric::FabricNodeId>(mod, "FabricNodeId", R"(
+        Identifies a node (chip) in the fabric topology.
+        Combines a mesh_id and chip_id to uniquely identify a device.
+    )")
+        .def(
+            nb::init<tt::tt_fabric::MeshId, uint32_t>(),
+            nb::arg("mesh_id"),
+            nb::arg("chip_id"),
+            "Create a FabricNodeId from mesh_id and chip_id.")
+        .def_ro("mesh_id", &tt::tt_fabric::FabricNodeId::mesh_id, "The mesh identifier.")
+        .def_ro("chip_id", &tt::tt_fabric::FabricNodeId::chip_id, "The chip identifier within the mesh.")
+        .def(
+            "__eq__",
+            [](const tt::tt_fabric::FabricNodeId& lhs, const tt::tt_fabric::FabricNodeId& rhs) { return lhs == rhs; },
+            nb::arg("other"))
+        .def("__repr__", [](const tt::tt_fabric::FabricNodeId& id) {
+            return fmt::format("FabricNodeId(M{}, D{})", *id.mesh_id, id.chip_id);
+        });
+
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricConfig>(mod, "FabricConfig")
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
@@ -90,6 +125,45 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
         nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
+
+    mod.def(
+        "setup_fabric_connection",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+           uint32_t link_idx,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           tt::tt_metal::CoreCoord worker_core,
+           tt::CoreType core_type) {
+            std::vector<uint32_t> fabric_args;
+
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                link_idx,
+                program_descriptor,
+                worker_core,
+                fabric_args,
+                core_type);
+
+            return fabric_args;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        nb::arg("link_idx"),
+        nb::arg("program_descriptor"),
+        nb::arg("worker_core"),
+        nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
+        R"(
+            Sets up fabric connection: returns necessary runtime args and appends SemaphoreDescriptors to
+            the given ProgramDescriptor
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_fabric_node_id: FabricNodeId of the destination chip
+                link_idx: Link index (0..n) to use between src and dst chips
+                program_descriptor: ProgramDescriptor to add semaphores to (mutated)
+                worker_core: Logical core coordinate of the worker
+                core_type: Core type (WORKER or ETH), defaults to WORKER
+        )");
 }
 
 }  // namespace ttnn::fabric

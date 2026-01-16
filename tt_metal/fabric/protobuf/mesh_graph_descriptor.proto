@@ -29,6 +29,39 @@ package tt.tt_fabric.proto;
 // - Use exact enum spellings (e.g., ALL_TO_ALL, not ALL-TO-ALL).
 // - Indexing for devices is linearized per your runtime (row-major by convention here).
 
+// -----------------------------------------------------------------------------
+// LogicalFabricNodeId
+// Logical fabric node identifier within a mesh.
+// - mesh_id: The identifier of the mesh instance
+// - chip_id: The chip identifier within that mesh, enumerated in row-major order
+//            based on the mesh's device_topology dimensions
+message LogicalFabricNodeId {
+    uint32 mesh_id = 1;    // Mesh identifier
+    uint32 chip_id = 2;    // Chip identifier within the mesh
+}
+
+// -----------------------------------------------------------------------------
+// PhysicalAsicPosition
+// Physical ASIC position in the hardware system.
+// - tray_id: The tray identifier from the cluster descriptor
+// - asic_location: The ASIC location within that tray, as defined in the cluster descriptor
+message PhysicalAsicPosition {
+    uint32 tray_id = 1;         // Tray identifier
+    uint32 asic_location = 2;   // ASIC location within the tray
+}
+
+// -----------------------------------------------------------------------------
+// AsicPinning
+// Maps a logical fabric node to a physical ASIC position.
+// Used to constrain which physical ASIC a logical node can be mapped to.
+message AsicPinning {
+    // Logical fabric node to pin
+    LogicalFabricNodeId logical_fabric_node_id = 1;
+
+    // Physical ASIC position where the fabric node should be pinned
+    PhysicalAsicPosition physical_asic_position = 2;
+}
+
 message MeshGraphDescriptor {
     // Reusable mesh templates (definitions) referenced by graphs and instances.
     // Required fields inside each MeshDescriptor: name, arch, device_topology.dims,
@@ -50,6 +83,10 @@ message MeshGraphDescriptor {
     // Single root NodeRef to instantiate (mesh, switch, or graph instance).
     // Exactly one root should be provided.
     NodeRef top_level_instance = 3;
+
+    // Top-level pinnings section (separate from descriptors and instances).
+    // Maps logical fabric nodes to physical ASIC positions for pinning constraints.
+    repeated AsicPinning pinnings = 5;
 }
 
 // -----------------------------------------------------------------------------

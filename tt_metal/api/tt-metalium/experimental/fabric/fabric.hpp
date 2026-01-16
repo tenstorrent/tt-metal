@@ -18,6 +18,7 @@
 
 namespace tt::tt_metal {
 class Program;
+struct ProgramDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -40,15 +41,18 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // It is advised to call the API once all the other run-time args for the prgram are
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
+// Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
+// it adds SemaphoreDescriptors instead of creating semaphores.
+//
 // Inputs:
 // src_chip_id: physical chip id/device id of the sender chip
 // dst_chip_id: physical chip id/device id of the receiver chip
 // link_idx: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
 //                instance we can have upto 4 active links b/w two chips
-// worker_program: program handle
+// worker_program_or_desc: program handle or program descriptor
 // worker_core: worker core logical coordinates
 // worker_args: list of existing run-time args to which the connection args will be appended
-// core_type: core type which the worker will be running on
+// core_type: core type which the worker will be running on (defaults to WORKER)
 //
 // Constraints:
 // 1. Currently the sender and receiver chip should be physically adjacent (for 1D)
@@ -56,11 +60,12 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
+template <typename ProgramOrDescriptor = tt::tt_metal::Program>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
@@ -74,11 +79,12 @@ enum class FabricApiType : uint8_t {
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
 // api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
+template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
@@ -172,11 +178,12 @@ public:
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
+    template <typename ProgramOrDescriptor = tt::tt_metal::Program>
     std::vector<uint32_t> get_fabric_mux_run_time_args(
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
-        tt::tt_metal::Program& mux_program,
+        ProgramOrDescriptor& mux_program_or_desc,
         const CoreCoord& mux_logical_core) const;
 
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;

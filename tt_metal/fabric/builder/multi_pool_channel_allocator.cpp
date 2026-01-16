@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "builder/fabric_remote_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
 namespace tt::tt_fabric {
 
@@ -31,7 +32,10 @@ MultiPoolChannelAllocator::MultiPoolChannelAllocator(
 }
 
 void MultiPoolChannelAllocator::emit_ct_args(
-    std::vector<uint32_t>& ct_args, size_t num_used_sender_channels, size_t num_used_receiver_channels) const {
+    std::vector<uint32_t>& ct_args,
+    size_t num_used_vc0_sender_channels,
+    size_t num_used_vc1_sender_channels,
+    size_t num_used_receiver_channels) const {
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
@@ -86,17 +90,71 @@ void MultiPoolChannelAllocator::emit_ct_args(
     }
 
     // Emit the sender channel to pool index
+    TT_FATAL(
+        pool_allocators_.size() == 1,
+        "Multi-pool channel allocator with channel-to-pool mapping currently only supports a single pool. Got {} "
+        "pools.",
+        pool_allocators_.size());
+
     for (const auto& pool_allocator : pool_allocators_) {
         TT_FATAL(
             dynamic_cast<FabricStaticSizedChannelsAllocator*>(pool_allocator.get()) ||
                 dynamic_cast<FabricRemoteChannelsAllocator*>(pool_allocator.get()),
             "Non static sized channel allocators not supported in the code below yet");
     }
-    for (size_t i = 0; i < num_used_sender_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i));
+
+    // Calculate total sender channels from the first (and only) pool allocator
+    auto [total_sender_channels, total_receiver_channels] =
+        get_static_channel_allocator_num_channels(pool_allocators_[0].get());
+
+    // Combine VC0 and VC1 counts to get total used sender channels
+    size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
+
+    // Determine if we need to skip pool mappings due to unused channels
+    // This occurs when the allocator has more channels than the router uses
+    // For example to support Z dimension in 2D fabric, we need 9 sender channels over
+    // 2 VCs. Z routers can potentially use all 9 channels. Mesh routers on a chip
+    // with Z routers uses 8 channels. Mesh routers on a chip without Z routers use
+    // 7 channels. But because the allocator is common for all routers, we need to skip
+    // the unused channels on mesh routers.
+    size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
+    bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
+
+    // Emit sender channel to pool index mapping
+    // If there are unused channels, we need to skip their pool mappings and add padding
+    if (has_unused_channels) {
+        // Map used channels to their pools, skipping the unused channel pools
+        // If we have to skip, pool at index (num_used_vc0_sender_channels) will be skipped.
+
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            if (i < num_used_vc0_sender_channels) {
+                // VC0 channels map directly (0 to num_used_vc0_sender_channels-1 → pools 0 to
+                // num_used_vc0_sender_channels-1)
+                ct_args.push_back(static_cast<uint32_t>(i));
+            } else {
+                // VC1 channels skip the unused VC0 channel(s)
+                // e.g., channels 4-7 → pools 5-8 (skipping pool 4)
+                ct_args.push_back(static_cast<uint32_t>(i + 1));
+            }
+        }
+        // Add padding entries for the unused channels
+        for (size_t i = 0; i < num_unused_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(0));  // Dummy padding
+        }
+    } else {
+        // No unused channels - direct mapping
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i));
+        }
     }
+
+    // Emit receiver channel to pool index mapping
+    // Receiver pools start after sender pools
+    size_t receiver_pool_base =
+        has_unused_channels ? (num_used_sender_channels + num_unused_channels) : num_used_sender_channels;
+
     for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i + num_used_sender_channels));
+        ct_args.push_back(static_cast<uint32_t>(i + receiver_pool_base));
     }
 
     // Emit the sender channel to pool type -- NVM

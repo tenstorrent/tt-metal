@@ -40,6 +40,7 @@ Owner:
 # Check if tt-exalens is installed
 import inspect
 import os
+import shutil
 import threading
 from time import time
 import traceback
@@ -74,7 +75,8 @@ except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries

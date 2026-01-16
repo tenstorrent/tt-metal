@@ -41,6 +41,7 @@
 #include <tt-metalium/vector_aligned.hpp>
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -490,7 +491,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
-    IDevice* device = mesh_device->get_device(target_coord);
+    IDevice* device = mesh_device->impl().get_device(target_coord);
     EXPECT_TRUE(device->is_mmio_capable());
 
     CoreCoord logical_core(0, 0);

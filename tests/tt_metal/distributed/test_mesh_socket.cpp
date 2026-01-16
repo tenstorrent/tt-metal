@@ -22,6 +22,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -589,8 +590,8 @@ void test_single_connection_multi_device_socket(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Used to setup fabric connections
-    const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
-    const uint32_t recv_physical_device_id = md1->get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t sender_physical_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t recv_physical_device_id = md1->impl().get_device(MeshCoordinate(0, 0))->id();
     const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
@@ -760,8 +761,8 @@ void test_single_connection_multi_device_socket_with_workers(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     // Used to setup fabric connections
-    const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
-    const uint32_t recv_physical_device_id = md1->get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t sender_physical_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t recv_physical_device_id = md1->impl().get_device(MeshCoordinate(0, 0))->id();
     const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
@@ -1254,10 +1255,10 @@ void test_multi_sender_single_recv(
     bool split_reducer) {
     TT_FATAL(link_indices.size() == 3, "Link indices must be of size 3");
     // Used to setup fabric connections
-    const uint32_t sender_0_physical_device_id = sender_0->get_device(MeshCoordinate(0, 0))->id();
-    const uint32_t sender_1_physical_device_id = sender_1->get_device(MeshCoordinate(0, 0))->id();
-    const uint32_t reducer_physical_device_id = reducer->get_device(MeshCoordinate(0, 0))->id();
-    const uint32_t receiver_physical_device_id = receiver->get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t sender_0_physical_device_id = sender_0->impl().get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t sender_1_physical_device_id = sender_1->impl().get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t reducer_physical_device_id = reducer->impl().get_device(MeshCoordinate(0, 0))->id();
+    const uint32_t receiver_physical_device_id = receiver->impl().get_device(MeshCoordinate(0, 0))->id();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv0_logical_coord = CoreCoord(0, 0);
@@ -1512,8 +1513,8 @@ void test_multi_connection_multi_device_data_copy(
     auto recv_mesh_workload = MeshWorkload();
 
     for (const auto& connection : socket_connections) {
-        auto sender_physical_id = sender_mesh->get_device(connection.sender_core.device_coord)->id();
-        auto recv_physical_id = recv_mesh->get_device(connection.receiver_core.device_coord)->id();
+        auto sender_physical_id = sender_mesh->impl().get_device(connection.sender_core.device_coord)->id();
+        auto recv_physical_id = recv_mesh->impl().get_device(connection.receiver_core.device_coord)->id();
 
         auto sender_program = create_sender_program(
             send_socket,
@@ -1622,10 +1623,10 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
         while (true) {
             link_indices.clear();
             std::shuffle(coordinates.begin(), coordinates.end(), std::mt19937(std::random_device()()));
-            auto sender_0_physical_chip_id = mesh_device->get_device(coordinates[0])->id();
-            auto sender_1_physical_chip_id = mesh_device->get_device(coordinates[1])->id();
-            auto reducer_physical_chip_id = mesh_device->get_device(coordinates[2])->id();
-            auto receiver_physical_chip_id = mesh_device->get_device(coordinates[3])->id();
+            auto sender_0_physical_chip_id = mesh_device->impl().get_device(coordinates[0])->id();
+            auto sender_1_physical_chip_id = mesh_device->impl().get_device(coordinates[1])->id();
+            auto reducer_physical_chip_id = mesh_device->impl().get_device(coordinates[2])->id();
+            auto receiver_physical_chip_id = mesh_device->impl().get_device(coordinates[3])->id();
             auto reducer_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(reducer_physical_chip_id);
 
@@ -1667,10 +1668,10 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
     auto reducer = fixture->get_mesh_device()->create_submesh(MeshShape(1, 1), coordinates[2]);
     auto receiver = fixture->get_mesh_device()->create_submesh(MeshShape(1, 1), coordinates[3]);
 
-    log_info(LogTest, "Sender 0 ID: {}", sender_0->get_device(MeshCoordinate(0, 0))->id());
-    log_info(LogTest, "Sender 1 ID: {}", sender_1->get_device(MeshCoordinate(0, 0))->id());
-    log_info(LogTest, "Reduce ID: {}", reducer->get_device(MeshCoordinate(0, 0))->id());
-    log_info(LogTest, "Receiver ID: {}", receiver->get_device(MeshCoordinate(0, 0))->id());
+    log_info(LogTest, "Sender 0 ID: {}", sender_0->impl().get_device(MeshCoordinate(0, 0))->id());
+    log_info(LogTest, "Sender 1 ID: {}", sender_1->impl().get_device(MeshCoordinate(0, 0))->id());
+    log_info(LogTest, "Reduce ID: {}", reducer->impl().get_device(MeshCoordinate(0, 0))->id());
+    log_info(LogTest, "Receiver ID: {}", receiver->impl().get_device(MeshCoordinate(0, 0))->id());
 
     uint32_t num_interations = 10;
     test_multi_sender_single_recv(
@@ -1699,7 +1700,7 @@ void run_multi_connection_multi_device_data_copy(FixtureT* fixture) {
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
+    auto current_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
     auto current_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(current_device_id);
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
@@ -1750,7 +1751,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
+    auto current_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
     auto current_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(current_device_id);
     std::size_t socket_fifo_size = 1024;
     const auto& worker_grid = md0->compute_with_storage_grid_size();
@@ -1834,11 +1835,11 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     std::unordered_map<MeshCoordinate, ChipId> receiver_device_coord_to_id;
 
     for (const auto& coord : MeshCoordinateRange(md0->shape())) {
-        sender_device_coord_to_id[coord] = md0->get_device(coord)->id();
+        sender_device_coord_to_id[coord] = md0->impl().get_device(coord)->id();
     }
 
     for (const auto& coord : MeshCoordinateRange(md1->shape())) {
-        receiver_device_coord_to_id[coord] = md1->get_device(coord)->id();
+        receiver_device_coord_to_id[coord] = md1->impl().get_device(coord)->id();
     }
     std::size_t socket_fifo_size = 1024;
     const auto& worker_grid = md0->compute_with_storage_grid_size();
