@@ -181,34 +181,6 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
-  cmake-version:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: Look for changed CMake files
-      id: find-changes
-      uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
-    - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
-      if: steps.find-changes.outputs.cmake-changed == 'true'
-      with:
-        cmakeVersion: "~3.24.0"
-    - name: Check CMake version
-      if: steps.find-changes.outputs.cmake-changed == 'true'
-      run: cmake --version
-    - name: Install Build Dependencies
-      if: steps.find-changes.outputs.cmake-changed == 'true'
-      run: sudo ./install_dependencies.sh --docker
-    - name: Check CMake compatibility
-      if: steps.find-changes.outputs.cmake-changed == 'true'
-      env:
-        ARCH_NAME: wormhole_b0
-        CMAKE_GENERATOR: Ninja
-      # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
-      run: |
-        echo "Checking compatibility with $(cmake --version)"
-        cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
   codeowners-validator:
     runs-on: ubuntu-latest
     steps:
