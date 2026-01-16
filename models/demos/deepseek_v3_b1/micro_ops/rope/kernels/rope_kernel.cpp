@@ -11,8 +11,8 @@
 // BRISC: No-op
 // TRISC: Performs RoPE compute
 
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/rope.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/rope.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
