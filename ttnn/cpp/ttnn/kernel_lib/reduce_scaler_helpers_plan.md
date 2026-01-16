@@ -408,3 +408,44 @@ All files have been successfully migrated!
   - Different signature: `template <uint32_t num_faces = 4, uint32_t num_cols_per_face = 16> void generate_reduce_scaler(const uint32_t cb_id, const uint16_t scaler)`
   - Takes `uint16_t` instead of `uint32_t` for scaler parameter
   - This is a specialized variant and may not need migration
+
+---
+
+## Next Steps / Related Patterns
+
+### Other Similar Patterns in the Codebase
+
+The following related implementations exist in the codebase that follow similar patterns and could be candidates for future consolidation:
+
+#### 1. Deepseek V3 B1 Custom Implementation
+**Location:** `models/demos/deepseek_v3_b1/kernel_includes/tt_metal/dm_utils.hpp`
+
+- Different signature: `uint16_t` scaler instead of `uint32_t`
+- Configurable template params for `num_faces` (default: 4) and `num_cols_per_face` (default: 16)
+- Used by: `models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_reader.cpp`
+- **Status:** Specialized variant for Deepseek model, may not need migration
+
+#### 2. Partial Reduce Scaler (Groupnorm-specific)
+**Location:** `ttnn/cpp/ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h`
+
+- Function: `generate_partial_reduce_scaler()`
+- For partial column reductions where `num_cols < 16`
+- Fills only up to `num_cols` columns in row 0
+- Uses `tt::constants::TILE_HEIGHT/WIDTH/FACE_HEIGHT/WIDTH`
+- **Status:** Active, used for custom groupnorm patterns
+
+#### 3. Fill Tile Utilities
+**Location:** `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp`
+
+Generic tile filling patterns (not reduction-specific but similar approach):
+- `fill_with_val_bfloat16()` - Fill entire tile with single value
+- `fill_tile_with_first_element_bfloat16()` - Replicate first element
+- `fill_tile_with_first_row_bfloat16()` - Replicate first row across faces
+- `fill_tile_with_first_column_bfloat16()` - Replicate first column
+- **Status:** Active, general-purpose tile filling utilities
+
+### Future Considerations
+
+- Consider whether the partial reduce scaler from `custom_tiles.h` should be added to the main library
+- Evaluate if the fill tile utilities could benefit from consolidation with reduce scaler helpers
+- Monitor Deepseek implementation for potential unification if model-specific customizations become more common
