@@ -1411,10 +1411,10 @@ AdjacencyGraph<NodeId> create_disconnected_graph(
         // Create nodes for this component
         std::map<size_t, size_t> local_to_global;
         for (const auto& edge : component) {
-            if (local_to_global.find(edge.first) == local_to_global.end()) {
+            if (!local_to_global.contains(edge.first)) {
                 local_to_global[edge.first] = current_node_id++;
             }
-            if (local_to_global.find(edge.second) == local_to_global.end()) {
+            if (!local_to_global.contains(edge.second)) {
                 local_to_global[edge.second] = current_node_id++;
             }
         }
@@ -1500,8 +1500,8 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
     if (found) {
         // Verify all nodes are mapped
         size_t mapped_count = 0;
-        for (size_t i = 0; i < state.mapping.size(); ++i) {
-            if (state.mapping[i] != -1) {
+        for (int mapped_value : state.mapping) {
+            if (mapped_value != -1) {
                 mapped_count++;
             }
         }
@@ -1658,8 +1658,8 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedTargetGraph) {
     if (found) {
         // Verify all nodes are mapped
         size_t mapped_count = 0;
-        for (size_t i = 0; i < state.mapping.size(); ++i) {
-            if (state.mapping[i] != -1) {
+        for (int mapped_value : state.mapping) {
+            if (mapped_value != -1) {
                 mapped_count++;
             }
         }
@@ -1773,8 +1773,8 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Success) {
     if (found) {
         // Verify all nodes are mapped
         size_t mapped_count = 0;
-        for (size_t i = 0; i < state.mapping.size(); ++i) {
-            if (state.mapping[i] != -1) {
+        for (int mapped_value : state.mapping) {
+            if (mapped_value != -1) {
                 mapped_count++;
             }
         }
