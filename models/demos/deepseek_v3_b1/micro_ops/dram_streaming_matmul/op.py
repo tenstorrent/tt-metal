@@ -49,9 +49,14 @@ def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
     - Wormhole: 8192 bytes
     - Blackhole: 16384 bytes
 
-    Returns (page_size, num_pages) where:
-    - page_size is the largest multiple of tile_size that fits in NOC max
-    - num_pages is total_size / page_size
+    Strategy: Use full NOC max size for all pages except potentially the last one.
+    - Non-last pages: full noc_max_page_size (aligned to tile_size)
+    - Last page: remainder (if any)
+
+    Returns (page_size, num_pages, last_page_size) where:
+    - page_size is the largest multiple of tile_size that fits in NOC max (for full pages)
+    - num_pages is total number of pages (including last partial page if any)
+    - last_page_size is the size of the last page (may be smaller than page_size, or 0 if no partial)
     """
     total_size = num_tiles * tile_size
 
@@ -64,15 +69,23 @@ def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
 
-    # Calculate page size as largest multiple of tile_size that fits
+    # Calculate page size as largest multiple of tile_size that fits in NOC max
     page_size = (noc_max_page_size // tile_size) * tile_size
 
-    # Ensure total_size is divisible by page_size
-    while total_size % page_size != 0 and page_size >= tile_size:
-        page_size -= tile_size
+    # If total_size <= page_size, just use one page
+    if total_size <= page_size:
+        return total_size, 1, 0
 
-    num_pages = total_size // page_size
-    return page_size, num_pages
+    # Calculate number of full pages and remainder
+    num_full_pages = total_size // page_size
+    remainder = total_size % page_size
+
+    if remainder == 0:
+        # Exact fit - all pages are full size
+        return page_size, num_full_pages, 0
+    else:
+        # Last page is partial
+        return page_size, num_full_pages + 1, remainder
 
 
 class DRAMStreamingMatmul:
@@ -190,17 +203,21 @@ class DRAMStreamingMatmul:
 
         # Calculate page size for NOC transfers (respects max NOC burst size)
         # Each block is subblock_k tiles (one K subblock)
-        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, in1_tile_size)
+        in1_page_size, in1_num_pages, in1_last_page_size = get_max_page_size_and_num_pages(
+            device, subblock_k, in1_tile_size
+        )
         in1_block_size_bytes = subblock_k * in1_tile_size
 
         logger.debug(
-            f"in1_page_size={in1_page_size}, in1_num_pages={in1_num_pages}, in1_block_size={in1_block_size_bytes}"
+            f"in1_page_size={in1_page_size}, in1_num_pages={in1_num_pages}, "
+            f"in1_last_page_size={in1_last_page_size}, in1_block_size={in1_block_size_bytes}"
         )
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: subblock_k tiles at a time, triple buffered for pipelining
-        in1_CB_tiles = subblock_k * 3
+        # in1: triple buffered per K subblock * num_subblocks_k
+        # This allows reader to stay ahead of compute for entire K dimension
+        in1_CB_tiles = subblock_k * 3 * num_subblocks_k
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
         # Output: per_core_N tiles (tensor-backed - size determined by tensor)
@@ -283,6 +300,7 @@ class DRAMStreamingMatmul:
             in1_block_size_bytes,
             out_num_tiles,
             num_subblocks_k,
+            in1_last_page_size,  # 0 if all pages are full size
         ]
 
         # Compute compile args

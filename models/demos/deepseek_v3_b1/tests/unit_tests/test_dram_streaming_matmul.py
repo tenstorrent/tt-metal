@@ -210,7 +210,7 @@ def test_dram_streaming_matmul(device, k, n, m):
     if k == 7168:
         subblock_k = k // tile_w // 4
     else:
-        subblock_k = k // tile_w
+        subblock_k = k // tile_w // 2
 
     # Run DRAM streaming matmul
     logger.info(f"Running DRAM streaming matmul: m={m}, k={k}, n={n}, num_cores={num_cores}")
