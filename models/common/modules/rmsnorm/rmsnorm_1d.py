@@ -17,6 +17,7 @@ Key design:
 
 import math
 from dataclasses import dataclass, replace
+from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -67,13 +68,18 @@ class RMSNorm1DConfig:
     # Distributed control (None = auto-detect: True if dim > 4096)
     prefill_distributed: bool | None = None
 
-    # Dimensions
-    dim: int | None = None
+    # Batch size for decode
     max_batch_size: int = 32
 
-    # Local decode configs (Path 1) - sharded
+    # Local decode configs (Path 1)
+    decode_in_sharded: bool = True  # If True, use sharded decode; if False, use interleaved
+    decode_out_sharded: bool = True  # If True, output stays sharded (only valid if in_sharded=True)
     decode_program_config: ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     decode_memory_config: ttnn.MemoryConfig | None = None
+
+    # Input memory configs (optional, for prepare_input_tensor)
+    decode_input_memcfg: ttnn.MemoryConfig | None = None
+    prefill_input_memcfg: ttnn.MemoryConfig | None = None
 
     # Compute kernel config (shared across paths)
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
@@ -82,14 +88,19 @@ class RMSNorm1DConfig:
     weight_dtype: ttnn.DataType = ttnn.bfloat16
     weight_memory_config: ttnn.MemoryConfig | None = None
 
+    # Internal: distributed weight LazyWeight (sharded across devices for Path 3)
+    # Note: Uses LazyWeight for consistency, but loaded via _load_distributed_weight()
+    # to bypass LazyWeight's auto-padding which breaks distributed RMSNorm alignment.
+    _weight_distributed: LazyWeight | None = None
+
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
-        required = ["weight", "mesh_device", "dim", "compute_kernel_config"]
+        required = ["weight", "mesh_device", "compute_kernel_config"]
 
-        # Multi-device needs CCL for distributed prefill
+        # Multi-device distributed prefill needs CCL and distributed weight
         num_devices = self.mesh_device.get_num_devices() if self.mesh_device else 1
         if num_devices > 1 and self.prefill_distributed:
-            required.append("tt_ccl")
+            required.extend(["tt_ccl", "_weight_distributed"])
 
         # Decode always needs sharded config
         required.extend(["decode_program_config", "decode_memory_config"])
@@ -118,17 +129,17 @@ class RMSNorm1D(LightweightModule):
         norm = RMSNorm1D.from_config(config)
     """
 
-    def __init__(self, weight: LazyWeight, eps: float = 1e-5, add_unit_offset: bool = False):
+    def __init__(self, weight: LazyWeight):
         """
         Simple API - derives all config from weight.
 
         Args:
-            weight: RMSNorm weight tensor of shape (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
-            eps: Small value for numerical stability (default 1e-5)
-            add_unit_offset: Whether to add 1.0 to weights (default False)
+            weight: RMSNorm weight tensor of shape (dim,) or (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
+
+        Note: Use from_config() to customize eps, add_unit_offset, or other settings.
         """
         super().__init__()
-        self.config = _resolve_1d_config(RMSNorm1DConfig(weight=weight, eps=eps, add_unit_offset=add_unit_offset))
+        self.config = _resolve_1d_config(RMSNorm1DConfig(weight=weight))
         self._device_weights_loaded = False
         self._bind_forward_methods()
 
@@ -146,8 +157,11 @@ class RMSNorm1D(LightweightModule):
         """Bind decode_forward and prefill_forward based on config."""
         cfg = self.config
 
-        # Decode: always local sharded for 1D
-        self.decode_forward = self._decode_local
+        # Decode: sharded or interleaved based on config
+        if cfg.decode_in_sharded:
+            self.decode_forward = self._decode_local_sharded
+        else:
+            self.decode_forward = self._decode_local_interleaved
 
         # Prefill: local or 1D distributed based on dim
         if cfg.prefill_distributed:
@@ -161,26 +175,38 @@ class RMSNorm1D(LightweightModule):
             return
 
         assert self.config.is_resolved(), "config must be resolved before loading device weights!"
-        self.weight = self.config.weight.get_device_weight()
+
+        cfg = self.config
+
+        # Always load replicated weight (decode always needs it)
+        self.weight = cfg.weight.get_device_weight()
+
+        # Load sharded weight if distributed prefill is enabled
+        if cfg.prefill_distributed and cfg._weight_distributed is not None:
+            self.weight_distributed = cfg._weight_distributed.get_device_weight()
+
         self._device_weights_loaded = True
 
     # =========================================================================
-    # Path 1: Local decode (sharded)
+    # Path 1a: Local decode - sharded
     # =========================================================================
 
-    def _decode_local(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _decode_local_sharded(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
-        Local decode - sharded RMSNorm.
+        Sharded decode - standard LLM decode path.
 
         Execution: to_sharded -> rms_norm(sharded) with program_config and memory_config
+        Output: sharded if decode_out_sharded=True, interleaved otherwise
         """
         self.load_device_weights()
+        x = _load_input_device_tensor(x, self.config, mode="decode")
         cfg = self.config
 
-        # Convert to sharded memory config
+        assert cfg.decode_in_sharded, "decode_in_sharded must be True for sharded decode"
+
         x = ttnn.to_memory_config(x, memory_config=cfg.decode_memory_config)
 
-        return ttnn.rms_norm(
+        x = ttnn.rms_norm(
             x,
             epsilon=cfg.eps,
             weight=self.weight,
@@ -189,17 +215,50 @@ class RMSNorm1D(LightweightModule):
             compute_kernel_config=cfg.compute_kernel_config,
         )
 
+        if not cfg.decode_out_sharded:
+            x = ttnn.sharded_to_interleaved(x)
+
+        return x
+
+    # =========================================================================
+    # Path 1b: Local decode - interleaved
+    # =========================================================================
+
+    def _decode_local_interleaved(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
+        """
+        Interleaved decode - for vision encoder decode.
+
+        Execution: rms_norm with program_config=None, memory_config=None
+        Output: always interleaved (decode_out_sharded must be False)
+        """
+        self.load_device_weights()
+        x = _load_input_device_tensor(x, self.config, mode="decode")
+        cfg = self.config
+
+        assert not cfg.decode_in_sharded, "decode_in_sharded must be False for interleaved decode"
+        assert not cfg.decode_out_sharded, "decode_out_sharded must be False when decode_in_sharded=False"
+
+        return ttnn.rms_norm(
+            x,
+            epsilon=cfg.eps,
+            weight=self.weight,
+            program_config=None,
+            memory_config=None,
+            compute_kernel_config=cfg.compute_kernel_config,
+        )
+
     # =========================================================================
     # Path 2: Local prefill (interleaved)
     # =========================================================================
 
-    def _prefill_local(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _prefill_local(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
         Local prefill - interleaved RMSNorm for dim <= 4096.
 
         Execution: rms_norm(interleaved) without program_config
         """
         self.load_device_weights()
+        x = _load_input_device_tensor(x, self.config, mode="prefill")
         cfg = self.config
 
         return ttnn.rms_norm(
@@ -215,7 +274,7 @@ class RMSNorm1D(LightweightModule):
     # Path 3: 1D distributed prefill (Ring topology, no cluster_axis)
     # =========================================================================
 
-    def _prefill_1d_distributed(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _prefill_1d_distributed(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
         1D distributed prefill - for dim > 4096.
 
@@ -225,6 +284,7 @@ class RMSNorm1D(LightweightModule):
           rms_norm_pre_all_gather -> all_gather(Ring) -> rms_norm_post_all_gather
         """
         self.load_device_weights()
+        x = _load_input_device_tensor(x, self.config, mode="prefill")
         cfg = self.config
 
         # Run distributed rmsnorm part 1
@@ -245,12 +305,12 @@ class RMSNorm1D(LightweightModule):
             num_buffers_per_channel=2,
         )
 
-        # Run distributed rmsnorm part 2
+        # Run distributed rmsnorm part 2 (uses sharded weight)
         tt_out = ttnn.rms_norm_post_all_gather(
             x,
             tt_stats,
             epsilon=cfg.eps,
-            weight=self.weight,
+            weight=self.weight_distributed,
             compute_kernel_config=cfg.compute_kernel_config,
         )
         tt_stats.deallocate(True)
@@ -261,12 +321,106 @@ class RMSNorm1D(LightweightModule):
     # Forward dispatcher
     # =========================================================================
 
-    def forward(self, x: ttnn.Tensor, mode: str) -> ttnn.Tensor:
-        """Dispatch to the appropriate forward method based on mode."""
+    def forward(self, x: "ttnn.Tensor | LazyWeight", mode: str) -> ttnn.Tensor:
+        """
+        Dispatch to the appropriate forward method based on mode.
+
+        Args:
+            x: Input tensor (ttnn.Tensor or LazyWeight wrapping torch tensor)
+            mode: "decode" or "prefill"
+
+        Note: Sharding behavior for decode is controlled via config:
+            - decode_in_sharded: True for sharded (LLM), False for interleaved (vision)
+            - decode_out_sharded: True to keep output sharded, False to convert to interleaved
+        """
         if mode == "decode":
             return self.decode_forward(x)
         else:
             return self.prefill_forward(x)
+
+    # [INFO] this is the entry point for TTTv1 model_config.py and will retire with TTTv1
+    @classmethod
+    def from_model_args(
+        cls,
+        mesh_device,
+        tt_ccl,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num: int,
+        weight_key: str,
+        state_dict_prefix: Optional[str] = None,
+        sharded_program_config=None,
+        sharded_output_config=None,
+    ):
+        """Factory method for backward compatibility with ModelArgs."""
+
+        if args.is_galaxy:
+            raise ValueError("RMSNorm1D cannot be used for Galaxy devices. Use RMSNorm2D instead.")
+
+        # Build weight name from state_dict_prefix and weight_key
+        if state_dict_prefix:
+            weight_name = f"{state_dict_prefix}{weight_key}.weight"
+        else:
+            if layer_num is None:
+                weight_name = f"{weight_key}.weight"
+            else:
+                weight_name = f"layers.{layer_num}.{weight_key}.weight"
+
+        # Transform weight to expected shape: (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
+        dim = args.dim
+        torch_weight = (
+            state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
+        )
+
+        # Add offset before creating LazyWeight
+        if args.rms_norm_add_unit_offset:
+            torch_weight = torch_weight + 1.0
+
+        # Create LazyWeight
+        lazy_weight = LazyWeight(
+            source=torch_weight,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dir_weight_name=(weight_cache_path, weight_name) if weight_cache_path else None,
+            mesh_mapper_config=(
+                ttnn.MeshMapperConfig(
+                    placements=[ttnn.PlacementReplicate()],
+                    mesh_shape_override=ttnn.MeshShape([mesh_device.get_num_devices()]),
+                )
+                if mesh_device.get_num_devices() > 1
+                else None
+            ),
+        )
+
+        # Get compute kernel config (e.g., fp32_dest_acc_en for Qwen models)
+        fp32_dest_acc_en = True
+        if hasattr(args, "base_model_name") and args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+            fp32_dest_acc_en = False
+
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        )
+
+        # Build config
+        config = RMSNorm1DConfig(
+            weight=lazy_weight,
+            eps=args.norm_eps,
+            add_unit_offset=False,  # Already applied above
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            max_batch_size=args.max_batch_size,
+            decode_program_config=sharded_program_config,
+            decode_memory_config=sharded_output_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        return cls.from_config(config)
 
 
 # =============================================================================
@@ -281,11 +435,8 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
 
     # --- Phase 1: Foundational fields ---
 
-    # Derive dim from weight
-    dim = config.dim
-    if config.dim is None:
-        dim = config.weight.source.shape[-2] * config.weight.source.shape[-1]
-        to_set["dim"] = dim
+    # Derive dim from weight (works for any shape: [dim], [1, dim], [1, 1, dim//32, 32], etc.)
+    dim = config.weight.source.numel()
 
     # Derive mesh_device from weight
     mesh_device = config.mesh_device
@@ -352,25 +503,69 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
     if config.weight_memory_config is None:
         to_set["weight_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
-    # --- Phase 6: Resolve LazyWeight ---
+    # --- Phase 6: Resolve LazyWeight (replicated for decode and local prefill) ---
 
     if num_devices == 1:
-        mesh_mapper_config = None
+        mesh_mapper_config_replicated = None
+        mesh_mapper_config_sharded = None
     else:
-        mesh_mapper_config = ttnn.MeshMapperConfig(
-            placements=[ttnn.PlacementReplicate()],
-            mesh_shape_override=ttnn.MeshShape([num_devices]),
+        # For 1D mesh topology, use 2D placement: [Replicate, Replicate]
+        # This replicates the weight to all devices
+        mesh_mapper_config_replicated = ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+            mesh_shape_override=ttnn.MeshShape(1, num_devices),
+        )
+        # For distributed prefill, shard on tensor dim 2 (hidden tiles)
+        # Weight shape is (1, 1, dim // 32, 32), so dim 2 is the tiles dimension
+        mesh_mapper_config_sharded = ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(2)],
+            mesh_shape_override=ttnn.MeshShape(1, num_devices),
         )
 
+    # Reshape weight to expected shape (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
+    assert dim % SHARD_HEIGHT == 0, "dim must be divisible by SHARD_HEIGHT"
+    expected_shape = (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
+    if config.weight.source.shape != expected_shape:
+        transformed_source = config.weight.source.reshape(*expected_shape)
+    else:
+        transformed_source = config.weight.source
+
+    # Apply unit offset if requested (e.g., for Gemma models)
+    if config.add_unit_offset:
+        transformed_source = transformed_source + 1.0
+
+    # Create a new LazyWeight with the transformed source
+    transformed_weight = replace(config.weight, source=transformed_source)
+
     resolved_weight = resolve_lazy_weight(
-        config.weight,
+        transformed_weight,
         dtype=config.weight_dtype,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
-        mesh_mapper_config=mesh_mapper_config,
+        mesh_mapper_config=mesh_mapper_config_replicated,
     )
     to_set["weight"] = resolved_weight
+
+    # --- Phase 7: Create distributed weight LazyWeight (for Path 3) ---
+    #
+    # Note: We store a LazyWeight but load it via _load_distributed_weight() which
+    # uses ttnn.as_tensor directly with ShardTensor2dMesh. This bypasses LazyWeight's
+    # auto-padding (in get_device_weight) which breaks distributed RMSNorm alignment.
+
+    if prefill_distributed and num_devices > 1:
+        # Create LazyWeight with sharded mesh_mapper_config
+        # Note: We store the config but load via _load_distributed_weight() which
+        # uses ttnn.as_tensor + ShardTensor2dMesh to bypass LazyWeight's auto-padding
+        weight_distributed = replace(
+            transformed_weight,
+            dtype=config.weight_dtype,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
+            mesh_mapper_config=mesh_mapper_config_sharded,
+        )
+        to_set["_weight_distributed"] = weight_distributed
 
     return replace(config, **to_set)
 
@@ -422,3 +617,57 @@ def _create_sharded_norm_program_config(
         block_w=block_w,
         inplace=False,
     )
+
+
+# =============================================================================
+# Input Tensor Utilities
+# =============================================================================
+
+
+def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: RMSNorm1DConfig, mode: str) -> ttnn.Tensor:
+    """
+    Resolve the input tensor to ttnn tensor if x is a LazyWeight, otherwise return as is.
+
+    For distributed prefill, uses sharded mesh_mapper_config to shard input across devices.
+    For decode/non-distributed prefill, replicates input (mesh_mapper_config=None).
+
+    Args:
+        x: Input tensor (ttnn.Tensor or LazyWeight wrapping torch tensor)
+        config: Resolved RMSNorm1DConfig
+        mode: "decode" or "prefill"
+
+    Returns:
+        ttnn.Tensor ready for the actual forward computation
+    """
+    assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode}"
+
+    if isinstance(x, LazyWeight):
+        # Determine memory config based on mode (default to DRAM if not specified)
+        if mode == "decode":
+            mem_cfg = config.decode_input_memcfg or ttnn.DRAM_MEMORY_CONFIG
+        else:
+            mem_cfg = config.prefill_input_memcfg or ttnn.DRAM_MEMORY_CONFIG
+
+        # For distributed prefill, shard input on last dim; otherwise replicate
+        is_distributed = mode == "prefill" and config.prefill_distributed
+        if is_distributed:
+            num_devices = config.mesh_device.get_num_devices()
+            mesh_mapper_config = ttnn.MeshMapperConfig(
+                placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
+                mesh_shape_override=ttnn.MeshShape(1, num_devices),
+            )
+        else:
+            mesh_mapper_config = None
+
+        resolved_x = resolve_lazy_weight(
+            x,
+            device=config.mesh_device,
+            memory_config=mem_cfg,
+            mesh_mapper_config=mesh_mapper_config,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        return resolved_x.get_device_weight()
+
+    # Already a ttnn.Tensor - return as is
+    assert isinstance(x, ttnn.Tensor), f"x must be ttnn.Tensor or LazyWeight, got {type(x)}"
+    return x

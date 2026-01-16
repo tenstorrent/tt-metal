@@ -81,13 +81,9 @@ class RMSNorm2DConfig:
     weight_dtype: ttnn.DataType = ttnn.bfloat16
     weight_memory_config: ttnn.MemoryConfig | None = None
 
-    # Internal: distributed weight (sharded across columns)
-    _weight_distributed: LazyWeight | None = None
-
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
         required = [
-            "weight",
             "mesh_device",
             "dim",
             "cluster_shape",
@@ -98,8 +94,8 @@ class RMSNorm2DConfig:
             "decode_stats_memcfg",
             # Compute config
             "compute_kernel_config_prefill",
-            # Distributed weight
-            "_weight_distributed",
+            # Weight (2D always uses distributed/sharded)
+            "weight",
         ]
         return all(getattr(self, f) is not None for f in required)
 
@@ -165,11 +161,8 @@ class RMSNorm2D(LightweightModule):
 
         assert self.config.is_resolved(), "config must be resolved before loading device weights!"
 
-        # Load replicated weight (for compatibility if needed)
+        # Load weight (sharded across columns, replicated across rows)
         self.weight = self.config.weight.get_device_weight()
-
-        # Load distributed weight (sharded across columns, replicated across rows)
-        self.weight_distributed = self.config._weight_distributed.get_device_weight()
 
         self._device_weights_loaded = True
 
@@ -213,7 +206,7 @@ class RMSNorm2D(LightweightModule):
         tt_out = ttnn.rms_norm_post_all_gather(
             x,
             epsilon=cfg.eps,
-            weight=self.weight_distributed,
+            weight=self.weight,
             program_config=cfg.decode_progcfg,
             stats=tt_stats,
         )
@@ -267,7 +260,7 @@ class RMSNorm2D(LightweightModule):
             x,
             tt_stats_gathered,
             epsilon=cfg.eps,
-            weight=self.weight_distributed,
+            weight=self.weight,
             compute_kernel_config=cfg.compute_kernel_config_prefill,
         )
         tt_stats_gathered.deallocate(True)
@@ -380,10 +373,12 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
     if config.weight_memory_config is None:
         to_set["weight_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
-    # --- Phase 5: Resolve LazyWeight (replicated) ---
+    # --- Phase 5: Resolve weight (sharded across columns, replicated across rows) ---
+    # 2D always uses distributed paths
 
-    mesh_mapper_config_replicated = ttnn.MeshMapperConfig(
-        placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+    # Shard across columns (axis 1), replicate across rows (axis 0)
+    mesh_mapper_config = ttnn.MeshMapperConfig(
+        placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
         mesh_shape_override=ttnn.MeshShape(list(cluster_shape)),
     )
 
@@ -393,28 +388,8 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
-        mesh_mapper_config=mesh_mapper_config_replicated,
+        mesh_mapper_config=mesh_mapper_config,
     )
     to_set["weight"] = resolved_weight
-
-    # --- Phase 6: Resolve distributed weight (sharded across columns, replicated across rows) ---
-
-    if config._weight_distributed is None:
-        # Shard across columns (axis 1), replicate across rows (axis 0)
-        # PlacementShard(-1) shards the last dim, PlacementReplicate() replicates
-        mesh_mapper_config_distributed = ttnn.MeshMapperConfig(
-            placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
-            mesh_shape_override=ttnn.MeshShape(list(cluster_shape)),
-        )
-
-        weight_distributed = resolve_lazy_weight(
-            config.weight,
-            dtype=config.weight_dtype,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
-            mesh_mapper_config=mesh_mapper_config_distributed,
-        )
-        to_set["_weight_distributed"] = weight_distributed
 
     return replace(config, **to_set)

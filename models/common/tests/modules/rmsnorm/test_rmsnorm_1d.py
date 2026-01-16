@@ -24,7 +24,6 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import (
-    SHARD_HEIGHT,
     RMSNorm1D,
     RMSNorm1DConfig,
     _compute_norm_core_grid,
@@ -53,15 +52,14 @@ def _get_or_init_norm_weights(model_name: str, reference_norm) -> None:
         reference_norm.weight.copy_(_CACHED_NORM_WEIGHTS[model_name])
 
 
-def get_norm_weight_from_ref_model(reference_norm, dim: int) -> torch.Tensor:
-    """
-    Extract weight from a reference RMSNorm module in TTNN layout.
-
-    Returns:
-        weight tensor in shape (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
-    """
-    weight = reference_norm.weight.detach().clone()
-    return weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
+def _get_or_create_synthetic_weight(dim: int, seed: int = 1234) -> torch.Tensor:
+    """Get or create synthetic RMSNorm weight, cached by dimension."""
+    cache_key = f"synthetic_dim{dim}"
+    if cache_key not in _CACHED_NORM_WEIGHTS:
+        logger.info(f"\033[33m[cache miss]\033[0m Creating synthetic weight for dim={dim}")
+        torch.manual_seed(seed)
+        _CACHED_NORM_WEIGHTS[cache_key] = torch.randn(dim, dtype=torch.bfloat16)
+    return _CACHED_NORM_WEIGHTS[cache_key]
 
 
 # ============================================================================
@@ -81,7 +79,6 @@ def test_rmsnorm_1d_config_creation():
         add_unit_offset=True,
         mesh_device=mock_mesh_device,
         tt_ccl=mock_tt_ccl,
-        dim=4096,
         max_batch_size=64,
     )
 
@@ -90,7 +87,6 @@ def test_rmsnorm_1d_config_creation():
     assert config.add_unit_offset is True
     assert config.mesh_device == mock_mesh_device
     assert config.tt_ccl == mock_tt_ccl
-    assert config.dim == 4096
     assert config.max_batch_size == 64
 
 
@@ -102,14 +98,14 @@ def test_rmsnorm_1d_config_defaults():
     assert config.eps == 1e-5
     assert config.add_unit_offset is False
     assert config.max_batch_size == 32
-    assert config.weight_dtype == ttnn.bfloat16
-    assert config.fp32_dest_acc_en is True
+    assert config.decode_in_sharded is True
+    assert config.decode_out_sharded is True
 
     # Optional fields default to None
     assert config.mesh_device is None
     assert config.tt_ccl is None
-    assert config.dim is None
-    assert config.decode_sharded_program_config is None
+    assert config.prefill_distributed is None
+    assert config.decode_program_config is None
 
 
 def test_rmsnorm_1d_config_power_user_overrides():
@@ -119,14 +115,14 @@ def test_rmsnorm_1d_config_power_user_overrides():
 
     config = RMSNorm1DConfig(
         weight=MagicMock(),
-        decode_sharded_program_config=mock_prg_config,
-        decode_sharded_output_memcfg=mock_mem_config,
-        fp32_dest_acc_en=False,
+        decode_program_config=mock_prg_config,
+        decode_memory_config=mock_mem_config,
+        decode_in_sharded=False,
     )
 
-    assert config.decode_sharded_program_config == mock_prg_config
-    assert config.decode_sharded_output_memcfg == mock_mem_config
-    assert config.fp32_dest_acc_en is False
+    assert config.decode_program_config == mock_prg_config
+    assert config.decode_memory_config == mock_mem_config
+    assert config.decode_in_sharded is False
 
 
 def test_compute_norm_core_grid():
@@ -163,105 +159,539 @@ def test_create_sharded_norm_program_config():
 HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
 
+# ============================================================================
+# Model name mappings for CSV-based test cases
+# ============================================================================
+
+# HuggingFace model paths
+LLAMA_1B = "meta-llama/Llama-3.2-1B-Instruct"
+LLAMA_3B = "meta-llama/Llama-3.2-3B-Instruct"
+LLAMA_8B = "meta-llama/Llama-3.1-8B-Instruct"
+LLAMA_11B = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+LLAMA_70B = "meta-llama/Llama-3.3-70B-Instruct"
+LLAMA_90B = "meta-llama/Llama-3.2-90B-Vision-Instruct"
+MISTRAL_7B = "mistralai/Mistral-7B-Instruct-v0.3"
+MIXTRAL_MOE = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+QWEN2_7B = "Qwen/Qwen2-7B-Instruct"
+QWEN25_7B = "Qwen/Qwen2.5-7B-Instruct"
+QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
+QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
+QWEN3_32B = "Qwen/Qwen3-32B"
+DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+
+_slow = pytest.mark.slow
+
+
+def _list_rmsnorm_1d_test_cases() -> list[pytest.param]:
+    """
+    Test cases from rmsnorm_1d_testcases.csv.
+
+    These cover various models across 1D topologies (1x1, 1x2, 1x8).
+    Includes both decode and prefill modes with various seq_len values.
+
+    Parameters:
+    - mesh_shape: (cluster_shape_x, cluster_shape_y) tuple
+    - input_shape: (x0, x1, x2, x3) - x1 > 1 for vision encoder norms
+    - mode: "decode" or "prefill"
+    - dim: hidden dimension
+    - eps: epsilon for numerical stability
+    - in_sharded: whether input is sharded
+    - out_sharded: whether output is sharded
+    - is_distributed: whether distributed path is used
+    - model_name: HuggingFace model path
+    - pcc: minimum PCC threshold
+    """
+    # fmt: off
+    return [
+        # === Fast tests (minimal coverage set) ===
+        # Single device (1x1) - local paths
+        pytest.param((1, 1), (1, 1, 128, 2048), "prefill", 2048, 1e-5, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-128-1B"),
+        pytest.param((1, 1), (1, 1, 32, 2048), "decode", 2048, 1e-5, True, True, False, LLAMA_1B, 0.999, id="1x1-decode-32-1B"),
+        pytest.param((1, 1), (1, 1, 128, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-128-8B"),
+        pytest.param((1, 1), (1, 1, 32, 4096), "decode", 4096, 1e-5, True, True, False, LLAMA_8B, 0.999, id="1x1-decode-32-8B"),
+        # Multi-device (1x2) - local paths
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-128-8B"),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-5, True, True, False, LLAMA_8B, 0.999, id="1x2-decode-32-8B"),
+        # Multi-device (1x8) - includes distributed path
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-128-8B"),
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-5, True, True, False, LLAMA_70B, 0.999, id="1x8-decode-32-70B"),
+        pytest.param((1, 8), (1, 1, 128, 8192), "prefill", 8192, 1e-5, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-128-70B-dist"),
+        # Non-Llama models
+        pytest.param((1, 2), (1, 1, 128, 3584), "prefill", 3584, 1e-6, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-128-Qwen2.5-7B"),
+        pytest.param((1, 8), (1, 1, 128, 5120), "prefill", 5120, 1e-6, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-128-Qwen3-32B-dist"),
+        # Vision encoder norms (x_shape_1 > 1, dim=128)
+        pytest.param((1, 1), (1, 4, 6528, 128), "decode", 128, 1e-5, False, False, False, LLAMA_11B, 0.999, id="1x1-decode-6528x4-11B-vision"),
+        pytest.param((1, 1), (1, 16, 128, 128), "prefill", 128, 1e-5, False, False, False, LLAMA_11B, 0.999, id="1x1-prefill-128x16-11B-vision"),
+        # === Slow tests (full coverage from CSV) ===
+        # Mesh 1x1
+        pytest.param((1, 1), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-128-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-32-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 1024, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 2048, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 4096, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 8192, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x1-decode-32-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 16384, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32768, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-128-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-32-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 1024, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 2048, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 4096, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 8192, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x1-decode-32-3B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-128-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-32-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x1-decode-32-8B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-128-7B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-32-7B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 1), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x1-decode-32-7B", marks=_slow),
+        # Mesh 1x2
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-128-1B", marks=_slow),
+        pytest.param((1, 2), (1, 4, 6528, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-decode-6528x4-1B-vision", marks=_slow),
+        pytest.param((1, 2), (1, 16, 128, 128), "prefill", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-128x16-1B-vision", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-32-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_11B, 0.999, id="1x2-decode-32-1B", marks=_slow),
+        pytest.param((1, 2), (1, 16, 16, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-decode-16x16-1B-vision", marks=_slow),
+        pytest.param((1, 2), (1, 4, 16, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-decode-16x4-1B-vision", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-128-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-32-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x2-decode-32-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 16384, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32768, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-128-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-32-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x2-decode-32-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 16384, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-16384-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32768, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-32768-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-128-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-32-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-8192-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x2-decode-32-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 16384, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-16384-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32768, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-32768-8B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 16384, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32768, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-128-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x2-decode-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-128-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3584), "decode", 3584, 1e-06, True, True, False, QWEN2_7B, 0.999, id="1x2-decode-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-128-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-32-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-1024-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-2048-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-4096-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-8192-DeepSeek-dist", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 5120), "decode", 5120, 1e-05, True, True, False, DEEPSEEK_R1_14B, 0.999, id="1x2-decode-32-DeepSeek", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-128-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 1024, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 2048, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 4096, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 8192, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-8192-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3584), "decode", 3584, 1e-06, True, True, False, QWEN25_7B, 0.999, id="1x2-decode-32-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 16384, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-16384-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32768, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-32768-7B", marks=_slow),
+        # Mesh 1x8
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-128-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 6528, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-decode-6528-1B", marks=_slow),
+        pytest.param((1, 8), (1, 4, 128, 128), "prefill", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-128x4-1B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-32-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_11B, 0.999, id="1x8-decode-32-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-decode-4-1B", marks=_slow),
+        pytest.param((1, 8), (1, 32, 4, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-decode-4x32-1B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 4, 4, 128), "decode", 128, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-decode-4x4-1B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_90B, 0.999, id="1x8-prefill-128-90B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 6528, 128), "decode", 128, 1e-05, False, False, False, LLAMA_90B, 0.999, id="1x8-decode-6528-90B", marks=_slow),
+        pytest.param((1, 8), (1, 8, 128, 128), "prefill", 128, 1e-05, False, False, False, LLAMA_90B, 0.999, id="1x8-prefill-128x8-90B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_90B, 0.999, id="1x8-prefill-32-90B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-05, True, True, False, LLAMA_90B, 0.999, id="1x8-decode-32-90B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8, 128), "decode", 128, 1e-05, False, False, False, LLAMA_90B, 0.999, id="1x8-decode-8-90B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-128-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-32-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8192, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x8-decode-32-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32768, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-128-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-32-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8192, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x8-decode-32-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-16384-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32768, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-32768-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-128-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-32-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8192, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-8192-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x8-decode-32-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-16384-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32768, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-32768-8B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8192, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32768, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-128-70B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-32-70B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-1024-70B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-2048-70B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-4096-70B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-05, True, True, False, LLAMA_70B, 0.999, id="1x8-decode-32-70B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-128-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-32-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-1024-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-2048-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-4096-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8192, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-8192-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-06, True, True, False, QWEN25_72B, 0.999, id="1x8-decode-32-Qwen2.5", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-16384-Qwen2.5-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-128-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-32-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-1024-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-2048-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-4096-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 5120), "decode", 5120, 1e-06, True, True, False, QWEN25_CODER_32B, 0.999, id="1x8-decode-32-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-128-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 8, 128, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-128x8-32B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-128-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-32-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-1024-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 8, 1024, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-1024x8-32B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-1024-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-2048-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 8, 2048, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-2048x8-32B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-2048-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-4096-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 8, 4096, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-4096x8-32B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-4096-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 5120), "decode", 5120, 1e-06, True, True, False, QWEN3_32B, 0.999, id="1x8-decode-32-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 8, 128), "decode", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-decode-8-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1, 128), "decode", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-decode-1-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-16384-32B-dist", marks=_slow),
+        pytest.param((1, 8), (1, 8, 16384, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-16384x8-32B-vision", marks=_slow),
+        pytest.param((1, 8), (1, 1, 16384, 128), "prefill", 128, 1e-06, False, False, False, QWEN3_32B, 0.999, id="1x8-prefill-16384-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-128-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-32-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x8-decode-32-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-128-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-32-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 1024, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-1024-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 2048, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-2048-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 4096, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-4096-7B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MIXTRAL_MOE, 0.999, id="1x8-decode-32-7B", marks=_slow),
+    ]
+    # fmt: on
+
+
+def _list_rmsnorm_2d_unique_test_cases() -> list[pytest.param]:
+    """
+    Unique test cases from rmsnorm_2d_testcases.csv (not duplicated in rmsnorm_1d_testcases.csv).
+
+    These are the 1x4 cluster shape cases for Llama-3.1-8B that only exist in the 2D file.
+    Note: Despite being in the "2D" file, these are still 1D topologies (cluster_shape_x=1).
+    """
+    # fmt: off
+    return [
+        # === Fast tests (1x4 minimal coverage) ===
+        pytest.param((1, 4), (1, 1, 128, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x4-prefill-128-8B"),
+        pytest.param((1, 4), (1, 1, 32, 4096), "decode", 4096, 1e-5, True, True, False, LLAMA_8B, 0.999, id="1x4-decode-32-8B"),
+        # === Slow tests (full 1x4 coverage) ===
+        pytest.param((1, 4), (1, 1, 32, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x4-prefill-32-8B", marks=_slow),
+        pytest.param((1, 4), (1, 1, 1024, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x4-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 4), (1, 1, 2048, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x4-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 4), (1, 1, 4096, 4096), "prefill", 4096, 1e-5, False, False, False, LLAMA_8B, 0.999, id="1x4-prefill-4096-8B", marks=_slow),
+    ]
+    # fmt: on
+
+
+def _list_rmsnorm_1d_test_cases_from_distnorm() -> list[pytest.param]:
+    """
+    Test cases derived from rmsnorm_*d_testcases_by_dist_norm.csv (de-duplicated).
+
+    These are cases collected from distribute_norm.py runs, representing
+    actual production usage patterns. Many overlap with existing tests but
+    include some unique mesh/dim combinations.
+
+    Generated by: models/common/tests/modules/rmsnorm/dedup_dist_rmsnorm.py
+    """
+    # fmt: off
+    return [
+        # === Fast tests (minimal coverage from dist_norm runs) ===
+        # DeepSeek 1x2 distributed prefill
+        pytest.param((1, 2), (1, 1, 128, 2560), "prefill", 5120, 1e-05, False, False, True, DEEPSEEK_R1_14B, 0.999, id="1x2-prefill-128-DeepSeek-14B-dist"),
+        # Qwen 1x2 non-distributed (eps=1e-06)
+        pytest.param((1, 2), (1, 1, 128, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN25_7B, 0.999, id="1x2-prefill-128-Qwen25-7B"),
+        # Qwen 1x8 distributed prefill
+        pytest.param((1, 8), (1, 1, 128, 1024), "prefill", 8192, 1e-06, False, False, True, QWEN25_72B, 0.999, id="1x8-prefill-128-Qwen25-72B-dist"),
+        # Llama 1x8 decode
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x8-decode-32-8B-dn"),
+
+        # === Slow tests (full coverage) ===
+        # DEEPSEEK_R1_14B
+        pytest.param((1, 2), (1, 1, 32, 5120), "decode", 5120, 1e-05, True, True, False, DEEPSEEK_R1_14B, 0.999, id="1x2-decode-32-DeepSeek-14B", marks=_slow),
+
+        # LLAMA_11B
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_11B, 0.999, id="1x2-decode-32-11B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x2-prefill-128-11B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_11B, 0.999, id="1x8-decode-32-11B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_11B, 0.999, id="1x8-prefill-128-11B", marks=_slow),
+
+        # LLAMA_1B
+        pytest.param((1, 1), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x1-decode-32-1B-dn", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x1-prefill-128-1B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x2-decode-32-1B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x2-prefill-128-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 2048), "decode", 2048, 1e-05, True, True, False, LLAMA_1B, 0.999, id="1x8-decode-32-1B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 2048), "prefill", 2048, 1e-05, False, False, False, LLAMA_1B, 0.999, id="1x8-prefill-128-1B", marks=_slow),
+
+        # LLAMA_3B
+        pytest.param((1, 1), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x1-decode-32-3B-dn", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x1-prefill-128-3B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x2-decode-32-3B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x2-prefill-128-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 3072), "decode", 3072, 1e-05, True, True, False, LLAMA_3B, 0.999, id="1x8-decode-32-3B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 3072), "prefill", 3072, 1e-05, False, False, False, LLAMA_3B, 0.999, id="1x8-prefill-128-3B", marks=_slow),
+
+        # LLAMA_70B
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-05, True, True, False, LLAMA_70B, 0.999, id="1x8-decode-32-70B-dn", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 1024), "prefill", 8192, 1e-05, False, False, True, LLAMA_70B, 0.999, id="1x8-prefill-128-70B-dist-dn", marks=_slow),
+
+        # LLAMA_8B
+        pytest.param((1, 1), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x1-decode-32-8B-dn", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x1-prefill-128-8B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, LLAMA_8B, 0.999, id="1x2-decode-32-8B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x2-prefill-128-8B-dn", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, LLAMA_8B, 0.999, id="1x8-prefill-128-8B-dn", marks=_slow),
+
+        # MISTRAL_7B
+        pytest.param((1, 1), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x1-decode-32-7B-dn", marks=_slow),
+        pytest.param((1, 1), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x1-prefill-128-7B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x2-decode-32-7B-dn", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x2-prefill-128-7B-dn", marks=_slow),
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MISTRAL_7B, 0.999, id="1x8-decode-32-7B-dn", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MISTRAL_7B, 0.999, id="1x8-prefill-128-7B-dn", marks=_slow),
+
+        # MIXTRAL_MOE
+        pytest.param((1, 8), (1, 1, 32, 4096), "decode", 4096, 1e-05, True, True, False, MIXTRAL_MOE, 0.999, id="1x8-decode-32-MOE", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 4096), "prefill", 4096, 1e-05, False, False, False, MIXTRAL_MOE, 0.999, id="1x8-prefill-128-MOE", marks=_slow),
+
+        # QWEN25_72B
+        pytest.param((1, 8), (1, 1, 32, 8192), "decode", 8192, 1e-06, True, True, False, QWEN25_72B, 0.999, id="1x8-decode-32-Qwen25-72B", marks=_slow),
+
+        # QWEN25_7B
+        pytest.param((1, 2), (1, 1, 32, 3584), "decode", 3584, 1e-06, True, True, False, QWEN25_7B, 0.999, id="1x2-decode-32-Qwen25-7B", marks=_slow),
+
+        # QWEN25_CODER_32B
+        pytest.param((1, 8), (1, 1, 32, 5120), "decode", 5120, 1e-06, True, True, False, QWEN25_CODER_32B, 0.999, id="1x8-decode-32-Qwen25-Coder-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 640), "prefill", 5120, 1e-06, False, False, True, QWEN25_CODER_32B, 0.999, id="1x8-prefill-128-Qwen25-Coder-32B-dist", marks=_slow),
+
+        # QWEN2_7B
+        pytest.param((1, 2), (1, 1, 32, 3584), "decode", 3584, 1e-06, True, True, False, QWEN2_7B, 0.999, id="1x2-decode-32-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), (1, 1, 128, 3584), "prefill", 3584, 1e-06, False, False, False, QWEN2_7B, 0.999, id="1x2-prefill-128-Qwen2-7B", marks=_slow),
+
+        # QWEN3_32B
+        pytest.param((1, 8), (1, 1, 32, 5120), "decode", 5120, 1e-06, True, True, False, QWEN3_32B, 0.999, id="1x8-decode-32-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), (1, 1, 128, 640), "prefill", 5120, 1e-06, False, False, True, QWEN3_32B, 0.999, id="1x8-prefill-128-Qwen3-32B-dist", marks=_slow),
+    ]
+    # fmt: on
+
+
+# ============================================================================
+# CSV-based Parametrized Test
+# ============================================================================
+
+
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
-    [(1, 1), (1, 2), (1, 8)],
-    ids=["1x1", "1x2", "1x8"],
+    [(1, 1), (1, 2), (1, 4), (1, 8)],
+    ids=["1x1", "1x2", "1x4", "1x8"],
     indirect=True,
 )
-@pytest.mark.parametrize("mode", ["decode", "prefill"])
 @pytest.mark.parametrize(
-    "batch_size,seq_len",
-    [
-        (1, 1),  # decode
-        (32, 1),  # decode with max batch
-        (1, 128),  # short prefill
-        (1, 512),  # medium prefill
-    ],
-    ids=["b1_s1", "b32_s1", "b1_s128", "b1_s512"],
+    "mesh_shape,input_shard_shape,mode,dim,eps,in_sharded,out_sharded,is_distributed,model_name,pcc",
+    _list_rmsnorm_1d_test_cases() + _list_rmsnorm_2d_unique_test_cases() + _list_rmsnorm_1d_test_cases_from_distnorm(),
 )
 def test_rmsnorm_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
+    input_shard_shape: tuple[int, int, int, int],
     mode: str,
-    batch_size: int,
-    seq_len: int,
+    dim: int,
+    eps: float,
+    in_sharded: bool,
+    out_sharded: bool,
+    is_distributed: bool,
+    model_name: str,
+    pcc: float,
 ):
     """
-    Test RMSNorm1D.forward(x, mode) matches PyTorch reference.
+    Test RMSNorm1D matches PyTorch reference for test cases from CSV files.
+
+    Test cases are derived from:
+    - rmsnorm_1d_testcases.csv (all cases)
+    - rmsnorm_2d_testcases.csv (unique 1x4 cases only, duplicates excluded)
     """
-    # Decode mode is for single-token generation (seq_len=1)
-    # Prefill mode handles variable-length sequences
-    if mode == "decode" and seq_len > 1:
-        pytest.skip("Decode mode is only valid for seq_len=1")
+    # Skip if mesh_shape doesn't match the current device
+    if ttnn_mesh_device.shape != ttnn.MeshShape(*mesh_shape):
+        pytest.skip(f"Test requires {mesh_shape} mesh, got {ttnn_mesh_device.shape}")
 
     seed = 1234
     torch.manual_seed(seed)
 
-    # Load HF model for reference
-    hf_model_name = HF_MODEL_NAME
-    config = AutoConfig.from_pretrained(hf_model_name)
-    config.num_hidden_layers = 1
+    # Create synthetic weights for RMSNorm reference.
+    # This approach is used for all cases because:
+    # 1. The test validates RMSNorm1D implementation correctness, not HF weight loading
+    # 2. Production code loads weights from state_dict, not HF AutoModel
+    # 3. The math is identical regardless of weight values
+    # 4. Avoids HF model loading overhead and config complexity (e.g., MllamaConfig)
+    # Weights are cached by dim to avoid regeneration across tests.
+    norm_weight = _get_or_create_synthetic_weight(dim, seed)
+    reference_norm = torch.nn.RMSNorm(dim, eps=eps).to(torch.bfloat16)
+    reference_norm.weight.data.copy_(norm_weight)
 
-    with no_init_weights():
-        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
-
-    # Get reference RMSNorm (input_layernorm from first layer)
-    first_layer = hf_model.model.layers[0]
-    reference_norm = first_layer.input_layernorm
-
-    # Initialize deterministic weights
-    _get_or_init_norm_weights(hf_model_name, reference_norm)
-
-    # Get dimensions
-    dim = config.hidden_size
-    eps = config.rms_norm_eps
-
-    # Build RMSNorm1D
-    weight_torch = get_norm_weight_from_ref_model(reference_norm, dim)
-
-    # Tensor shapes match real model usage:
-    # - Decode: (1, 1, batch_size, dim) - each user has 1 token, height = batch_size
-    # - Prefill: (1, 1, seq_len, dim) - single user with full sequence
-    if mode == "decode":
-        torch_input = torch.randn(1, 1, batch_size, dim, dtype=torch.bfloat16)
-    else:
-        torch_input = torch.randn(1, 1, seq_len, dim, dtype=torch.bfloat16)
+    # Create input tensor with full hidden dimension
+    # input_shard_shape = (x0, x1, x2, x3) where:
+    # - x0, x1 = batch dimensions (x1 > 1 for vision encoder norms)
+    # - x2 = sequence length
+    # - x3 = per-device hidden dim (equals dim for non-distributed, dim/num_devices for distributed)
+    # We always create full input shape using dim, then let prepare_input_tensor handle sharding
+    torch_input = torch.randn(*input_shard_shape[:-1], dim, dtype=torch.bfloat16)
 
     # Create LazyWeights
     ttnn.SetDefaultDevice(ttnn_mesh_device)
     cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/rmsnorm_1d"))
 
     lazy_weight = LazyWeight(
-        source=weight_torch,
+        source=norm_weight,  # Raw [dim] shape - module reshapes internally
         dtype=ttnn.bfloat16,
-        cache_dir_weight_name=(cache_dir, "norm_weight"),
+        cache_dir_weight_name=(cache_dir, f"norm_weight_{model_name}_dim{dim}"),
     )
 
     # Construct RMSNorm1D
-    tt_model = RMSNorm1D(weight=lazy_weight, eps=eps)
+    # Happy path: standard cases with default eps and sharded decode
+    # Power path: vision encoder (interleaved decode) or non-default eps
+    is_default_eps = eps == 1e-5
+    is_default_sharding = in_sharded and out_sharded
 
-    # Run TT model
+    if is_default_eps and is_default_sharding:
+        tt_model = RMSNorm1D(weight=lazy_weight)
+    else:
+        config = RMSNorm1DConfig(
+            weight=lazy_weight,
+            eps=eps,
+            decode_in_sharded=in_sharded,
+            decode_out_sharded=out_sharded,
+        )
+        tt_model = RMSNorm1D.from_config(config)
+
+    # Verify config matches expected sharding behavior from CSV
+    cfg = tt_model.config
+    if mode == "prefill":
+        # Prefill uses interleaved memory (not sharded)
+        assert not in_sharded, f"Prefill should have in_sharded=False, got {in_sharded}"
+        assert not out_sharded, f"Prefill should have out_sharded=False, got {out_sharded}"
+        assert (
+            cfg.prefill_distributed == is_distributed
+        ), f"Expected prefill_distributed={is_distributed}, got {cfg.prefill_distributed}"
+    else:  # decode
+        # Decode never uses distributed path
+        assert not is_distributed, f"Decode should have is_distributed=False, got {is_distributed}"
+        # Verify decode sharding config matches CSV
+        assert cfg.decode_in_sharded == in_sharded, f"Expected decode_in_sharded={in_sharded}"
+        assert cfg.decode_out_sharded == out_sharded, f"Expected decode_out_sharded={out_sharded}"
+        # in_sharded/out_sharded should match (decode either shards both or neither externally)
+        assert (
+            in_sharded == out_sharded
+        ), f"Decode in_sharded and out_sharded should match, got in={in_sharded}, out={out_sharded}"
+
+    # Run TT model - wrap input in LazyWeight, forward() handles conversion
     tt_input = LazyWeight(source=torch_input, dtype=ttnn.bfloat16)
     tt_output = tt_model.forward(tt_input, mode=mode)
     tt_output_torch = to_torch_auto_compose(tt_output)
     ttnn.SetDefaultDevice(None)
 
     # Run reference model
-    # PyTorch RMSNorm expects (*, dim), we pass (height, dim)
-    torch_input_squeezed = torch_input.squeeze(0).squeeze(0)  # (height, dim)
+    # RMSNorm operates on last dimension, so reshape to 2D, apply, reshape back
+    # For distributed cases, torch_input already has full dim (not sharded)
+    original_shape = torch_input.shape
+    torch_input_2d = torch_input.reshape(-1, original_shape[-1])  # (batch*heads*seq, dim)
     with torch.no_grad():
-        reference_output = reference_norm(torch_input_squeezed)
-    reference_output = reference_output.unsqueeze(0).unsqueeze(0)  # (1, 1, height, dim)
+        reference_output_2d = reference_norm(torch_input_2d)
+    reference_output = reference_output_2d.reshape(original_shape)
+
+    # For distributed cases with sharded output, we may need to adjust comparison
+    # The TT output is auto-composed (gathered) so should match full reference
 
     # Compare
-    pcc = 0.999
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"RMSNorm1D vs HF reference: {pcc_message}")
 
     assert passing, f"RMSNorm1D output does not meet PCC requirement {pcc}: {pcc_message}."
-    logger.info(f"RMSNorm1D vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+    logger.info(
+        f"RMSNorm1D vs HF reference: PASSED for model={model_name}, mode={mode}, shard_shape={input_shard_shape}"
+    )
+
+
+# ============================================================================
+# Legacy Integration Tests (kept for backwards compatibility)
+# ============================================================================
+
+# todo)) add real test cases
+# - [x] rmsnorm_1d_testcases.csv --> must have
+# - [x] rmsnorm_2d_testcases.csv --> must have (name say 2d but it is all 1d cases due to data parallelism)
+
+# - [ ] dist_rmsnorm_1d_testcases.csv --> collected from distribute_norm.py --> de-dupe and then use
+# - [ ]dist_rmsnorm_2d_testcases.csv --> collected from distribute_norm.py --> de-dupe and then use (name say 2d but it is all 1d cases due to data parallelism)
+# distribute_norm.py is "interesting" because it contains potentially redundant code -- the last ttnn.all_gather_async call is potentially redundant because rmsnorm.py already performs a all_gather?
+# Needs to confirm --> some test cases in dist_rmsnorm_1d_testcases.csv would be calling that last all_gather_async call
+# ----> confirmed --> do need that all_gather_async call in distribute_norm.py to distribute rmsnorm results to all devices!!!
+# regardless, all of these test cases should work with rmsnorm_1d.py
+
+# - rmsnorm_1d_testcases_by_dist_norm.csv --> should be just duplicates of some of the test cases in rmsnorm_1d_testcases.csv
+# - rmsnorm_2d_testcases_by_dist_norm.csv --> should be just duplicates of some of the test cases in rmsnorm_2d_testcases.csv
 
 
 @pytest.mark.parametrize(

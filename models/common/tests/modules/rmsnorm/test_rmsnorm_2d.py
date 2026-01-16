@@ -154,6 +154,7 @@ def test_rmsnorm_2d_rejects_non_tg():
 HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
 
+# todo)) tttv1 code for TG has bit-rotten! --> so we start with a simple test case for now
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(4, 8), (8, 4)],
