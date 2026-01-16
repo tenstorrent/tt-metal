@@ -415,6 +415,9 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
+/**
+ * Initialization for the run_clamp_loadmacro function.
+ */
 template <uint32_t scale>
 inline void init_clamp_loadmacro() {
     constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
@@ -424,12 +427,6 @@ inline void init_clamp_loadmacro() {
     TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
     TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
     TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
-
-    // There are two ways to program the macro instruction registers, and this setup leverages both ways
-    //  - we can either use the SFPCONFIG flow, by setting up the bits of the instruction into LREG[0] and then
-    //  targeting the Macro instruction register
-    //  - or we can use the shortcut / backdoor load method which relies on having some illegal destination register
-    //  values as part of the instruction
 
     // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which
     // is not normally a legal value
@@ -455,14 +452,10 @@ inline void init_clamp_loadmacro() {
     // 03: ( SFPSTORE                                                        ) <-- these are fixed / not programmable
     // 04: TTI_SFPSWAP       (0, 0, 11, 1)
 
-    // Now we want to set up our two sequences
+    // Now we want to set up our sequence
 
     // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
     //       Delay slot:                  0     1        2
-    //                                                                                                                                                                                                 Use
-    //                                                                                                                                                                                                 Loaded  Result          Macro
-    //                                                                                                                                                                                                 Value   Value   Delay   Instruction
-    //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
     TTI_SFPLOADI(
         0,
         0xA,
@@ -476,11 +469,13 @@ inline void init_clamp_loadmacro() {
     TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
 }
 
+/**
+ * Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more
+ * negative than that, swap the input value with -88.5 and store back to DEST
+ *  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}.
+ * This only runs on the odd columns of 1 face.
+ */
 inline void run_clamp_loadmacro() {
-    // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more
-    // negative than that, swap the input value with -88.5 and store back to DEST
-    //  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}
-
     // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a range we
     // can handle, and then store them back to dest
     //  LD     : bring in the original value from DEST (y)
@@ -491,60 +486,31 @@ inline void run_clamp_loadmacro() {
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_3,
-        0);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting
-             // the even columns for rows   3: 0
+        ADDR_MOD_7,
+        0);      // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
+                 // Dest offset  0 is targeting the even columns for rows   3: 0
     TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
-    TTI_SFPLOADMACRO(
-        5,
-        0,
-        ADDR_MOD_3,
-        2);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting
-             // the odd  columns for rows   3: 0
-    TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_3,
-        4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting
-             // the even columns for rows   7: 4
-    TTI_SFPNOP;
-    TTI_SFPLOADMACRO(
-        7,
-        0,
-        ADDR_MOD_3,
-        6);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting
-             // the odd  columns for rows   7: 4
+        ADDR_MOD_7,
+        4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
+             // Dest offset  4 is targeting the even columns for rows   7: 4
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_3,
-        8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting
-             // the even columns for rows  11: 8
-    TTI_SFPNOP;
-    TTI_SFPLOADMACRO(
-        5,
-        0,
-        ADDR_MOD_3,
-        10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is
-              // targeting the even columns for rows  11: 8
+        ADDR_MOD_7,
+        8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
+             // Dest offset  8 is targeting the even columns for rows  11: 8
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_3,
-        12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is
-              // targeting the odd  columns for rows  15:12
+        ADDR_MOD_7,
+        12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
+              // Dest offset 12 is targeting the even columns for rows  15:12
     TTI_SFPNOP;
-    TTI_SFPLOADMACRO(
-        7,
-        0,
-        ADDR_MOD_3,
-        14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is
-              // targeting the even columns for rows  15:12
-    // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use the
-    // SIMPLE unit
 }
 
 template <uint32_t SCALE>
@@ -570,21 +536,6 @@ void calculate_exponential_polynomial_init() {
 }
 
 /**
- * Inserts an SFPNOP instruction if not on Blackhole. From the documentation:
- * Wormhole:
- *     If SFPMAD is used, software must ensure that on the next cycle, the Vector Unit (SFPU)
- *     does not execute an instruction which reads from any location written to by the SFPMAD.
- * Blackhole:
- *     If SFPMAD is used, hardware will ensure that on the next cycle, the Vector Unit (SFPU)
- *     does not execute an instruction which reads from any location written to by the SFPMAD.
- */
-ALWI void INSERT_SFPNOP() {
-#ifndef ARCH_BLACKHOLE
-    TTI_SFPNOP;
-#endif
-}
-
-/**
  * Computes exp(x) using polynomial approximation after range reduction.
  *
  * Clamps input to >= -88.5, scales by configured factor, then reduces to exp(r) * 2^k
@@ -595,19 +546,20 @@ ALWI void INSERT_SFPNOP() {
  * supported on Blackhole.
  * @tparam SCALE_EN Apply scaling factor from LREG11 to input values
  * @tparam ITERATIONS Number of 32-element vectors to process per tile
- * @tparam NUM_TERMS Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
+ * @tparam POLY_DEGREE Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
+ * @tparam IS_FP32_DEST_ACC_EN Float32 accumulation to dest register enabled.
  */
-template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool is_fp32_dest_acc_en>
+template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool IS_FP32_DEST_ACC_EN>
 void calculate_exponential_polynomial() {
-    // Clamp values < -88.5 to 0.
-    run_clamp_loadmacro();
-
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_7);
+
+    // Clamp values < -88.5 to 0.
+    run_clamp_loadmacro();
 
     if (!USE_SFPARECIP_INSTR) {
         ASSERT(
@@ -654,17 +606,17 @@ void calculate_exponential_polynomial() {
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        constexpr uint32_t input_type = is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+        constexpr uint32_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
         TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_7, 0);
 
         if constexpr (SCALE_EN) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            INSERT_SFPNOP();
+            TTI_SFPNOP;
         }
 
         // Multiply by 1/ln(2) and round.
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        INSERT_SFPNOP();
+        TTI_SFPNOP;
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
@@ -683,42 +635,43 @@ void calculate_exponential_polynomial() {
 #endif
         } else {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            INSERT_SFPNOP();
+            TTI_SFPNOP;
 
             // Calculate polynomial.
             if constexpr (POLY_DEGREE == 1) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 2) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 3) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else {  // degree 4.
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
+                TTI_SFPNOP;
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             }
+            TTI_SFPNOP;
         }
 
         // Multiply by 2^k.
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
-        INSERT_SFPNOP();
+        TTI_SFPNOP;
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        INSERT_SFPNOP();
+        TTI_SFPNOP;
 
         // Store the result.
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (!IS_FP32_DEST_ACC_EN) {
             // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it
             // so convert to bfloat16 using round-to-nearest-even.
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
