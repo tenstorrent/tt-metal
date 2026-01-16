@@ -50,7 +50,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        self.tokenizer_type = tc.get("tokenizer_type", "char")
         self.use_no_op = tc.get("use_no_op", False)
         self.use_moreh_adamw = tc.get("use_moreh_adamw", False)
         self.use_kahan_summation = tc.get("use_kahan_summation", False)
@@ -169,27 +168,63 @@ class PrimitiveEmbedding(AbstractModuleBase):
         return self.forward(x)
 
 
-class PrimitiveMLP(AbstractModuleBase):
-    """GPT-style MLP layer implemented with ttml ops."""
+class PrimitiveLinear(AbstractModuleBase):
+    """Linear layer matching C++ LinearLayer parameter naming (weight, bias)."""
 
-    def __init__(self, embedding_dim: int, dropout: float = 0.0) -> None:
+    def __init__(
+        self, in_features: int, out_features: int, has_bias: bool = True
+    ) -> None:
+        super().__init__()
+        # Match C++ LinearLayer naming: creates "linear" as module name
+        self.create_name("linear")
+
+        init_k = np.sqrt(1.0 / in_features)
+        weight_shape = (1, 1, out_features, in_features)
+        weight_np = np.random.uniform(-init_k, init_k, size=weight_shape).astype(
+            ml_dtypes.bfloat16
+        )
+        weight_tensor = ttml.autograd.Tensor.from_numpy(
+            weight_np, layout=ttnn.Layout.TILE
+        )
+        self.weight = Parameter(weight_tensor)
+
+        if has_bias:
+            bias_shape = (1, 1, 1, out_features)
+            bias_np = np.random.uniform(-init_k, init_k, size=bias_shape).astype(
+                ml_dtypes.bfloat16
+            )
+            bias_tensor = ttml.autograd.Tensor.from_numpy(
+                bias_np, layout=ttnn.Layout.TILE
+            )
+            self.bias = Parameter(bias_tensor)
+        else:
+            self.bias = None
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        bias_tensor = self.bias.tensor if self.bias is not None else None
+        return ttml.ops.linear.linear(x, self.weight.tensor, bias_tensor)
+
+    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        return self.forward(x)
+
+
+class PrimitiveMLP(AbstractModuleBase):
+    """GPT-style MLP layer matching full model parameter naming."""
+
+    def __init__(
+        self, embedding_dim: int, dropout: float = 0.0, bias: bool = True
+    ) -> None:
         super().__init__()
         self.dropout_prob = dropout
 
-        fc1_shape = (1, 1, embedding_dim * 4, embedding_dim)
-        fc1_np = np.random.normal(0.0, 0.02, size=fc1_shape).astype(ml_dtypes.bfloat16)
-        fc1_tensor = ttml.autograd.Tensor.from_numpy(fc1_np, layout=ttnn.Layout.TILE)
-        self.fc1 = Parameter(fc1_tensor)
-
-        fc2_shape = (1, 1, embedding_dim, embedding_dim * 4)
-        fc2_np = np.random.normal(0.0, 0.02, size=fc2_shape).astype(ml_dtypes.bfloat16)
-        fc2_tensor = ttml.autograd.Tensor.from_numpy(fc2_np, layout=ttnn.Layout.TILE)
-        self.fc2 = Parameter(fc2_tensor)
+        # Use PrimitiveLinear to get fc1/weight, fc1/bias naming
+        self.fc1 = PrimitiveLinear(embedding_dim, embedding_dim * 4, has_bias=bias)
+        self.fc2 = PrimitiveLinear(embedding_dim * 4, embedding_dim, has_bias=bias)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        x = ttml.ops.linear.linear(x, self.fc1.tensor, None)
+        x = self.fc1(x)
         x = ttml.ops.unary.gelu(x)
-        x = ttml.ops.linear.linear(x, self.fc2.tensor, None)
+        x = self.fc2(x)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             x = ttml.ops.dropout.dropout(x, self.dropout_prob)
         return x
@@ -199,9 +234,15 @@ class PrimitiveMLP(AbstractModuleBase):
 
 
 class PrimitiveMultiHeadAttention(AbstractModuleBase):
-    """Multi-head attention implemented with ttml ops."""
+    """Multi-head attention matching full model parameter naming."""
 
-    def __init__(self, embedding_dim: int, num_heads: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        bias: bool = True,
+    ):
         super().__init__()
         if embedding_dim % num_heads != 0:
             raise ValueError("embedding_dim must be divisible by num_heads")
@@ -209,24 +250,16 @@ class PrimitiveMultiHeadAttention(AbstractModuleBase):
         self.num_heads = num_heads
         self.dropout_prob = dropout
 
-        qkv_shape = (1, 1, embedding_dim * 3, embedding_dim)
-        qkv_np = np.random.normal(0.0, 0.02, size=qkv_shape).astype(ml_dtypes.bfloat16)
-        qkv_tensor = ttml.autograd.Tensor.from_numpy(qkv_np, layout=ttnn.Layout.TILE)
-        self.qkv_weight = Parameter(qkv_tensor)
-
-        out_proj_shape = (1, 1, embedding_dim, embedding_dim)
-        out_proj_np = np.random.normal(0.0, 0.02, size=out_proj_shape).astype(
-            ml_dtypes.bfloat16
+        # Use PrimitiveLinear to get qkv_linear/weight, qkv_linear/bias naming
+        self.qkv_linear = PrimitiveLinear(
+            embedding_dim, embedding_dim * 3, has_bias=bias
         )
-        out_proj_tensor = ttml.autograd.Tensor.from_numpy(
-            out_proj_np, layout=ttnn.Layout.TILE
-        )
-        self.out_proj_weight = Parameter(out_proj_tensor)
+        self.out_linear = PrimitiveLinear(embedding_dim, embedding_dim, has_bias=bias)
 
     def forward(
         self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
-        qkv = ttml.ops.linear.linear(x, self.qkv_weight.tensor, None)
+        qkv = self.qkv_linear(x)
         query, key, value = ttml.ops.multi_head_utils.heads_creation(
             qkv, self.num_heads
         )
@@ -234,7 +267,7 @@ class PrimitiveMultiHeadAttention(AbstractModuleBase):
             query, key, value, mask
         )
         fused = ttml.ops.multi_head_utils.heads_fusion(attn_out)
-        out = ttml.ops.linear.linear(fused, self.out_proj_weight.tensor, None)
+        out = self.out_linear(fused)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
         return out
@@ -282,8 +315,10 @@ class PrimitiveGPTBlock(AbstractModuleBase):
         else:
             self.ln2_beta = None
 
-        self.attention = PrimitiveMultiHeadAttention(embedding_dim, num_heads, dropout)
-        self.mlp = PrimitiveMLP(embedding_dim, dropout)
+        self.attention = PrimitiveMultiHeadAttention(
+            embedding_dim, num_heads, dropout, bias
+        )
+        self.mlp = PrimitiveMLP(embedding_dim, dropout, bias)
 
     def forward(
         self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
@@ -310,14 +345,24 @@ class PrimitiveGPTBlock(AbstractModuleBase):
 
 
 class PrimitiveNanoGPT(AbstractModuleBase):
-    """NanoGPT model implemented with ttml/ttnn primitives."""
+    """NanoGPT model implemented with ttml/ttnn primitives.
+
+    Parameter names match the full NanoGPT model exactly for checkpoint compatibility.
+    """
 
     def __init__(self, config: PrimitiveNanoGPTConfig) -> None:
         super().__init__()
+        # Use "NanoGPT" as module name to match full model's parameter paths
+        self.create_name("NanoGPT")
         self.config = config
 
-        self.wte = PrimitiveEmbedding(config.vocab_size, config.n_embd)
-        self.wpe = PrimitiveEmbedding(config.block_size, config.n_embd)
+        # Match full model naming: tok_emb, pos_emb
+        vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
+        self.tok_emb = PrimitiveEmbedding(vocab_size_divisible_by_32, config.n_embd)
+        self.pos_emb = PrimitiveEmbedding(config.block_size, config.n_embd)
+
+        # LM head (fc) - no bias, matching full model
+        self.fc = PrimitiveLinear(config.n_embd, config.vocab_size, has_bias=False)
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
@@ -345,9 +390,6 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         else:
             self.ln_f_beta = None
 
-        # Weight tying: share with token embedding
-        self.lm_head_weight = self.wte.weight
-
         # Cache for position tensor (avoids recreating every forward pass)
         self._cached_pos_tensor = None
         self._cached_pos_seq_len = None
@@ -355,7 +397,7 @@ class PrimitiveNanoGPT(AbstractModuleBase):
     def forward(
         self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
-        tok_emb = self.wte(idx)
+        tok_emb = self.tok_emb(idx)
 
         # Create position indices (cached for constant sequence length during training)
         idx_shape = idx.shape()
@@ -369,7 +411,7 @@ class PrimitiveNanoGPT(AbstractModuleBase):
             )
             self._cached_pos_seq_len = seq_len
 
-        pos_emb = self.wpe(self._cached_pos_tensor)
+        pos_emb = self.pos_emb(self._cached_pos_tensor)
 
         x = ttml.ops.binary.add(tok_emb, pos_emb)
         if self.get_run_mode() == RunMode.TRAIN and self.config.dropout > 0.0:
@@ -381,7 +423,7 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         x = ttml.ops.layernorm.composite_layernorm(
             x, self.ln_f_gamma.tensor, self.ln_f_beta.tensor if self.ln_f_beta else None
         )
-        logits = ttml.ops.linear.linear(x, self.lm_head_weight.tensor, None)
+        logits = self.fc(x)
         logits_shape = logits.shape()
         if len(logits_shape) == 5:
             new_shape = [logits_shape[0], 1, logits_shape[3], logits_shape[4]]
@@ -414,19 +456,30 @@ def create_warmup_linear_scheduler(optimizer, total_steps: int):
 
 
 def create_dataset_from_text(
-    text: str, sequence_length: int, tokenizer_type: str = "char"
+    text: str,
+    sequence_length: int,
 ) -> Tuple[list, CharTokenizer]:
-    if tokenizer_type == "char":
-        tokenizer = CharTokenizer(text)
-        tokens = tokenizer.encode(text)
-        dataset = []
-        for i in range(0, len(tokens) - sequence_length, sequence_length):
-            seq = tokens[i : i + sequence_length]
-            target = tokens[i + 1 : i + sequence_length + 1]
-            if len(seq) == sequence_length and len(target) == sequence_length:
-                dataset.append((seq, target))
-        return dataset, tokenizer
-    raise ValueError(f"Unsupported tokenizer type: {tokenizer_type}")
+    """Create dataset from text using CharTokenizer from ttml.common.data.
+
+    Args:
+        text: Text corpus to create dataset from.
+        sequence_length: Length of each sequence.
+
+    Returns:
+        Tuple of (dataset, tokenizer) where dataset is list of (seq, target) tuples.
+    """
+    tokenizer = CharTokenizer(text)
+    tokens = tokenizer.encode(text)
+
+    # Create sequences
+    dataset = []
+    for i in range(0, len(tokens) - sequence_length, sequence_length):
+        seq = tokens[i : i + sequence_length]
+        target = tokens[i + 1 : i + sequence_length + 1]
+        if len(seq) == sequence_length and len(target) == sequence_length:
+            dataset.append((seq, target))
+
+    return dataset, tokenizer
 
 
 def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
@@ -559,6 +612,9 @@ def sample_greedy(
 ) -> str:
     model.eval()
 
+    # Reset graph before inference to ensure clean state
+    get_autograd_ctx().reset_graph()
+
     if len(prompt) == 0:
         prompt = " "
 
@@ -590,7 +646,9 @@ def sample_greedy(
         input_tensor = ttml.autograd.Tensor.from_numpy(
             inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        logits = model(input_tensor, mask)
+        # Clone mask before each use to avoid TTNN memory reuse corrupting the original
+        mask_for_model = ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
+        logits = model(input_tensor, mask_for_model)
         logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
         logits_shape = logits_np.shape
         if len(logits_shape) == 5:
@@ -719,6 +777,7 @@ def find_latest_checkpoint(base_path: str) -> Optional[str]:
 def load_model_from_checkpoint(
     checkpoint_path: str,
 ) -> Tuple[PrimitiveNanoGPT, CharTokenizer, ModelConfig, TrainingConfig, int]:
+    """Load model from checkpoint file."""
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
@@ -745,9 +804,13 @@ def load_model_from_checkpoint(
 
     print("  Loading model parameters...")
     model_params = model.parameters()
+
+    loaded_count = 0
+    skipped_count = 0
     for name, param_data in model_state.items():
         if name not in model_params:
             print(f"    Warning: Parameter {name} not found in model, skipping")
+            skipped_count += 1
             continue
 
         if isinstance(param_data, dict):
@@ -769,8 +832,9 @@ def load_model_from_checkpoint(
             numpy_bfloat16, layout=layout, new_type=ttnn.DataType.BFLOAT16
         )
         model_params[name].assign(restored_tensor)
-        print(f"    Loaded: {name} (shape: {numpy_array.shape})")
+        loaded_count += 1
 
+    print(f"  Loaded {loaded_count} parameters, skipped {skipped_count}")
     print(f"  Checkpoint loaded from step {step}")
     return model, tokenizer, model_config, training_config, step
 
@@ -987,7 +1051,6 @@ def main():
                 model_path,
             )
             sequence_length = model_config.max_sequence_length
-            dataset = []
             print(f"   - Model loaded from step {loaded_step}")
             print(f"   - Vocabulary size: {model_config.vocab_size}")
             print(f"   - Sequence length: {sequence_length}")
@@ -1027,13 +1090,10 @@ def main():
 
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
-        print(f"   - Tokenizer: {training_config.tokenizer_type}")
 
         text = read_file_to_str(training_config.data_path)
         sequence_length = model_config.max_sequence_length
-        dataset, tokenizer = create_dataset_from_text(
-            text, sequence_length, training_config.tokenizer_type
-        )
+        dataset, tokenizer = create_dataset_from_text(text, sequence_length)
         model_config.vocab_size = tokenizer.vocab_size
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")

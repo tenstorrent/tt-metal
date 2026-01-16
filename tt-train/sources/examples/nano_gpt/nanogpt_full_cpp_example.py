@@ -13,7 +13,7 @@ including:
 - Model checkpointing and resuming
 - Loss tracking and averaging
 - Configurable training parameters
-- Support for character and BPE tokenizers
+- Character tokenizer (via ttml.common.data.CharTokenizer)
 - Proper tensor shapes matching C++ implementation
 """
 
@@ -72,7 +72,6 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        self.tokenizer_type = tc.get("tokenizer_type", "char")
         self.use_no_op = tc.get("use_no_op", False)
         self.use_moreh_adamw = tc.get("use_moreh_adamw", False)
         self.use_kahan_summation = tc.get("use_kahan_summation", False)
@@ -195,56 +194,30 @@ def create_warmup_linear_scheduler(optimizer, total_steps: int):
 
 
 def create_dataset_from_text(
-    text: str, sequence_length: int, tokenizer_type: str = "char"
+    text: str,
+    sequence_length: int,
 ) -> Tuple[list, CharTokenizer]:
-    """Create dataset from text matching C++ create_dataset."""
-    if tokenizer_type == "char":
-        tokenizer = CharTokenizer(text)
-        tokens = tokenizer.encode(text)
-
-        # Create sequences
-        dataset = []
-        for i in range(len(tokens) - sequence_length):
-            seq = tokens[i : i + sequence_length]
-            target = tokens[i + 1 : i + sequence_length + 1]
-            dataset.append((seq, target))
-
-        return dataset, tokenizer
-    else:
-        raise ValueError(f"Unsupported tokenizer type: {tokenizer_type}")
-
-
-def create_causal_mask_tensor(
-    sequence_length: int, device=None
-) -> ttml.autograd.Tensor:
-    """Create causal attention mask as a tensor using ttml.common.data.build_causal_mask.
+    """Create dataset from text using CharTokenizer from ttml.common.data.
 
     Args:
-        sequence_length: Sequence length for the mask
-        device: Optional device to create the mask on. If None, uses AutoContext device.
+        text: Text corpus to create dataset from.
+        sequence_length: Length of each sequence.
 
     Returns:
-        Causal mask tensor with shape (1, 1, sequence_length, sequence_length)
+        Tuple of (dataset, tokenizer) where dataset is list of (seq, target) tuples.
     """
-    # Create mask directly with proper shape and contiguous memory
-    mask_2d = np.tril(np.ones((sequence_length, sequence_length), dtype=np.float32))
-    mask_np = np.ascontiguousarray(
-        mask_2d.reshape(1, 1, sequence_length, sequence_length)
-    )
-    # Must use TILE layout for SDPA kernel compatibility
-    mask_tensor = ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    tokenizer = CharTokenizer(text)
+    tokens = tokenizer.encode(text)
 
-    # If device is provided, ensure mask is on the same device as input tensors
-    if device is not None:
-        # Get the underlying ttnn.Tensor and move to device if needed
-        mask_ttnn = mask_tensor.get_value()
-        if mask_ttnn.device() != device:
-            mask_ttnn = ttnn.to_device(mask_ttnn, device)
-            mask_tensor = ttml.autograd.Tensor(mask_ttnn, False)
+    # Create sequences
+    dataset = []
+    for i in range(0, len(tokens) - sequence_length, sequence_length):
+        seq = tokens[i : i + sequence_length]
+        target = tokens[i + 1 : i + sequence_length + 1]
+        if len(seq) == sequence_length and len(target) == sequence_length:
+            dataset.append((seq, target))
 
-    return mask_tensor
+    return dataset, tokenizer
 
 
 def collate_fn(
@@ -283,7 +256,6 @@ def collate_fn(
 def get_loss_value(loss: ttml.autograd.Tensor) -> float:
     """Extract loss value from tensor without using NumPy.
 
-    This function extracts the loss value AFTER backward() and reset_graph() have been called.
     Uses ttnn.Tensor.item() which directly extracts scalar via to_vector<T>() without NumPy conversion.
 
     Args:
@@ -335,8 +307,6 @@ def train_step(
     # Scale loss for gradient accumulation (matching C++: gradient_accumulator_helper.scale(loss))
     loss = gradient_accumulator.scale(loss)
 
-    # Extract loss value BEFORE backward (matching C++: get_loss_value(loss) before loss->backward())
-    # This matches the C++ implementation timing
     loss_float = get_loss_value(loss)
 
     # Backward pass
@@ -441,34 +411,6 @@ def sample_greedy(
     # Cache device to avoid repeated lookups
     device = get_autograd_ctx().get_device()
 
-    # Always recreate mask to ensure it's properly registered with nanobind
-    # The mask parameter might have been created before device was fully set up
-    # or might not be properly registered as a shared_ptr
-    # Creating it fresh here ensures proper shared_ptr registration for nanobind casting
-    # Create mask directly with proper shape and contiguous memory
-    mask_2d = np.tril(np.ones((sequence_length, sequence_length), dtype=np.float32))
-    mask_np = np.ascontiguousarray(
-        mask_2d.reshape(1, 1, sequence_length, sequence_length)
-    )
-    # Verify mask shape before creating tensor
-    assert mask_np.shape == (
-        1,
-        1,
-        sequence_length,
-        sequence_length,
-    ), f"Mask numpy array has wrong shape: {mask_np.shape}, expected (1, 1, {sequence_length}, {sequence_length})"
-    # Must use TILE layout for SDPA kernel compatibility
-    # Use a different variable name to avoid confusion with the parameter
-    causal_mask = ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
-    mask_shape = causal_mask.shape()
-    assert (
-        len(mask_shape) == 4
-        and mask_shape[2] == sequence_length
-        and mask_shape[3] == sequence_length
-    ), f"Mask tensor has wrong shape: {mask_shape}, expected [1, 1, {sequence_length}, {sequence_length}]"
-
     # Encode prompt
     if len(prompt) == 0:
         prompt = " "  # Default to space if empty
@@ -519,9 +461,7 @@ def sample_greedy(
 
         # Forward pass with causal mask (matching C++ model call)
         # Clone mask before each use to avoid TTNN memory reuse corrupting the original
-        mask_for_model = ttml.autograd.Tensor(
-            ttnn.clone(causal_mask.get_value()), False
-        )
+        mask_for_model = ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
 
         logits = model(input_tensor, mask_for_model)
 
@@ -627,21 +567,21 @@ def sample_greedy(
 
                     # Create mask: values below threshold should be masked
                     # Broadcasting happens automatically: [1,1,1,1] vs [1,1,1,vocab_size]
-                    mask = ttnn.lt(last_logits_ttnn, threshold_tensor)
+                    topk_mask = ttnn.lt(last_logits_ttnn, threshold_tensor)
 
                     # Apply mask: set values below threshold to -1e9
                     filter_value_tensor = ttnn.full_like(
                         last_logits_ttnn, -1e9, dtype=ttnn.bfloat16
                     )
                     filtered_logits_ttnn = ttnn.where(
-                        mask, filter_value_tensor, last_logits_ttnn
+                        topk_mask, filter_value_tensor, last_logits_ttnn
                     )
 
                     # Cleanup intermediate tensors
                     ttnn.deallocate(topk_values)
                     ttnn.deallocate(topk_indices)
                     ttnn.deallocate(threshold_tensor)
-                    ttnn.deallocate(mask)
+                    ttnn.deallocate(topk_mask)
                     ttnn.deallocate(filter_value_tensor)
 
                     # Convert back to ttml.autograd.Tensor
@@ -878,9 +818,6 @@ def load_model_from_checkpoint(
         # Update the parameter using assign() - works with both C++ and Python modules
         # The model_params dict contains references to the actual parameter tensors
         model_params[name].assign(restored_tensor)
-
-        print(f"    Loaded: {name} (shape: {numpy_array.shape})")
-
     print(f"  Checkpoint loaded from step {step}")
 
     return model, tokenizer, model_config, training_config, step
@@ -1167,16 +1104,13 @@ def main():
 
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
-        print(f"   - Tokenizer: {training_config.tokenizer_type}")
 
         # Load data
         text = read_file_to_str(training_config.data_path)
         sequence_length = model_config.max_sequence_length
 
         # Create dataset
-        dataset, tokenizer = create_dataset_from_text(
-            text, sequence_length, training_config.tokenizer_type
-        )
+        dataset, tokenizer = create_dataset_from_text(text, sequence_length)
         model_config.vocab_size = tokenizer.vocab_size
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
@@ -1315,7 +1249,10 @@ def main():
         print("\n2. Creating attention mask...")
     else:
         print("\n5. Creating attention mask...")
-    mask = create_causal_mask_tensor(sequence_length)
+    mask_np = build_causal_mask(sequence_length)
+    mask = ttml.autograd.Tensor.from_numpy(
+        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+    )
 
     # Training or inference mode
     if args.prompt:
@@ -1354,89 +1291,65 @@ def main():
 
         # Training loop (matching C++ structure)
         start_time = time.time()
+        # Cache values used in hot path
+        batch_size = training_config.batch_size
+        max_steps = training_config.max_steps
+        dataset_len = len(dataset)
+
         for epoch in range(training_config.num_epochs):
-            # Shuffle dataset at the start of each epoch
             np.random.shuffle(dataset)
 
-            # Create batches - continue iterating through dataset until max_steps is reached
-            while global_step < training_config.max_steps:
-                # Iterate through all batches in the dataset
-                for batch_start in range(0, len(dataset), training_config.batch_size):
-                    # Check if we've reached max_steps before processing more batches
-                    if global_step >= training_config.max_steps:
-                        break
+            for batch_start in range(0, dataset_len, batch_size):
+                batch_end = batch_start + batch_size
+                if batch_end > dataset_len:
+                    continue  # Skip incomplete batches
 
-                    batch_samples = dataset[
-                        batch_start : batch_start + training_config.batch_size
-                    ]
-                    if len(batch_samples) < training_config.batch_size:
-                        continue  # Skip incomplete batches
+                batch_samples = dataset[batch_start:batch_end]
+                input_tokens, target_tokens = collate_fn(
+                    batch_samples, batch_size, sequence_length
+                )
 
-                    # Collate batch (matching C++ collate_fn)
-                    input_tokens, target_tokens = collate_fn(
-                        batch_samples,
-                        training_config.batch_size,
-                        sequence_length,
+                loss_float, step_time, should_step = train_step(
+                    model,
+                    optimizer,
+                    scheduler_fn,
+                    global_step,
+                    input_tokens,
+                    target_tokens,
+                    mask,
+                    gradient_accumulator,
+                    training_config.use_clip_grad_norm,
+                    training_config.clip_grad_norm_max_norm,
+                    batch_size=batch_size,
+                )
+
+                if should_step:
+                    global_step += 1
+                    avg_loss = gradient_accumulator.average_loss()
+                    loss_meter.update(avg_loss)
+                    print(
+                        f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
                     )
 
-                    # Training step with mask (matching C++: run_model(model, features, masks))
-                    loss_float, step_time, should_step = train_step(
-                        model,
-                        optimizer,
-                        scheduler_fn,
-                        global_step,
-                        input_tokens,
-                        target_tokens,
-                        mask,  # Pass the causal mask to model
-                        gradient_accumulator,
-                        training_config.use_clip_grad_norm,
-                        training_config.clip_grad_norm_max_norm,
-                    )
-
-                    # Only update counters and print when we've stepped (matching C++: if should_step())
-                    if should_step:
-                        # Increment global step BEFORE checking (matching C++: optimizer->get_steps() returns count after step())
-                        global_step += 1
-
-                        avg_loss = gradient_accumulator.average_loss()
-                        loss_meter.update(avg_loss)
-                        print(
-                            f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
+                    if (
+                        checkpoint_save_path
+                        and global_step % training_config.model_save_interval == 0
+                    ):
+                        save_checkpoint(
+                            f"{checkpoint_save_path}_step_{global_step}.pkl",
+                            global_step,
+                            model,
+                            tokenizer,
+                            model_config,
+                            training_config,
                         )
 
-                        # Save checkpoint if needed (matching C++: model_save_interval)
-                        if (
-                            checkpoint_save_path
-                            and global_step % training_config.model_save_interval == 0
-                        ):
-                            checkpoint_path = (
-                                f"{checkpoint_save_path}_step_{global_step}.pkl"
-                            )
-                            save_checkpoint(
-                                checkpoint_path,
-                                global_step,
-                                model,
-                                tokenizer,
-                                model_config,
-                                training_config,
-                            )
+                    gradient_accumulator.reset()
 
-                        # Reset gradient accumulator after stepping (matching C++: gradient_accumulator_helper.reset())
-                        gradient_accumulator.reset()
+                    if global_step >= max_steps:
+                        break
 
-                        # Check if max steps reached (matching C++: if (global_step >= training_config.max_steps))
-                        if global_step >= training_config.max_steps:
-                            break
-
-                # Break from outer while loop if we've reached max_steps
-                if global_step >= training_config.max_steps:
-                    break
-
-                # Re-shuffle dataset for next iteration through the dataset (matching C++ DataLoader behavior)
-                np.random.shuffle(dataset)
-
-            # Break from epoch loop if we've reached max_steps (matching C++: check after inner loop)
-            if global_step >= training_config.max_steps:
+            if global_step >= max_steps:
                 break
 
         # Save final checkpoint after training
