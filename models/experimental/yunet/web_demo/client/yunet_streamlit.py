@@ -186,7 +186,7 @@ def main():
         processor.set_params(input_size, conf_thresh)
         return processor
 
-    webrtc_ctx = webrtc_streamer(
+    webrtc_streamer(
         key="yunet-face-detection",
         video_processor_factory=processor_factory,
         media_stream_constraints={
