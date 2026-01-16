@@ -93,14 +93,11 @@ tt::tt_metal::Tensor ring_shift(
 
     TT_FATAL(
         (cluster_axis.has_value() && cluster_axis.value() < mesh_shape.dims() && cluster_axis.value() >= 0) ||
-            (!cluster_axis.has_value() && tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-             tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING),
-        "cluster_axis must be either > 0 and < {} for 2D mesh, got {} or nullopt for 1D mesh and linear topology, the "
-        "actual "
-        "fabric config is {}",
-        mesh_shape.dims(),
-        cluster_axis.value(),
-        tt::tt_fabric::GetFabricConfig());
+            (!cluster_axis.has_value() &&
+             (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D ||
+              tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_1D_RING)),
+        "cluster_axis must be either >= 0 and < {} for 2D mesh or nullopt for 1D mesh and linear topology",
+        mesh_shape.dims());
 
     const uint32_t cluster_axis_value = cluster_axis.has_value() ? cluster_axis.value() : 1;
     const uint32_t ring_size = mesh_shape[cluster_axis_value];
@@ -129,18 +126,11 @@ tt::tt_metal::Tensor ring_shift(
         tt::tt_fabric::MeshCoordinate recv_coord = sender_coord;
         recv_coord[cluster_axis_value] = target_idx;
 
-        std::vector<tt::tt_metal::distributed::SocketConnection> connections;
-        connections.reserve(send_recv_logical_coord.size());
+        auto& target_connections = (idx % 2U == 0U) ? even_to_odd_connections : odd_to_even_connections;
         for (auto [sender_core, recv_core] : send_recv_logical_coord) {
-            auto connection = tt::tt_metal::distributed::SocketConnection{
+            target_connections.emplace_back(
                 tt::tt_metal::distributed::MeshCoreCoord{sender_coord, sender_core},
-                tt::tt_metal::distributed::MeshCoreCoord{recv_coord, recv_core}};
-            connections.push_back(connection);
-        }
-        if (idx % 2U == 0U) {
-            std::copy(connections.begin(), connections.end(), std::back_inserter(even_to_odd_connections));
-        } else {
-            std::copy(connections.begin(), connections.end(), std::back_inserter(odd_to_even_connections));
+                tt::tt_metal::distributed::MeshCoreCoord{recv_coord, recv_core});
         }
     }
 
