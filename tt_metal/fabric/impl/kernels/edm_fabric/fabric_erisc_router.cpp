@@ -562,22 +562,22 @@ template <
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     typename SenderChannelT,
     typename WorkerInterfaceT,
-    typename ReceiverPointersT,
-    typename ReceiverChannelT>
+    typename ReceiverPointersT
+>
 FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    ReceiverChannelT& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
-    auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
 
+    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
-    auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+
+    auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
     }
@@ -593,19 +593,16 @@ FORCE_INLINE void send_next_data(
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
 
     // Advance receiver buffer pointers
-    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_index();
-    receiver_buffer_channel.set_cached_next_buffer_slot_addr(
-        receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
+    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
     // update the remote reg
-    static constexpr uint32_t packets_to_forward = 1;
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
 
 /////////////////////////////////////////////
@@ -641,9 +638,9 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
     return map_downstream_direction_to_compact_index(downstream_direction);
 }
 
-template <typename DownstreamSenderVC0T, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
+template <typename DownstreamSenderT, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
@@ -653,12 +650,12 @@ FORCE_INLINE bool check_downstream_has_space(
 }
 
 template <
-    typename DownstreamSenderVC0T,
+    typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
     eth_chan_directions DIRECTION,
     size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     if constexpr (DIRECTION == my_direction) {
         if constexpr (udm_mode) {
@@ -673,23 +670,23 @@ FORCE_INLINE bool check_downstream_has_space(
 }
 
 template <
-    typename DownstreamSenderVC0T,
+    typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
     size_t DOWNSTREAM_EDM_SIZE,
     eth_chan_directions... DIRECTIONS>
 FORCE_INLINE bool downstreams_have_space(
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     return (
-        ... && check_downstream_has_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DIRECTIONS, DOWNSTREAM_EDM_SIZE>(
+        ... && check_downstream_has_space<DownstreamSenderT, LocalRelayInterfaceT, DIRECTIONS, DOWNSTREAM_EDM_SIZE>(
                    downstream_edm_interfaces, local_relay_interface));
 }
 
 #ifdef FABRIC_2D
-template <typename DownstreamSenderVC0T, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
+template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
     uint32_t hop_cmd,
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     bool ret_val = false;
 
@@ -701,43 +698,42 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     switch (hop_cmd) {
         case MeshRoutingFields::NOOP:
             if constexpr (z_router_enabled) {
-                ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
+                ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
                     downstream_edm_interfaces, local_relay_interface);
             }
             break;
         case MeshRoutingFields::FORWARD_EAST:
-            ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
                 downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::FORWARD_WEST:
-            ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
                 downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_EW:
             // Line Mcast East<->West
-            ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST>(
-                    downstream_edm_interfaces, local_relay_interface);
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST>(
+                downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::FORWARD_NORTH:
-            ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
                 downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::FORWARD_SOUTH:
-            ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
                 downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
             ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH, SOUTH>(
+                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH, SOUTH>(
                     downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East and West
             ret_val = downstreams_have_space<
-                DownstreamSenderVC0T,
+                DownstreamSenderT,
                 LocalRelayInterfaceT,
                 DOWNSTREAM_EDM_SIZE,
                 EAST,
@@ -749,7 +745,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East
             ret_val = downstreams_have_space<
-                DownstreamSenderVC0T,
+                DownstreamSenderT,
                 LocalRelayInterfaceT,
                 DOWNSTREAM_EDM_SIZE,
                 EAST,
@@ -760,7 +756,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: West
             ret_val = downstreams_have_space<
-                DownstreamSenderVC0T,
+                DownstreamSenderT,
                 LocalRelayInterfaceT,
                 DOWNSTREAM_EDM_SIZE,
                 WEST,
@@ -770,52 +766,40 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<
-                DownstreamSenderVC0T,
-                LocalRelayInterfaceT,
-                DOWNSTREAM_EDM_SIZE,
-                EAST,
-                WEST,
-                SOUTH>(downstream_edm_interfaces, local_relay_interface);
+            ret_val =
+                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST, SOUTH>(
+                    downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<
-                DownstreamSenderVC0T,
-                LocalRelayInterfaceT,
-                DOWNSTREAM_EDM_SIZE,
-                EAST,
-                WEST,
-                NORTH>(downstream_edm_interfaces, local_relay_interface);
+            ret_val =
+                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST, NORTH>(
+                    downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_SE:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East
-            ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, SOUTH>(
-                    downstream_edm_interfaces, local_relay_interface);
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, SOUTH>(
+                downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_SW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: West
-            ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, SOUTH>(
-                    downstream_edm_interfaces, local_relay_interface);
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, SOUTH>(
+                downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NE:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East
-            ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, NORTH>(
-                    downstream_edm_interfaces, local_relay_interface);
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, NORTH>(
+                downstream_edm_interfaces, local_relay_interface);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: West
-            ret_val =
-                downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, NORTH>(
-                    downstream_edm_interfaces, local_relay_interface);
+            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, NORTH>(
+                downstream_edm_interfaces, local_relay_interface);
             break;
         default: __builtin_unreachable();
     }
@@ -898,11 +882,7 @@ FORCE_INLINE void forward_to_local_destination(
 }
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <
-    uint8_t rx_channel_id,
-    size_t DOWNSTREAM_EDM_SIZE,
-    typename DownstreamSenderVC0T,
-    typename LocalRelayInterfaceT>
+template <uint8_t rx_channel_id, size_t DOWNSTREAM_EDM_SIZE, typename DownstreamSenderT, typename LocalRelayInterfaceT>
 #if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
 #endif
@@ -910,7 +890,7 @@ FORCE_INLINE
     receiver_forward_packet(
         tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
         ROUTING_FIELDS_TYPE cached_routing_fields,
-        std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+        std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
         LocalRelayInterfaceT& local_relay_interface,
         uint8_t transaction_id,
         uint32_t hop_cmd) {
@@ -1633,7 +1613,6 @@ FORCE_INLINE
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            remote_receiver_channel,
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -1738,12 +1717,12 @@ template <
     typename WriteTridTracker,
     typename ReceiverChannelBufferT,
     typename ReceiverChannelPointersT,
-    typename DownstreamSenderVC0T,
+    typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
@@ -1830,7 +1809,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
             can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely<DownstreamSenderVC0T, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
+                can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
                     hop_cmd, downstream_edm_interfaces, local_relay_interface);
 #endif
         } else {
@@ -1936,7 +1915,7 @@ template <
     uint8_t receiver_channel,
     bool enable_first_level_ack,
     size_t DOWNSTREAM_EDM_SIZE,
-    typename DownstreamSenderVC0T,
+    typename DownstreamSenderT,
     typename LocalRelayInterfaceT,
     typename EthReceiverChannels,
     typename WriteTridTracker,
@@ -1944,7 +1923,7 @@ template <
     typename LocalTelemetryT>
 FORCE_INLINE bool run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
-    std::array<DownstreamSenderVC0T, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
@@ -1962,7 +1941,7 @@ FORCE_INLINE bool run_receiver_channel_step(
             WriteTridTracker,
             decltype(local_receiver_channels.template get<receiver_channel>()),
             ReceiverChannelPointersT,
-            DownstreamSenderVC0T,
+            DownstreamSenderT,
             LocalRelayInterfaceT>(
             local_receiver_channels.template get<receiver_channel>(),
             downstream_edm_interfaces,
@@ -1975,6 +1954,21 @@ FORCE_INLINE bool run_receiver_channel_step(
             local_fabric_telemetry);
     }
     return false;
+}
+
+template<
+    typename OutboundReceiverChannelPointers,
+    typename RemoteEthReceiverChannels>
+FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
+    OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
+    RemoteEthReceiverChannels& remote_receiver_channels) {
+    static_assert(OutboundReceiverChannelPointers::N == RemoteEthReceiverChannels::num_channels);
+
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((outbound_to_receiver_channel_pointers.template get<Is>().init(
+            reinterpret_cast<uint32_t>(remote_receiver_channels.template get<Is>().channel_base_address()),
+            remote_receiver_channels.template get<Is>().get_max_eth_payload_size())), ...);
+    }(std::make_index_sequence<OutboundReceiverChannelPointers::N>{});
 }
 
 /*
@@ -2030,6 +2024,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     //       math ops on single individual words (or half words)
     auto outbound_to_receiver_channel_pointers =
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
+
+    configure_outbound_to_receiver_channel_pointers(outbound_to_receiver_channel_pointers, remote_receiver_channels);
+
     // Workaround the perf regression in RingAsLinear test.
     auto outbound_to_receiver_channel_pointer_ch0 =
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
