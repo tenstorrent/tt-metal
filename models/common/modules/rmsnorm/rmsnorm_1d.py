@@ -22,8 +22,8 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tensor_utils import TILE_SIZE
 from models.common.modules.tt_ccl import get_tt_ccl
+from models.common.tensor_utils import TILE_SIZE
 
 # =============================================================================
 # Constants
