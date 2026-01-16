@@ -50,7 +50,9 @@ namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
  * - Third core will be backward on link 1
  * - etc
  * Note:
- * - Always need a forward and backward core for each link, even if the worker isn't being used
+ * - Always need a backward and forward core for each link being used, even if the forward worker isn't being used for
+ * data
+ * - Needed for pre op synchronization
  * - May need to add a single additional forward core to even it out (on top of the shard cores)
  */
 std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
@@ -60,13 +62,14 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
 
     // add additional forward core if needed
     if (worker_cores.size() % 2 != 0) {
-        // TODO: (GR) handle when selected core is already one of the shard cores (non optimal placement)
         // which core to use based on which link it's being used for
+        // TODO: (GR) handle when selected core is already one of the shard cores (non optimal placement)
+        // TODO: (GR) pick optimal cores for the different cases
         const std::vector<CoreCoord> supplemental_cores = {
-            CoreCoord(0, 0),
-            CoreCoord(0, 0),
-            CoreCoord(0, 0),
-            CoreCoord(0, 0),
+            CoreCoord(7, 0),
+            CoreCoord(7, 0),
+            CoreCoord(7, 0),
+            CoreCoord(7, 0),
         };
         worker_cores.emplace_back(supplemental_cores.at(clamped_num_links - 1));
     }
