@@ -64,6 +64,7 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
+class D2HSocket;
 
 namespace multihost {
 class DistributedContext;
@@ -170,6 +171,9 @@ public:
     bool compile_fabric() override;
     [[deprecated("This is an internal function. It will be removed.")]]
     void configure_fabric() override;
+    void init_fabric() override;
+    void init_perf_telemetry_socket();
+    D2HSocket* get_perf_telemetry_socket() const;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
