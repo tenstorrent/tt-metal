@@ -18,11 +18,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-<<<<<<< HEAD
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
-=======
-from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer
->>>>>>> a5e968a0e5a (Fix perf of python nano gpt)
+from ttml.modules import AbstractModuleBase, Parameter, ModuleList, RunMode, LinearLayer
 
 from .embedding import Embedding
 from .gpt_block import GPTBlock
