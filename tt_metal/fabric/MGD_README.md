@@ -43,12 +43,62 @@ Notes:
 
 ---
 
-## Writing an MGD textproto
+## Pinning Fabric Nodes
 
-An MGD has three parts:
+Pinnings allow you to map logical fabric nodes to specific physical ASIC positions in the hardware system. This is useful when you need to constrain certain fabric nodes to specific hardware locations.
+
+### Fabric Node ID
+
+A `LogicalFabricNodeId` identifies a logical fabric node within a mesh:
+- `mesh_id`: The identifier of the mesh instance
+- `chip_id`: The chip identifier within that mesh, enumerated in **row-major order** based on the mesh's `device_topology` dimensions
+
+For example, in a mesh with `device_topology { dims: [ 4, 8 ] }` (4 rows × 8 columns):
+- `chip_id: 0` corresponds to position (0, 0)
+- `chip_id: 1` corresponds to position (0, 1)
+- `chip_id: 8` corresponds to position (1, 0)
+- `chip_id: 31` corresponds to position (3, 7)
+
+The chip_ids are assigned sequentially from 0 to `(rows × cols - 1)` in row-major order, where each row is traversed left-to-right before moving to the next row.
+
+### Physical ASIC Position
+
+A `PhysicalAsicPosition` identifies a physical ASIC location in the cluster:
+- `tray_id`: The tray identifier from the cluster descriptor. A tray is a physical grouping of ASICs (e.g., a board or UBB unit)
+- `asic_location`: The ASIC location within that tray, as defined in the cluster descriptor. This identifies which specific ASIC slot within the tray
+
+These values come from the cluster descriptor and represent the physical hardware topology of the system.
+
+### Pinning Syntax
+
+Pinnings are specified as a separate top-level section in the MGD file:
+
+```proto
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+```
+
+---
+
+## Writing an MGD 2.0 textproto
+
+An MGD has three main parts:
 - mesh_descriptors: definitions of reusable meshes
 - graph_descriptors: logical groupings and connectivity across meshes/graphs
 - top_level_instance: the single root instance to instantiate
+
+Optionally, an MGD can also include:
+- pinnings: mappings of logical fabric nodes to physical ASIC positions (see [Pinning Fabric Nodes](#pinning-fabric-nodes))
 
 Follow comments written in .proto file for detailed instructions for how to write an MGD file.
 [`tt_metal/fabric/protobuf/mesh_graph_descriptor.proto`](protobuf/mesh_graph_descriptor.proto)

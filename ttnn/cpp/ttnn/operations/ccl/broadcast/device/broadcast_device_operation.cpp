@@ -65,19 +65,15 @@ Tensor BroadcastDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
     log_trace(tt::LogOp, "BroadcastDeviceOperation::compute_program_hash is called");
 
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    const auto available_cores =
-        operation_attributes.sub_device_id.has_value()
-            ? input_tensor.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<BroadcastDeviceOperation>(
         operation_attributes.sender_coord,
         operation_attributes.num_links,
@@ -85,12 +81,9 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
-        operation_attributes.sub_device_id.has_value(),
-        available_cores,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::ccl::broadcast
