@@ -402,7 +402,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     # Convert HF QKV weights to Meta format for RoPE compatibility
     reference_state_swizzled = convert_hf_qkv_to_meta_format(reference_state, config.head_dim)
     max_seq_len = getattr(config, "max_position_embeddings", 131072)
-    rope_scaling = rope_scaling_model_factory(hf_config.rope_scaling)
+    rope_scaling = rope_scaling_model_factory(config.rope_scaling)
     rope_setup = RotarySetup(
         device=setup["mesh_device"],
         batch_size=1,
