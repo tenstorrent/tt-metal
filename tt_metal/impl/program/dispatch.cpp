@@ -571,7 +571,7 @@ void generate_runtime_args_cmds(
                         data_in_sequence,
                         data.first.get().rt_args_count * sizeof(uint32_t));
                 }
-                offset += data.first.get().rt_args_count * sizeof(uint32_t);
+                offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
             }
             data_offset += data_inc;
         }
@@ -648,6 +648,7 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
+    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     // Calculate the best way to multicast common RTAs.
 
     // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
@@ -663,6 +664,8 @@ BatchedTransfers assemble_runtime_args_commands(
         if (common_rt_args.empty()) {
             continue;
         }
+        TT_ASSERT(kernel->common_runtime_args_data().data() == common_rt_args.data() + count_word_offset);
+        TT_ASSERT(kernel->common_runtime_args_data().size() == common_rt_args.size() - count_word_offset);
         per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
     }
 
@@ -763,8 +766,6 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
-    uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
-
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         auto programmable_core_type = hal.get_programmable_core_type(index);
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
@@ -864,7 +865,9 @@ BatchedTransfers assemble_runtime_args_commands(
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
 
-                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                    TT_ASSERT(
+                        (kernel->common_runtime_args_data().size() + count_word_offset) * sizeof(uint32_t) ==
+                        common_size);
                     TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
                     // Back up pointer to include count word for dispatch (same as RTAs)
                     // common_runtime_args_data().data() points to args; backing up includes count

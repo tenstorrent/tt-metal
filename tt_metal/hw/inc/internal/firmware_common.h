@@ -131,8 +131,13 @@ uint32_t firmware_config_init(
                                          launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+#ifdef ARCH_QUASAR
+    extern thread_local uint32_t rta_count;
+    extern thread_local uint32_t crta_count;
+#else
     extern uint32_t rta_count;
     extern uint32_t crta_count;
+#endif
     // Initialize RTA count from L1 memory
     // Set to 0 if: 1. offset is sentinel (no args set)
     //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
