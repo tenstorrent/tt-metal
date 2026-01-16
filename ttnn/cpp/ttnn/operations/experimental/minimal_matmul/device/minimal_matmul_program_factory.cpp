@@ -733,58 +733,88 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
     return {std::move(program), std::move(shared_vars)};
 }
 
-void MinimalMatmulProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const MinimalMatmulParams& /*operation_attributes*/,
-    const MinimalMatmulInputs& tensor_args,
-    Tensor& tensor_return_value) {
+// Common helper for override_runtime_arguments - works with both single and multiple output tensors
+void override_runtime_arguments_common(
+    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs) {
     auto& program = cached_program.program;
     auto& override_variables = cached_program.shared_variables;
-
-    auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-    auto output_addr = tensor_return_value.buffer()->address();
-    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-
-    auto in3_addr = tensor_args.optional_input_tensor.has_value() && override_variables.read_local_slice_from_input
-                        ? tensor_args.optional_input_tensor.value().buffer()->address()
-                        : 0;
 
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
 
-    // For regular minimal_matmul, we have a single output (N_chunks=1)
+    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    // out_addrs(N)...] RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    // out_addrs(N)...]
+    constexpr uint32_t in0_in2_addr_idx = 1;
+    constexpr uint32_t in0_in3_addr_idx = 2;
     constexpr uint32_t in0_out_addr_start_idx = 13;  // After defer_write_k_block
+    constexpr uint32_t in1_in2_addr_idx = 1;
     constexpr uint32_t in1_out_addr_start_idx = 12;  // After defer_write_k_block
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
+
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = in2_addr;
-            in0_sender_args[2] = in3_addr;
-            in0_sender_args[in0_out_addr_start_idx] = output_addr;  // Single output address
+            in0_sender_args[in0_in2_addr_idx] = in2_addr;
+            in0_sender_args[in0_in3_addr_idx] = in3_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
+                in0_sender_args[in0_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            }
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[1] = in2_addr;
-            in0_receiver_args[in0_out_addr_start_idx] = output_addr;  // Single output address
+            in0_receiver_args[in0_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
+                in0_receiver_args[in0_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            }
         }
+
         if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[0] = in1_addr;
-            in1_sender_args[1] = in2_addr;
-            in1_sender_args[in1_out_addr_start_idx] = output_addr;  // Single output address
+            in1_sender_args[in1_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
+                in1_sender_args[in1_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            }
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[1] = in2_addr;
-            in1_receiver_args[in1_out_addr_start_idx] = output_addr;  // Single output address
+            in1_receiver_args[in1_in2_addr_idx] = in2_addr;
+            // Update N output addresses at the end
+            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
+                in1_receiver_args[in1_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            }
         }
     }
+}
+
+void MinimalMatmulProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    Tensor& tensor_return_value) {
+    auto in0_addr = tensor_args.input_tensor.buffer()->address();
+    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
+    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+    auto in3_addr =
+        tensor_args.optional_input_tensor.has_value() && cached_program.shared_variables.read_local_slice_from_input
+            ? tensor_args.optional_input_tensor.value().buffer()->address()
+            : 0;
+
+    std::vector<uint32_t> output_addrs = {tensor_return_value.buffer()->address()};
+    override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
 }
 
 }  // namespace ttnn::experimental::prim
