@@ -205,8 +205,8 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     ), f"Return value element count mismatch: expected {expected_return_elements}, got {actual_return_elements}"
 
     # Clean up trace directory
-    # if trace_dir.exists():
-    #    shutil.rmtree(trace_dir)
+    if trace_dir.exists():
+        shutil.rmtree(trace_dir)
 
     # Restore original state
     ttnn.operation_tracer._OPERATION_COUNTER = original_operation_counter
@@ -315,8 +315,8 @@ def test_from_torch_to_device_tracing(tmp_path, device):
     assert first_arg["type"] == "ttnn.Tensor", f"Expected ttnn.Tensor, got {first_arg.get('type')}"
 
     # Clean up trace directory
-    # if trace_dir.exists():
-    #    shutil.rmtree(trace_dir)
+    if trace_dir.exists():
+        shutil.rmtree(trace_dir)
 
     # Restore
     ttnn.operation_tracer._OPERATION_COUNTER = original_counter
