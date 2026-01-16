@@ -16,7 +16,6 @@ on:
           - p150
           - p300
           - wh-loudbox
-          - bh-qb
           - bh-qb2
           - bh-loudbox
           - wh-6u
@@ -139,22 +138,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
-
-  # BH QuietBox Tests (4xP300)
-  bh-qb-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
-    with:
-      device-type: 'BH-QB'
-      runner-label: 'BH-LLMBox'
-      arch: 'blackhole'
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
-      extra-tag: 'in-service'
 
   # BH QuietBox Tests (2xP300)
   bh-quietbox-tests:
