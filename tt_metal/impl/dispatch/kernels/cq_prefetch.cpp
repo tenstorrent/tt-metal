@@ -1867,8 +1867,7 @@ CBReaderWithManualRelease<
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 // Since the size of the data is less that the size of the cmddat_q, we let the caller return pages to the upstream all
 // at once.
-inline void relay_raw_data_to_downstream(
-    uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
+inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     while (wlength > 0) {
         // Ensure at least one upstream page is available

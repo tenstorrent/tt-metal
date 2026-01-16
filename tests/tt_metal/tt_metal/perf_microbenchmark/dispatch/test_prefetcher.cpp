@@ -1074,7 +1074,6 @@ public:
         const uint32_t dram_alignment,
         Common::DeviceData& src_device_data,
         Common::DeviceData& dest_device_data) {
-
         // Destination: DRAM bank 0 on Remote Device
         const uint32_t dest_dram_bank_id = 0;
         const auto dest_dram_channel =
@@ -2038,8 +2037,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         const uint32_t num_banks = remote_device_->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                remote_device_, bank_id, remote_dram_base, dirty_data);
+            tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
         }
         MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
     }
@@ -2048,7 +2046,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
     auto commands_per_iteration =
         generate_prefetch_relay_h_commands(first_worker, mmio_dram_base, dram_alignment, mmio_device_data, device_data);
-    
+
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
     const bool pass_after = device_data.validate(remote_device_);
     EXPECT_TRUE(pass_after) << "Dispatcher test failed validation";
