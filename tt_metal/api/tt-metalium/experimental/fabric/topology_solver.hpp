@@ -277,18 +277,15 @@ struct MappingResult {
  * @tparam TargetNode The type used to identify nodes in the target graph (deduced)
  * @tparam GlobalNode The type used to identify nodes in the global graph (deduced)
  * @param result The mapping result to print
- * @param target_graph The target graph (for showing unmapped nodes)
  *
  * @example
  * ```cpp
  * MappingResult<FabricNodeId, AsicID> result = solve_topology_mapping(...);
- * AdjacencyGraph<FabricNodeId> target_graph = ...;
- * print_mapping_result(result, target_graph);  // No template parameters needed
+ * print_mapping_result(result);  // No template parameters needed
  * ```
  */
 template <typename TargetNode, typename GlobalNode>
-void print_mapping_result(
-    const MappingResult<TargetNode, GlobalNode>& result, const AdjacencyGraph<TargetNode>& target_graph);
+void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result);
 
 }  // namespace tt::tt_fabric
 
