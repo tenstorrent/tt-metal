@@ -1533,11 +1533,6 @@ bool process_cmd(
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
-        case CQ_PREFETCH_CMD_RELAY_LINEAR_H:
-            // DPRINT << "relay_linear_h: " << HEX() << cmd_ptr << DEC() << ENDL();
-            stride = process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
-            break;
-
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
             {
@@ -1703,12 +1698,6 @@ static uint32_t relay_linear_to_downstream(
 
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
-    if constexpr (is_d_variant) {
-        // This ensures that a previous cmd using the scratch buf has finished
-        // Unnecessary for prefetch_h because writes are flushed in the end
-        noc_async_writes_flushed();
-    }
-
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = nullptr;
     if constexpr (not is_d_variant) {
         cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
@@ -1718,14 +1707,12 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     uint64_t wlength = cmd->relay_linear_h.length;
     uint32_t scratch_read_addr = scratch_db_top[0];
     constexpr uint32_t start_offset = is_d_variant ? 0 : sizeof(CQPrefetchHToPrefetchDHeader);
-    if constexpr (not is_d_variant) {
-        // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
-        volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
-            (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_read_addr;
-        dptr->header.length = wlength + sizeof(CQPrefetchHToPrefetchDHeader);
-        dptr->header.raw_copy = true;
-        scratch_read_addr += sizeof(CQPrefetchHToPrefetchDHeader);
-    }
+    // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
+    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
+        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_read_addr;
+    dptr->header.length = wlength + sizeof(CQPrefetchHToPrefetchDHeader);
+    dptr->header.raw_copy = true;
+    scratch_read_addr += sizeof(CQPrefetchHToPrefetchDHeader);
 
     uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
     uint64_t read_addr = cmd->relay_linear_h.addr;
@@ -1792,7 +1779,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     DispatchRelayInlineState::cb_writer.release_pages(npages + additional_page, downstream_data_ptr);
 #endif
 
-    return is_d_variant ? CQ_PREFETCH_CMD_BARE_MIN_SIZE : 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
 // This function is only valid when called on the H variant
