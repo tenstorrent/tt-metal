@@ -184,9 +184,9 @@ def test_permute_5d(device, shape, perm, dtype):
     assert_equal(torch_output, tt_output)
 
 
-@pytest.mark.parametrize("pad_value", [float("-inf"), None])
+@pytest.mark.parametrize("pad_value", [float("-inf"), 0.0])
 def test_permute_pad_value(device, pad_value):
-    if pad_value is not None and is_blackhole():
+    if pad_value != 0.0 and is_blackhole():
         pytest.skip("Blackhole reduce is needed for the full test to work")
     torch.manual_seed(2005)
     input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
@@ -508,7 +508,7 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
 @pytest.mark.parametrize("shape", [[7, 7, 7, 17, 17]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [35.0, float("-inf"), None])
+@pytest.mark.parametrize("pad_value", [35.0, float("-inf"), 0.0])
 def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
@@ -524,7 +524,7 @@ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
     else:
         assert_equal(torch_output, output_tensor)
 
-    if pad_value != None:
+    if pad_value != 0.0:
         logical_shape = torch_output.shape
         output_padded = ttnn.from_device(ttnn_output).to_torch()
         padded_shape = output_padded.shape
