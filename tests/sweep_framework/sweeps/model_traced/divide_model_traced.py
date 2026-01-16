@@ -44,12 +44,12 @@ if model_traced_params:
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -77,7 +77,7 @@ def run(
 
     # Avoid division by zero - generate denominator with values away from zero
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
     )(shape_b)
 
     torch_output_tensor = torch.divide(torch_input_tensor_a, torch_input_tensor_b)
@@ -91,8 +91,8 @@ def run(
         "layout": input_a_layout,
     }
     from_torch_kwargs_b = {
-        "dtype": input_b_dtype,
-        "layout": input_b_layout,
+        "dtype": input_b_dtype or input_a_dtype,
+        "layout": input_b_layout or input_a_layout,
     }
 
     # Only add device and memory_config if not HOST storage
@@ -100,13 +100,15 @@ def run(
         from_torch_kwargs_a["device"] = device
         from_torch_kwargs_a["memory_config"] = input_a_memory_config
         from_torch_kwargs_b["device"] = device
-        from_torch_kwargs_b["memory_config"] = input_b_memory_config
+        from_torch_kwargs_b["memory_config"] = input_b_memory_config or input_a_memory_config
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs_a)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs_b)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.divide(
+        input_tensor_a, input_tensor_b, memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG
+    )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
