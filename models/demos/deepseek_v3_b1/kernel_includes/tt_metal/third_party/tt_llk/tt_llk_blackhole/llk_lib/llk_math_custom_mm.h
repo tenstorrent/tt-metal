@@ -100,15 +100,27 @@ inline void _llk_math_custom_mm_init_(
 }
 
 // Simplified implementation: NUM_FIDELITY_PHASES = 0 (no high fidelity mode)
+// Template parameter partial_acc:
+//   false (default): Full custom_mm - MVMULs for all K tiles + finalization
+//   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
+template <bool partial_acc = false>
 inline void _llk_math_custom_mm_(
     uint dst_index, [[maybe_unused]] const bool transpose = false, [[maybe_unused]] const std::uint32_t kt_dim = 1) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    for (uint32_t i = 0; i < kt_dim - 1; i++) {
-        lltt::replay(ckernel::math::replay_buf_offset, 4);
+    if constexpr (partial_acc) {
+        // Partial K accumulation: run all kt_dim iterations with CLR_AB (instructions 0-3)
+        // MVMUL accumulates into dest, results persist for next K subblock
+        // NO finalization - skip instructions 4-13
+        for (uint32_t i = 0; i < kt_dim; i++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        }
+    } else {
+        // Full accumulation with finalization
+        for (uint32_t i = 0; i < kt_dim - 1; i++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        }
+        // Final K tile + finalization (MOVD2A/MOVD2B/ELWADD)
+        lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
     }
-    // For math end acumulation
-    lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
-    // For pack end accumulation
-    // lltt::replay(ckernel::math::replay_buf_offset, 4);
 }

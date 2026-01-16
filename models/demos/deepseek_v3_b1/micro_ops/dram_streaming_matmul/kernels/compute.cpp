@@ -13,23 +13,22 @@
  * Each core computes: output[M=1, N=per_core_N] = in0[M=1, K] @ in1[K, N=per_core_N]
  *
  * in0 is fully available in L1 (replicated, tensor-backed CB).
- * in1 is streamed from DRAM, one Kx1 column stick at a time.
+ * in1 is streamed from DRAM, subblock_k tiles at a time.
  *
  * Uses custom_mm_block which handles K-dimension reduction via MOP replay
  * for maximum throughput (eliminates software loop overhead).
  *
- * Uses subblock_w to batch tile processing, reducing cb_reserve_back and
- * tile_regs_acquire calls. subblock_w is determined by dest register availability:
- * - FP32 dest: 8 (full sync) or 4 (half sync)
- * - BF16/FP16 dest: 16 (full sync) or 8 (half sync)
+ * Subblocking in both K and N dimensions:
+ * - subblock_k: reduces initial latency by allowing compute to start sooner
+ * - subblock_w: batches output tiles to reduce cb_reserve_back and tile_regs_acquire calls
  *
  * Loop structure:
  *   for each subblock in N (per_core_N / subblock_w iterations):
- *     reserve subblock_w output tiles
- *     for each tile in subblock:
- *       wait for in1 Kx1 stick
- *       accumulate across K into dest[w]
- *       pop in1 Kx1 stick
+ *     for each tile w in subblock:
+ *       for each K subblock:
+ *         wait for in1 subblock_k tiles
+ *         accumulate into dest[w]
+ *         pop in1 subblock_k tiles
  *     pack subblock_w output tiles
  */
 namespace NAMESPACE {
@@ -38,15 +37,18 @@ void MAIN {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(3);
+    constexpr uint32_t subblock_k = get_compile_time_arg_val(3);  // tiles per K subblock
     constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
+    constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(6);
 
     constexpr uint32_t transpose = false;
-    constexpr uint32_t num_subblocks = per_core_N / subblock_w;
+    constexpr uint32_t num_subblocks_n = per_core_N / subblock_w;
+    constexpr uint32_t num_tiles_k = subblock_k * num_subblocks_k;
 
-    // Initialize custom matmul with K-dimension optimization
-    custom_mm_block_init(cb_id_in0, cb_id_in1, cb_id_out, transpose, num_tiles_k);
+    // Initialize custom matmul
+    // Use subblock_k for init since that's the K tiles per call
+    custom_mm_block_init(cb_id_in0, cb_id_in1, cb_id_out, transpose, subblock_k);
 
     // Wait for all in0 tiles (replicated, tensor-backed - always available)
     cb_wait_front(cb_id_in0, num_tiles_k);
@@ -55,25 +57,28 @@ void MAIN {
     cb_reserve_back(cb_id_out, per_core_N);
 
     // Process subblocks of output tiles
-    for (uint32_t sb = 0; sb < num_subblocks; sb++) {
+    for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
         // Accumulate subblock_w output tiles into dest registers
         tile_regs_acquire();
         for (uint32_t w = 0; w < subblock_w; w++) {
-            // Wait for in1 Kx1 stick (matching reader's production rate)
-            cb_wait_front(cb_id_in1, num_tiles_k);
-
-            // Compute output tile w, accumulating into dest[w]
-            custom_mm_block(cb_id_in0, cb_id_in1, 0, 0, w, transpose, num_tiles_k);
-
-            // Pop in1 Kx1 stick
-            cb_pop_front(cb_id_in1, num_tiles_k);
+            // Intermediate K subblocks: partial accumulation (no finalization)
+            for (uint32_t sb_k = 0; sb_k < num_subblocks_k - 1; sb_k++) {
+                cb_wait_front(cb_id_in1, subblock_k);
+                custom_mm_block<true>(cb_id_in0, cb_id_in1, sb_k * subblock_k, 0, w, transpose, subblock_k);
+                cb_pop_front(cb_id_in1, subblock_k);
+            }
+            // Final K subblock: full accumulation with finalization
+            cb_wait_front(cb_id_in1, subblock_k);
+            custom_mm_block<false>(
+                cb_id_in0, cb_id_in1, (num_subblocks_k - 1) * subblock_k, 0, w, transpose, subblock_k);
+            cb_pop_front(cb_id_in1, subblock_k);
         }
         tile_regs_commit();
 
         // Pack all output tiles in subblock to correct CB offsets
         tile_regs_wait();
         for (uint32_t w = 0; w < subblock_w; w++) {
-            pack_tile(w, cb_id_out, sb * subblock_w + w);
+            pack_tile(w, cb_id_out, sb_n * subblock_w + w);
         }
         tile_regs_release();
     }

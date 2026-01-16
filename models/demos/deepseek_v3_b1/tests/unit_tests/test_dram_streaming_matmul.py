@@ -207,6 +207,11 @@ def test_dram_streaming_matmul(device, k, n, m):
         tile=out_tile,
     )
 
+    if k == 7168:
+        subblock_k = k // tile_w // 4
+    else:
+        subblock_k = k // tile_w
+
     # Run DRAM streaming matmul
     logger.info(f"Running DRAM streaming matmul: m={m}, k={k}, n={n}, num_cores={num_cores}")
     try:
@@ -217,6 +222,7 @@ def test_dram_streaming_matmul(device, k, n, m):
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
+            subblock_k=subblock_k,
         )
     except Exception as e:
         logger.error(f"DRAM streaming matmul failed: {e}")
