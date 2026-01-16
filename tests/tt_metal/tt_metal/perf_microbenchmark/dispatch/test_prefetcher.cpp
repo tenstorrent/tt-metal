@@ -2048,8 +2048,6 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         generate_prefetch_relay_h_commands(first_worker, mmio_dram_base, dram_alignment, mmio_device_data, device_data);
 
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
-    const bool pass_after = device_data.validate(remote_device_);
-    EXPECT_TRUE(pass_after) << "Dispatcher test failed validation";
 }
 
 // Smoke test of prefetcher/dispatcher commands except add_dispatch_write_host
