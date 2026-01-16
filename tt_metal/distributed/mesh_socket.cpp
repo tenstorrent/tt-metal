@@ -498,9 +498,9 @@ D2HSocket::D2HSocket(
     data_pinned_memory_(nullptr),
     bytes_sent_pinned_memory_(nullptr),
     sender_core_(sender_core),
-    buffer_type_(buffer_type),
     fifo_size_(fifo_size),
     page_size_(0) {
+    (void)buffer_type;  // Unused for now
     const SocketSenderSize_ sender_size;
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 

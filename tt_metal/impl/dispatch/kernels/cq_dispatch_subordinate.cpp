@@ -151,6 +151,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    // DPRINT << wait_count << "," << wait_stream << ENDL();
     while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
     WAYPOINT("WCD");

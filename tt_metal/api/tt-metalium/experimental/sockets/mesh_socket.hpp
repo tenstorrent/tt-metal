@@ -107,7 +107,6 @@ private:
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_sent_buffer_ = nullptr;
 
     MeshCoreCoord sender_core_ = {};
-    BufferType buffer_type_ = BufferType::DRAM;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
     uint32_t bytes_acked_ = 0;
