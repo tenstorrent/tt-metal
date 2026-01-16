@@ -197,21 +197,36 @@ struct ChannelCounter {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
+    uint32_t slot_size_bytes;
+    uint32_t remote_receiver_channel_address_base;
+    uint32_t remote_receiver_channel_address_ptr;
+    uint32_t remote_receiver_channel_address_last;
     uint32_t num_free_slots;
-    BufferIndex remote_receiver_buffer_index;
-    size_t cached_next_buffer_slot_addr;
 
     FORCE_INLINE void init() {
+        this->slot_size_bytes = 0U;
+        this->remote_receiver_channel_address_base = 0U;
+        this->remote_receiver_channel_address_ptr = 0U;
+        this->remote_receiver_channel_address_last = 0U;
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->remote_receiver_buffer_index = BufferIndex{0};
-        this->cached_next_buffer_slot_addr = 0;
+    }
+
+    FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes) {
+        this->slot_size_bytes = slot_size_bytes;
+        this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
+        this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
+        this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
+        this->num_free_slots = RECEIVER_NUM_BUFFERS;
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
 
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        remote_receiver_buffer_index =
-            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+    FORCE_INLINE void advance_remote_receiver_buffer_pointer() {
+        bool const is_last_buffer = remote_receiver_channel_address_ptr == remote_receiver_channel_address_last;
+        remote_receiver_channel_address_ptr += slot_size_bytes;
+        if(is_last_buffer) {
+            remote_receiver_channel_address_ptr = remote_receiver_channel_address_base;
+        }
     }
 };
 
@@ -251,6 +266,7 @@ struct ChannelPointersTupleImpl;
 // Provide the specialization that actually holds the tuple and `get<>`:
 template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
 struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
+    static constexpr size_t N = sizeof...(Is);
     std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
 
     template <size_t I>
