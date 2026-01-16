@@ -146,6 +146,21 @@ class TTSampling(LightweightModule):
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(self.mesh_device, self.sub_core_grids, self.tt_ccl)
 
+        self.seeds_tt_tensor = ttnn.as_tensor(
+            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.user_ids_tt_tensor = ttnn.as_tensor(
+            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
@@ -395,7 +410,11 @@ class TTSampling(LightweightModule):
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
         ttnn.deallocate(topk_global_indices_interleaved)
-
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
+            sub_core_grids=self.sub_core_grids,
+        )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,

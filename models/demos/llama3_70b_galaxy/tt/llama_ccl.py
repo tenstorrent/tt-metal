@@ -494,7 +494,7 @@ class TT_CCL:
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
@@ -502,7 +502,7 @@ class TT_CCL:
                 if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
@@ -562,12 +562,12 @@ class TT_CCL:
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    # "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
                     "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
                     "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
@@ -575,12 +575,12 @@ class TT_CCL:
                 if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    # "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
                     "FF3_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
                     "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
@@ -626,7 +626,7 @@ class TT_CCL:
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO": [(1, 1, seqlen, 2048)],
+                    "WO_AG": [(8, 1, seqlen, 2048)],
                     "FF1": [(1, 1, seqlen, 3584)],
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
@@ -637,7 +637,7 @@ class TT_CCL:
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO": [(1, 1, seqlen, 1280)],
+                    "WO_AG": [(8, 1, seqlen, 1280)],
                     "FF1": [(1, 1, seqlen, 3200)],
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
@@ -722,7 +722,7 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
 
         else:
-            if lm_head:
+            if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
                     dim=0,
@@ -1175,7 +1175,7 @@ class TT_CCL:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
-            if buffer_key != "LM_HEAD":
+            if buffer_key not in ["LM_HEAD", "WO_AG"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -1280,7 +1280,7 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
+    use_2d_grid = False
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
