@@ -39,9 +39,6 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         Q, K, V = torch.chunk(outs, chunks=3, dim=-1)
         ```
 
-        **Currently only chunks=3 is supported.** This op expects TILE layout tensors on device and operates in tile
-        units internally.
-
         Parameters
         ----------
         input_tensor : ttnn.Tensor

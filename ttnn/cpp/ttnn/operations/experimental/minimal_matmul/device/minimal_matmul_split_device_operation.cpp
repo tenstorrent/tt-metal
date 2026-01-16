@@ -103,10 +103,10 @@ void MinimalMatmulSplitDeviceOperation::validate_on_program_cache_miss(
     // Validate each chunk is tile-aligned
     const uint32_t N_per_chunk = N / chunks;
     TT_FATAL(
-        N_per_chunk % TILE_WIDTH == 0,
+        N_per_chunk % tt::constants::TILE_WIDTH == 0,
         "Each chunk size N/chunks={} must be a multiple of TILE_WIDTH={}",
         N_per_chunk,
-        TILE_WIDTH);
+        tt::constants::TILE_WIDTH);
 
     if (has_bias) {
         const auto& b_logical = bias_ptr->logical_shape();
