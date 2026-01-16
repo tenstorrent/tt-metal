@@ -139,7 +139,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
     auto scores_tensor = tensor_args.expert_scores_tensor;
     const auto& output_tensor = tensor_return_value.at(0);
-    const auto& metadata_tensor = tensor_return_value.at(1);
+    const auto& metadata_tensor = tensor_return_value.at(1);    // output indices tensor
+    const auto& scores_out_tensor = tensor_return_value.at(2);  // output scores tensor
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -268,6 +269,17 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_pages,
         metadata_page_size,
         aligned_metadata_page_size);
+
+    auto scores_out_page_size = detail::get_page_size(scores_out_tensor);
+    auto scores_out_pages = detail::get_num_pages(scores_out_tensor);
+    uint32_t aligned_scores_out_page_size = detail::get_aligned_page_size(scores_out_tensor);
+    log_debug(
+        tt::LogOp,
+        "scores_out shape: {}, scores_out_pages: {}, scores_out_page_size: {}, aligned_scores_out_page_size: {}",
+        scores_out_tensor.logical_shape(),
+        scores_out_pages,
+        scores_out_page_size,
+        aligned_scores_out_page_size);
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
         input_tensor, indices_tensor, scores_tensor, mapping_tensor, num_links, operation_attributes.axis);
@@ -398,6 +410,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
 
@@ -447,10 +460,14 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         mapping_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
+        scores_out_tensor.buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
-        0,
-        0,
     };
+
+    uint32_t reader_token_start_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
+    uint32_t reader_token_end_idx = reader_runtime_args.size();
+    reader_runtime_args.push_back(0);
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
@@ -462,16 +479,20 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             mapping_tensor.buffer()->address(),
             output_tensor.buffer()->address(),
             metadata_tensor.buffer()->address(),
+            scores_out_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
-            0,
-            0,
         };
-        reader_runtime_args[7] = tokens_per_core_start;
-        reader_runtime_args[8] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[8] = tokens_per_core_start;
-        writer_runtime_args[9] = reader_runtime_args[8];
-        tokens_per_core_start = reader_runtime_args[8];
+        uint32_t writer_token_start_idx = writer_runtime_args.size();
+        writer_runtime_args.push_back(0);
+        uint32_t writer_token_end_idx = writer_runtime_args.size();
+        writer_runtime_args.push_back(0);
+        reader_runtime_args[reader_token_start_idx] = tokens_per_core_start;
+        reader_runtime_args[reader_token_end_idx] =
+            std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
+        writer_runtime_args[writer_token_start_idx] = tokens_per_core_start;
+        writer_runtime_args[writer_token_end_idx] = reader_runtime_args[reader_token_end_idx];
+        tokens_per_core_start = reader_runtime_args[reader_token_end_idx];
         for (const auto& neighbor_coordinate : neighbors) {
             log_debug(
                 tt::LogOp,
@@ -483,8 +504,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
                 neighbor_coordinate[1],
                 sender_core,
                 link_id,
-                reader_runtime_args[7],
-                reader_runtime_args[8]);
+                reader_runtime_args[8],
+                reader_runtime_args[9]);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
@@ -521,6 +542,7 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
+        const auto& scores_out_tensor = tensor_return_value.at(2);
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
@@ -531,7 +553,8 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
             reader_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
             reader_runtime_args.at(4) = output_tensor.buffer()->address();
             reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(6) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            reader_runtime_args.at(6) = scores_out_tensor.buffer()->address();
+            reader_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -539,8 +562,9 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
             writer_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
             writer_runtime_args.at(4) = output_tensor.buffer()->address();
             writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(6) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            writer_runtime_args.at(7) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(6) = scores_out_tensor.buffer()->address();
+            writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
         }
     }
 }

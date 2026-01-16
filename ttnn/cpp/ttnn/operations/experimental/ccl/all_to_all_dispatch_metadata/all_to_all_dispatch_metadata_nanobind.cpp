@@ -46,16 +46,18 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
             subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
             output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
-            output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens and the metadata. Defaults to `None`.
+            output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
+            drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `(0, 0)`.
 
         Returns:
-            Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
+            Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.
 
             output_tensor: The output tensor is expected to be [1, B*D[A], S, H] per device if output_concat_dim is 1 or [1, B, S*D[A], H] per device if output_concat_dim is 2, sharded fully such that we have [D, B*D[A], S, H] or [D, B, S*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
-            expert_metadata_tensor: The metadata tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2, replicated across all devices. Each row contains the all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is expected to be in Row Major, Interleaved format.
+            expert_indices_tensor: The indices tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2. Each row contains all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is L1 sharded to drain_sync_tilizer_core.
+            expert_scores_tensor: The scores tensor has the same shape as the indices tensor and contains the corresponding scores. The tensor is L1 sharded to drain_sync_tilizer_core.
 
         Example:
-            >>> output_tensor, metadata_tensor = ttnn.experimental.all_to_all_dispatch_metadata(
+            >>> output_tensor, indices_tensor, scores_tensor = ttnn.experimental.all_to_all_dispatch_metadata(
                             input_tensor,
                             expert_indices_tensor,
                             expert_scores_tensor,
@@ -65,7 +67,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             topology=topology,
                             memory_config=memory_config,
                             subdevice_id=subdevice_id,
-                            output_concat_dim=output_concat_dim)
+                            output_concat_dim=output_concat_dim,
+                            drain_sync_tilizer_core=(0, 0))
         )doc";
 
     using OperationType = decltype(ttnn::experimental::all_to_all_dispatch_metadata);
@@ -83,9 +86,14 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                const std::optional<uint32_t> cluster_axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<std::array<ttnn::Tensor, 2>>& output_tensors,
+               const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) /*-> std::array*/ {
+               const std::optional<tt::tt_fabric::Topology> topology,
+               const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core) /*-> std::array*/ {
+                std::optional<CoreCoord> drain_core = std::nullopt;
+                if (drain_sync_tilizer_core.has_value()) {
+                    drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
+                }
                 return self(
                     input_tensor,
                     expert_indices_tensor,
@@ -97,7 +105,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                     topology,
                     memory_config,
                     subdevice_id,
-                    output_concat_dim);
+                    output_concat_dim,
+                    drain_core);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
@@ -110,7 +119,8 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensors") = nb::none(),
             nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none()});
+            nb::arg("topology") = nb::none(),
+            nb::arg("drain_sync_tilizer_core") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

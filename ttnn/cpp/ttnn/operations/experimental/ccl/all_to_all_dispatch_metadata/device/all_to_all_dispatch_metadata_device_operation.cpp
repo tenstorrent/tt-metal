@@ -48,13 +48,17 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
         const auto& sparse_token_tensor = output_tensors[0];
-        const auto& metadata_tensor = output_tensors[1];
+        const auto& indices_tensor_out = output_tensors[1];
+        const auto& scores_tensor_out = output_tensors[2];
         TT_FATAL(
             sparse_token_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output tensor must be in row major layout");
         TT_FATAL(
-            metadata_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            "Output metadata tensor must be in row major layout");
+            indices_tensor_out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "Output indices tensor must be in row major layout");
+        TT_FATAL(
+            scores_tensor_out.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "Output scores tensor must be in row major layout");
 
         TT_FATAL(
             output_specs[0] == sparse_token_tensor.tensor_spec(),
@@ -62,10 +66,15 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
             sparse_token_tensor.tensor_spec(),
             output_specs[0]);
         TT_FATAL(
-            output_specs[1] == metadata_tensor.tensor_spec(),
-            "Optional metadata tensor spec {} does not match computed output spec {}",
-            metadata_tensor.tensor_spec(),
+            output_specs[1] == indices_tensor_out.tensor_spec(),
+            "Optional indices tensor spec {} does not match computed output spec {}",
+            indices_tensor_out.tensor_spec(),
             output_specs[1]);
+        TT_FATAL(
+            output_specs[2] == scores_tensor_out.tensor_spec(),
+            "Optional scores tensor spec {} does not match computed output spec {}",
+            scores_tensor_out.tensor_spec(),
+            output_specs[2]);
     }
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
@@ -102,7 +111,6 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
-    uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 
     // experts are expert parallel across devices
     // tokens are data parallel across devices
@@ -120,42 +128,64 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         log_debug(tt::LogOp, "axis: {}", axis);
         dispatch_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
     }
+    uint32_t total_tokens = input_shape[0] * input_shape[1] * input_shape[2] * dispatch_devices;
 
-    // final batch in the metadata tensor
-    uint32_t batch = (output_concat_dim == 1) ? input_shape[0] * dispatch_devices : input_shape[0];
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t seq_len = (output_concat_dim == 2) ? indices_shape[-2] * dispatch_devices : indices_shape[-2];
 
-    auto output_shape = ttnn::Shape({1, batch, seq_len, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, batch, seq_len, selected_experts_k});
-
-    log_debug(tt::LogOp, "output_shape: {}", output_shape);
-    log_debug(tt::LogOp, "metadata_shape: {}", metadata_shape);
-    log_debug(tt::LogOp, "input_tensor_shape: {}", input_shape);
-    log_debug(tt::LogOp, "indices_shape: {}", indices_shape);
-    log_debug(tt::LogOp, "mapping_shape: {}", mapping_shape);
-    log_debug(tt::LogOp, "dispatch_devices: {}", dispatch_devices);
-    log_debug(tt::LogOp, "hidden_size: {}", hidden_size);
-    log_debug(tt::LogOp, "batch: {}", batch);
-    log_debug(tt::LogOp, "selected_experts_k: {}", selected_experts_k);
+    auto output_shape = ttnn::Shape({1, total_tokens, hidden_size});
+    auto metadata_shape = ttnn::Shape({1, total_tokens, selected_experts_k});
 
     auto mem_config = operation_attributes.output_mem_config;
+
+    // Output tokens tensor - DRAM interleaved
     auto output_tokens_spec = TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
-    auto metadata_spec = TensorSpec(
+
+    // Create sharded memory config for indices/scores on drain_sync_tilizer_core
+    CoreCoord drain_core = operation_attributes.drain_sync_tilizer_core;
+    CoreRangeSet drain_core_range_set({CoreRange(drain_core, drain_core)});
+
+    auto indices_shard_spec = tt::tt_metal::ShardSpec(
+        drain_core_range_set, {total_tokens, selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    auto indices_sharded_mem_config = tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, indices_shard_spec};
+
+    auto scores_shard_spec = tt::tt_metal::ShardSpec(
+        drain_core_range_set, {total_tokens, selected_experts_k}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    auto scores_sharded_mem_config = tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, scores_shard_spec};
+
+    // Indices tensor spec - sharded to drain core
+    auto indices_spec = TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.dtype(),
             tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
-            mem_config));
+            indices_sharded_mem_config));
+
+    // Scores tensor spec - sharded to drain core (same shape as indices, different dtype)
+    auto scores_spec = TensorSpec(
+        Shape(metadata_shape),
+        tt::tt_metal::TensorLayout(
+            tensor_args.expert_scores_tensor.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.expert_scores_tensor.layout()),
+            scores_sharded_mem_config));
+
+    log_debug(tt::LogOp, "indices_spec shape: {}", indices_spec.logical_shape());
+    log_debug(tt::LogOp, "scores_spec shape: {}", scores_spec.logical_shape());
+    log_debug(tt::LogOp, "drain_sync_tilizer_core: ({}, {})", drain_core.x, drain_core.y);
+
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
         auto preallocated_output_spec = output_tensors[0].tensor_spec();
-        auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
-        return {preallocated_output_spec, preallocated_metadata_spec};
+        auto preallocated_indices_spec = output_tensors[1].tensor_spec();
+        auto preallocated_scores_spec = output_tensors[2].tensor_spec();
+        return {preallocated_output_spec, preallocated_indices_spec, preallocated_scores_spec};
     }
-    return {output_tokens_spec, metadata_spec};
+    return {output_tokens_spec, indices_spec, scores_spec};
 }
 
 AllToAllDispatchMetadataDeviceOperation::tensor_return_value_t
@@ -167,8 +197,9 @@ AllToAllDispatchMetadataDeviceOperation::create_output_tensors(
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
-    auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor};
+    auto indices_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
+    auto scores_tensor = create_device_tensor(output_spec[2], tensor_args.input_tensor.device());
+    return {output_tensor, indices_tensor, scores_tensor};
 }
 
 }  // namespace ttnn::operations::experimental::ccl
@@ -181,13 +212,14 @@ all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
-    uint32_t output_concat_dim) {
+    uint32_t output_concat_dim,
+    const CoreCoord& drain_sync_tilizer_core) {
     using OperationType = ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -197,7 +229,8 @@ all_to_all_dispatch_metadata(
             .num_links = num_links,
             .topology = topology,
             .impl = impl,
-            .output_concat_dim = output_concat_dim},
+            .output_concat_dim = output_concat_dim,
+            .drain_sync_tilizer_core = drain_sync_tilizer_core},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

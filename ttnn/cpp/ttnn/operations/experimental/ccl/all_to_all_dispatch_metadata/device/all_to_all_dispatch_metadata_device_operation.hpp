@@ -45,11 +45,26 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const tt::tt_fabric::Topology topology;
         const AllToAllTransferType impl;
         const uint32_t output_concat_dim;
+        const CoreCoord drain_sync_tilizer_core;  // Core where indices/scores are sharded for selective_tilize
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "worker_core_range_set", "output_mem_config", "axis", "num_links", "topology", "impl", "output_concat_dim");
+            "worker_core_range_set",
+            "output_mem_config",
+            "axis",
+            "num_links",
+            "topology",
+            "impl",
+            "output_concat_dim",
+            "drain_sync_tilizer_core");
         auto attribute_values() const {
             return std::forward_as_tuple(
-                worker_core_range_set, output_mem_config, axis, num_links, topology, impl, output_concat_dim);
+                worker_core_range_set,
+                output_mem_config,
+                axis,
+                num_links,
+                topology,
+                impl,
+                output_concat_dim,
+                drain_sync_tilizer_core);
         };
     };
     struct tensor_args_t {
@@ -57,12 +72,12 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const Tensor expert_indices_tensor;
         const Tensor expert_scores_tensor;
         const Tensor expert_mapping_tensor;
-        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
+        const std::optional<std::array<Tensor, 3>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = std::array<Tensor, 3>;
 
     struct AllToAllDispatchMetadataSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -126,11 +141,12 @@ all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
-    uint32_t output_concat_dim);
+    uint32_t output_concat_dim,
+    const CoreCoord& drain_sync_tilizer_core);
 }  // namespace ttnn::prim

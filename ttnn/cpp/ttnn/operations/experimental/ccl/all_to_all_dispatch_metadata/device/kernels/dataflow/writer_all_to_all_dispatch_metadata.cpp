@@ -103,6 +103,7 @@ void kernel_main() {
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto scores_out_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -111,6 +112,7 @@ void kernel_main() {
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);

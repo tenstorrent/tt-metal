@@ -14,18 +14,19 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
+std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<uint32_t>& output_concat_dim) {
+    const std::optional<uint32_t>& output_concat_dim,
+    const std::optional<CoreCoord>& drain_sync_tilizer_core) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -35,6 +36,9 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
+
+    // Default drain_sync_tilizer_core to (0, 0) if not provided
+    CoreCoord drain_core = drain_sync_tilizer_core.value_or(CoreCoord(0, 0));
 
     AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
@@ -51,7 +55,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatchMetadata::invoke(
         memory_config_,
         subdevice_core_range_set,
         impl,
-        output_concat_dim_);
+        output_concat_dim_,
+        drain_core);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

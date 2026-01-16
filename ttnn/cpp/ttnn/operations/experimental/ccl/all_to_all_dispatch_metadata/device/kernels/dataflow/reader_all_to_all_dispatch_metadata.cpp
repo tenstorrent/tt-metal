@@ -70,6 +70,7 @@ void kernel_main() {
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    [[maybe_unused]] uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_ags++);
 
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
@@ -125,7 +126,7 @@ void kernel_main() {
         for (uint32_t d = 0; d < dispatch_devices; d++) {
             uint32_t page = d * tokens_per_device + t;
             uint32_t l1_write_addr = get_write_ptr(metadata_buffer_id) + page * aligned_indices_page_size;
-            uint64_t metadata_write_addr = get_noc_addr(page, metadata_addr_gen);
+            uint64_t metadata_write_addr = metadata_addr_gen.get_noc_addr(page);
             noc_async_write(l1_write_addr, metadata_write_addr, metadata_page_size);
         }
     }
