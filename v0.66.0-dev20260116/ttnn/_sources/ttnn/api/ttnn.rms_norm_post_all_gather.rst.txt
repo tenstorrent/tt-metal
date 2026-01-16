@@ -1,0 +1,8 @@
+﻿ttnn.rms\_norm\_post\_all\_gather
+=================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rms_norm_post_all_gather:
+
+.. autooperation:: ttnn.rms_norm_post_all_gather
