@@ -324,7 +324,6 @@ set(GPP_FLAGS_common
     -D__DATE__="redacted"
     -D__TIME__="redacted"
     -D__TIMESTAMP__="redacted"
-    -frandom-seed=0
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
@@ -392,14 +391,16 @@ foreach(ARCH IN LISTS ARCHS)
         list(GET HW_PAIR_LIST 0 HWOBJ)
         list(GET HW_PAIR_LIST 1 HWSRC)
         set(HW_OUTPUT_FILE "${HW_OBJ_DIR}/${HWOBJ}")
+        # Use source filename as random seed for deterministic LTO
+        get_filename_component(HWSRC_NAME "${HWSRC}" NAME)
         add_custom_command(
             OUTPUT
                 ${HW_OUTPUT_FILE}
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OUTPUT_FILE}
-                ${PROJECT_SOURCE_DIR}/${HWSRC}
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -frandom-seed=${HWSRC_NAME} -c -o
+                ${HW_OUTPUT_FILE} ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
                 ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
@@ -465,14 +466,16 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                 -mcpu=${CPU}
                 ${GPP_FLAGS_common}
             )
+            # Use source filename as random seed for deterministic LTO
+            get_filename_component(HWSRC_NAME "${HWSRC}" NAME)
             add_custom_command(
                 OUTPUT
                     ${HW_OBJ_DIR}/${HW_OBJ_FILE}
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
                 COMMAND
-                    ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HW_OBJ_FILE}
-                    ${PROJECT_SOURCE_DIR}/${HWSRC}
+                    ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -frandom-seed=${HWSRC_NAME} -c -o
+                    ${HW_OBJ_DIR}/${HW_OBJ_FILE} ${PROJECT_SOURCE_DIR}/${HWSRC}
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
                     ${PROJECT_SOURCE_DIR}/${HWSRC}
