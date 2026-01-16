@@ -54,13 +54,6 @@ enum class LineDirection: uint8_t {
     BACKWARD,
 };
 
-// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
-
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;

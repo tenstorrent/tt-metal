@@ -238,14 +238,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::RDIV: {
-            uint32_t round_mode_value = params[1];
-            static constexpr const char* round_mode_strs[] = {
+            uint32_t rounding_mode_value = params[1];
+            static constexpr const char* rounding_mode_strs[] = {
                 "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
             return {
                 "rdiv_tile_init();",
                 fmt::format(
                     "rdiv_tile<{}>({}, {:#x}u);",
-                    round_mode_strs[round_mode_value],
+                    rounding_mode_strs[rounding_mode_value],
                     idst,
                     std::bit_cast<uint32_t>(param0))};
         }
@@ -816,7 +816,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     }
     if (name == "softplus") {
-        return UnaryWithParam(UnaryOpType::SOFTPLUS);
+        return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f, 0.0f});  // beta=1, threshold=20, approx_mode=0
     }
     if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,9 +13,20 @@
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-int main() {
-    using namespace tt;
-    using namespace tt::tt_metal;
+using namespace tt;
+using namespace tt::tt_metal;
+
+// This test requires simulator environment
+TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
+    // Skip if simulator is not available
+    char* env_var = std::getenv("TT_METAL_SIMULATOR");
+    if (env_var == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    }
+
+    IDevice* dev = devices_[0]->get_devices()[0];
+    auto mesh_device = devices_[0];
+
     const uint32_t address = 100 * 1024;
     const uint32_t value = 0x12345678;
     const std::unordered_map<std::string, uint32_t> named_compile_time_args = {
@@ -23,35 +36,17 @@ int main() {
         {"very_long_parameter_name_that_someone_could_potentially_use_to_try_to_break_the_kernel", 456}};
     std::vector<uint32_t> outputs(1);
     outputs[0] = 0;
-    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
+    env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
                   << std::endl;
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
-    env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        std::cerr
-            << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR"
-            << std::endl;
-        std::cerr << "ERROR: with a valid simulator path" << std::endl;
-        return 1;
-    }
-    env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (env_var == nullptr) {
-        std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
-                     "TT_METAL_SLOW_DISPATCH_MODE"
-                  << std::endl;
-        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << std::endl;
-        return 1;
-    }
 
-    // Initialize mesh device (1x1), command queue, workload, device range, and program.
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], core, address, outputs);
+    tt_metal::detail::WriteToDeviceL1(dev, core, address, outputs);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -78,13 +73,7 @@ int main() {
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], core, address, 4, outputs);
-    mesh_device->close();
+    tt_metal::detail::ReadFromDeviceL1(dev, core, address, 4, outputs);
 
-    if (outputs[0] == value) {
-        std::cout << "Test passed!" << std::endl;
-        return 0;
-    }
-    std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << std::endl;
-    return 1;
+    ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }

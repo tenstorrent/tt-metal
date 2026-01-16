@@ -23,14 +23,14 @@ struct ReshardSameWidthFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const reshard::operation_attributes_t& operation_attributes,
-        const reshard::tensor_args_t& tensor_args,
+        const reshard::ReshardParams& operation_attributes,
+        const reshard::ReshardInputs& tensor_args,
         reshard::tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const reshard::operation_attributes_t& operation_attributes,
-        const reshard::tensor_args_t& tensor_args,
+        const reshard::ReshardParams& operation_attributes,
+        const reshard::ReshardInputs& tensor_args,
         reshard::tensor_return_value_t& tensor_return_value);
 };
 

@@ -43,11 +43,7 @@ void WriteShard(
     std::vector<DType>& src,
     const MeshCoordinate& coord,
     bool blocking = false) {
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = src.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
     mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
 }
 
@@ -67,11 +63,7 @@ void ReadShard(
 
     auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = dst.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }
 

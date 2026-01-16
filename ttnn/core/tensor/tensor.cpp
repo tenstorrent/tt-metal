@@ -507,11 +507,10 @@ void memcpy(
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
-        .host_data = dst,
-        .region = region,
-    }};
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(dst)
+            .region(region)};
     queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
@@ -527,11 +526,10 @@ void memcpy(
     ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
-        .host_data = const_cast<void*>(src),
-        .region = region,
-    }};
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(const_cast<void*>(src))
+            .region(region)};
     queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
 }
 
