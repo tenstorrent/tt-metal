@@ -13,4 +13,4 @@ global_env:
   TT_LOGGER_LEVEL: "Debug"
   TT_LOGGER_TYPES: "OpFabricDistributedTestTTNN"
 
-mesh_graph_desc_path: "tests/scale_out/4x_bh_quietbox/config/2x4_bh_mesh_graph_descriptor.textproto"
+mesh_graph_desc_path: "tests/scale_out/4x_bh_quietbox/mesh_graph_descriptors/2x4_bh_mesh_graph_descriptor.textproto"
