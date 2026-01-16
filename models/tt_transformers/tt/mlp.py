@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+
 import torch
 
 import ttnn
@@ -64,7 +65,7 @@ class MLP(LightweightModule):
             padded_weight = pad_hidden_dim(raw_weight, dims[0] if args.is_galaxy else dims[-1])
             # Make 4D: [1, 1, H, W] - CRITICAL for prefetcher to work correctly
             torch_tensor = padded_weight.unsqueeze(0).unsqueeze(0)
-            
+
             result = ttnn.as_tensor(
                 torch_tensor,
                 dtype=type,
@@ -76,7 +77,7 @@ class MLP(LightweightModule):
                 ),
                 cache_file_name=cache_name(name),
             )
-            
+
             # Debug: Print shape info when DEBUG_PREFETCHER is enabled
             if DEBUG_PREFETCHER and layer_num == 0:
                 print(f"[MLP DEBUG] Layer {layer_num} {name}: torch={torch_tensor.shape}, ttnn={result.shape}")
@@ -89,7 +90,7 @@ class MLP(LightweightModule):
         layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
         ff1_3_dtype = ttnn.bfloat8_b
-        
+
         # self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
         #     decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
         # )
@@ -103,7 +104,6 @@ class MLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
-        
 
         # Default activation is SILU
         self.activation_type = (

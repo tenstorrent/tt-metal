@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, comp_allclose_and_pcc
+from models.common.utility_functions import comp_allclose, comp_allclose_and_pcc, comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -362,14 +362,15 @@ def test_model_inference(
             pt_layer_outputs = {}
             pt_layer_intermediates = {}  # For layer 30/31 detailed intermediates
             hooks = []
-            
+
             def make_hook(layer_idx):
                 def hook(module, input, output):
                     # Output is a tuple (hidden_states, ...), extract first element
                     hidden_states = output[0] if isinstance(output, tuple) else output
                     pt_layer_outputs[f"layer_{layer_idx}"] = hidden_states.detach().clone()
+
                 return hook
-            
+
             # Create hooks for detailed intermediates within layers 30 and 31
             def make_intermediate_hook(layer_idx, stage_name):
                 def hook(module, input, output):
@@ -382,15 +383,16 @@ def test_model_inference(
                     if stage_name == "input_layernorm":
                         input_key = f"layer_{layer_idx}_input"
                         pt_layer_intermediates[input_key] = input[0].detach().clone()
+
                 return hook
-            
+
             # Register hooks on each decoder layer
             # Access layers through HfModelWrapper: reference_model.model.model.layers
             ref_layers = reference_model.model.model.layers
             for layer_idx, layer in enumerate(ref_layers):
                 hook = layer.register_forward_hook(make_hook(layer_idx))
                 hooks.append(hook)
-                
+
                 # Add detailed hooks for ALL layers when DEBUG_LAYERS is enabled
                 if DEBUG_LAYERS:
                     # Hook input_layernorm (corresponds to attention_norm)
@@ -398,36 +400,32 @@ def test_model_inference(
                         make_intermediate_hook(layer_idx, "input_layernorm")
                     )
                     hooks.append(h)
-                    
+
                     # Hook self_attn (attention output)
-                    h = layer.self_attn.register_forward_hook(
-                        make_intermediate_hook(layer_idx, "self_attn")
-                    )
+                    h = layer.self_attn.register_forward_hook(make_intermediate_hook(layer_idx, "self_attn"))
                     hooks.append(h)
-                    
+
                     # Hook post_attention_layernorm (corresponds to ff_norm)
                     h = layer.post_attention_layernorm.register_forward_hook(
                         make_intermediate_hook(layer_idx, "post_attention_layernorm")
                     )
                     hooks.append(h)
-                    
+
                     # Hook mlp (MLP output)
-                    h = layer.mlp.register_forward_hook(
-                        make_intermediate_hook(layer_idx, "mlp")
-                    )
+                    h = layer.mlp.register_forward_hook(make_intermediate_hook(layer_idx, "mlp"))
                     hooks.append(h)
-            
+
             # In this test all users have the same position
             ref_output = reference_model(pt_decode_input, current_pos[0])
-            
+
             # Remove hooks
             for hook in hooks:
                 hook.remove()
-            
+
             # Compare decoder intermediates for ALL layers
             if DEBUG_LAYERS and pt_layer_intermediates:
                 logger.info(f"[Decoder Intermediate] Comparing decoder intermediates (with ATOL and PCC)")
-                
+
                 # Mapping from TT names to PT names
                 stage_mapping = {
                     "input": "input",
@@ -435,25 +433,25 @@ def test_model_inference(
                     "after_attention": "self_attn",
                     "after_ff_norm": "post_attention_layernorm",
                     "after_mlp": "mlp",
-                    "output": None  # output is captured by layer hook, not submodule
+                    "output": None,  # output is captured by layer hook, not submodule
                 }
-                
+
                 # Print detailed info for first few layers and periodic layers
                 verbose_layers = [0, 1, 2, 3, 4, 5, 10, 15, 20, 25, 29, 30, 31]
-                
+
                 for layer_idx in range(len(tt_model.layers)):
                     layer = tt_model.layers[layer_idx]
-                    if hasattr(layer, 'debug_intermediates') and layer.debug_intermediates:
+                    if hasattr(layer, "debug_intermediates") and layer.debug_intermediates:
                         # Only print header for verbose layers
                         if layer_idx in verbose_layers:
                             logger.info(f"[Decoder Layer {layer_idx}] Comparing intermediates:")
-                        
+
                         for tt_stage, pt_stage in stage_mapping.items():
                             if tt_stage not in layer.debug_intermediates:
                                 continue
-                            
+
                             tt_tensor = layer.debug_intermediates[tt_stage]
-                            
+
                             # Get PT tensor (either from intermediates or layer output)
                             if pt_stage is None:
                                 pt_key = f"layer_{layer_idx}"
@@ -461,25 +459,25 @@ def test_model_inference(
                             else:
                                 pt_key = f"layer_{layer_idx}_{pt_stage}"
                                 pt_tensor = pt_layer_intermediates.get(pt_key)
-                            
+
                             if pt_tensor is None:
                                 if layer_idx in verbose_layers:
                                     logger.warning(f"  {tt_stage}: PT tensor not found (key={pt_key})")
                                 continue
-                            
+
                             # Reshape PT: [batch, seq, dim] -> [1, 1, batch*seq, dim]
                             if len(pt_tensor.shape) == 3:
                                 pt_tensor = pt_tensor.view(1, 1, -1, pt_tensor.shape[-1])
-                            
+
                             # Compare only valid dimensions
                             min_dim = min(tt_tensor.shape[-1], pt_tensor.shape[-1])
                             tt_compare = tt_tensor[..., :min_dim].float()
                             pt_compare = pt_tensor[..., :min_dim].float()
-                            
+
                             # Flatten for comparison
-                            tt_flat = tt_compare.reshape(-1)[:pt_compare.numel()]
+                            tt_flat = tt_compare.reshape(-1)[: pt_compare.numel()]
                             pt_flat = pt_compare.reshape(-1)
-                            
+
                             if tt_flat.numel() == pt_flat.numel():
                                 # Use comp_allclose_and_pcc to get both ATOL and PCC
                                 passing, metrics_msg = comp_allclose_and_pcc(pt_flat, tt_flat, pcc=0.9)
@@ -488,35 +486,39 @@ def test_model_inference(
                                     logger.info(f"  {tt_stage}: {metrics_msg}")
                             else:
                                 if layer_idx in verbose_layers:
-                                    logger.warning(f"  {tt_stage}: Shape mismatch - TT: {tt_tensor.shape}, PT: {pt_tensor.shape}")
-            
+                                    logger.warning(
+                                        f"  {tt_stage}: Shape mismatch - TT: {tt_tensor.shape}, PT: {pt_tensor.shape}"
+                                    )
+
             # Compare intermediate layer outputs if debug outputs are available
-            if hasattr(tt_model, 'debug_layer_outputs') and tt_model.debug_layer_outputs:
+            if hasattr(tt_model, "debug_layer_outputs") and tt_model.debug_layer_outputs:
                 logger.info(f"[Layer PCC Debug] Comparing {len(tt_model.debug_layer_outputs)} layer outputs")
                 for layer_key in sorted(tt_model.debug_layer_outputs.keys()):
                     if layer_key in pt_layer_outputs:
                         tt_layer_out = tt_model.debug_layer_outputs[layer_key]
                         pt_layer_out = pt_layer_outputs[layer_key]
-                        
+
                         # Reshape PT output to match TT output shape if needed
                         # PT: [batch, seq, dim], TT: [1, 1, batch*seq, dim] or similar
                         if len(pt_layer_out.shape) == 3:
                             pt_layer_out = pt_layer_out.view(1, 1, -1, pt_layer_out.shape[-1])
-                        
+
                         # Compare only the valid dimensions
                         min_dim = min(tt_layer_out.shape[-1], pt_layer_out.shape[-1])
                         tt_compare = tt_layer_out[..., :min_dim]
                         pt_compare = pt_layer_out[..., :min_dim].float()
-                        
+
                         # Flatten for comparison
-                        tt_flat = tt_compare.reshape(-1)[:pt_compare.numel()]
+                        tt_flat = tt_compare.reshape(-1)[: pt_compare.numel()]
                         pt_flat = pt_compare.reshape(-1)
-                        
+
                         if tt_flat.numel() == pt_flat.numel():
                             passing, pcc_msg = comp_pcc(pt_flat, tt_flat, 0.9)
                             logger.info(f"[Layer PCC] {layer_key}: {pcc_msg}")
                         else:
-                            logger.warning(f"[Layer PCC] {layer_key}: Shape mismatch - TT: {tt_layer_out.shape}, PT: {pt_layer_out.shape}")
+                            logger.warning(
+                                f"[Layer PCC] {layer_key}: Shape mismatch - TT: {tt_layer_out.shape}, PT: {pt_layer_out.shape}"
+                            )
 
         # Increment position
         current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])

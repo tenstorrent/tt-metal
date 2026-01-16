@@ -6,14 +6,12 @@
 import os
 
 import torch
-from loguru import logger
 from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -143,7 +141,7 @@ class Transformer(LightweightModule):
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = False # self.args.vocab_size // sampling_splits <= 64 * 1024
+        self._supports_on_device_sampling = False  # self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -522,11 +520,11 @@ class Transformer(LightweightModule):
         kv_cache=None,
     ):
         debug_layers = os.environ.get("DEBUG_LAYERS", "0") == "1"
-        
+
         # Store intermediate outputs for debugging
         if debug_layers:
             self.debug_layer_outputs = {}
-        
+
         if mode == "decode":
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
@@ -548,7 +546,6 @@ class Transformer(LightweightModule):
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-
 
             x = layer(
                 x,

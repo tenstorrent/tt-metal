@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
-from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -226,11 +224,11 @@ class TransformerBlock(LightweightModule):
 
         # Debug for all layers to compare - store intermediates for PCC comparison
         debug_layer = os.environ.get("DEBUG_LAYERS", "0") == "1" and mode == "decode"
-        
+
         if debug_layer:
             # Clear/initialize debug storage for this layer at each forward
             self.debug_intermediates = {}
-        
+
         def store_debug_tensor(name, tensor):
             """Store tensor for later PCC comparison with PyTorch reference"""
             if not debug_layer:
@@ -250,7 +248,7 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
-        
+
         if debug_layer:
             store_debug_tensor("after_attention_norm", attn_in)
 
@@ -281,7 +279,7 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
 
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
-        
+
         if debug_layer:
             store_debug_tensor("after_ff_norm", hidden_states)
 
