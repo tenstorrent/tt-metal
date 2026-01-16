@@ -1028,19 +1028,22 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
+        # Scale KVPE before filling cache to account for the reduction in FastReduce
+        scale = 1.0 / mla_tp_factor
+        tt_kvpe = ttnn.mul(tt_kvpe, scale)
+
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
-        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
 
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
             page_table=page_table,
             batch_idx=local_batch_idx,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
 
         # FlashMLA
