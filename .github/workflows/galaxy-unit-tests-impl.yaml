@@ -232,7 +232,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          pip install -r models/demos/gpt_oss/requirements.txt
+          uv pip install -r models/demos/gpt_oss/requirements.txt
 
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
