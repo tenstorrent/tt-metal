@@ -54,6 +54,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     Program program = CreateProgram();
 
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
+    dm_dram_to_l1_kernels.reserve(4);
     for (uint32_t i = 0; i < 4; i++) {
         dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
             program,
@@ -63,6 +64,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
+    dm_l1_to_dram_kernels.reserve(4);
     for (uint32_t i = 0; i < 4; i++) {
         dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
             program,
