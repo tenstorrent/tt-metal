@@ -35,8 +35,8 @@ class TTNNReLU(TTNNModule):
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through ReLU activation."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.relu(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=input_tensor.memory_config())
+        tt_output = ttnn.relu(input_tensor, memory_config=input_tensor.memory_config())
         return tt_output
 
 
