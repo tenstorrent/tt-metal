@@ -17,7 +17,9 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
+from helpers.pack import pack_mxfp8p, pack_mxfp8r
 from helpers.tilize_untilize import tilize_block, untilize_block
+from helpers.unpack import unpack_mxfp8p, unpack_mxfp8r
 
 # Tile and face dimension constants
 FACE_DIM = 16
@@ -25,7 +27,12 @@ ELEMENTS_PER_FACE = 256  # 16x16 = 256 elements per face
 FACES_PER_TILE = 4
 ELEMENTS_PER_TILE = 1024  # 4 faces × 256 elements
 TILE_SIZE = 32
+TILE_DIM = 32
 TILE_DIMENSIONS = (32, 32)  # Tile dimensions as tuple
+
+# Destination register capacity (in tiles)
+MAX_TILES_16_BIT_DEST = 8
+MAX_TILES_32_BIT_DEST = 4
 
 golden_registry = {}
 
@@ -111,6 +118,117 @@ def get_golden_generator(cls):
     return golden_registry[cls]
 
 
+def quantize_mx_stimuli(
+    tensor: torch.Tensor, data_format: DataFormat, num_faces: int = 4
+) -> torch.Tensor:
+    """
+    Quantize MX format stimuli by performing pack→unpack roundtrip.
+
+    This simulates the quantization that occurs when data is stored in MX format
+    in L1 memory and then unpacked by hardware. The golden model should use
+    quantized values to match what hardware actually sees.
+
+    Args:
+        tensor: Input tensor (bfloat16 values)
+        data_format: MX format (MxFp8R or MxFp8P)
+        num_faces: Number of faces (1, 2, or 4)
+
+    Returns:
+        Quantized tensor (bfloat16 values after pack→unpack roundtrip)
+
+    Raises:
+        ValueError: If data_format is not an MX format, num_faces is invalid, or tensor size is incorrect
+    """
+    # Validate data format
+    if not data_format.is_mx_format():
+        raise ValueError(
+            f"quantize_mx_stimuli only supports MX formats, got {data_format}"
+        )
+
+    # Validate num_faces
+    if num_faces not in [1, 2, 4]:
+        raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+
+    # Validate tensor size matches expected for num_faces
+    elements_per_face = 256
+    expected_elements = elements_per_face * num_faces
+    actual_elements = tensor.numel()
+
+    if actual_elements < expected_elements:
+        raise ValueError(
+            f"Tensor has {actual_elements} elements, but need at least {expected_elements} "
+            f"for {num_faces} face(s)"
+        )
+
+    # Quantize based on format
+    if data_format == DataFormat.MxFp8R:
+        packed = pack_mxfp8r(tensor, num_faces=num_faces)
+        return unpack_mxfp8r(packed, num_faces=num_faces)
+    elif data_format == DataFormat.MxFp8P:
+        packed = pack_mxfp8p(tensor, num_faces=num_faces)
+        return unpack_mxfp8p(packed, num_faces=num_faces)
+    else:
+        # This should never happen due to validation above, but kept for safety
+        raise ValueError(f"Unsupported MX format: {data_format}")
+
+
+def quantize_mx_tensor_chunked(
+    tensor: torch.Tensor, data_format: DataFormat
+) -> torch.Tensor:
+    """
+    Quantize MX format tensor by processing in chunks.
+
+    Args:
+        tensor: Input tensor (bfloat16 values)
+        data_format: MX format (MxFp8R or MxFp8P)
+
+    Returns:
+        Quantized tensor (bfloat16 values)
+    """
+    tensor = tensor if isinstance(tensor, torch.Tensor) else torch.tensor(tensor)
+    tensor_size = tensor.numel()
+
+    if tensor_size == 0:
+        return tensor
+
+    # Pre-allocate output tensor for better performance
+    quantized = torch.zeros_like(tensor)
+    idx = 0
+    # FACE_R_DIM support is not implemented yet, so we only support 4 faces for now.
+    # Chunk size lookup: (min_size, chunk_size, num_faces)
+    chunk_configs = [(1024, 1024, 4), (512, 512, 2), (256, 256, 1)]
+
+    while idx < tensor_size:
+        remaining = tensor_size - idx
+
+        # Select chunk configuration based on remaining elements
+        for min_size, chunk_size, num_faces in chunk_configs:
+            if remaining >= min_size:
+                break
+        else:
+            # Handle case where remaining < 256
+            chunk_size, num_faces = 256, 1
+
+        actual_chunk_size = min(chunk_size, remaining)
+        chunk = tensor[idx : idx + actual_chunk_size]
+
+        # Pad only if necessary
+        if actual_chunk_size < chunk_size:
+            padding = torch.zeros(
+                chunk_size - actual_chunk_size, dtype=chunk.dtype, device=chunk.device
+            )
+            chunk = torch.cat([chunk, padding])
+
+        # Quantize chunk
+        quantized_chunk = quantize_mx_stimuli(chunk, data_format, num_faces=num_faces)
+
+        # Write directly to output tensor (avoid list append + concat)
+        quantized[idx : idx + actual_chunk_size] = quantized_chunk[:actual_chunk_size]
+        idx += actual_chunk_size
+
+    return quantized
+
+
 class SrcFormatModel:
     """
     Source register holds data in TF32 format.
@@ -126,6 +244,8 @@ class SrcFormatModel:
             DataFormat.Float16_b: SrcFormatModel._fp16b_to_tf32,
             DataFormat.Float16: SrcFormatModel._fp16_to_tf32,
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
+            DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
+            DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
         }
 
         # todo: value error
@@ -248,6 +368,32 @@ class SrcFormatModel:
         mant = mant | (1 << (FP32_MANT_WIDTH - FP32_TF32_MANT_RIGHT_TRUNC))
 
         return (sign, exp, mant)
+
+    @staticmethod
+    def _mxfp8r_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MXFP8R format (MXFP8 E5M2 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MXFP8R stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
+        The pack/unpack functions handle the MXFP8 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
+
+    @staticmethod
+    def _mxfp8p_to_tf32(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Handles MXFP8P format (MXFP8 E4M3 variant).
+
+        Golden generators work on the original stimuli data (before compression).
+        MXFP8P stimuli are generated as torch.bfloat16, so we delegate to Float16_b conversion.
+        The pack/unpack functions handle the MXFP8 compression/decompression separately.
+        """
+        return SrcFormatModel._fp16b_to_tf32(tensor)
 
     @staticmethod
     def from_src_format(
@@ -1398,12 +1544,28 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def __call__(self, op, operand1, operand2, data_format, math_fidelity):
+    def __call__(
+        self, op, operand1, operand2, data_format, math_fidelity, input_format=None
+    ):
         if op not in self.ops:
             raise ValueError(f"Unsupported Eltwise operation: {op}")
 
-        t1 = to_tensor(operand1, data_format)
-        t2 = to_tensor(operand2, data_format)
+        # Quantize MX format operands to match what hardware sees after unpack
+        # This simulates the quantization that occurs during pack→unpack roundtrip
+        # Only quantize if input_format is explicitly provided and is MX format.
+        # If input_format is None, operands are in an unknown format and should not be quantized.
+        if input_format is not None and input_format.is_mx_format():
+            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
+            operand2 = quantize_mx_tensor_chunked(operand2, input_format)
+            # Keep as bfloat16 for math (hardware sees bfloat16 after unpacking MX)
+            t1 = operand1
+            t2 = operand2
+            # For fidelity masking, use bfloat16 format
+            math_format_for_fidelity = DataFormat.Float16_b
+        else:
+            t1 = to_tensor(operand1, data_format)
+            t2 = to_tensor(operand2, data_format)
+            math_format_for_fidelity = data_format
 
         MATH_FIDELITY_TO_ITER_COUNT = {
             MathFidelity.LoFi: 0,
@@ -1421,7 +1583,7 @@ class EltwiseBinaryGolden(FidelityMasking):
             res = None
             for fidelity_iter in range(fidelity_iter_count + 1):
                 t1, t2 = self._apply_fidelity_masking(
-                    data_format, t1, t2, fidelity_iter
+                    math_format_for_fidelity, t1, t2, fidelity_iter
                 )
                 phase_result = self.ops[op](t1, t2)
 
@@ -1430,9 +1592,19 @@ class EltwiseBinaryGolden(FidelityMasking):
                 else:
                     res += phase_result
 
-            return res
+            result = res
         else:
-            return self.ops[op](t1, t2)
+            result = self.ops[op](t1, t2)
+
+        if data_format.is_mx_format():
+            if op == MathOperation.Elwmul:
+                result = result.to(torch.bfloat16)
+            result = quantize_mx_tensor_chunked(result, data_format)
+        else:
+            # Convert to output format when output is non-MX
+            result = to_tensor(result, data_format)
+
+        return result
 
     # Operation methods
     def _add(self, t1, t2):

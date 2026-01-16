@@ -6,6 +6,9 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    MAX_TILES_16_BIT_DEST,
+    MAX_TILES_32_BIT_DEST,
+    TILE_DIM,
     MatmulGolden,
     TransposeGolden,
     get_golden_generator,
@@ -38,8 +41,6 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
-TILE_DIM = 32  # Standard tile dimension for row and column
-MAX_TILES_32_BIT_DEST = 4
 kt_dims = [1, 2, 4]
 matmul_dimensions_32_bit_dest = [
     (
@@ -51,7 +52,6 @@ matmul_dimensions_32_bit_dest = [
     for nt_dim in range(1, MAX_TILES_32_BIT_DEST // mt_dim + 1)
     for kt_dim in kt_dims
 ]
-MAX_TILES_16_BIT_DEST = 8
 matmul_dimensions_16_bit_dest = [
     (
         [mt_dim * TILE_DIM, kt_dim * TILE_DIM],

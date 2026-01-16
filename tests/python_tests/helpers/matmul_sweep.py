@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, NamedTuple, Tuple
 
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -104,7 +105,6 @@ def generate_matmul_dimension_combinations(
         - excludes: ([128, 32], [32, 128]) → result 4×4 = 16 tiles
     """
 
-    TILE_DIM = 32  # Standard tile dimension for row and column
     return [
         ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
         for mt_dim in range(1, max_tiles + 1)

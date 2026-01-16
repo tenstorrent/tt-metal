@@ -70,6 +70,10 @@ def infer_unpack_out(
     Returns:
         The inferred output data format for unpacking to registers
     """
+    # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
+    if input_format.is_mx_format():
+        return DataFormat.Float16_b
+
     if input_format == DataFormat.Float32 and not unpacking_to_dest:
         # When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         # Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
@@ -112,9 +116,12 @@ def infer_pack_in(
     is_wormhole = chip_arch == ChipArchitecture.WORMHOLE
     is_quasar = chip_arch == ChipArchitecture.QUASAR
 
+    # Packer operates on register data, so use unpack_out (what's in registers) not input_format (what's in L1).
+    # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
+
     if is_quasar:
         if (
-            input_format in (DataFormat.Float16, DataFormat.Float16_b)
+            unpack_out in (DataFormat.Float16, DataFormat.Float16_b)
             and output_format == DataFormat.Float32
             and is_fp32_dest_acc_en == DestAccumulation.No
         ):
@@ -123,13 +130,13 @@ def infer_pack_in(
             # When dest register is in 16-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is not valid
             # because pack_in=Fp16/16_b and pack_out=Fp32, which is not a supported packer conversion.
             raise ValueError(
-                "Quasar packer does not support {input_format.name} to Float32 conversion when the dest register is in 16-bit mode"
+                f"Quasar packer does not support {unpack_out.name} to Float32 conversion when the dest register is in 16-bit mode"
             )
         # When the dest register is in 32-bit mode, the packer input format is 32-bit
         return (
             DataFormat.Float32
             if is_fp32_dest_acc_en == DestAccumulation.Yes
-            else input_format
+            else unpack_out
         )
 
     # Wormhole + FP32 dest reg datums + Float16 output: keep Float32 for packer input for conversion to desired output format
@@ -144,7 +151,7 @@ def infer_pack_in(
         return DataFormat.Float32
 
     # Float32 in L1, unpacking to src regs: choose directly if packer can convert
-    if input_format == DataFormat.Float32 and not unpacking_to_dest:
+    if unpack_out == DataFormat.Float32 and not unpacking_to_dest:
         if (
             is_fp32_dest_acc_en == DestAccumulation.Yes
             or output_format.is_exponent_B()
@@ -158,16 +165,14 @@ def infer_pack_in(
 
     # Float16_A in L1 to Bfp8_B without float32 datums in dest reg requires Bfp8_A as packer input for conversion to desired output format
     if (
-        input_format == DataFormat.Float16
+        unpack_out == DataFormat.Float16
         and output_format == DataFormat.Bfp8_b
         and is_fp32_dest_acc_en == DestAccumulation.No
     ):
         return DataFormat.Bfp8
 
     # 8-bit exponent -> Float16 without float32 datums in dest reg requires Float32 on Wormhole
-    elif is_format_combination_outlier(
-        input_format, output_format, is_fp32_dest_acc_en
-    ):
+    elif is_format_combination_outlier(unpack_out, output_format, is_fp32_dest_acc_en):
         # Handling a hardware limitation: cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register.
         # For wormhole architecture, gasket cannot perform this conversion and packer takes input Float32 (from dest register) converting to Float16_A.
         # For blackhole architecture, gasket able to convert Float32 to Float16_A before packing (reduces work on packer).
@@ -175,10 +180,8 @@ def infer_pack_in(
 
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format
-    # Otherwise, packer input stays equal to the dest register format (input_format)and packer performs conversion instead of the packer gasket
-    return (
-        output_format if is_fp32_dest_acc_en == DestAccumulation.Yes else input_format
-    )
+    # Otherwise, packer input stays equal to the dest register format (unpack_out) and packer performs conversion instead of the packer gasket
+    return output_format if is_fp32_dest_acc_en == DestAccumulation.Yes else unpack_out
 
 
 def infer_data_formats(
@@ -287,12 +290,22 @@ def data_formats(
 
     if disable_format_inference:
         # Return a single FormatConfig where all formats are the same if format inference is disabled or not supported for the architecture
+        # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
+        if input_format.is_mx_format():
+            unpack_dst = DataFormat.Float16_b
+            math_format = DataFormat.Float16_b
+            pack_src_format = DataFormat.Float16_b
+        else:
+            unpack_dst = input_format
+            math_format = input_format
+            pack_src_format = input_format
+
         return [
             FormatConfig(
                 unpack_A_src=input_format,
-                unpack_A_dst=input_format,
-                math=input_format,
-                pack_src=input_format,
+                unpack_A_dst=unpack_dst,
+                math=math_format,
+                pack_src=pack_src_format,
                 pack_dst=output_format,
             )
         ]  # No final config for single iteration

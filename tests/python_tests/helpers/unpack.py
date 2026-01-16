@@ -6,7 +6,7 @@
 import ml_dtypes
 import numpy as np
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import MXFP8_BLOCK_SIZE, DataFormat
 
 from .llk_params import format_dict, format_tile_sizes
 
@@ -108,6 +108,83 @@ def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4):
     return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
 
 
+# ============================================================================
+# MX (Microscaling) Format Support - OCP Specification
+# ============================================================================
+
+
+def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4):
+    """
+    Unpack MXFP8 format with layout: [all_scales][all_elements]
+
+    Args:
+        packed_bytes: List of bytes in [all scales][all elements] format
+        fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
+        num_faces: Number of faces (1, 2, or 4). Defaults to 4.
+
+    Returns:
+        torch.Tensor of bfloat16 values
+    """
+    num_scales = num_faces * 8
+    num_blocks = num_faces * 8
+
+    scales_e8m0 = packed_bytes[:num_scales]
+    elements_bytes = packed_bytes[num_scales:]
+
+    # Convert all elements to FP8 array using ml_dtypes
+    fp8_array = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype)
+
+    # Reshape into blocks: (num_blocks, 32)
+    fp8_blocks = fp8_array[: num_blocks * MXFP8_BLOCK_SIZE].reshape(
+        num_blocks, MXFP8_BLOCK_SIZE
+    )
+
+    # Vectorized scale decoding - decode all E8M0 scales at once
+    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
+    # Handle NaN case (255) and compute 2^(exponent) where exponent = value - 127
+    scale_factors = np.where(
+        scales_array == 255, np.nan, np.exp2(scales_array.astype(np.float32) - 127.0)
+    )
+    # Replace NaN and zero scales with 0
+    scale_factors = np.where(
+        np.isnan(scale_factors) | (scale_factors == 0), 0, scale_factors
+    )
+
+    # Scale blocks back to float32
+    scaled_blocks = fp8_blocks.astype(np.float32) * scale_factors[:, np.newaxis]
+
+    # Flatten and convert to bfloat16 tensor
+    return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
+
+
+def unpack_mxfp8r(packed_bytes, num_faces=4):
+    """
+    Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
+
+    Args:
+        packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
+        num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+
+    Returns:
+        torch.Tensor of bfloat16 values
+    """
+    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e5m2, num_faces)
+
+
+def unpack_mxfp8p(packed_bytes, num_faces=4):
+    """
+    Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
+
+    Args:
+        packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
+        num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+
+    Returns:
+        torch.Tensor of bfloat16 values
+    """
+    return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces)
+
+
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
@@ -150,6 +227,10 @@ def unpack_res_tiles(
 
     if output_format == DataFormat.Bfp8_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
+    elif output_format == DataFormat.MxFp8R:
+        unpack_func = unpack_mxfp8r
+    elif output_format == DataFormat.MxFp8P:
+        unpack_func = unpack_mxfp8p
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -164,6 +245,8 @@ def unpack_res_tiles(
 
         if unpack_func == unpack_bfp8_b:
             unpacked_tile = unpack_func(tile_data, sfpu=sfpu, num_faces=num_faces)
+        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p]:
+            unpacked_tile = unpack_func(tile_data, num_faces=num_faces)
         else:
             unpacked_tile = unpack_func(tile_data)
 

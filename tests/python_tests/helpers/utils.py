@@ -146,24 +146,6 @@ def calculate_pcc(golden, input):
     return pcc_result
 
 
-def get_tolerance(output_data_format):
-    if output_data_format in [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.Float32,
-        DataFormat.Int32,
-    ]:
-        atol = 0.05
-        rtol = 0.05
-    elif output_data_format == DataFormat.Bfp8_b:
-        atol = 0.1
-        rtol = 0.2
-    else:
-        raise ValueError(f"Unsupported output data format: {output_data_format}")
-
-    return atol, rtol
-
-
 def passed_test(
     golden_tensor,
     res_tensor,
@@ -185,6 +167,8 @@ def passed_test(
             DataFormat.Int8: Tolerance(atol=0, rtol=0),
             DataFormat.UInt8: Tolerance(atol=0, rtol=0),
             DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
+            DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
+            DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
         }
 
         try:
@@ -218,7 +202,9 @@ def passed_test(
                     res_tile = res_tensor[tile_no * 1024 : (tile_no + 1) * 1024].view(
                         tile_shape
                     )
-                    # golden_tile = golden_tensor[tile_no*1024:(tile_no+1)*1024].view(tile_shape)
+                    golden_tile = golden_tensor[
+                        tile_no * 1024 : (tile_no + 1) * 1024
+                    ].view(tile_shape)
                     error_tile = ~is_valid[tile_no * 1024 : (tile_no + 1) * 1024].view(
                         tile_shape
                     )
@@ -249,7 +235,7 @@ def passed_test(
                             row_str += (
                                 "\033[41m" if error_tile[row, col] else "\033[42m"
                             )
-                            row_str += f"{golden_tensor[row, col]:7.2f}\033[0m"
+                            row_str += f"{golden_tile[row, col]:7.2f}\033[0m"
 
                             if col == 15:
                                 row_str += " "

@@ -44,9 +44,7 @@ from .pack import (
 )
 from .target_config import TestTargetConfig
 from .tilize_untilize import untilize_block
-from .unpack import (
-    unpack_res_tiles,
-)
+from .unpack import unpack_res_tiles
 
 # Constant - indicates the TRISC kernel run status
 KERNEL_COMPLETE = 1  # Kernel completed its run
@@ -159,11 +157,14 @@ def exalens_device_setup(chip_arch, location="0,0", device_id=0):
 def is_assert_hit(risc_name, core_loc="0,0", device_id=0):
     # check if the core is stuck on an EBREAK instruction
 
+    CHIP_ARCH = get_chip_architecture()
     context = check_context()
     device = context.devices[device_id]
     coordinate = convert_coordinate(core_loc, device_id, context)
     block = device.get_block(coordinate)
-    risc_debug = block.get_risc_debug(risc_name)
+    risc_debug = block.get_risc_debug(
+        risc_name, neo_id=0 if CHIP_ARCH == ChipArchitecture.QUASAR else None
+    )
 
     return risc_debug.is_ebreak_hit()
 

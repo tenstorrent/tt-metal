@@ -17,6 +17,8 @@ from .pack import (
     pack_fp32,
     pack_int8,
     pack_int32,
+    pack_mxfp8p,
+    pack_mxfp8r,
     pack_uint8,
     pack_uint16,
     pack_uint32,
@@ -130,6 +132,8 @@ class StimuliConfig:
             DataFormat.Float32: pack_fp32,
             DataFormat.Bfp8_b: pack_bfp8_b,
             DataFormat.Int32: pack_int32,
+            DataFormat.MxFp8R: pack_mxfp8r,
+            DataFormat.MxFp8P: pack_mxfp8p,
             DataFormat.UInt32: pack_uint32,
             DataFormat.UInt16: pack_uint16,
             DataFormat.Int8: pack_int8,
@@ -152,7 +156,7 @@ class StimuliConfig:
 
         pack_function_lambda = lambda buffer_tile: (
             pack_function(buffer_tile, num_faces=num_faces)
-            if pack_function == pack_bfp8_b
+            if pack_function in [pack_bfp8_b, pack_mxfp8r, pack_mxfp8p]
             else pack_function(buffer_tile)
         )
 

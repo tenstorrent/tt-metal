@@ -5,6 +5,8 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    MAX_TILES_16_BIT_DEST,
+    TILE_DIM,
     EltwiseBinaryGolden,
     get_golden_generator,
 )
@@ -34,10 +36,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# Quasar hardware constraints for eltwise operations
-TILE_DIM = 32  # Standard tile dimension (32x32)
-MAX_TILES_16_BIT_DEST = 8  # Max tiles with 16-bit dest (Float16/Float16_b)
-
 ELTWISE_DIMENSIONS = [
     ([mt_dim * TILE_DIM, nt_dim * TILE_DIM], DestAccumulation.No)
     for mt_dim in range(1, MAX_TILES_16_BIT_DEST + 1)
@@ -49,7 +47,9 @@ ELTWISE_DIMENSIONS = [
 @parametrize(
     formats=input_output_formats(
         [
-            DataFormat.Float16_b,
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+            # DataFormat.Float16_b,
             DataFormat.Float16,
         ],
     ),
@@ -91,11 +91,19 @@ def test_eltwise_binary(
     ):
         pytest.skip("Math fidelity only affects multiplication operations")
 
+    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
+    if (
+        formats.input_format.is_mx_format()
+        and implied_math_format == ImpliedMathFormat.No
+    ):
+        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
+
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        output_format=formats.output_format,
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
@@ -105,6 +113,7 @@ def test_eltwise_binary(
         src_B,
         formats.output_format,
         math_fidelity,
+        input_format=formats.input_format,
     )
 
     configuration = TestConfig(
@@ -134,12 +143,14 @@ def test_eltwise_binary(
             num_faces=num_faces,
         ),
         # Determine unpack_to_dest based on format and accumulation mode
-        # This follows the same logic as pack_test
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
+        # This ensures Python-side format inference uses Float16_b for MX internal math
+        disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
 
     res_from_L1 = configuration.run()

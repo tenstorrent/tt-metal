@@ -1,9 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Tuple
+
+import ml_dtypes
+import numpy as np
+
+# ============================================================================
+# MX (Microscaling) Format Constants - OCP Specification
+# ============================================================================
+
+MXFP8_BLOCK_SIZE = 32  # Fixed block size per OCP MX specification
+MXFP8_E5M2_MAX_NORMAL = float(
+    ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
+)  # 57344.0 from dtype
+MXFP8_E4M3_MAX_NORMAL = float(
+    ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
+)  # 448.0 from dtype
+
+
+# ============================================================================
+# Data Format Classes
+# ============================================================================
 
 
 class DataFormatInfo:
@@ -45,6 +66,8 @@ class DataFormat(Enum):
     UInt16 = DataFormatInfo("UInt16", 2)
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
+    MxFp8R = DataFormatInfo("MxFp8R", 1)
+    MxFp8P = DataFormatInfo("MxFp8P", 1)
 
     @property
     def size(self) -> int:
@@ -83,11 +106,75 @@ class DataFormat(Enum):
         num_exponents = 0
         if self in {DataFormat.Bfp8, DataFormat.Bfp8_b}:
             num_exponents = num_datums // 16
+        elif self.is_mx_format():
+            # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
+            num_exponents = num_datums // 32
         return (self.size * num_datums) + num_exponents
 
     def is_float32(self) -> bool:
         """Checks if the data format is a Float32 type."""
         return self == DataFormat.Float32
+
+    def is_mx_format(self) -> bool:
+        """Checks if the data format is an MX (Microscaling) format."""
+        return self in {
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+        }
+
+
+# ============================================================================
+# MX (Microscaling) Format Utilities
+# ============================================================================
+
+
+def encode_e8m0_scale(max_abs_value, element_max_normal):
+    """
+    Encode a scale factor as E8M0 (8-bit exponent, no mantissa, bias=127).
+
+    Per OCP MX spec Section 2.B (Gorodecky et al., 5 Nov 2024):
+    e = ⌈log₂(amax/destmax)⌉ (round up to ensure no overflow)
+    E8M0 = clamp(e, -127, 127) + bias
+
+    This "round up" approach ensures post-scaling values do not exceed
+    representable FP8 range, minimizing quantization error.
+
+    Args:
+        max_abs_value: Maximum absolute value in the block
+        element_max_normal: Maximum normal value for element format (e.g., 448 for E4M3, 57344 for E5M2)
+
+    Returns:
+        E8M0 encoded scale (0-255), where 255 = NaN
+    """
+    # Handle special cases
+    if max_abs_value == 0 or np.isnan(max_abs_value):
+        return 127  # Scale = 2^0 = 1 (neutral scale)
+    if np.isinf(max_abs_value):
+        return 254  # Max representable scale
+
+    # Calculate exponent: ceil(log2(max_value / element_max)) per OCP spec
+    scale_ratio = max_abs_value / element_max_normal
+    exponent = math.ceil(math.log2(scale_ratio))
+
+    # Clamp to E8M0 range and add bias
+    return int(max(-127, min(127, exponent)) + 127)
+
+
+def decode_e8m0_scale(e8m0_value):
+    """
+    Decode E8M0 scale factor to float.
+
+    Args:
+        e8m0_value: E8M0 encoded scale (0-255)
+
+    Returns:
+        Scale factor as float (2**exponent), or NaN if e8m0_value = 255
+    """
+    if e8m0_value == 255:
+        return float("nan")  # NaN encoding per OCP spec
+
+    exponent = int(e8m0_value) - 127  # Remove bias
+    return 2.0**exponent
 
 
 @dataclass
