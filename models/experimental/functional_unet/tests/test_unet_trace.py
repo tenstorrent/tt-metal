@@ -28,6 +28,7 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
+# comment for diff
 def determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
     number_of_cores = max_cores
     while shard_dim % number_of_cores != 0:
