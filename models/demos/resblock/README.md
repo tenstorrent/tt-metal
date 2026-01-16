@@ -49,7 +49,7 @@ The operation uses five kernels:
 
 1. Reader kernel loads activations and weights into CBs
 2. Compute kernel performs:
-   - First matmul: `activation @ weight0` → stored in `INTERM_CB`
+   - First matmul: `activation @ weight0` → stored in `INTERMEDIATE_PREGATHER_CB`
    - ReLU activation applied in-place
    - Second matmul: `intermediate @ weight1` → accumulated with residual
    - Result stored in `OUT_CB`

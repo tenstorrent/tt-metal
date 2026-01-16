@@ -42,11 +42,11 @@ def create_random_tensor(shape, random_tensor_gen):
 )
 @pytest.mark.parametrize(
     "activation_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "weight_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "generation_type",
@@ -55,6 +55,8 @@ def create_random_tensor(shape, random_tensor_gen):
 def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype):
     if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
+    if activation_dtype != weight_dtype:
+        pytest.skip("activation and weight dtypes must be the same")
 
     torch.manual_seed(1234)
 

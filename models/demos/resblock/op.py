@@ -10,8 +10,8 @@ class FusedResblock:
         WEIGHT0_CB = 1
         WEIGHT1_CB = 2
         OUT_CB = 3
-        INTERM_CB = 4
-        INTERM_CB2 = 5
+        INTERMEDIATE_PREGATHER_CB = 4
+        INTERMEDIATE_FULL_CB = 5
 
     class McastCoreCBIndex:
         MCAST_CORE_GATHER_CB = 6
@@ -89,7 +89,7 @@ class FusedResblock:
             core_ranges=all_mcast_cores,
             compile_time_args=[
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
+                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
                 number_of_senders,
                 receiver_semaphore_descriptor.id,
                 sender_semaphore_descriptor.id,
@@ -254,29 +254,29 @@ class FusedResblock:
         gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
         all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
 
-        interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERM_CB,
+        intermediate_pregather_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
             data_format=out_dtype,
             page_size=out_tile_size,
             tile=out_tile_descriptor,
         )
-        interm_cb_descriptor = ttnn.CBDescriptor(
+        intermediate_pregather_cb_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size,
             core_ranges=all_matmul_cores,
-            format_descriptors=[interm_cb_format],
+            format_descriptors=[intermediate_pregather_cb_format],
         )
-        interm_cb2_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
+        intermediate_full_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
             data_format=out_dtype,
             page_size=out_tile_size,
             tile=out_tile_descriptor,
         )
-        interm_cb2_descriptor = ttnn.CBDescriptor(
+        intermediate_full_cb_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size * num_tiles_k,
             core_ranges=all_matmul_cores.merge(
                 all_mcast_cores
             ),  # Include mcast cores to ensure all cores can get the correct CB address with get_write_ptr
-            format_descriptors=[interm_cb2_format],
+            format_descriptors=[intermediate_full_cb_format],
         )
 
         all_cores = all_matmul_cores.merge(all_mcast_cores)
@@ -328,8 +328,8 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERM_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
+                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
                 num_tiles_k,
                 gather_destination_core.x,
                 gather_destination_core.y,
@@ -359,8 +359,8 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
                 FusedResblock.MatmulCoreCBIndex.OUT_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERM_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERM_CB2,
+                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
+                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
             ],
@@ -387,8 +387,8 @@ class FusedResblock:
                     weight0_cb_descriptor,
                     weight1_cb_descriptor,
                     out_cb_descriptor,
-                    interm_cb_descriptor,
-                    interm_cb2_descriptor,
+                    intermediate_pregather_cb_descriptor,
+                    intermediate_full_cb_descriptor,
                     mcast_cb_descriptor,
                 ],
                 semaphores=[mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor],

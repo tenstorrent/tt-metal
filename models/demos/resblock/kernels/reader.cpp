@@ -52,8 +52,8 @@ void kernel_main() {
     constexpr uint32_t in0_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
     constexpr uint32_t weight1_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t interm_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t interm_cb2 = get_compile_time_arg_val(4);
+    constexpr uint32_t intermediate_pregather_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t intermediate_full_cb = get_compile_time_arg_val(4);
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(5);
 
     constexpr uint32_t mcast_receiver_noc_x = get_compile_time_arg_val(6);
@@ -84,19 +84,19 @@ void kernel_main() {
     cb_push_back(weight1_cb, num_tiles_k);
 
     // Gather after first matmul so that we can mcast full result to all cores
-    cb_reserve_back(interm_cb2, num_tiles_k);
+    cb_reserve_back(intermediate_full_cb, num_tiles_k);
     const uint32_t gather_destination_tile_offset_bytes =
         compute_sender_tile_offset_bytes<sender_logical_x_start, sender_logical_y_start, sender_grid_width>(
-            get_tile_size(interm_cb));
+            get_tile_size(intermediate_pregather_cb));
     gather<
-        interm_cb,
-        interm_cb2,
+        intermediate_pregather_cb,
+        intermediate_full_cb,
         num_output_tiles,
         mcast_receiver_noc_x,
         mcast_receiver_noc_y,
         mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
 
-    // Wait for mcast to complete before pushing back to interm_cb2 which will start the second matmul
+    // Wait for mcast to complete before pushing back to intermediate_full_cb which will start the second matmul
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
-    cb_push_back(interm_cb2, num_tiles_k);
+    cb_push_back(intermediate_full_cb, num_tiles_k);
 }
