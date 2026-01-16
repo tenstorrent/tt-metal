@@ -1352,9 +1352,6 @@ def main():
         )
         global_step = start_step
 
-        # Cache batch_size to avoid repeated lookups in hot path
-        batch_size = training_config.batch_size
-
         # Training loop (matching C++ structure)
         start_time = time.time()
         for epoch in range(training_config.num_epochs):
