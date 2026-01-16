@@ -753,7 +753,9 @@ class TtLlamaAttention(LightweightModule):
                 is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](
+                    seq_len // batch_size if seq_len // batch_size == 128 else seq_len
+                ),
             )
 
         # deallocate keys and values
@@ -830,15 +832,16 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        output_11SH = self.tt_ccl.line_all_reduce(
+        output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO",
+            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )
+        output_11SH.deallocate()
 
-        return output_11SH
+        return output_11SH_reduced
 
     def forward(
         self,
