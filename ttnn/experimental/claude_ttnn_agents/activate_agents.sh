@@ -41,9 +41,23 @@ cp -r "$SCRIPT_DIR/scripts/logging" "$REPO_ROOT/.claude/scripts/"
 echo "Installing reference documents..."
 cp "$SCRIPT_DIR/references/"*.md "$REPO_ROOT/.claude/references/"
 
+# Copy reference subdirectories
+if [ -d "$SCRIPT_DIR/references/logging" ]; then
+    mkdir -p "$REPO_ROOT/.claude/references/logging"
+    cp "$SCRIPT_DIR/references/logging/"*.md "$REPO_ROOT/.claude/references/logging/"
+    echo "  - Installed logging references"
+fi
+
 # Copy workflow documentation
 echo "Installing workflow documentation..."
 cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
+
+# Copy skills (user-invocable slash commands)
+if [ -d "$SCRIPT_DIR/skills" ]; then
+    echo "Installing skills..."
+    cp -r "$SCRIPT_DIR/skills" "$REPO_ROOT/.claude/"
+    echo "  - Installed skills"
+fi
 
 # Copy CLAUDE.md to repo root
 echo "Installing CLAUDE.md..."
@@ -172,6 +186,8 @@ echo "  - $REPO_ROOT/.claude/agents/ttnn-pipeline-analyzer.md"
 echo "  - $REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/ (scripts + templates)"
 echo "  - $REPO_ROOT/.claude/scripts/logging/ (structured logging)"
 echo "  - $REPO_ROOT/.claude/references/ (agent reference docs)"
+echo "  - $REPO_ROOT/.claude/references/logging/ (logging reference docs)"
+echo "  - $REPO_ROOT/.claude/skills/ (user-invocable slash commands)"
 echo "  - $REPO_ROOT/.claude/logs/ (agent debug logs)"
 echo ""
 echo "DeepWiki MCP configured in:"
