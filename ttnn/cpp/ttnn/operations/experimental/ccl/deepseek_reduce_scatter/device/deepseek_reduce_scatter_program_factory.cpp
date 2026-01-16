@@ -519,7 +519,8 @@ void deepseek_reduce_scatter_helper_override_runtime_arguments(
     // update senders
     for (uint32_t link = 0; link < clamped_num_links; link++) {
         for (uint32_t direction = 0; direction < num_directions_per_link; direction++) {
-            CoreCoord core = all_cores[link * num_directions_per_link + direction];
+            uint32_t worker_id = (link * num_directions_per_link) + direction;
+            CoreCoord core = all_cores[worker_id];
             std::vector<std::vector<RuntimeArgsData>> reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
             std::vector<std::vector<RuntimeArgsData>> writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 

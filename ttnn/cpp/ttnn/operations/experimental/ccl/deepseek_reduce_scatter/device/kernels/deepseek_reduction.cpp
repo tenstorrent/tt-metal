@@ -89,7 +89,7 @@ void MAIN {
             cb_wait_front(intermediate_slice_cb_id, tile_granularity);
             cb_reserve_back(compute_cb_id, tile_granularity);
             acquire_dst();
-            for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
+            for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
                 add_tiles(input_slice_cb_id, intermediate_slice_cb_id, tile_id, tile_id, tile_id);
                 pack_tile(tile_id, compute_cb_id);
             }

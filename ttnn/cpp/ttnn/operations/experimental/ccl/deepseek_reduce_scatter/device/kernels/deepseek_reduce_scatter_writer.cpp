@@ -137,35 +137,33 @@ void kernel_main() {
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
 
-    fabric_unicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+    // execute pre op barrier
+    uint64_t pre_op_barrier_semaphore_noc_address = safe_get_noc_addr(
+        pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
+    fabric_unicast_noc_unicast_atomic_inc(
+        fabric_connection,
+        unicast_sem_inc_route_id,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
+        unicast_num_hops);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
+
+    // TODO: (GR) no_flush causing bad pcc on 3+ links
+    // set state for op semaphore
+    uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
+    fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::All>(
+        fabric_connection,
+        unicast_sem_inc_route_id,
+        unicast_num_hops,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
+
+    // set state for scatter write
+    fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::All>(
         fabric_connection,
         unicast_scatter_write_route_id,
         unicast_num_hops,
         NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
         page_size * 2);
-
-    fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric_connection,
-        unicast_sem_inc_route_id,
-        unicast_num_hops,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                         // ignore
-            static_cast<uint32_t>(1),  // increment 1
-            false});                   // flush = false
-
-    // pre op barrier
-    // unicast to the opposite core in the direction you're sending
-    // you need the device you're writing to, to have sent you and inc
-    uint64_t pre_op_barrier_semaphore_noc_addr_in_pkt = safe_get_noc_addr(
-        pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
-    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        fabric_connection,
-        unicast_sem_inc_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_addr_in_pkt, 0, false});
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
@@ -243,18 +241,17 @@ void kernel_main() {
                     unicast_scatter_write_route_id,
                     intermediate_slice_l1_read_addr,
                     NocUnicastScatterCommandHeader(
-                        {intermediate_slice_noc_address_one, intermediate_slice_noc_address_two}));
+                        {intermediate_slice_noc_address_one, intermediate_slice_noc_address_two},
+                        {static_cast<uint16_t>(page_size)}));
 
                 noc_async_writes_flushed();
                 cb_pop_front(reduced_cb_id, tile_granularity);
 
                 // TODO: (GR) fuse
-                uint64_t op_semaphore_noc_addr_in_pkt =
-                    safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
                     fabric_connection,
                     unicast_sem_inc_route_id,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_addr_in_pkt, 0, false});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{op_semaphore_noc_address, 1, true});
             }
         } else {
             while (tiles_read < tiles_to_read) {
