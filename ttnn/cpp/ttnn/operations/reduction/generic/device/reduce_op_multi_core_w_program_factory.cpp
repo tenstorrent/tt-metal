@@ -15,7 +15,7 @@ using namespace tt::constants;
 namespace ttnn::operations::reduction::generic::program {
 
 ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const GenericParams& operation_attributes, const GenericInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     const auto& a = tensor_args.input_tensor;
@@ -186,8 +186,8 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
 void ReduceMultiCoreWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const GenericParams& /*operation_attributes*/,
+    const GenericInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;

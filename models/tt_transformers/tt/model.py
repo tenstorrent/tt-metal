@@ -68,6 +68,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            use_qk_fused=args.use_qk_fused,
         )
 
         if args.rope_theta_local:
@@ -77,6 +78,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                use_qk_fused=args.use_qk_fused,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()

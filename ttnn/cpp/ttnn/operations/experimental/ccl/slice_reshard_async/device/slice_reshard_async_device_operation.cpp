@@ -59,24 +59,21 @@ Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto input_shape = tensor_args.input.padded_shape();
-    auto input_memory_layout = tensor_args.input.layout();
-    auto input_dtype = tensor_args.input.dtype();
-    auto input_memory_config = tensor_args.input.memory_config();
+    log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
         args.dim,
         args.output_dim_offset,
         args.output_dim_shape,
+        args.cluster_axis,
         args.num_links,
         args.output_mem_config,
         args.topology,
-        args.cluster_axis,
         args.ring_size,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::slice_reshard_async

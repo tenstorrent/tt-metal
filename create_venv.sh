@@ -72,7 +72,7 @@ else
 fi
 
 # Verify Python command exists
-if ! command -v $PYTHON_CMD &>/dev/null; then
+if ! command -v "$PYTHON_CMD" &>/dev/null; then
     echo "Python command not found: $PYTHON_CMD"
     exit 1
 fi
@@ -80,11 +80,41 @@ fi
 # Install uv if not already available
 if ! command -v uv &>/dev/null; then
     echo "Installing uv..."
-    ${PYTHON_CMD} -m pip install uv
-    # Add pip's bin directory to PATH for the current session
-    USER_BIN="${HOME}/.local/bin"
-    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
-        export PATH="$USER_BIN:$PATH"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$SCRIPT_DIR/scripts/install-uv.sh" ]; then
+        bash "$SCRIPT_DIR/scripts/install-uv.sh"
+        # Ensure uv is available in the current shell even if installed with --user
+        if ! command -v uv &>/dev/null; then
+            USER_BIN="${HOME}/.local/bin"
+            if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+                export PATH="$USER_BIN:$PATH"
+            fi
+        fi
+    else
+        echo "Warning: install-uv.sh not found, falling back to pip installation"
+        UV_VERSION="0.7.12"  # Fallback version - keep in sync with scripts/install-uv.sh
+        if ! ${PYTHON_CMD} -m pip install --no-cache-dir "uv==${UV_VERSION}"; then
+            echo "Initial 'pip install uv' failed. This can happen in PEP 668 externally-managed environments."
+            echo "Retrying uv installation with --break-system-packages..."
+            if ! ${PYTHON_CMD} -m pip install --no-cache-dir --break-system-packages "uv==${UV_VERSION}"; then
+                echo "Retry with --break-system-packages failed. Retrying uv installation with --user..."
+                if ! ${PYTHON_CMD} -m pip install --no-cache-dir --user "uv==${UV_VERSION}"; then
+                    echo "Error: Failed to install uv via pip after trying:" >&2
+                    echo "  1. Standard installation" >&2
+                    echo "  2. --break-system-packages flag" >&2
+                    echo "  3. --user installation" >&2
+                    echo "" >&2
+                    echo "Please ensure Python and pip are properly configured, or install uv manually." >&2
+                    echo "You can also try running '$SCRIPT_DIR/scripts/install-uv.sh' if available." >&2
+                    exit 1
+                fi
+            fi
+        fi
+        # Add pip's bin directory to PATH for the current session
+        USER_BIN="${HOME}/.local/bin"
+        if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+            export PATH="$USER_BIN:$PATH"
+        fi
     fi
 fi
 
@@ -103,9 +133,9 @@ echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
-uv python install ${VENV_PYTHON_VERSION}
-uv venv $PYTHON_ENV_DIR --python ${VENV_PYTHON_VERSION}
-source $PYTHON_ENV_DIR/bin/activate
+uv python install "${VENV_PYTHON_VERSION}"
+uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+source "$PYTHON_ENV_DIR/bin/activate"
 
 # Import functions for detecting OS
 . ./install_dependencies.sh --source-only
@@ -124,13 +154,13 @@ fi
 
 echo "Installing dev dependencies"
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
-uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r $(pwd)/tt_metal/python_env/requirements-dev.txt
+uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
 echo "Installing tt-metal"
 uv pip install -e .
 
 # Do not install hooks when this is a worktree
-if [ $(git rev-parse --git-dir) = $(git rev-parse --git-common-dir) ]; then
+if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"
     pre-commit install
     pre-commit install --hook-type commit-msg

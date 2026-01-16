@@ -194,13 +194,14 @@ public:
         }
 
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
-            reliability_mode != current_fabric_reliability_mode_) {
+            reliability_mode != current_fabric_reliability_mode_ ||
+            fabric_setup.max_packet_size != current_max_packet_size_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
-            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
 
             topology_ = topology;
         } else {
@@ -246,6 +247,7 @@ public:
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
         current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        current_max_packet_size_ = std::nullopt;
         are_devices_open_ = false;
     }
 
@@ -1619,6 +1621,7 @@ private:
     tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
     tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
+    std::optional<uint32_t> current_max_packet_size_{std::nullopt};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1664,9 +1667,23 @@ private:
     void open_devices_internal(
         tt::tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt_fabric::FabricReliabilityMode reliability_mode) {
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        const TestFabricSetup& fabric_setup) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
+        // Create FabricRouterConfig if max_packet_size is specified
+        tt::tt_fabric::FabricRouterConfig router_config{};
+        if (fabric_setup.max_packet_size.has_value()) {
+            router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
+        }
+
+        tt::tt_fabric::SetFabricConfig(
+            fabric_config,
+            reliability_mode,
+            std::nullopt,
+            fabric_tensix_config,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            router_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
@@ -1711,6 +1728,7 @@ private:
         current_fabric_config_ = fabric_config;
         current_fabric_tensix_config_ = fabric_tensix_config;
         current_fabric_reliability_mode_ = reliability_mode;
+        current_max_packet_size_ = fabric_setup.max_packet_size;
         are_devices_open_ = true;
     }
 

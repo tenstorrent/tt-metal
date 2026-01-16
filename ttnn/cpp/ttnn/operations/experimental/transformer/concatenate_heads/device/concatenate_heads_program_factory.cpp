@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 using namespace tt;
 
 ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
+    const TransformerParams& operation_attributes, const TransformerInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& ashape = a.padded_shape();
     const auto& compute_with_storage_grid_size = operation_attributes.compute_with_storage_grid_size;
@@ -134,8 +134,8 @@ ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory:
 
 void ConcatenateHeadsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const TransformerParams& /*operation_attributes*/,
+    const TransformerInputs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
