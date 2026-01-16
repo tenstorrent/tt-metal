@@ -2,7 +2,81 @@
 
 Real issues encountered and their solutions.
 
+## Contents
+
+- [General Debugging Tips](#general-debugging-tips)
+- [Setup & Access](#setup--access)
+  - [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi)
+  - [Tests Fail with "Permission denied" on tt-metal-cache](#tests-fail-with-permission-denied-on-tt-metal-cache)
+- [SLURM Issues](#slurm-issues)
+  - [SLURM Nodes Showing Down](#slurm-nodes-showing-down)
+  - [tt-smi Reset Requires Sudo Password in SLURM Session](#tt-smi-reset-requires-sudo-password-in-slurm-session)
+  - [Hanging on PCIe Device Lock](#hanging-on-pcie-device-lock)
+- [Reset & Power Issues](#reset--power-issues)
+  - [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout)
+  - [Machine Won't Power On After BMC Power Cycle](#machine-wont-power-on-after-bmc-power-cycle)
+  - [Machine Rebooted with PCIe Errors](#machine-rebooted-with-pcie-errors)
+  - [Tensix Stall Issue (Requires Power Cycle)](#tensix-stall-issue-requires-power-cycle)
+- [Hardware Issues (GDDR/ASIC)](#hardware-issues-gddrasic)
+  - [GDDR Issue on Chip](#gddr-issue-on-chip)
+  - [Missing ASIC After Reboot](#missing-asic-after-reboot)
+  - [Do NOT Update Firmware on Cluster Machines](#do-not-update-firmware-on-cluster-machines)
+- [Ethernet & Connectivity](#ethernet--connectivity)
+  - [UMD Firmware Version Mismatch - Links Not Detected](#umd-firmware-version-mismatch---links-not-detected)
+  - [QSFP Connections Missing Between Hosts](#qsfp-connections-missing-between-hosts)
+  - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
+  - [Z Ports Showing Down](#z-ports-showing-down)
+  - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
+- [Tensix & Validation](#tensix--validation)
+  - [Tensix Cores Unresponsive During Validation](#tensix-cores-unresponsive-during-validation)
+  - [Intermittent Tensix Cores Hung at Device Startup](#intermittent-tensix-cores-hung-at-device-startup)
+  - [Data Mismatch During Traffic Tests](#data-mismatch-during-traffic-tests)
+- [ERISC & Firmware](#erisc--firmware)
+  - [ERISC Workarounds and Known Issues](#erisc-workarounds-and-known-issues)
+  - [Single ERISC Fabric Workloads Hang Immediately](#single-erisc-fabric-workloads-hang-immediately)
+
 ---
+
+# General Debugging Tips
+
+**Before diving into specific issues:**
+
+1. **Check basic connectivity**: Can you SSH to all hosts? Does `mpirun --host <hosts> hostname` work?
+2. **Check chip visibility**: Run `tt-smi -l` on each host - do you see all 32 chips?
+3. **Check link status**: Use the eth status script to see which ports are up/down
+4. **Run validation first**: Most issues surface during physical validation
+
+**Useful commands:**
+
+| Command | Purpose |
+|---------|---------|
+| `tt-smi -l` | List visible devices |
+| `tt-smi -r` | Reset devices (3.1.1+) |
+| `tt-smi -glx_reset` | Galaxy reset (older) |
+| `who` | See who's logged in |
+| `uptime` | Check if machine recently rebooted |
+| `dmesg \| tail -100` | Check kernel logs for errors |
+| `sinfo` | SLURM node status |
+
+**Key resources:**
+
+- [Cluster Validation Tools README](https://github.com/tenstorrent/tt-metal/tree/main/tools/scaleout/validation) - explains how to run `run_cluster_validation`, interpret output (missing connections, faulty links report, ethernet metrics), MPI usage for multi-node, and directed link retrains. Essential for understanding what the validation scripts do and how to read their output.
+
+- [Cabling Generator README](https://github.com/tenstorrent/tt-metal/tree/main/tools/scaleout) - explains how to generate Factory System Descriptors (FSD) from cabling and deployment descriptors, and how to generate cluster descriptor YAMLs. Useful if you need to create or modify topology definitions.
+
+- `#exabox-infra` Slack channel - report issues, request power cycles, coordinate access
+
+**Understanding validation output:**
+
+The validation tool compares discovered state (GSD) against expected state (FSD). Missing connections mean:
+- **Channel missing**: Individual ethernet link not trained
+- **Port missing**: Physical cable/port issue (check cables first)
+
+When you see missing ports between the same host pair, start with physical inspection and reseating cables.
+
+---
+
+# Setup & Access
 
 ## SSH Agent Forwarding for MPI
 
@@ -25,6 +99,26 @@ If you get a `known_hosts` warning, delete the offending line from `~/.ssh/known
 **Important**: Do NOT copy SSH keys between machines for MPI. Always use agent forwarding (`ssh -A`).
 
 ---
+
+## Tests Fail with "Permission denied" on tt-metal-cache
+
+**Symptom**: Running tests with your personal account fails with:
+```
+cannot map elf file into memory: Permission denied
+```
+Error points to `/tmp/tt-metal-cache/...`
+
+**Cause**: The `/tmp/tt-metal-cache` directory was created by a different user (e.g., local-syseng) from a previous test run.
+
+**Solution**: Remove the cache directory:
+```bash
+rm -rf /tmp/tt-metal-cache
+```
+Then re-run your tests.
+
+---
+
+# SLURM Issues
 
 ## SLURM Nodes Showing Down
 
@@ -59,24 +153,6 @@ If this issue persists, report to infra team to fix group synchronization.
 
 ---
 
-## Tests Fail with "Permission denied" on tt-metal-cache
-
-**Symptom**: Running tests with your personal account fails with:
-```
-cannot map elf file into memory: Permission denied
-```
-Error points to `/tmp/tt-metal-cache/...`
-
-**Cause**: The `/tmp/tt-metal-cache` directory was created by a different user (e.g., local-syseng) from a previous test run.
-
-**Solution**: Remove the cache directory:
-```bash
-rm -rf /tmp/tt-metal-cache
-```
-Then re-run your tests.
-
----
-
 ## Hanging on PCIe Device Lock
 
 **Symptom**: Your workload hangs trying to acquire a lock on a PCIe device, even though you have a SLURM reservation.
@@ -86,6 +162,60 @@ Then re-run your tests.
 **Diagnosis**: SSH into the machine and run `who` to see logged in users.
 
 **Solution**: Coordinate with the other user. If they're using bare metal SSH for bringup, ask them to finish or yield the machine. Report conflicts in #exabox-infra.
+
+---
+
+# Reset & Power Issues
+
+## tt-smi Reset Fails with ARC Timeout
+
+**Note**: As of tt-smi 3.1.1, use `tt-smi -r` instead of `tt-smi --glx-reset` for faster resets. The new reset goes through the driver instead of BMC, doesn't need sudo, and works in docker/VMs.
+
+**Symptom**: `tt-smi -glx_reset` (or `tt-smi -r`) fails with ARC timing out.
+
+**Cause**: Can be transient or caused by underlying GDDR issues on a specific chip.
+
+**Resolution steps**:
+1. Try a soft reboot first (faster than power cycle)
+2. If reboot doesn't help, try a full power cycle
+3. If still failing after power cycle, it's likely a hardware issue (often GDDR related)
+
+**Diagnosis**: If issue persists, have syseng check for GDDR BIST failures. Common signature: UBBx ASICy GDDRz failing BIST, related to CA.
+
+**Solution for GDDR BIST failure**:
+- Syseng may attempt to revive with debug firmware reload
+- If no improvement, UBB tray swap required
+
+---
+
+## Machine Won't Power On After BMC Power Cycle
+
+**Symptom**: After remote power cycle, machine doesn't come back up. BMC shows it going back to "Off" state immediately.
+
+BMC logs example:
+```
+Jan 08 02:27:58 s7tk power-control[4462]: Host0: Moving to "Wait for Power Supply Power OK" state
+Jan 08 02:28:58 s7tk power-control[4462]: Host0: Moving to "Off" state
+```
+
+ipmitool shows UBB tray POST failures:
+```
+ipmitool -I lanplus -H <bmc-ip> -U root -P '<password>' sel elist
+62bf | 01/07/2026 | 13:36:05 MST | Processor UBB3_ASIC0_Stat | FRB2/Hang in POST failure | Asserted
+62c0 | 01/07/2026 | 13:36:05 MST | Processor UBB3_ASIC1_Stat | FRB2/Hang in POST failure | Asserted
+...
+```
+
+**Cause**: PDU circuit breaker tripped due to di/dt (current spike during power cycling).
+
+**Solution**:
+1. Physically check the PDU - look for tripped circuit breakers
+2. Reset the breaker
+3. Power cycle the machine again
+
+This requires physical access to the datacenter.
+
+**Prevention**: Consider power cycling one node at a time to avoid di/dt issues.
 
 ---
 
@@ -109,6 +239,65 @@ pcieport 0000:c0:01.4: AER: aer_layer=Transaction Layer, aer_agent=Receiver ID
 **Solution**: File an issue on exabox-infra repo and report the machine. Check `dmesg` for the full error log.
 
 ---
+
+## Tensix Stall Issue (Requires Power Cycle)
+
+**Symptom**: Cluster validation or tests hang on tensix operations. Multiple hosts affected in the same way.
+
+**Context**: Observed on both 8x16 (C01/C02) and 4x32 (B08/B09) clusters. Goes away with power cycle but root cause unclear.
+
+**Cause**: Unknown - possibly something in SW or the handoff process during cluster bringup. Lower priority for debugging since power cycle resolves it.
+
+**Solution**: Power cycle the affected hosts via BMC. This clears the stall and allows cluster validation to proceed.
+
+**Concern**: If this happens repeatedly on the same system after handoff to SW, it needs more investigation.
+
+---
+
+# Hardware Issues (GDDR/ASIC)
+
+## GDDR Issue on Chip
+
+**Symptom**: One chip showing GDDR issues in tt-smi. Example: UBB2 ASIC8 having GDDR issue.
+
+**Context**: This appeared out of nowhere - all prior testing showed everything clean. No sensitivity to FW version was found.
+
+**Cause**: GDDR training failure on that specific chip.
+
+**Solution**: Try virtual AC power cycle first to see if it's recoverable. If GDDR issue persists after power cycle, it's a hardware problem that may require chip/board replacement.
+
+---
+
+## Missing ASIC After Reboot
+
+**Symptom**: Only 31 chips visible after `tt-smi reset` instead of 32. One ASIC doesn't come up.
+
+Example: bh-glx-c01u08 showing only 31 chips, missing tray_id=2, asic_location=7.
+
+**Context**: This happened after the machine initially had some QSFP connections not showing up, then rebooted itself.
+
+**Cause**: ASIC failed to initialize after software reboot. Software reboot (`tt-smi reset` or OS reboot) is not sufficient to recover the chip.
+
+**Solution**: Full power cycle via BMC (not just software reboot). Contact someone with BMC access to power cycle the machine.
+
+After power cycle, verify all 32 chips come up:
+```bash
+tt-smi -l  # should show 32 devices
+```
+
+---
+
+## Do NOT Update Firmware on Cluster Machines
+
+**Warning**: Exabox cluster machines are running debug firmware (built off 19.3.1 with debug eth fw not merged to main).
+
+**Do not run firmware updates** - updating to released firmware will make the machine unusable in a cluster configuration.
+
+If firmware updates are needed, coordinate with syseng and scaleout teams first.
+
+---
+
+# Ethernet & Connectivity
 
 ## UMD Firmware Version Mismatch - Links Not Detected
 
@@ -145,104 +334,6 @@ The root cause was that patch builds (like 1.7.103) didn't update the version nu
 
 ---
 
-## Missing ASIC After Reboot
-
-**Symptom**: Only 31 chips visible after `tt-smi reset` instead of 32. One ASIC doesn't come up.
-
-Example: bh-glx-c01u08 showing only 31 chips, missing tray_id=2, asic_location=7.
-
-**Context**: This happened after the machine initially had some QSFP connections not showing up, then rebooted itself.
-
-**Cause**: ASIC failed to initialize after software reboot. Software reboot (`tt-smi reset` or OS reboot) is not sufficient to recover the chip.
-
-**Solution**: Full power cycle via BMC (not just software reboot). Contact someone with BMC access to power cycle the machine.
-
-After power cycle, verify all 32 chips come up:
-```bash
-tt-smi -l  # should show 32 devices
-```
-
----
-
-## GDDR Issue on Chip
-
-**Symptom**: One chip showing GDDR issues in tt-smi. Example: UBB2 ASIC8 having GDDR issue.
-
-**Context**: This appeared out of nowhere - all prior testing showed everything clean. No sensitivity to FW version was found.
-
-**Cause**: GDDR training failure on that specific chip.
-
-**Solution**: Try virtual AC power cycle first to see if it's recoverable. If GDDR issue persists after power cycle, it's a hardware problem that may require chip/board replacement.
-
----
-
-## tt-smi Reset Fails with ARC Timeout
-
-**Note**: As of tt-smi 3.1.1, use `tt-smi -r` instead of `tt-smi --glx-reset` for faster resets. The new reset goes through the driver instead of BMC, doesn't need sudo, and works in docker/VMs.
-
-**Symptom**: `tt-smi -glx_reset` (or `tt-smi -r`) fails with ARC timing out.
-
-**Cause**: Can be transient or caused by underlying GDDR issues on a specific chip.
-
-**Resolution steps**:
-1. Try a soft reboot first (faster than power cycle)
-2. If reboot doesn't help, try a full power cycle
-3. If still failing after power cycle, it's likely a hardware issue (often GDDR related)
-
-**Diagnosis**: If issue persists, have syseng check for GDDR BIST failures. Common signature: UBBx ASICy GDDRz failing BIST, related to CA.
-
-**Solution for GDDR BIST failure**:
-- Syseng may attempt to revive with debug firmware reload
-- If no improvement, UBB tray swap required
-
----
-
-## Z Ports Showing Down
-
-**Symptom**: Diagnostic script shows all Z ports (ETH10+) are down.
-
-**Cause**: Z ports aren't cabled in your current topology.
-
-**Solution**: This is expected behavior. In an 8x16 topology (4 Galaxies), Z ports aren't used. Only ETH00-ETH09 should be up.
-
-Only investigate if Z ports are supposed to be connected in your topology.
-
----
-
-## Tensix Cores Unresponsive During Validation
-
-**Symptom**: Traffic tests that load management firmware onto tensix and ethernet cores fail. SW reports all tensix cores as unresponsive across all hosts. The workload waits for a response as part of initialization (by polling) and never gets it.
-
-**Observation**: Skipping the step where firmware is loaded onto tensix and immediately launching TX and RX kernels on ethernet cores works fine. Ethernet links are healthy across multiple runs when tensix is bypassed.
-
-**Cause**: Unknown - possibly firmware/driver interaction issue. The firmware team noted this is strange because they don't have anything that runs on the Tensixes. Each host was broken in the same way.
-
-**Solution**: Power cycle resolved the issue, though root cause remains unknown. This is concerning but not an immediate blocker.
-
-**Debugging approach**: Start with debug on the SW side - do basic reads and writes over PCIe to ensure data lands in L1 as expected. Loop in syseng as needed depending on what you see.
-
-**Workaround**: If ethernet-only tests pass, the physical links are healthy. The issue is in the tensix firmware loading path, not the ethernet interconnect.
-
-**Escalation**: Loop in firmware team if this blocks testing.
-
----
-
-## Transient Ethernet Connectivity Loss
-
-**Symptom**: Missing connections between hosts that were previously stable. Ethernet was working earlier but now shows missing links.
-
-Example: Missing connections between c01u02 and c01u08 - physical cables checked and found no issues.
-
-**Cause**: Transient issue - links failed to train after some event (reset, temperature change, etc.) but no physical damage.
-
-**Diagnosis**:
-1. Check physical connectivity first (cables seated properly)
-2. If physical looks fine, it's likely a transient issue
-
-**Solution**: Power cycle both affected machines via BMC. This resolved ethernet connectivity issues on the 8x16 cluster.
-
----
-
 ## QSFP Connections Missing Between Hosts
 
 **Symptom**: Validation shows missing QSFP_DD port connections between specific hosts. All missing connections are between the same pair of machines.
@@ -267,6 +358,34 @@ Physical Discovery found 12 missing port/cable connections:
 6. If issue persists after cable swap, escalate to syseng for hardware investigation
 
 In the example above, QSFPs on C02U08 were found to be down. Reseating the cables resolved the issue.
+
+---
+
+## Transient Ethernet Connectivity Loss
+
+**Symptom**: Missing connections between hosts that were previously stable. Ethernet was working earlier but now shows missing links.
+
+Example: Missing connections between c01u02 and c01u08 - physical cables checked and found no issues.
+
+**Cause**: Transient issue - links failed to train after some event (reset, temperature change, etc.) but no physical damage.
+
+**Diagnosis**:
+1. Check physical connectivity first (cables seated properly)
+2. If physical looks fine, it's likely a transient issue
+
+**Solution**: Power cycle both affected machines via BMC. This resolved ethernet connectivity issues on the 8x16 cluster.
+
+---
+
+## Z Ports Showing Down
+
+**Symptom**: Diagnostic script shows all Z ports (ETH10+) are down.
+
+**Cause**: Z ports aren't cabled in your current topology.
+
+**Solution**: This is expected behavior. In an 8x16 topology (4 Galaxies), Z ports aren't used. Only ETH00-ETH09 should be up.
+
+Only investigate if Z ports are supposed to be connected in your topology.
 
 ---
 
@@ -295,34 +414,33 @@ export TT_METAL_DISABLE_MULTI_AERISC=1
 
 ---
 
-## Do NOT Update Firmware on Cluster Machines
+# Tensix & Validation
 
-**Warning**: Exabox cluster machines are running debug firmware (built off 19.3.1 with debug eth fw not merged to main).
+## Tensix Cores Unresponsive During Validation
 
-**Do not run firmware updates** - updating to released firmware will make the machine unusable in a cluster configuration.
+**Symptom**: Traffic tests that load management firmware onto tensix and ethernet cores fail. SW reports all tensix cores as unresponsive across all hosts. The workload waits for a response as part of initialization (by polling) and never gets it.
 
-If firmware updates are needed, coordinate with syseng and scaleout teams first.
+**Observation**: Skipping the step where firmware is loaded onto tensix and immediately launching TX and RX kernels on ethernet cores works fine. Ethernet links are healthy across multiple runs when tensix is bypassed.
+
+**Cause**: Unknown - possibly firmware/driver interaction issue. The firmware team noted this is strange because they don't have anything that runs on the Tensixes. Each host was broken in the same way.
+
+**Solution**: Power cycle resolved the issue, though root cause remains unknown. This is concerning but not an immediate blocker.
+
+**Debugging approach**: Start with debug on the SW side - do basic reads and writes over PCIe to ensure data lands in L1 as expected. Loop in syseng as needed depending on what you see.
+
+**Workaround**: If ethernet-only tests pass, the physical links are healthy. The issue is in the tensix firmware loading path, not the ethernet interconnect.
+
+**Escalation**: Loop in firmware team if this blocks testing.
 
 ---
 
-## ERISC Workarounds and Known Issues
+## Intermittent Tensix Cores Hung at Device Startup
 
-Reference for ERISC-related issues discovered during bringup (from GitHub issue #25427):
+**Symptom**: Arbitrary tensix cores are hung/unresponsive at device startup. Happens intermittently.
 
-**ND hangs during init (Mailbox API to Metal FW)**
-- Went away after shifting binaries by 32 bytes
-- Workaround: Once RISC gets to metal FW, save registers and soft reset both ERISC0 and ERISC1
-- Suspected cause: Stuck data in the instruction cache (i$)
-- Code: `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc` lines 117-195
+**Cause**: Under investigation.
 
-**Interrupts causing retrain counts to increase**
-- Interrupts were disabled as workaround
-- Code: `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc` line 203
-
-**NOC usage conflicts**
-- Base FW runs on ERISC0 and uses NOC0
-- Kernel creation API enforces: ERISC0 → NOC0, ERISC1 → NOC1
-- This prevents conflicts between base FW and user kernels
+**Workaround**: Power cycle and retry. Issue is intermittent.
 
 ---
 
@@ -341,48 +459,26 @@ Example from logs:
 
 ---
 
-## Machine Won't Power On After BMC Power Cycle
+# ERISC & Firmware
 
-**Symptom**: After remote power cycle, machine doesn't come back up. BMC shows it going back to "Off" state immediately.
+## ERISC Workarounds and Known Issues
 
-BMC logs example:
-```
-Jan 08 02:27:58 s7tk power-control[4462]: Host0: Moving to "Wait for Power Supply Power OK" state
-Jan 08 02:28:58 s7tk power-control[4462]: Host0: Moving to "Off" state
-```
+Reference for ERISC-related issues discovered during bringup (from GitHub issue #25427):
 
-ipmitool shows UBB tray POST failures:
-```
-ipmitool -I lanplus -H <bmc-ip> -U root -P '<password>' sel elist
-62bf | 01/07/2026 | 13:36:05 MST | Processor UBB3_ASIC0_Stat | FRB2/Hang in POST failure | Asserted
-62c0 | 01/07/2026 | 13:36:05 MST | Processor UBB3_ASIC1_Stat | FRB2/Hang in POST failure | Asserted
-...
-```
+**ND hangs during init (Mailbox API to Metal FW)**
+- Went away after shifting binaries by 32 bytes
+- Workaround: Once RISC gets to metal FW, save registers and soft reset both ERISC0 and ERISC1
+- Suspected cause: Stuck data in the instruction cache (i$)
+- Code: `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc` lines 117-195
 
-**Cause**: PDU circuit breaker tripped due to di/dt (current spike during power cycling).
+**Interrupts causing retrain counts to increase**
+- Interrupts were disabled as workaround
+- Code: `tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc` line 203
 
-**Solution**:
-1. Physically check the PDU - look for tripped circuit breakers
-2. Reset the breaker
-3. Power cycle the machine again
-
-This requires physical access to the datacenter.
-
-**Prevention**: Consider power cycling one node at a time to avoid di/dt issues.
-
----
-
-## Tensix Stall Issue (Requires Power Cycle)
-
-**Symptom**: Cluster validation or tests hang on tensix operations. Multiple hosts affected in the same way.
-
-**Context**: Observed on both 8x16 (C01/C02) and 4x32 (B08/B09) clusters. Goes away with power cycle but root cause unclear.
-
-**Cause**: Unknown - possibly something in SW or the handoff process during cluster bringup. Lower priority for debugging since power cycle resolves it.
-
-**Solution**: Power cycle the affected hosts via BMC. This clears the stall and allows cluster validation to proceed.
-
-**Concern**: If this happens repeatedly on the same system after handoff to SW, it needs more investigation.
+**NOC usage conflicts**
+- Base FW runs on ERISC0 and uses NOC0
+- Kernel creation API enforces: ERISC0 uses NOC0, ERISC1 uses NOC1
+- This prevents conflicts between base FW and user kernels
 
 ---
 
@@ -395,15 +491,5 @@ This requires physical access to the datacenter.
 **Workaround**: Run fabric workloads with 2 ERISCs instead. 2D fabric stress tests pass with dual ERISC.
 
 **Note**: Physical validation can still use single ERISC, but fabric tests need dual ERISC.
-
----
-
-## Intermittent Tensix Cores Hung at Device Startup
-
-**Symptom**: Arbitrary tensix cores are hung/unresponsive at device startup. Happens intermittently.
-
-**Cause**: Under investigation.
-
-**Workaround**: Power cycle and retry. Issue is intermittent.
 
 ---
