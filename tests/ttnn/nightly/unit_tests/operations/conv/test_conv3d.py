@@ -149,9 +149,7 @@ def create_sharded_memory_config(layout_type, grid_size, input_shape):
         memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         orientation = ttnn.ShardOrientation.ROW_MAJOR
 
-        logger.debug(
-            f"BLOCK_SHARDED: core grid ({cores_x}, {cores_y}), shard shape: ({shard_height}, {shard_width})"
-        )
+        logger.debug(f"BLOCK_SHARDED: grid ({cores_x}, {cores_y}), shard: ({shard_height}, {shard_width})")
 
     else:
         raise ValueError(f"Unsupported layout_type: {layout_type}")
