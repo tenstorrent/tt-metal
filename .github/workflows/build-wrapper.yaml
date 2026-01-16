@@ -2,13 +2,89 @@ name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
+    inputs:
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ubuntu-2204-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-manylinux-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-manylinux-tag:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build for"
 
 permissions:
   packages: write
 
 jobs:
+  # parse-platform and build-dispatch are for direct workflow_dispatch calls
+  # They only run if NO pre-built docker image tags were provided (i.e., not called from merge-gate)
+  parse-platform:
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+      toolchain: ${{ steps.parse.outputs.toolchain }}
+      enable-lto: ${{ steps.parse.outputs.enable-lto }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
+  build-dispatch:
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      distro: ${{ needs.parse-platform.outputs.distro }}
+      version: ${{ needs.parse-platform.outputs.version }}
+      toolchain: ${{ needs.parse-platform.outputs.toolchain }}
+      build-type: "Release"
+      enable-lto: true
+      publish-artifact: false
+      publish-package: false
+      skip-tt-train: true
+      tracy: false
+
+  # build job runs the matrix - either when called from merge-gate with pre-built tags,
+  # or when called via workflow_call without the platform dropdown
   build:
+    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -24,6 +100,7 @@ jobs:
             toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
           - version: "22.04"
+            image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
@@ -31,14 +108,27 @@ jobs:
             build-type: "Release"
             enable-lto: true
           - version: "24.04"
+            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
+      distro: ${{ matrix.config.distro || 'ubuntu' }}
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
-      enable-lto: ${{ matrix.config.enable-lto || false }}
+      # Enable LTO for Release builds
+      enable-lto: ${{ matrix.config.build-type == 'Release' || matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
       tracy: false
+      # Pass pre-built docker image tags based on image-key
+      ci-build-docker-image: ${{
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-ci-build-tag) ||
+        inputs.ubuntu-2204-ci-build-tag }}
+      dev-docker-image: ${{
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-dev-tag) ||
+        inputs.ubuntu-2204-dev-tag }}
+      manylinux-docker-image: ${{
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-manylinux-tag) ||
+        inputs.ubuntu-2204-manylinux-tag }}

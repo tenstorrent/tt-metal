@@ -88,22 +88,56 @@ on:
         type: string
         default: ""
         description: "Workflow run ID to download artifacts from (skips build)"
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+      ci-test-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Test Docker image tag"
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Dev Docker image tag"
+      basic-dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Basic Dev Docker image tag"
+      basic-ttnn-runtime-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Basic TTNN Runtime Docker image tag"
+      manylinux-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built ManyLinux Docker image tag"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+        value: ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-tag }}
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+        value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-tag }}
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+        value: ${{ inputs.dev-docker-image || jobs.build-docker-image.outputs.dev-tag }}
       basic-dev-docker-image:
         description: "Docker tag for the basic dev Docker image for basic development"
-        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
+        value: ${{ inputs.basic-dev-docker-image || jobs.build-docker-image.outputs.basic-dev-tag }}
       basic-ttnn-runtime-docker-image:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
-        value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
+        value: ${{ inputs.basic-ttnn-runtime-docker-image || jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image:
+        description: "Docker tag for the ManyLinux Docker image"
+        value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
@@ -135,14 +169,14 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      distro:
+      platform:
         required: false
-        type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Target Platform"
       architecture:
         required: false
         type: string
@@ -169,12 +203,35 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # Parse platform dropdown to extract distro/version/toolchain
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+      toolchain: ${{ steps.parse.outputs.toolchain }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          distro: ${{ inputs.distro }}
+          version: ${{ inputs.version }}
+
+  # Only build docker images if pre-built tags are not provided
   build-docker-image:
+    needs: parse-platform
+    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ inputs.distro }}
-      version: ${{ inputs.version }}
+      # Use parsed platform values for workflow_dispatch, otherwise use direct inputs
+      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:
@@ -225,17 +282,23 @@ jobs:
           retention-days: 1
 
   build-artifact:
-    if: ${{ inputs.use-artifacts-from-run == '' }}
-    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
-    needs: build-docker-image
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }} ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}"
+    needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+    env:
+      # Resolved platform values (from parse-platform for workflow_dispatch, or direct inputs for workflow_call)
+      DISTRO: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      VERSION: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
+      TOOLCHAIN: ${{ needs.parse-platform.outputs.toolchain || inputs.toolchain }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -273,13 +336,12 @@ jobs:
       - name: Set artifact name
         id: set-artifact-name
         run: |
-          TOOLCHAIN="${{ inputs.toolchain }}"
-          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
           # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+          ARTIFACT_NAME="packages-${{ env.DISTRO }}-${{ env.VERSION }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -315,7 +377,7 @@ jobs:
 
           args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
           echo "Args: ${args_fixme}"
-          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
+          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ env.TOOLCHAIN }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
             build_command="$build_command --disable-profiler"
@@ -351,7 +413,12 @@ jobs:
       - name: 📦 Package
         run: |
           cmake --build build --target package
-          ls -1sh build/*.deb build/*.ddeb || true
+
+          if [[ "${{ env.DISTRO }}" == "fedora" ]]; then
+            ls -1sh build/*.rpm || true
+          else
+            ls -1sh build/*.deb build/*.ddeb || true
+          fi
 
       - name: Publish ccache summary
         run: |
@@ -384,12 +451,12 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
           # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ env.VERSION }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -403,15 +470,38 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # Determine Python version based on platform
+  determine-python-version:
+    needs: parse-platform
+    runs-on: ubuntu-latest
+    outputs:
+      python-version: ${{ steps.set-python-version.outputs.version }}
+    steps:
+      - id: set-python-version
+        run: |
+          # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
+          DISTRO="${{ needs.parse-platform.outputs.distro }}"
+          VERSION="${{ needs.parse-platform.outputs.version }}"
+
+          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
+          if [ "$VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+
+          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
+
   build-wheel:
-    if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
+    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: build-docker-image
+    needs: [parse-platform, build-docker-image, determine-python-version]
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type }}
-      python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
-      docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      python-version: ${{ needs.determine-python-version.outputs.python-version }}
+      docker-image: ${{ inputs.manylinux-docker-image || needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
