@@ -112,4 +112,26 @@ void kernel_main() {
 
     // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
     wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+
+    // Gather after second matmul so that we can mcast full result to all cores
+    gather<
+        intermediate_pregather_cb,
+        intermediate_full_cb,
+        num_output_tiles,
+        mcast_receiver_noc_x,
+        mcast_receiver_noc_y,
+        mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
+
+    // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
+    wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+
+    // Copy from intermediate_full_cb to out_cb
+    constexpr uint32_t number_of_tiles = 1;
+    noc_async_write(
+        get_read_ptr(intermediate_full_cb),
+        get_noc_addr(get_write_ptr(3)),
+        get_tile_size(intermediate_full_cb) * num_tiles_k * number_of_tiles);
+    noc_async_write_barrier();
+    cb_pop_front(intermediate_full_cb, num_tiles_k);
+    cb_push_back(3, num_tiles_k);
 }

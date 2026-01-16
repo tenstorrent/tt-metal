@@ -99,15 +99,15 @@ void kernel_main() {
         debug_enabled);
 
     // After matmul+bias we gather+mcast the result
-    // wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
-    // mcast(
-    // mcast_cb,
-    // mcast_sender_cb,
-    // num_senders,
-    // mcast_sender_semaphore_addr,
-    // mcast_sender_noc_coord_x_start,
-    // mcast_sender_noc_coord_y_start,
-    // mcast_sender_noc_coord_x_end,
-    // mcast_sender_noc_coord_y_end,
-    // debug_enabled);
+    wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+    mcast(
+        mcast_cb,
+        mcast_sender_cb,
+        num_senders,
+        mcast_sender_semaphore_addr,
+        mcast_sender_noc_coord_x_start,
+        mcast_sender_noc_coord_y_start,
+        mcast_sender_noc_coord_x_end,
+        mcast_sender_noc_coord_y_end,
+        debug_enabled);
 }

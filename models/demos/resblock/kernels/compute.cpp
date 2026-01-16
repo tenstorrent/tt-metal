@@ -99,6 +99,12 @@ void MAIN {
     relu_tile_init();
 
     matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k>();
-    matmul_with_bias_block<intermediate_full_cb, weight1_cb, in0_cb, out_cb, num_tiles_k, num_output_tiles>();
+    matmul_with_bias_block<
+        intermediate_full_cb,
+        weight1_cb,
+        in0_cb,
+        intermediate_pregather_cb,
+        num_tiles_k,
+        num_output_tiles>();
 }
 }  // namespace NAMESPACE
