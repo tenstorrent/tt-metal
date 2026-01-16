@@ -494,6 +494,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
     }
 
     while (length != 0) {
+        #if 1
         // Transfer size is min(remaining_length, data_available_in_cb)
 #if defined(FABRIC_RELAY)
         uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
@@ -519,6 +520,11 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
         noc_nonposted_writes_acked[noc_index] += num_mcast_dests * num_noc_packets_written;
+        #endif
+        #if 0
+        uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+        uint32_t xfer_size = length > available_data ? available_data : length;
+        #endif
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
