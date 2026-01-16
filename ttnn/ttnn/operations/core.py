@@ -5,7 +5,6 @@
 import math
 import os
 import pathlib
-from this import d
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
