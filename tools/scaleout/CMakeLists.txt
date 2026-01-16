@@ -261,6 +261,7 @@ add_custom_command(
 
 add_custom_target(
     fabric_test_gen_proto
+    ALL
     DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
 )
