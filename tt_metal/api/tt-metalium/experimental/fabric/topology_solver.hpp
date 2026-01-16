@@ -251,29 +251,44 @@ struct MappingResult {
     std::map<GlobalNode, TargetNode> global_to_target;
 
     /// Statistics about constraint satisfaction
-    struct {
+    struct ConstraintStats {
         size_t required_satisfied = 0;   ///< Number of required constraints satisfied
         size_t preferred_satisfied = 0;  ///< Number of preferred constraints satisfied
         size_t preferred_total = 0;      ///< Total number of preferred constraints
     } constraint_stats;
 
     /// Statistics about the solving process
-    struct {
+    struct Stats {
         size_t dfs_calls = 0;                      ///< Number of DFS calls made
         size_t backtrack_count = 0;                ///< Number of backtracks performed
-        std::chrono::milliseconds elapsed_time{};  ///< Time taken to solve
+        std::chrono::microseconds elapsed_time{};  ///< Time taken to solve (microsecond resolution)
     } stats;
-
-    /**
-     * @brief Print mapping result for debugging
-     *
-     * Prints the mapping showing which target nodes map to which global nodes,
-     * along with warnings, statistics, and other diagnostic information.
-     *
-     * @param target_graph The target graph (for showing unmapped nodes)
-     */
-    void print(const AdjacencyGraph<TargetNode>& target_graph) const;
 };
+
+/**
+ * @brief Print mapping result for debugging
+ *
+ * Prints the mapping showing which target nodes map to which global nodes,
+ * along with warnings, statistics, and other diagnostic information.
+ *
+ * Template parameters are automatically deduced from the function arguments,
+ * so explicit template parameters are not required when calling this function.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph (deduced)
+ * @tparam GlobalNode The type used to identify nodes in the global graph (deduced)
+ * @param result The mapping result to print
+ * @param target_graph The target graph (for showing unmapped nodes)
+ *
+ * @example
+ * ```cpp
+ * MappingResult<FabricNodeId, AsicID> result = solve_topology_mapping(...);
+ * AdjacencyGraph<FabricNodeId> target_graph = ...;
+ * print_mapping_result(result, target_graph);  // No template parameters needed
+ * ```
+ */
+template <typename TargetNode, typename GlobalNode>
+void print_mapping_result(
+    const MappingResult<TargetNode, GlobalNode>& result, const AdjacencyGraph<TargetNode>& target_graph);
 
 }  // namespace tt::tt_fabric
 

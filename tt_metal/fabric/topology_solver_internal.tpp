@@ -338,13 +338,15 @@ int SearchHeuristic::compute_candidate_cost(
                         size_t gap = actual - required;
                         // Score: higher for exact match (gap=0), lower for larger gaps
                         // Use SOFT_WEIGHT for exact match, SOFT_WEIGHT/2 for gap=1, SOFT_WEIGHT/4 for gap=2, etc.
-                        int match_bonus = static_cast<int>(SOFT_WEIGHT / (1 + gap));
+                        float raw_bonus = static_cast<float>(SOFT_WEIGHT) / (1.0f + static_cast<float>(gap));
+                        int match_bonus = static_cast<int>(std::max(1.0f, raw_bonus));  // Ensure minimum of 1 for large gaps
                         channel_match_score += match_bonus;
                     } else {
                         // Below required: still allow but penalize based on how far below
                         // Penalty increases with gap (but less than perfect match bonus)
                         size_t gap = required - actual;
-                        int penalty = static_cast<int>(SOFT_WEIGHT / (10 + gap));  // Small penalty, decreases with gap
+                        float raw_penalty = static_cast<float>(SOFT_WEIGHT) / (10.0f + static_cast<float>(gap));
+                        int penalty = static_cast<int>(std::max(1.0f, raw_penalty));  // Small penalty, decreases with gap, minimum of 1
                         channel_match_score -= penalty;
                     }
                 }
@@ -355,18 +357,14 @@ int SearchHeuristic::compute_candidate_cost(
     // Compute degree gap (runtime optimization)
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
-    size_t degree_gap;
+    int degree_gap_cost;
     if (global_deg >= target_deg) {
-        degree_gap = global_deg - target_deg;
+        // Clamp to INT_MAX to avoid overflow when casting size_t to int
+        size_t degree_gap = global_deg - target_deg;
+        degree_gap_cost = static_cast<int>(std::min(degree_gap, static_cast<size_t>(INT_MAX)));
     } else {
         // Shouldn't happen if check_hard_constraints was called, but handle gracefully
-        degree_gap = SIZE_MAX;
-    }
-    int degree_gap_cost;
-    if (degree_gap != SIZE_MAX) {
-        degree_gap_cost = static_cast<int>(degree_gap * RUNTIME_WEIGHT);
-    } else {
-        degree_gap_cost = static_cast<int>(SIZE_MAX);
+        degree_gap_cost = INT_MAX;
     }
 
     // Cost = -is_preferred * SOFT_WEIGHT
@@ -478,6 +476,7 @@ SearchHeuristic::SelectionResult SearchHeuristic::select_and_generate_candidates
     const std::vector<bool>& used,
     ConnectionValidationMode validation_mode) {
     // Find unassigned target node with lowest cost (most constrained)
+    // Break ties deterministically by selecting the node with the lowest index
     size_t best_target = SIZE_MAX;
     int best_cost = INT_MAX;
 
@@ -487,10 +486,15 @@ SearchHeuristic::SelectionResult SearchHeuristic::select_and_generate_candidates
         }
 
         int cost = compute_node_cost(i, graph_data, constraint_data, mapping, used, validation_mode);
-        if (cost < best_cost) {
+        if (cost < best_cost || (cost == best_cost && i < best_target)) {
             best_cost = cost;
             best_target = i;
         }
+    }
+
+    // If all target nodes are already assigned, no candidates can be generated.
+    if (best_target == SIZE_MAX) {
+        return {best_target, {}};
     }
 
     // Generate ordered candidates for selected node
@@ -549,7 +553,7 @@ bool ConsistencyChecker::check_forward_consistency(
     size_t global_idx,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    const std::vector<int>& mapping,
+    std::vector<int>& mapping,
     const std::vector<bool>& used,
     ConnectionValidationMode validation_mode) {
     // For each unassigned neighbor of target_idx, check if there's at least one viable candidate
@@ -573,14 +577,17 @@ bool ConsistencyChecker::check_forward_consistency(
             }
 
             // Check local consistency for neighbor -> candidate_global
-            // Create temporary mapping to check
-            std::vector<int> temp_mapping = mapping;
-            temp_mapping[neighbor] = static_cast<int>(candidate_global);
+            // Modify mapping in-place, check, then restore to avoid O(n) copy per candidate
+            int old_mapping_value = mapping[neighbor];
+            mapping[neighbor] = static_cast<int>(candidate_global);
 
-            if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
+            if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, mapping, validation_mode)) {
+                mapping[neighbor] = old_mapping_value;  // Restore before returning
                 has_viable_candidate = true;
                 break;  // Found at least one viable candidate
             }
+
+            mapping[neighbor] = old_mapping_value;  // Restore before trying next candidate
         }
 
         if (!has_viable_candidate) {
