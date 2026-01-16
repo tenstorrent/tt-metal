@@ -14,9 +14,9 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -663,11 +663,11 @@ class TtSDXLPipeline(LightweightModule):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
             # 2. Load tt_unet, tt_vae and tt_scheduler
             self.tt_unet_model_config = (
-                ModelOptimisations()
+                load_model_optimisations(self.pipeline_config.image_resolution)
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
-                else RefinerModelOptimisations()
+                else load_refiner_model_optimisations(self.pipeline_config.image_resolution)
             )
-            self.tt_vae_model_config = VAEModelOptimisations()
+            self.tt_vae_model_config = load_vae_model_optimisations(self.pipeline_config.image_resolution)
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),

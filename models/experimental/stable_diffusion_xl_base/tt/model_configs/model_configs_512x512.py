@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class ModelOptimisations:
+class ModelOptimisations512x512:
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,

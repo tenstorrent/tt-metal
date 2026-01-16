@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -18,13 +18,21 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
-@pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])
+@pytest.mark.parametrize(
+    "image_resolution, input_shape, up_block_id",
+    [
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 1280, 32, 32), 0),
+        ((1024, 1024), (1, 640, 64, 64), 1),
+    ],
+)
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_upsample2d(
     device,
+    image_resolution,
     input_shape,
     up_block_id,
     stride,
@@ -47,7 +55,7 @@ def test_upsample2d(
     torch_upsample = unet.up_blocks[up_block_id].upsamplers[0]
     groups = 1
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_upsample = TtUpsample2D(
         device,
         state_dict,
