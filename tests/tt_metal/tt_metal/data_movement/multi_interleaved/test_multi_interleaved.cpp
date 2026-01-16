@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -43,7 +44,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         test_config.page_size_bytes);
 
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -290,7 +291,7 @@ void packet_sizes_test(
 /* ========== Full grid directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
@@ -302,7 +303,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal
 /* ========== Full grid packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
@@ -314,7 +315,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
 /* ========== Full grid read kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
@@ -326,7 +327,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedI
 /* ========== Full grid read kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
@@ -338,7 +339,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
 /* ========== Full grid write kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
@@ -350,7 +351,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirected
 /* ========== Full grid write kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};
