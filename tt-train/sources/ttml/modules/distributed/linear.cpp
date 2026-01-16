@@ -47,7 +47,7 @@ autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& ten
         does all reduce in backward pass. See similar implementation in fairscale for more details.
         https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
     */
-    x = ops::distributed::all_reduce(x, /* noop_backward */ true, m_shard_dim);
+    x = ops::distributed::all_reduce(x, /* noop_backward */ m_input_is_parallel, m_shard_dim);
     if (m_bias != nullptr) {
         x = ops::add(x, m_bias);
     }
