@@ -71,6 +71,20 @@ tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
     return outputs;
 }
 
+ttsl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    // Hash together the operation type and number of branches
+    // Each branch's unique identity will be determined by its type and attributes
+    ttsl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
+
+    for (const auto& branch : operation_attributes.branches) {
+        // Use the branch's type_info to differentiate between different operation types
+        combined_hash = ttsl::hash::hash_objects(combined_hash, branch->type_info().hash_code());
+    }
+
+    return combined_hash;
+}
+
 }  // namespace ttnn::operations::experimental::parallel
 
 namespace ttnn::prim {

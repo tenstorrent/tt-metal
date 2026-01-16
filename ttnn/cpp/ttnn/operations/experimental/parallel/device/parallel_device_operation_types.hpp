@@ -6,6 +6,7 @@
 
 #include <any>
 #include <memory>
+#include <typeinfo>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
@@ -24,6 +25,7 @@ struct BranchDescriptor;
 
 struct operation_attributes_t {
     std::vector<std::shared_ptr<BranchDescriptor>> branches;
+    ttnn::MeshDevice* mesh_device = nullptr;  // Required for device operation infrastructure
 };
 
 struct tensor_args_t {
@@ -63,6 +65,9 @@ struct BranchDescriptor {
 
     // Returns whether shared variables have been initialized
     virtual bool has_shared_variables() const = 0;
+
+    // Type information for hashing
+    virtual const std::type_info& type_info() const = 0;
 };
 
 // =============================================================================
@@ -204,6 +209,9 @@ public:
                 }
             },
             factory_variant);
+
+        // Put the potentially-modified tensor(s) back into the outputs vector
+        reflatten_outputs(outputs, tensor_return);
     }
 
     void update_runtime_args(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) override {
@@ -245,9 +253,14 @@ public:
                 shared_variables_ = std::move(cached_program.shared_variables);
             }
         });
+
+        // Put the potentially-modified tensor(s) back into the outputs vector
+        reflatten_outputs(outputs, tensor_return);
     }
 
     bool has_shared_variables() const override { return shared_variables_.has_value(); }
+
+    const std::type_info& type_info() const override { return typeid(DeviceOp); }
 
 private:
     // Helper to visit a variant at a specific index
@@ -331,6 +344,30 @@ private:
             return {std::move(v[0]), std::move(v[1]), std::move(v[2])};
         } else if constexpr (std::is_same_v<tensor_return_value_t, std::array<Tensor, 2>>) {
             return {std::move(v[0]), std::move(v[1])};
+        } else {
+            static_assert(sizeof(tensor_return_value_t) == 0, "Unsupported tensor_return_value_t type");
+        }
+    }
+
+    // Put tensors back into the vector after unflatten_outputs
+    void reflatten_outputs(std::vector<Tensor>& v, tensor_return_value_t& result) {
+        if constexpr (std::is_same_v<tensor_return_value_t, Tensor>) {
+            if (v.empty()) {
+                v.push_back(std::move(result));
+            } else {
+                v[0] = std::move(result);
+            }
+        } else if constexpr (std::is_same_v<tensor_return_value_t, std::vector<Tensor>>) {
+            v = std::move(result);
+        } else if constexpr (std::is_same_v<tensor_return_value_t, std::tuple<Tensor, Tensor, Tensor>>) {
+            v.resize(3);
+            v[0] = std::move(std::get<0>(result));
+            v[1] = std::move(std::get<1>(result));
+            v[2] = std::move(std::get<2>(result));
+        } else if constexpr (std::is_same_v<tensor_return_value_t, std::array<Tensor, 2>>) {
+            v.resize(2);
+            v[0] = std::move(result[0]);
+            v[1] = std::move(result[1]);
         } else {
             static_assert(sizeof(tensor_return_value_t) == 0, "Unsupported tensor_return_value_t type");
         }
