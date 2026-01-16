@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <algorithm>
 #include <limits>
@@ -1115,6 +1114,13 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
+    // Cache the bank_id -> dram_view mapping for use by WH proximity-based routing
+    bank_id_to_dram_view_[device_id].clear();
+    bank_id_to_dram_view_[device_id].resize(num_dram_banks);
+    for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
+    }
+
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
     bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
@@ -1125,7 +1131,7 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
             CoreCoord dram_noc_coord =
-                soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
+                soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
             if (dram_is_virtualized) {
                 noc_x = dram_noc_coord.x;
                 noc_y = dram_noc_coord.y;
@@ -1175,25 +1181,24 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     }
 }
 
-std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_for_core(
+std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity(
     ChipId device_id, CoreCoord virtual_core) {
     // For Wormhole, each DRAM channel has multiple NOC endpoints. This function generates
-    // a per-core table that picks the closest DRAM NOC endpoint for each bank.
+    // a per-core table that picks the closest DRAM NOC endpoint for each bank based on
+    // Manhattan distance from the worker core.
     const auto& soc_d = cluster_->get_soc_desc(device_id);
-    auto config = L1BankingAllocator::generate_config(
-        device_id,
-        num_hw_cqs_,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        worker_l1_unreserved_start_,
-        l1_bank_remap_);
-    const auto allocator = L1BankingAllocator(config);
-    const size_t num_dram_banks = allocator.get_num_banks(BufferType::DRAM);
+
+    // bank_id_to_dram_view must be pre-populated by generate_device_bank_to_noc_tables
+    TT_ASSERT(
+        bank_id_to_dram_view_.find(device_id) != bank_id_to_dram_view_.end() &&
+        !bank_id_to_dram_view_[device_id].empty(),
+        "bank_id_to_dram_view mapping must be populated before calling generate_dram_bank_to_noc_table_by_proximity");
+
+    const auto& bank_id_to_dram_view = bank_id_to_dram_view_.at(device_id);
+    const size_t num_dram_banks = bank_id_to_dram_view.size();
     const auto& dram_cores = soc_d.get_dram_cores();
 
-    bool noc_translation_enabled = (cluster_->get_target_device_type() == tt::TargetDevice::Mock)
-                                       ? false
-                                       : cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
 
@@ -1205,7 +1210,7 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_for_core(
 
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-            size_t dram_view = allocator.get_dram_channel_from_bank_id(bank_id);
+            size_t dram_view = bank_id_to_dram_view[bank_id];
             size_t physical_channel = soc_d.get_channel_for_dram_view(dram_view);
             const auto& channel_endpoints = dram_cores.at(physical_channel);
             CoreCoord closest_endpoint;
@@ -1215,8 +1220,13 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_for_core(
                 tt::umd::CoreCoord dram_endpoint_noc0 =
                     soc_d.get_dram_core_for_channel(physical_channel, subchan, CoordSystem::NOC0);
 
-                uint32_t distance = std::abs(static_cast<int>(worker_noc0_coord.x) - static_cast<int>(dram_endpoint_noc0.x)) +
-                                    std::abs(static_cast<int>(worker_noc0_coord.y) - static_cast<int>(dram_endpoint_noc0.y));
+                uint32_t dx = (worker_noc0_coord.x > dram_endpoint_noc0.x)
+                                  ? (worker_noc0_coord.x - dram_endpoint_noc0.x)
+                                  : (dram_endpoint_noc0.x - worker_noc0_coord.x);
+                uint32_t dy = (worker_noc0_coord.y > dram_endpoint_noc0.y)
+                                  ? (worker_noc0_coord.y - dram_endpoint_noc0.y)
+                                  : (dram_endpoint_noc0.y - worker_noc0_coord.y);
+                uint32_t distance = dx + dy;
 
                 if (distance < min_distance) {
                     min_distance = distance;
@@ -1247,18 +1257,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    // For Wormhole, generate per-core DRAM tables picking the closest NOC endpoint.
-    // For other architectures, use the pre-generated device-wide table.
-    std::vector<uint16_t> dram_bank_to_noc_xy;
-    const std::vector<uint16_t>* dram_table_ptr;
-    if (cluster_->arch() == ARCH::WORMHOLE_B0) {
-        dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_for_core(device_id, virtual_core);
-        dram_table_ptr = &dram_bank_to_noc_xy;
-    } else {
-        dram_table_ptr = &dram_bank_to_noc_xy_[device_id];
-    }
-
-    const uint32_t dram_to_noc_sz_in_bytes = dram_table_ptr->size() * sizeof(uint16_t);
+    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1271,11 +1270,51 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
-    if (end_core.has_value() && cluster_->arch() != ARCH::WORMHOLE_B0) {
+    // For Wormhole, generate per-core DRAM tables picking the closest NOC endpoint.
+    // Each core needs its own unique table, so we iterate and unicast to each core.
+    // Skip for Mock devices as they don't have real DRAM endpoints.
+    if (cluster_->arch() == ARCH::WORMHOLE_B0 && end_core.has_value() &&
+        cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        auto start = virtual_core;
+        auto end = end_core.value();
+        for (uint32_t y = start.y; y <= end.y; y++) {
+            for (uint32_t x = start.x; x <= end.x; x++) {
+                CoreCoord core(x, y);
+                auto dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, core);
+
+                cluster_->write_core(
+                    dram_bank_to_noc_xy.data(),
+                    dram_to_noc_sz_in_bytes,
+                    tt_cxy_pair(device_id, core),
+                    mem_bank_to_noc_addr);
+
+                uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+                cluster_->write_core(
+                    l1_bank_to_noc_xy_[device_id].data(),
+                    l1_to_noc_sz_in_bytes,
+                    tt_cxy_pair(device_id, core),
+                    l1_noc_addr);
+
+                uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+                cluster_->write_core(
+                    dram_bank_offset_map_[device_id].data(),
+                    dram_offset_sz_in_bytes,
+                    tt_cxy_pair(device_id, core),
+                    dram_offset_addr);
+
+                uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+                cluster_->write_core(
+                    l1_bank_offset_map_[device_id].data(),
+                    l1_offset_sz_in_bytes,
+                    tt_cxy_pair(device_id, core),
+                    l1_offset_addr);
+            }
+        }
+    } else if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
         cluster_->noc_multicast_write(
-            dram_table_ptr->data(),
+            dram_bank_to_noc_xy_[device_id].data(),
             dram_to_noc_sz_in_bytes,
             device_id,
             start_core,
@@ -1309,7 +1348,16 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             end_core.value(),
             l1_offset_addr);
     } else {
-        // Unicast to single core
+        // Unicast to single core (for WH single core, generate per-core table)
+        const std::vector<uint16_t>* dram_table_ptr;
+        std::vector<uint16_t> dram_bank_to_noc_xy;
+        if (cluster_->arch() == ARCH::WORMHOLE_B0 && cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+            dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, virtual_core);
+            dram_table_ptr = &dram_bank_to_noc_xy;
+        } else {
+            dram_table_ptr = &dram_bank_to_noc_xy_[device_id];
+        }
+
         cluster_->write_core(
             dram_table_ptr->data(),
             dram_to_noc_sz_in_bytes,
