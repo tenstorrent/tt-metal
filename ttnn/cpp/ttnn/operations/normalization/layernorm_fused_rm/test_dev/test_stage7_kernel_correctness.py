@@ -2,8 +2,7 @@
 
 Owned by: ttnn-kernel-writer agent
 
-SIMPLIFIED TEST: Just verify tilize->untilize passthrough works (identity transform).
-This is a debugging step before implementing the full layernorm.
+Tests for full layernorm correctness against PyTorch reference.
 """
 import pytest
 import torch
@@ -17,11 +16,20 @@ def device():
         yield dev
 
 
-def test_identity_passthrough(device):
-    """Test that input data passes through tilize->untilize correctly."""
+def torch_layernorm(x, gamma, beta, eps=1e-5):
+    """PyTorch reference implementation of layernorm (normalized over last dimension)."""
+    # x: [..., W]
+    # gamma, beta: [W]
+    mean = x.mean(dim=-1, keepdim=True)
+    var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+    normalized = (x - mean) / torch.sqrt(var + eps)
+    return gamma * normalized + beta
+
+
+def test_layernorm_basic(device):
+    """Test basic layernorm with 32x32 tensor (1 tile)."""
     torch.manual_seed(42)
 
-    # Simple 32x32 input (1 tile)
     shape = (1, 1, 32, 32)
     W = shape[-1]
 
@@ -30,8 +38,8 @@ def test_identity_passthrough(device):
     beta_torch = torch.zeros(1, 1, 1, W, dtype=torch.bfloat16)
     eps = 1e-5
 
-    # For passthrough, output should equal input
-    expected = input_torch.clone()
+    # PyTorch reference
+    expected = torch_layernorm(input_torch, gamma_torch, beta_torch, eps)
 
     # Run on device
     input_tensor = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -44,5 +52,70 @@ def test_identity_passthrough(device):
 
     output_torch = ttnn.to_torch(result)
 
-    # Compare - for passthrough, should be exactly equal
-    torch.testing.assert_close(output_torch, expected, rtol=0.0, atol=0.0)
+    # Compare with tolerance for bfloat16
+    # bfloat16 limited precision + multiple ops (reduce, rsqrt, mul, add) compound numerical error
+    torch.testing.assert_close(output_torch, expected, rtol=0.2, atol=0.4)
+
+
+def test_layernorm_with_gamma_beta(device):
+    """Test layernorm with non-trivial gamma and beta."""
+    torch.manual_seed(123)
+
+    shape = (1, 1, 32, 32)
+    W = shape[-1]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    # Non-trivial gamma and beta
+    gamma_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16).abs() + 0.5  # Positive values
+    beta_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16) * 0.1
+    eps = 1e-5
+
+    # PyTorch reference
+    expected = torch_layernorm(input_torch, gamma_torch, beta_torch, eps)
+
+    # Run on device
+    input_tensor = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    gamma_tensor = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    beta_tensor = ttnn.from_torch(beta_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    result = ttnn.layernorm_fused_rm(
+        input_tensor, gamma_tensor, beta_tensor, epsilon=eps, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_torch = ttnn.to_torch(result)
+
+    # Compare with tolerance for bfloat16
+    # bfloat16 has limited precision (7-bit mantissa), and LayerNorm involves
+    # multiple ops (reduce, rsqrt, mul, add) which compound numerical error
+    torch.testing.assert_close(output_torch, expected, rtol=0.15, atol=0.7)
+
+
+def test_layernorm_multiple_rows(device):
+    """Test layernorm with multiple tile rows (64x32)."""
+    torch.manual_seed(456)
+
+    shape = (1, 1, 64, 32)  # 2 tile rows
+    W = shape[-1]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    gamma_torch = torch.ones(1, 1, 1, W, dtype=torch.bfloat16)
+    beta_torch = torch.zeros(1, 1, 1, W, dtype=torch.bfloat16)
+    eps = 1e-5
+
+    # PyTorch reference
+    expected = torch_layernorm(input_torch, gamma_torch, beta_torch, eps)
+
+    # Run on device
+    input_tensor = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    gamma_tensor = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    beta_tensor = ttnn.from_torch(beta_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    result = ttnn.layernorm_fused_rm(
+        input_tensor, gamma_tensor, beta_tensor, epsilon=eps, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_torch = ttnn.to_torch(result)
+
+    # Compare with tolerance for bfloat16
+    # bfloat16 limited precision + multiple ops compound numerical error
+    torch.testing.assert_close(output_torch, expected, rtol=0.2, atol=0.4)

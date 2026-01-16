@@ -49,9 +49,10 @@ LayernormFusedRmProgramFactory::cached_program_t LayernormFusedRmProgramFactory:
 
     // Circular Buffer Configuration (from spec)
     // CB c_0: Input RM sticks (32 sticks per tile row, each stick is W elements)
-    // We store one complete tile row (32 sticks * stick_size bytes)
+    // Reader pushes input TWICE per tile row (for mean+center+square+var, then for re-center+normalize)
+    // Double-buffered: 2 * 32 sticks
     uint32_t cb_in_rm_idx = tt::CBIndex::c_0;
-    uint32_t cb_in_rm_size = 32 * stick_size;  // 32 sticks per tile row
+    uint32_t cb_in_rm_size = 2 * 32 * stick_size;  // 2x 32 sticks per tile row
     tt::tt_metal::CircularBufferConfig cb_in_rm_config =
         tt::tt_metal::CircularBufferConfig(cb_in_rm_size, {{cb_in_rm_idx, cb_data_format}})
             .set_page_size(cb_in_rm_idx, stick_size);  // Page = one stick
