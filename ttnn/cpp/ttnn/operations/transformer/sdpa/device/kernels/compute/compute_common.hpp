@@ -415,6 +415,12 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
+#ifdef ARCH_WORMHOLE
+#define ADDR_MOD_X ADDR_MOD_3
+#else
+#define ADDR_MOD_X ADDR_MOD_7
+#endif
+
 /**
  * Initialization for the run_clamp_loadmacro function.
  */
@@ -486,28 +492,28 @@ inline void run_clamp_loadmacro() {
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_X,
         0);      // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
                  // Dest offset  0 is targeting the even columns for rows   3: 0
     TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_X,
         4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
              // Dest offset  4 is targeting the even columns for rows   7: 4
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         4,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_X,
         8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
              // Dest offset  8 is targeting the even columns for rows  11: 8
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(
         6,
         0,
-        ADDR_MOD_7,
+        ADDR_MOD_X,
         12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
               // Dest offset 12 is targeting the even columns for rows  15:12
     TTI_SFPNOP;
@@ -515,14 +521,11 @@ inline void run_clamp_loadmacro() {
 
 template <uint32_t SCALE>
 void calculate_exponential_polynomial_init() {
+    // L11 is used by the SFPI compiler for -1.
+
     constexpr float scale_fp32 = __builtin_bit_cast(float, SCALE);
     TTI_SFPLOADI(0, 0xA, lo16(scale_fp32));
     TTI_SFPLOADI(0, 0x8, hi16(scale_fp32));
-    TTI_SFPCONFIG(0, 11, 0);
-
-    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
-    TTI_SFPLOADI(0, 0xA, lo16(LN2_RECIP));
-    TTI_SFPLOADI(0, 0x8, hi16(LN2_RECIP));
     TTI_SFPCONFIG(0, 12, 0);
 
     constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
@@ -606,16 +609,20 @@ void calculate_exponential_polynomial() {
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
-        constexpr uint32_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
-        TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_7, 0);
+        constexpr uint8_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
+        TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
 
         if constexpr (SCALE_EN) {
-            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            TTI_SFPNOP;
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            // TTI_SFPNOP;
         }
 
         // Multiply by 1/ln(2) and round.
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
+        TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
+
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
@@ -676,7 +683,7 @@ void calculate_exponential_polynomial() {
             // so convert to bfloat16 using round-to-nearest-even.
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        TTI_SFPSTORE(p_sfpu::LREG2, input_type, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
         TTI_INCRWC(0, 4, 0, 0);  // Skip odd columns.
     }
 }
