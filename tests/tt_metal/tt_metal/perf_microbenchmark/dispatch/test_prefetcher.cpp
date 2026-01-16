@@ -1082,13 +1082,16 @@ public:
 
         // Destination: DRAM bank 0 on Remote Device
         const uint32_t dest_dram_bank_id = 0;
-        const auto dest_dram_channel = remote_device_->allocator_impl()->get_dram_channel_from_bank_id(dest_dram_bank_id);
+        const auto dest_dram_channel =
+            remote_device_->allocator_impl()->get_dram_channel_from_bank_id(dest_dram_bank_id);
         const CoreCoord dest_dram_logical_core = remote_device_->logical_core_from_dram_channel(dest_dram_channel);
-        const CoreCoord dest_dram_physical_core = MetalContext::instance()
-                                                      .get_cluster()
-                                                      .get_soc_desc(remote_device_->id())
-                                                      .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
-        const uint32_t noc_xy = remote_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
+        const CoreCoord dest_dram_physical_core =
+            MetalContext::instance()
+                .get_cluster()
+                .get_soc_desc(remote_device_->id())
+                .get_preferred_worker_core_for_dram_view(dest_dram_channel, NOC::NOC_0);
+        const uint32_t noc_xy =
+            remote_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
 
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
@@ -1114,11 +1117,11 @@ public:
             HostMemDeviceCommand cmd1(dispatch_cmd_size);
 
             cmd1.add_dispatch_write_linear<false, false>(
-                0,         // num_mcast_dests
-                noc_xy,    // NOC coordinates
-                dram_addr, // destination DRAM address
-                length,    // data size
-                nullptr    // payload data
+                0,          // num_mcast_dests
+                noc_xy,     // NOC coordinates
+                dram_addr,  // destination DRAM address
+                length,     // data size
+                nullptr     // payload data
             );
 
             commands_per_iteration.push_back(std::move(cmd1));
@@ -1127,19 +1130,19 @@ public:
             const uint32_t src_dram_bank_id = 0;
             auto src_dram_channel = mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(src_dram_bank_id);
             CoreCoord src_dram_logical_core = mmio_device_->logical_core_from_dram_channel(src_dram_channel);
-            CoreCoord src_dram_physical_core = MetalContext::instance()
-                                               .get_cluster()
-                                               .get_soc_desc(mmio_device_->id())
-                                               .get_preferred_worker_core_for_dram_view(src_dram_channel, NOC::NOC_0);
+            CoreCoord src_dram_physical_core =
+                MetalContext::instance()
+                    .get_cluster()
+                    .get_soc_desc(mmio_device_->id())
+                    .get_preferred_worker_core_for_dram_view(src_dram_channel, NOC::NOC_0);
             uint32_t src_noc_xy_addr =
                 mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, src_dram_physical_core);
 
-            auto src_bank_offset =
-                mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, src_dram_bank_id);
+            auto src_bank_offset = mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, src_dram_bank_id);
             // Read from DRAM at current read offset within the prepopulated data
             // Common::DeviceData uses the logical coordinates as keys
             uint32_t src_addr = mmio_dram_base + src_bank_offset + src_read_offset_bytes;
-            
+
             // Increment source read offset for next iteration
             src_read_offset_bytes += length;
 
@@ -1158,10 +1161,17 @@ public:
 
             // Update tracking: reading from source DRAM bank 0 on MMIO device,
             // writing to destination DRAM bank 0 on remote device
-            uint32_t src_read_offset_words = (src_read_offset_bytes - length) / sizeof(uint32_t);  // Use offset from BEFORE we incremented
+            uint32_t src_read_offset_words =
+                (src_read_offset_bytes - length) / sizeof(uint32_t);  // Use offset from BEFORE we incremented
             DeviceDataUpdater::update_cross_device_read(
-                dest_dram_logical_core, dest_dram_bank_id, dest_device_data,
-                src_dram_logical_core, src_dram_bank_id, src_read_offset_words, src_device_data, length_words);
+                dest_dram_logical_core,
+                dest_dram_bank_id,
+                dest_device_data,
+                src_dram_logical_core,
+                src_dram_bank_id,
+                src_read_offset_words,
+                src_device_data,
+                length_words);
 
             remaining_bytes -= length;
         }
@@ -2015,11 +2025,11 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
     // Source: DRAM on MMIO Device - prepopulate with test data
     auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
-    
+
     // Prepopulate source DRAM with test data
     Common::DeviceData mmio_device_data(
         mmio_device_, worker_range, l1_base, mmio_dram_base, nullptr, true, dram_data_size_words, cfg_);
-    
+
     // Destination: Remote Device DRAM - this is what we'll validate
     // Do NOT prepopulate destination DRAM (pass 0 for dram_data_size_words)
     auto remote_dram_base = remote_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
