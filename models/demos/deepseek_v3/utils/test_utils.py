@@ -303,8 +303,13 @@ def run_reference_with_attention(
     base_chunk_size = 8192
     bytes_per_elem = torch.tensor([], dtype=torch.bfloat16).element_size()
     target_mask_bytes = 128 * 1024**2
-    max_chunk_size = target_mask_bytes // (batch_size * max_position_id_or_seq_len * bytes_per_elem)
-    chunk_size = max(1, min(base_chunk_size, int(max_chunk_size)))
+    mask_denominator = batch_size * max_position_id_or_seq_len * bytes_per_elem
+    if mask_denominator > 0:
+        max_chunk_size = target_mask_bytes // mask_denominator
+        chunk_size = max(1, min(base_chunk_size, int(max_chunk_size)))
+    else:
+        max_chunk_size = base_chunk_size
+        chunk_size = base_chunk_size
     use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > chunk_size
     if mode == "prefill":
         logger.info(
