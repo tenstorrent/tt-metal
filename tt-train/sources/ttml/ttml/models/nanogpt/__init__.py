@@ -88,6 +88,10 @@ class NanoGPT(AbstractModuleBase):
         # We'll use the same weight as wte for weight tying
         self.lm_head_weight = self.wte.weight
 
+        # Cache for position tensor (avoids recreating every forward pass)
+        self._cached_pos_tensor = None
+        self._cached_pos_seq_len = None
+
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
@@ -106,15 +110,19 @@ class NanoGPT(AbstractModuleBase):
         # Token and position embeddings
         tok_emb = self.wte(idx)
 
-        # Create position indices
-        # Get sequence length from input
-        idx_np = idx.to_numpy(ttnn.DataType.UINT32)
-        seq_len = idx_np.shape[-1]
-        pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
-        pos = ttml.autograd.Tensor.from_numpy(
-            pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
-        pos_emb = self.wpe(pos)
+        # Create position indices (cached for constant sequence length during training)
+        idx_shape = idx.shape()
+        seq_len = idx_shape[-1]
+
+        # Use cached position tensor if sequence length matches
+        if self._cached_pos_seq_len != seq_len:
+            pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
+            self._cached_pos_tensor = ttml.autograd.Tensor.from_numpy(
+                pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+            )
+            self._cached_pos_seq_len = seq_len
+
+        pos_emb = self.wpe(self._cached_pos_tensor)
 
         # Add embeddings
         x = ttml.ops.binary.add(tok_emb, pos_emb)

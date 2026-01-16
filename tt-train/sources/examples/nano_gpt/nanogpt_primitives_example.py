@@ -26,6 +26,17 @@ from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
+# Module-level cache for AutoContext singleton (initialized on first use)
+_autograd_ctx = None
+
+
+def get_autograd_ctx():
+    """Get cached AutoContext singleton instance."""
+    global _autograd_ctx
+    if _autograd_ctx is None:
+        _autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    return _autograd_ctx
+
 
 class TrainingConfig(BaseTrainingConfig):
     """Extended training config with NanoGPT-specific fields."""
@@ -337,18 +348,28 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         # Weight tying: share with token embedding
         self.lm_head_weight = self.wte.weight
 
+        # Cache for position tensor (avoids recreating every forward pass)
+        self._cached_pos_tensor = None
+        self._cached_pos_seq_len = None
+
     def forward(
         self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
         tok_emb = self.wte(idx)
 
-        idx_np = idx.to_numpy(ttnn.DataType.UINT32)
-        seq_len = idx_np.shape[-1]
-        pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
-        pos = ttml.autograd.Tensor.from_numpy(
-            pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
-        pos_emb = self.wpe(pos)
+        # Create position indices (cached for constant sequence length during training)
+        idx_shape = idx.shape()
+        seq_len = idx_shape[-1]
+
+        # Use cached position tensor if sequence length matches
+        if self._cached_pos_seq_len != seq_len:
+            pos_np = np.arange(seq_len, dtype=np.uint32).reshape(1, 1, 1, seq_len)
+            self._cached_pos_tensor = ttml.autograd.Tensor.from_numpy(
+                pos_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+            )
+            self._cached_pos_seq_len = seq_len
+
+        pos_emb = self.wpe(self._cached_pos_tensor)
 
         x = ttml.ops.binary.add(tok_emb, pos_emb)
         if self.get_run_mode() == RunMode.TRAIN and self.config.dropout > 0.0:
@@ -435,12 +456,12 @@ def collate_fn(
 
 
 def get_loss_value(loss: ttml.autograd.Tensor) -> float:
-    loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
-    if loss_np.size == 1:
-        return float(loss_np.item() if hasattr(loss_np, "item") else float(loss_np))
-    if loss_np.size > 1:
-        return float(np.mean(loss_np))
-    raise RuntimeError("Loss tensor is empty!")
+    """Extract loss value from tensor efficiently.
+
+    Uses ttnn.Tensor.item() which directly extracts scalar via to_vector<T>()
+    without NumPy conversion overhead.
+    """
+    return float(loss.get_value().item())
 
 
 def train_step(
@@ -454,7 +475,16 @@ def train_step(
     gradient_accumulator: GradientAccumulator,
     use_clip_grad_norm: bool,
     clip_grad_norm_max_norm: float,
+    batch_size=None,
 ) -> tuple:
+    """Single training step with proper gradient accumulation.
+
+    Args:
+        batch_size: Optional cached batch size (if None, will extract from input_tokens)
+
+    Returns:
+        Tuple of (loss_float, step_time_ms, should_step)
+    """
     start_time = time.time()
 
     if gradient_accumulator.should_zero_grad():
@@ -467,9 +497,11 @@ def train_step(
     loss = gradient_accumulator.scale(loss)
     loss_float = get_loss_value(loss)
     loss.backward(False)
-    ttml.autograd.AutoContext.get_instance().reset_graph()
 
-    samples = input_tokens.shape()[0]
+    get_autograd_ctx().reset_graph()
+
+    # Use cached batch_size if provided to avoid shape() call
+    samples = batch_size if batch_size is not None else input_tokens.shape()[0]
     gradient_accumulator.update(loss_float, samples)
 
     should_step = gradient_accumulator.should_step()
@@ -607,7 +639,7 @@ def sample_greedy(
         running.append(next_id)
         generated_tokens.append(next_id)
 
-        ttml.autograd.AutoContext.get_instance().reset_graph()
+        get_autograd_ctx().reset_graph()
 
         if (step + 1) % 50 == 0:
             current_text = tokenizer.decode(generated_tokens)
@@ -1147,19 +1179,22 @@ def main():
         )
         global_step = start_step
 
+        # Cache batch_size to avoid repeated lookups in hot path
+        batch_size = training_config.batch_size
+
         start_time = time.time()
         for epoch in range(training_config.num_epochs):
             np.random.shuffle(dataset)
-            for batch_start in range(0, len(dataset), training_config.batch_size):
-                batch_samples = dataset[
-                    batch_start : batch_start + training_config.batch_size
-                ]
-                if len(batch_samples) < training_config.batch_size:
+            dataset_len = len(dataset)
+            for batch_start in range(0, dataset_len, batch_size):
+                batch_end = batch_start + batch_size
+                if batch_end > dataset_len:
                     continue
+                batch_samples = dataset[batch_start:batch_end]
 
                 input_tokens, target_tokens = collate_fn(
                     batch_samples,
-                    training_config.batch_size,
+                    batch_size,
                     sequence_length,
                 )
                 loss_float, step_time, should_step = train_step(
@@ -1173,6 +1208,7 @@ def main():
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
+                    batch_size=batch_size,
                 )
 
                 if should_step:
