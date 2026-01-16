@@ -84,7 +84,6 @@ class TtAttention(LightweightModule):
         )
 
         self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
-        assert (self.q_program_config is not None, "Is should not be None")
         self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
         self.q_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_q")
 
@@ -189,6 +188,7 @@ class TtAttention(LightweightModule):
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # TODO: To optimize
+        tracy.signpost("Attention Out Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
@@ -197,5 +197,6 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=self.out_memory_config,
         )
+        tracy.signpost("Attention Out End")
 
         return hidden_states

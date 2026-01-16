@@ -4,6 +4,7 @@
 
 import ttnn
 import re
+import tracy
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
@@ -99,11 +100,12 @@ class TtTransformer2DModel(LightweightModule):
             **self.groupnorm_config,
         )
 
-        if C == 1280:
+        if C == 1280 or (C == 1536 or C == 768):  # TODO: C == 1536 or C == 768 is for the Refiner; check
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         # TODO: To optimize
+        tracy.signpost("Transformer In Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
@@ -112,10 +114,13 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=self.memory_config_in,
         )
+        tracy.signpost("Transformer In End")
 
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
 
+        # TODO: To optimize
+        tracy.signpost("Transformer Out Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,
@@ -124,6 +129,7 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_out,
             memory_config=self.memory_config_out,
         )
+        tracy.signpost("Transformer Out End")
 
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 

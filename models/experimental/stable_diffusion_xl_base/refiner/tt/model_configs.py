@@ -497,7 +497,161 @@ class RefinerModelOptimisations(ModelOptimisations):
             fused_activation=None,
         )
 
+        # # # ATTENTION Q (separate Q projections for cross-attention) # # #
+        self.matmul_configs["2D_ATTENTION_Q_4096x768x768_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=2,  # TODO: Check if this is correct, should be 6 for 4096x768x768
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_ATTENTION_Q_1024x1536x1536_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_ATTENTION_Q_256x1536x1536_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=1,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # # # ATTENTION K/V (separate K/V projections for cross-attention, same configs) # # #
+        self.matmul_configs["1D_ATTENTION_K_96x1280x768_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(3, 8),
+            in0_block_w=8,
+            per_core_M=3,
+            per_core_N=1,
+            out_subblock_h=3,
+            out_subblock_w=1,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["1D_ATTENTION_K_96x1280x1536_40_CORES"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(3, 8),
+            in0_block_w=8,
+            per_core_M=3,
+            per_core_N=2,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=None,
+        )
+
+        # V uses the same configs as K
+        self.matmul_configs["1D_ATTENTION_V_96x1280x768_40_CORES"] = self.matmul_configs[
+            "1D_ATTENTION_K_96x1280x768_40_CORES"
+        ]
+
+        self.matmul_configs["1D_ATTENTION_V_96x1280x1536_40_CORES"] = self.matmul_configs[
+            "1D_ATTENTION_K_96x1280x1536_40_CORES"
+        ]
+
+        # # # TRANSFORMER IN (input projections) # # #
+        self.matmul_configs[
+            "2D_TRANSFORMER_IN_4096x768x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_TRANSFORMER_IN_1024x1536x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_TRANSFORMER_IN_256x1536x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=1,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        # # # TRANSFORMER OUT (output projections) # # #
+        self.matmul_configs[
+            "2D_TRANSFORMER_OUT_4096x768x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=3,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_TRANSFORMER_OUT_1024x1536x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_TRANSFORMER_OUT_256x1536x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=1,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
@@ -512,14 +666,50 @@ class RefinerModelOptimisations(ModelOptimisations):
         )
 
     def get_matmul_config(self, matmul_path):
-        # # # ATTENTION QKV # # #
-        if ".to_q" in matmul_path:
+        # # # TRANSFORMER IN (input projections) # # #
+        if "proj_in" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_IN_4096x768x768_40_CORES"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_IN_1024x1536x1536_40_CORES"]
+            elif "mid_block" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_IN_256x1536x1536_40_CORES"]
+
+        # # # TRANSFORMER OUT (output projections) # # #
+        if "proj_out" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_OUT_4096x768x768_40_CORES"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_OUT_1024x1536x1536_40_CORES"]
+            elif "mid_block" in matmul_path:
+                return self.matmul_configs["2D_TRANSFORMER_OUT_256x1536x1536_40_CORES"]
+
+        # # # ATTENTION Q (cross-attention attn2) and ATTENTION OUT (both attn1 and attn2) # # #
+        # Note: Cross-attention Q uses .to_out lookup, and output projections also use .to_out
+        if "attn1.to_out" in matmul_path or "attn2.to_out" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
+                return self.matmul_configs["2D_ATTENTION_Q_4096x768x768_40_CORES"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTENTION_Q_1024x1536x1536_40_CORES"]
+            elif "mid_block" in matmul_path:
+                return self.matmul_configs["2D_ATTENTION_Q_256x1536x1536_40_CORES"]
+
+        # # # ATTENTION QKV (fused for self-attention attn1) # # #
+        if "attn1.to_q" in matmul_path:
             if "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
                 return self.matmul_configs["2D_ATTENTION_QKV_4096x768x2304_40_CORES"]
             elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
                 return self.matmul_configs["2D_ATTENTION_QKV_1024x1536x4608_40_CORES"]
             elif "mid_block" in matmul_path:
                 return self.matmul_configs["1D_ATTENTION_QKV_256x1536x4608_40_CORES"]
+
+        # # # ATTENTION K/V (separate K/V for cross-attention attn2, same configs) # # #
+        if (".to_k" in matmul_path or ".to_v" in matmul_path) and "attn2" in matmul_path:
+            # K/V projections: 96x1280 shapes, use same configs
+            if "mid_block" in matmul_path or "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["1D_ATTENTION_K_96x1280x1536_40_CORES"]
+            else:
+                return self.matmul_configs["1D_ATTENTION_K_96x1280x768_40_CORES"]
 
         # # # GEGLU # # #
         if "net.0.proj" in matmul_path:
@@ -613,6 +803,9 @@ class RefinerModelOptimisations(ModelOptimisations):
         return None
 
     def get_mm_compute_config(self, module_path):
+        # for now, return default config
+        if ".to_q" in module_path:
+            return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_mm_output_memory_config(self, module_path):
