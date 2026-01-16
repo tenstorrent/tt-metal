@@ -49,6 +49,33 @@ def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorc
     return "\n".join(messages)
 
 
+def _post_to_torch_conversion(tensor):
+    # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+    # This was changed to convert to unsigned types instead to address issue with the value truncation
+    # https://github.com/tenstorrent/tt-metal/issues/31150
+
+    # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+    # so ttnn tensor must have a post-conversion correction to avoid this error.
+    if tensor.dtype == torch.uint16:
+        return tensor.to(torch.int32)
+
+    elif tensor.dtype == torch.uint32:
+        return tensor.to(torch.int64)
+
+    else:
+        return tensor
+
+
+def _normalize_tensor(tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        tensor = ttnn.to_torch(tensor)
+
+    if is_unsigned_tensor(tensor):
+        tensor = _post_to_torch_conversion(tensor)
+
+    return tensor
+
+
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     """
     Assert that two PyTorch tensors are similar within a specified Pearson Correlation Coefficient (PCC) threshold.
@@ -71,6 +98,10 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     Raises:
         AssertionError: If the tensor shapes don't match or if the PCC is below the specified threshold
     """
+
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -109,27 +140,8 @@ def assert_allclose(
                          the aforementioned formula.
     """
 
-    def post_to_torch_conversion(tensor):
-        # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
-        # This was changed to convert to unsigned types instead to address issue with the value truncation
-        # https://github.com/tenstorrent/tt-metal/issues/31150
-
-        # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
-        # so ttnn tensor must have a post-conversion correction to avoid this error.
-        if tensor.dtype == torch.uint16:
-            return tensor.to(torch.int32)
-
-        elif tensor.dtype == torch.uint32:
-            return tensor.to(torch.int64)
-
-        else:
-            return tensor
-
-    if isinstance(expected_result, ttnn.Tensor):
-        expected_result = post_to_torch_conversion(ttnn.to_torch(expected_result))
-
-    if isinstance(actual_result, ttnn.Tensor):
-        actual_result = post_to_torch_conversion(ttnn.to_torch(actual_result))
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -251,6 +263,9 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     Raises:
         AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
     """
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"

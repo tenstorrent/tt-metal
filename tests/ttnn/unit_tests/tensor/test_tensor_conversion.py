@@ -16,7 +16,6 @@ from tests.ttnn.utils_for_testing import (
     match_type_post_conversion,
     tt_dtype_to_torch_dtype,
     tt_dtype_to_np_dtype,
-    convert_to_signed_tensor,
 )
 
 pytestmark = pytest.mark.use_module_device
