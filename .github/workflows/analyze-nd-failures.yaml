@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 1
 
       - name: Run analyze nd failures
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack-output-analysis@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
