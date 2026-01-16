@@ -86,6 +86,10 @@ int main(int argc, char** argv) {
     const uint32_t dp_size = logical_mesh_shape[0];
     const uint32_t tp_size = logical_mesh_shape[1];
 
+    assert(num_features % tp_size == 0);
+    assert(num_targets % tp_size == 0);
+    assert(batch_size % dp_size == 0);
+
     // Validate that batch_size is divisible by dp_size
     if (batch_size == 0) {
         fmt::print(stderr, "Error: batch_size must be > 0\n");
@@ -195,7 +199,8 @@ int main(int argc, char** argv) {
     // Configure optimizer
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F); /* Denys's lr*/
     if (!use_row_parallel) {
-        /* loss is caclulated for each tp partition, so its averaged over 1/tp_size times less samples making gradient tp_size times greater*/
+        /* loss is calculated for each tp partition, so it is averaged over 1/tp_size times less samples making gradient
+         * tp_size times greater*/
         learning_rate /= tp_size;
     }
 
