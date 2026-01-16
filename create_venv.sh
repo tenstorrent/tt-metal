@@ -33,7 +33,7 @@ EXAMPLES:
     ./create_venv.sh
 
     # Specify Python version
-    ./create_venv.sh --python-version 3.11
+    ./create_venv.sh --python-version 3.12
 
     # Custom environment directory
     ./create_venv.sh --env-dir /opt/venv
@@ -42,10 +42,10 @@ EXAMPLES:
     ./create_venv.sh --env-dir /opt/myproject/envs/dev
 
     # Using environment variables
-    PYTHON_ENV_DIR=/opt/venv VENV_PYTHON_VERSION=3.11 ./create_venv.sh
+    PYTHON_ENV_DIR=/opt/venv VENV_PYTHON_VERSION=3.12 ./create_venv.sh
 
     # Arguments override environment variables
-    VENV_PYTHON_VERSION=3.10 ./create_venv.sh --python-version 3.11  # Uses 3.11
+    VENV_PYTHON_VERSION=3.10 ./create_venv.sh --python-version 3.12  # Uses 3.12
 
 NOTE:
     If you encounter venv issues, running "uv pip install -e ." with the venv active
