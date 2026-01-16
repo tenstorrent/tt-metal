@@ -306,11 +306,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
-            auto dst_chan = eth_chan;  // std::get<1>(remote_info);
-            if (eth_chan == 8 || eth_chan == 9 || eth_chan == 2 || eth_chan == 3) {
-                // Skip Z Links for now
-                continue;
-            }
+            auto dst_chan = std::get<1>(remote_info);
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
@@ -911,6 +907,16 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
     TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
     return host_to_rank_.at(host_name);
+}
+
+std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
+    for (const auto& [host, host_rank] : host_to_rank_) {
+        if (host_rank == rank) {
+            return host;
+        }
+    }
+    TT_FATAL(false, "Hostname for rank {} not found", rank);
+    return "";
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {

@@ -13,16 +13,20 @@
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_pages = get_compile_time_arg_val(1);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(2);  // This is assumed to be aligned
-constexpr uint32_t socket_block_size = get_compile_time_arg_val(3);
-constexpr uint32_t socket_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(5);
-// Used when there are multiple pages per packet
-constexpr uint32_t num_whole_packets = get_compile_time_arg_val(6);
-constexpr uint32_t num_pages_remainder = get_compile_time_arg_val(7);
-constexpr uint32_t output_args_cta_idx = 8;
+constexpr uint32_t output_page_size = get_compile_time_arg_val(1);  // This is assumed to be aligned
+constexpr uint32_t socket_block_size = get_compile_time_arg_val(2);
+constexpr uint32_t num_pages_per_ack = get_compile_time_arg_val(3);
+
+constexpr uint32_t output_args_cta_idx = 4;
 constexpr uint32_t output_args_crta_idx = 0;
+
+FORCE_INLINE void notify_sender(
+    SocketReceiverInterface& receiver_socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr) {
+    noc_async_writes_flushed();
+    fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+}
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -37,9 +41,6 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
-    //  - data_packet_header: Used for issuing reads from upstream data cores
-    //  - socket_packet_header: Used by socket APIs for control flow
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     fabric_connection.open();
@@ -50,64 +51,30 @@ void kernel_main() {
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
-
-    // Small pages. We write multiple pages from a single packet.
-    uint32_t page_index = 0;
-    if constexpr (num_pages_per_packet > 0) {
-        for (uint32_t i = 0; i < num_whole_packets; ++i) {
-            socket_wait_for_pages(receiver_socket, 1);
-            uint32_t l1_read_addr = receiver_socket.read_ptr;
-            for (uint32_t j = 0; j < num_pages_per_packet; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
-                page_index++;
-                l1_read_addr += socket_page_size;
-            }
-            socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        }
-
-        if (num_pages_remainder > 0) {
-            socket_wait_for_pages(receiver_socket, 1);
-            uint32_t l1_read_addr = receiver_socket.read_ptr;
-            for (uint32_t j = 0; j < num_pages_remainder; ++j) {
-                auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-                noc_async_write<output_page_size>(l1_read_addr, noc_write_addr, output_page_size);
-                page_index++;
-                l1_read_addr += socket_page_size;
-            }
-            socket_pop_pages(receiver_socket, 1);
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        }
-
-    }
-    // Large pages. We write page chunks from multiple packets.
-    else {
-        for (int i = 0; i < 1000000; i++) {
-            uint32_t page_index = 0;
-            auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-            // DPRINT << "Wait for pages:" << i << ENDL();
-            socket_wait_for_pages(receiver_socket, 1);
-            // DPRINT << "Done waiting for pages:" << i << ENDL();
-            // uint32_t l1_read_addr = receiver_socket.read_ptr;
-            // uint32_t val = 0;
-            // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
-            //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
-            //         while (true);
-            //     }
-            //     val++;
-            // }
-            noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
-            page_index++;
-            socket_pop_pages(receiver_socket, 1);
-            if (i % 2 == 0) {
-                noc_async_writes_flushed();
-                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-            }
+    bool ack_sent = false;
+    for (int i = 0; i < 1000000; i++) {
+        auto noc_write_addr = output_addr_gen.get_noc_addr(0);
+        socket_wait_for_pages(receiver_socket, 1);
+        // uint32_t l1_read_addr = receiver_socket.read_ptr;
+        // uint32_t val = 0;
+        // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
+        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
+        //         while (true);
+        //     }
+        //     val++;
+        // }
+        noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
+        socket_pop_pages(receiver_socket, 1);
+        if (i % num_pages_per_ack == 0) {
+            notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            ack_sent = true;
         }
     }
+
+    if (!ack_sent) {
+        notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+    }
+
     update_socket_config(receiver_socket);
     fabric_connection.close();
 }

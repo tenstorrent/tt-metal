@@ -48,17 +48,26 @@ tt::tt_metal::operation::ProgramWithCallbacks socket_copy_single_core(
         mesh_device->allocator()->get_alignment(send_socket.get_config().socket_mem_config.socket_storage_type),
         mesh_device->allocator()->get_alignment(recv_socket.get_config().socket_mem_config.socket_storage_type));
 
-    auto input_page_size = num_bytes;
-    auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
+    auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
+
+    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
+    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
+    TT_FATAL(
+        fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
+    TT_FATAL(bwd_link_indices.size(), "No link indices found from downstream to upstream core in SocketForward.");
+    uint32_t num_fwd_links = 2;
+    uint32_t num_bwd_links = 1;
+
     auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    uint32_t partial_packet_size = num_bytes % fabric_max_payload_size;
+    uint32_t socket_block_size = socket_aligned_page_size;
 
-    uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0, socket_block_size = 0;
+    uint32_t num_whole_packets = num_bytes / fabric_max_payload_size;
+    uint32_t num_whole_packets_link_0 =
+        (num_whole_packets / num_fwd_links) + static_cast<uint32_t>(partial_packet_size > 0);
+    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
 
-    num_whole_packets_per_page = input_page_size / fabric_max_payload_size;
-    partial_packet_size = input_page_size % fabric_max_payload_size;
-    socket_block_size = socket_aligned_page_size;
-
-    uint32_t packet_header_cb_num_pages = 3;  // One for data, one for sync
+    uint32_t packet_header_cb_num_pages = num_fwd_links + num_bwd_links;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto packet_header_cb_index = tt::CBIndex::c_0;
@@ -73,9 +82,11 @@ tt::tt_metal::operation::ProgramWithCallbacks socket_copy_single_core(
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
-        num_whole_packets_per_page,
         partial_packet_size,
-        fabric_max_payload_size};
+        fabric_max_payload_size,
+        num_whole_packets_link_0,
+        num_whole_packets_link_1,
+    };
 
     auto kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -90,33 +101,14 @@ tt::tt_metal::operation::ProgramWithCallbacks socket_copy_single_core(
     std::vector<uint32_t> rt_args = {
         send_socket.get_config_buffer()->address(), recv_socket.get_config_buffer()->address(), downstream_bank_id};
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
-    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
-
-    TT_FATAL(
-        !bwd_link_indices.empty(),
-        "No link indices found {} {} {} {}",
-        my_fabric_node_id.mesh_id,
-        my_fabric_node_id.chip_id,
-        upstream_fabric_node_id.mesh_id,
-        upstream_fabric_node_id.chip_id);
-    TT_FATAL(
-        !fwd_link_indices.empty(),
-        "No link indices found {} {} {} {}",
-        my_fabric_node_id.mesh_id,
-        my_fabric_node_id.chip_id,
-        downstream_fabric_node_id.mesh_id,
-        downstream_fabric_node_id.chip_id);
-
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[0], program, my_core_coord, rt_args);
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[0], program, my_core_coord, rt_args);
-
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[1], program, my_core_coord, rt_args);
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[1], program, my_core_coord, rt_args);
+    for (uint32_t i = 0; i < num_bwd_links; i++) {
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
+    }
+    for (uint32_t i = 0; i < num_fwd_links; i++) {
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[i], program, my_core_coord, rt_args);
+    }
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);
 

@@ -187,6 +187,7 @@ public:
     std::vector<ExitNodeConnection> get_connecting_exit_nodes(
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
+    std::string get_hostname_for_rank(uint32_t rank) const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
     UID get_u_id(const std::string& hostname);
     RackID get_rack_id(const std::string& hostname);

@@ -32,4 +32,4 @@ rank_bindings:
     env_overrides:
       TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
 
-mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto"
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_dual_glx_split_2x4.textproto"
