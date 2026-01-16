@@ -140,6 +140,27 @@ class DRAMStreamingMatmul:
         assert Mt == 1, f"Mt must be 1 for simplified matmul, got {Mt}"
         assert K == K_from_in1, f"K dimension mismatch: {K} vs {K_from_in1}"
 
+        # Determine subblock_w based on fp32_dest_acc_en and per_core_N
+        # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
+        # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
+        if fp32_dest_acc_en:
+            if per_core_N <= 8:
+                max_subblock_w = 8
+            else:
+                max_subblock_w = 4
+        else:
+            if per_core_N <= 16:
+                max_subblock_w = 16
+            else:
+                max_subblock_w = 8
+
+        # Find largest subblock_w that evenly divides per_core_N
+        subblock_w = max_subblock_w
+        while subblock_w > 1 and per_core_N % subblock_w != 0:
+            subblock_w -= 1
+
+        logger.debug(f"subblock_w={subblock_w}, max_subblock_w={max_subblock_w}")
+
         # Data formats
         in0_dtype = input_a.dtype
         in1_dtype = input_b.dtype
@@ -260,6 +281,7 @@ class DRAMStreamingMatmul:
             cb_id_out,
             Kt,  # num_tiles_k
             per_core_N,
+            subblock_w,
         ]
 
         # Runtime args (per-core: bank_id and vc)
