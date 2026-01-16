@@ -39,7 +39,7 @@ void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshD
     ttnn::Tensor tt_inputs_host = from_torch(torch_input_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
 
     // Pad TTNN tensor
-    tt_inputs_host = tt_inputs_host.pad(tt::tt_metal::Shape{1, 1, n * h * w, 16}, tt::tt_metal::Shape{0, 0, 0, 0}, 0);
+    tt_inputs_host = tt_inputs_host.pad(tt::tt_metal::Shape{1, 1, static_cast<uint32_t>(n * h * w), 16}, tt::tt_metal::Shape{0, 0, 0, 0}, 0);
 
     MobileNetV2Trace2CQ mobilenetv2_trace_2cq;
 
@@ -54,7 +54,7 @@ void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshD
         mobilenetv2_trace_2cq.execute_mobilenetv2_trace_2cqs_inference(tt_inputs_host);
         pf.stop("inference time");
     }
-
+    
     pf.start("sync output");
     mobilenetv2_trace_2cq.get_output();
     pf.stop("sync output");

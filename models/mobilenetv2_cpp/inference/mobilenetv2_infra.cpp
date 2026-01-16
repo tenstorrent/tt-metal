@@ -43,10 +43,10 @@ MobileNetv2TestInfra::OneConfResult MobileNetv2TestInfra::setupL1ShardedInput(to
     ttnn::MemoryConfig input_mem_config(ttnn::TensorMemoryLayout::HEIGHT_SHARDED, ttnn::BufferType::L1, shard_spec);
 
     torch_input_tensor = torch_input_tensor.permute({0, 2, 3, 1});
-    torch_input_tensor = torch_input_tensor.reshape({1, 1, h * w * n, c});
+    torch_input_tensor = torch_input_tensor.reshape({1, 1, static_cast<uint32_t>(h * w * n), c});
     ttnn::Tensor tt_inputs_host = from_torch(torch_input_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
     tt_inputs_host =
-        ttnn::pad(tt_inputs_host, tt::tt_metal::Array4D{1, 1, n * h * w, 16}, tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
+        ttnn::pad(tt_inputs_host, tt::tt_metal::Array4D{1, 1, static_cast<uint32_t>(n * h * w), 16}, tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
 
     return {tt_inputs_host, input_mem_config};
 }
