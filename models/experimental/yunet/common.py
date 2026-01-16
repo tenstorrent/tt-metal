@@ -7,7 +7,7 @@ import torch
 
 # Model constants
 YUNET_INPUT_SIZE = 320
-YUNET_L1_SMALL_SIZE = 245760
+YUNET_L1_SMALL_SIZE = 24576  # Same as ResNet50, reduced from 245760 for Wormhole compatibility
 YUNET_BATCH_SIZE = 1
 
 # Detection thresholds
