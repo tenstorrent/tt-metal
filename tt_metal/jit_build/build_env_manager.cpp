@@ -258,9 +258,8 @@ BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
     const std::lock_guard<std::mutex> lock(this->lock);
     if (is_fw) {
         return get_firmware_build_index_and_state_count(programmable_core, processor_class);
-    } else {
-        return get_kernel_build_index_and_state_count(programmable_core, processor_class);
     }
+    return get_kernel_build_index_and_state_count(programmable_core, processor_class);
 }
 
 void BuildEnvManager::build_firmware(ChipId device_id) {
