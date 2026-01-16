@@ -10,7 +10,7 @@ MPI tasks require passwordless SSH between hosts.
 
 **Setup**:
 ```bash
-ssh-agent
+eval $(ssh-agent)
 ssh-add
 ssh-add -L  # verify your key is listed
 ```
