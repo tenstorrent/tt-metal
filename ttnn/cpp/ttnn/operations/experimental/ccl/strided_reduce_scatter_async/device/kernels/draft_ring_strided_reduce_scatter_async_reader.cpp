@@ -106,15 +106,15 @@ void kernel_main() {
     }
 
     /*
-    uint32_t sem_target = 0;
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
     uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
     unit32_t M_tiles_per_block = mm_block_ht;
     uint32_t stride_size = M_tiles_per_core;
-    uint32_t batch_size = input_tensor_B;
     */
     uint32_t M_blocks_per_core = 1;
+    uint32_t sem_target = 0;
+    uint32_t batch_size = input_tensor_B;
 
     // TODO: direction --> should the backward direction handle the second half of the chunk?
     // or every other half of the block?
@@ -150,6 +150,7 @@ void kernel_main() {
 
             for (uint32_t i = 0; i < ring_size; ++i) {
                 const bool do_reduce = i != 0;
+                /*
                 uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
                 uint32_t actual_slice_idx;
@@ -158,10 +159,10 @@ void kernel_main() {
                 } else {
                     actual_slice_idx =
                         slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-                }
+                } */
 
                 for (uint32_t strided_chunk_idx = 0; strided_chunk_idx < chunk_counts_per_slice; strided_chunk_idx++) {
-                    if constexpr (fuse_op) {
+                    /* if constexpr (fuse_op) {
                         // this has to be sent to all devices in the direction
                         // note that the order of sending these must be consistent with the order of matmul
                         // this may be nontrivial, in the worst case, can wait for full blocks above
@@ -208,10 +209,13 @@ void kernel_main() {
                         output_tensor_Wt,
                         my_chip_id,
                         false);
-
+                    */
                     if (do_reduce) {
                         // wait for the chunk from the other device in the direction to be ready in noc
-                        wait_for_semaphore(out_ready_sem, sem_target + 1);
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                        /*
                         sem_target++;
                         // read a chunk from the other device in the direction into the intermediate CB
                         read_strided_chunk_from_noc_and_put_into_cb(
@@ -232,17 +236,18 @@ void kernel_main() {
                             input_tensor_Ht,
                             output_tensor_Wt,
                             my_chip_id,
-                            false);
-                    }
+                            false); */
+                    } /*
                     if (direction) {
                         slice_idx--;
                     } else {
                         slice_idx++;
-                    }
+                    } */
                 }
 
                 if (do_reduce && (i == (ring_size - 1))) {
                     // Reset the semaphore before the next batch
+                    // TODO: should this be in the ring loop?
                     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
                     sem_target = 0;
                 }
