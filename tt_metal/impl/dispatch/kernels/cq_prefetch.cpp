@@ -1675,23 +1675,15 @@ static uint32_t relay_linear_to_downstream(
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#if defined(FABRIC_RELAY)
         relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(
             scratch_write_addr, noc_addr, last_chunk_size);
-#else
-        cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
-#endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#if defined(FABRIC_RELAY)
     // consider calling relay_client.write_atomic_inc_any_len instead
     relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(scratch_write_addr, noc_addr, amt_to_write);
-#else
-    cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
-#endif
     downstream_data_ptr += amt_to_write;
     return npages;
 }
@@ -1755,11 +1747,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 
             // Third step - write from DB
             uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
-#if defined(FABRIC_RELAY)
             relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-#else
-            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, true);
-#endif
             read_length -= amt_to_read;
 
             // TODO(pgk); we can do better on WH w/ tagging
@@ -1772,11 +1760,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-#if defined(FABRIC_RELAY)
     relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-#else
-    DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr);
-#endif
 
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
