@@ -858,7 +858,8 @@ static void ReadDeviceProfilerResultsImpl(
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
-        profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        profiler.readResults(
+            mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     }
 #endif
 }
@@ -938,7 +939,7 @@ void ProcessDeviceProfilerResults(
     if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
-        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     }
 
     if (dumpDeviceProfilerDataMidRun(state)) {
