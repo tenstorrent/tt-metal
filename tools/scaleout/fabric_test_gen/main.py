@@ -4,16 +4,24 @@
 
 import yaml
 import argparse
-import mesh_graph_descriptor_pb2
+import sys
+import os
+from pathlib import Path
 from google.protobuf import text_format
 from enum import Enum
 
+# Get the relative path from root to the script
+metal_root = os.environ.get("TT_METAL_HOME")
+script_dir = Path(__file__).parent
+relative_proto_path = script_dir.relative_to(metal_root)
 
-# Given .textproto from MGD or FSD
+# Build the path to where the pb2.py artifact is genreated
+full_proto_path = os.path.join(metal_root, "build", relative_proto_path)
 
-# Parse for the topology, board etc.
+# Add to the paths python searched
+sys.path.append(full_proto_path)
 
-# To start, only perform neighboring latency checks
+import mesh_graph_descriptor_pb2
 
 
 class TorusTopology(Enum):
@@ -163,6 +171,7 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], architecture: str, args
     src_cores = []
     if args.src_core is None:
         if args.sweep_cores:
+            # If src_core is not specified, and dst is, sweep over all src to the single dst
             # Sweep over all source cores
             for src_x in range(worker_core_dims[0]):
                 for src_y in range(worker_core_dims[1]):
@@ -177,6 +186,7 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], architecture: str, args
     dst_cores = []
     if args.dst_core is None:
         if args.sweep_cores:
+            # If dst_core is not specified, and src is, sweep over all dst to the single src
             # Sweep over all destination cores
             for dst_x in range(worker_core_dims[0]):
                 for dst_y in range(worker_core_dims[1]):
@@ -188,6 +198,7 @@ def gen_tests(dev_dims: list[int], dim_types: list[int], architecture: str, args
         # Use specific destination core provided
         dst_cores = [list(args.dst_core)]
 
+    # From above, have a list of all src and dst cores to use
     # Generate all combinations of core pairs
     core_pairs = [(src, dst) for src in src_cores for dst in dst_cores]
 

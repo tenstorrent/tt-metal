@@ -247,9 +247,9 @@ target_link_libraries(
 # possible refactor to unify cpp/python compilation of proto files
 add_custom_command(
     OUTPUT
-        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
+        ${CMAKE_CURRENT_BINARY_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
     COMMAND
-        $<TARGET_FILE:protobuf::protoc> --python_out=${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen
+        $<TARGET_FILE:protobuf::protoc> --python_out=${CMAKE_CURRENT_BINARY_DIR}/fabric_test_gen
         --proto_path=${CMAKE_SOURCE_DIR}/tt_metal/fabric/protobuf
         ${CMAKE_SOURCE_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.proto
     DEPENDS
@@ -263,5 +263,5 @@ add_custom_target(
     fabric_test_gen_proto
     ALL
     DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
+        ${CMAKE_CURRENT_BINARY_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
 )
