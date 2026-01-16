@@ -242,3 +242,25 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+# fabric test generator requires protoc compilation for python output
+# possible refactor to unify cpp/python compilation of proto files
+add_custom_command(
+    OUTPUT
+        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
+    COMMAND
+        $<TARGET_FILE:protobuf::protoc> --python_out=${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen
+        --proto_path=${CMAKE_SOURCE_DIR}/tt_metal/fabric/protobuf
+        ${CMAKE_SOURCE_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.proto
+    DEPENDS
+        protobuf::protoc
+        ${CMAKE_SOURCE_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.proto
+    COMMENT "Generating Python protobuf for fabric_test_gen"
+    VERBATIM
+)
+
+add_custom_target(
+    fabric_test_gen_proto
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_test_gen/mesh_graph_descriptor_pb2.py
+)
