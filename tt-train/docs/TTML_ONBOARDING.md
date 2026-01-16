@@ -17,9 +17,22 @@
 
 ## **Quick Install** 
 
-```py
+**Prerequisites:** Ensure `tt-metal` is installed first (see [INSTALLING.md](../INSTALLING.md)).
 
+```bash
+# 1. Activate tt-metal Python environment
+cd /path/to/tt-metal
+source python_env/bin/activate
+
+# 2. Install tt-train
+cd tt-train
+pip install --no-build-isolation -e .
+
+# 3. Verify installation
+python -c "import ttml; print('TTML installed successfully')"
 ```
+
+For development installation with C++ components, see [Development Installation](#development-installation) below.
 
 # **Part 2: User Guide**
 
@@ -29,7 +42,32 @@ TT-Train provides a complete training framework with automatic differentiation, 
 
 ## **TTML vs PyTorch**
 
-…
+TTML provides a PyTorch-like API optimized for Tenstorrent hardware:
+
+| Feature | PyTorch | TTML |
+|---------|---------|------|
+| **API Style** | Python-first | C++/Python hybrid |
+| **Autograd** | ✅ Dynamic graphs | ✅ Dynamic graphs |
+| **Device** | CUDA/CPU | Tenstorrent hardware |
+| **Tensor Layout** | Row-major | Tile-based (optimized for TT) |
+| **Distributed** | DDP, FSDP | DDP, TP (FSDP-style), PP (native) |
+
+**Key Differences:**
+- **Tensor shapes**: TTML expects `[B, 1, 1, features]` format for many operations (tile-aligned)
+- **Graph reset**: Must call `ctx.reset_graph()` after each backward pass
+- **Loss retrieval**: Get loss value AFTER `backward()` using `loss.get_value().item()`
+- **Layout awareness**: Operations respect `ttnn.Layout.TILE` vs `ttnn.Layout.ROW_MAJOR`
+- **Device mesh**: Native support for scale-up (multiple devices on same host) and scale-out (multiple hosts) via unified mesh API
+- **Process model**: **1 process per host** (unlike PyTorch which spawns 1 process per device/GPU)
+
+**Similarities:**
+TTML aims for a **very similar API and developer experience** to PyTorch:
+- Autograd tensor API (`requires_grad`, `backward()`)
+- Module-based architecture (`nn.Module` → `ModuleBase`)
+- Optimizer interface (`zero_grad()`, `step()`)
+- Training/eval modes (`model.train()`, `model.eval()`)
+
+**Note:** Most differences from PyTorch arise from TTML's **native support for scale-out training** (unified mesh API, single-process-per-host architecture, and built-in distributed strategies).
 
 ## **Supported Features**
 
@@ -48,17 +86,199 @@ TT-Train provides a complete training framework with automatic differentiation, 
 
 | Strategy | Support | Description |
 | ----- | ----- | ----- |
-| Data Parallel (DDP) | ✅ | Replicate model, shard data |
-| Tensor Parallel (TP) | ✅ | Shard layers across devices |
-| Pipeline Parallel (PP) | ✅ | Shard layers sequentially |
+| Data Parallel (DDP) | ✅ | Replicate model, shard data, synchronize gradients |
+| Tensor Parallel (TP) | ✅ | FSDP-style: Shard parameters across devices, gather/reduce as needed |
+| Pipeline Parallel (PP) | ✅ | Shard layers sequentially across devices |
 
 ### WanDB Integration
 
-## **Known Issues**
+TTML supports Weights & Biases (wandb) for experiment tracking. Training metrics are automatically logged during training.
+
+**Setup:**
+
+1. **Install wandb** (if not already installed):
+```bash
+pip install wandb
+```
+
+2. **Login to wandb** (first time only):
+```bash
+wandb login
+```
+
+3. **Configure in training config**:
+```yaml
+training_config:
+  project_name: "my_training_project"  # wandb project name
+```
+
+4. **Disable wandb** (if desired):
+```bash
+# Option 1: Use offline mode
+wandb offline
+
+# Option 2: Disable in code (C++ examples)
+# Pass -w 0 flag to disable wandb logging
+```
+
+**What gets logged:**
+- Training loss per step
+- Learning rate (if using scheduler)
+- Model parameters count
+- Training metrics (samples/sec, tokens/sec)
+
+**Example wandb dashboard:**
+See the [NanoGPT training example](https://wandb.ai/tenstorrent-ml/tt_train_nano_gpt) for a live dashboard.
+
 
 ## **Getting Started**
 
-…
+TTML provides a complete training framework with automatic differentiation, optimized operations, and distributed training support. The framework is designed specifically for Tenstorrent's tile-based scaleout architecture.
+
+**Core Concepts:**
+
+1. **AutoContext**: Global singleton managing device, graph, and distributed state
+2. **Tensor**: Autograd-enabled tensor wrapper around `ttnn.Tensor`
+3. **Graph**: Computation graph for automatic differentiation
+4. **Modules**: Composable layers (Linear, Attention, etc.)
+5. **Optimizers**: Parameter update algorithms (AdamW, SGD)
+
+**Typical Training Flow:**
+
+```python
+# 1. Initialize context
+ctx = ttml.autograd.AutoContext.get_instance()
+ctx.open_device()
+
+# 2. Create model
+model = create_model(...)
+
+# 3. Setup optimizer
+optimizer = ttml.optimizers.AdamW(model.parameters(), config)
+
+# 4. Training loop
+for batch in dataloader:
+    optimizer.zero_grad()
+    pred = model(input)
+    loss = compute_loss(pred, target)
+    loss.backward()
+    optimizer.step()
+    ctx.reset_graph()  # Important: reset after each iteration
+```
+
+See the examples below for complete working code.
+
+### **Quick Start: Run TinyLlama Inference**
+
+Get started quickly by running an existing model. This example loads TinyLlama from Hugging Face and runs inference:
+
+```python
+import os
+import sys
+import numpy as np
+import ttml
+from huggingface_hub import hf_hub_download
+from transformers import AutoTokenizer
+from ttml.common.config import load_config
+from ttml.common.model_factory import TransformerModelFactory
+from ttml.common.utils import initialize_device, set_seed
+
+# ============================================================
+# 1. Setup
+# ============================================================
+set_seed(42)
+os.chdir(os.path.join(os.environ.get("TT_METAL_HOME", "."), "tt-train"))
+
+# ============================================================
+# 2. Load Model Configuration
+# ============================================================
+model_config_path = "configs/model_configs/tinyllama.yaml"
+model_yaml = load_config(model_config_path)
+print(f"Loaded model config: {model_config_path}")
+
+# ============================================================
+# 3. Initialize Device
+# ============================================================
+device_config = {"device_config": {"mesh_shape": [1, 1]}}  # Single device
+initialize_device(device_config)
+ctx = ttml.autograd.AutoContext.get_instance()
+ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)  # Inference mode
+print("Device initialized")
+
+# ============================================================
+# 4. Create and Load Model
+# ============================================================
+model_factory = TransformerModelFactory(model_yaml)
+model = model_factory.create_model()
+model.eval()
+
+# Download and load weights from Hugging Face
+model_path = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+safetensors_dir = hf_hub_download(repo_id=model_path, filename="model.safetensors")
+safetensors_dir = safetensors_dir.replace("model.safetensors", "")
+model.load_from_safetensors(safetensors_dir)
+print(f"Model loaded from: {model_path}")
+
+# ============================================================
+# 5. Load Tokenizer
+# ============================================================
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+print(f"Tokenizer loaded (vocab size: {tokenizer.vocab_size})")
+
+# ============================================================
+# 6. Run Inference
+# ============================================================
+prompt = "The capital of France is"
+input_ids = tokenizer.encode(prompt, return_tensors="np")[0]
+
+# Convert to TTML tensor format [B, 1, 1, seq_len]
+input_tensor = ttml.autograd.Tensor.from_numpy(
+    input_ids.reshape(1, 1, 1, len(input_ids)),
+    layout=ttml.Layout.ROW_MAJOR,
+    new_type=ttml.DataType.UINT32
+)
+
+# Create causal mask
+seq_len = len(input_ids)
+mask_np = np.tril(np.ones((seq_len, seq_len), dtype=np.float32))
+mask = ttml.autograd.Tensor.from_numpy(
+    mask_np.reshape(1, 1, seq_len, seq_len),
+    layout=ttml.Layout.TILE,
+    new_type=ttml.DataType.BFLOAT16
+)
+
+# Forward pass
+logits = model(input_tensor, mask)
+output_ids = ttml.argmax(logits.get_value(), dim=-1).to_numpy(ttml.DataType.UINT32)
+
+# Decode output
+generated_text = tokenizer.decode(output_ids.flatten()[:len(input_ids)])
+print(f"\nPrompt: {prompt}")
+print(f"Generated: {generated_text}")
+
+# ============================================================
+# 7. Cleanup
+# ============================================================
+ctx.close_device()
+```
+
+**Quick Command (C++):**
+```bash
+# Build the inference example
+cd $TT_METAL_HOME/tt-train
+cmake --build build --target llama_inference
+
+# Run with pre-trained weights
+./build/sources/examples/nano_gpt/llama_inference \
+  --model-path path/to/model.msgpack \
+  --prompt "1,2,3" \
+  --max-tokens 50
+```
+
+**Next Steps:**
+- See [llm_inference.ipynb](../sources/examples/llm_inference/llm_inference.ipynb) for a complete Jupyter notebook example
+- Try training your own model (see examples below)
+- Explore distributed training with multiple devices
 
 ### **Example 1: Linear Regression**
 
@@ -345,11 +565,194 @@ ctx.close_device()
 
 ## **Scale Up**
 
+Scale up refers to optimizing training on a single device or multiple devices on the **same host** by:
+- Increasing batch size (within device memory limits)
+- Using gradient accumulation to simulate larger batches
+- Enabling memory-efficient training (gradient checkpointing)
+- Optimizing tensor layouts and operations
+
+**Key Architecture Benefit:**
+TTML uses a **unified mesh API** where a single process manages all devices on a host. Unlike PyTorch (which spawns 1 process per device), TTML spawns **1 process per host**, simplifying multi-device coordination and reducing overhead.
+
+**Example: Single Device Optimization**
+
+```python
+# Single device (N150/N300)
+device_config:
+  mesh_shape: [1, 1]  # Single device
+  enable_ddp: false
+  enable_tp: false
+
+# Use gradient accumulation for effective larger batch
+training_config:
+  batch_size: 4
+  gradient_accumulation_steps: 8  # Effective batch size = 32
+
+# Enable memory-efficient mode for larger models
+transformer_config:
+  runner_type: "memory_efficient"  # Gradient checkpointing
+```
+
+**Memory Optimization Tips:**
+- Use `memory_efficient` runner type to reduce activation memory
+- Reduce batch size and increase gradient accumulation
+- Monitor memory usage with `MemoryUsageTracker` (see [Profiling](#profiling))
+
 ## **Scale Out**
+
+Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
+- **Data Parallel (DDP)**: Replicate model, shard data across devices
+- **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
+- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
+- **Multi-host**: Scale across multiple machines with unified mesh topology
+
+**Architecture:**
+- **Scale-up** (same host): Single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
+- **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
+- **Unified API**: Same mesh configuration works for both single-host and multi-host scenarios
+
+**Data Parallel Example:**
+
+```python
+# 4-device DDP (e.g., LoudBox with 4 N300s)
+device_config:
+  mesh_shape: [1, 4]  # 4 devices in a row
+  enable_ddp: true
+  enable_tp: false
+
+training_config:
+  batch_size: 16  # Will be split across 4 devices (4 per device)
+```
+
+**Tensor Parallel Example (FSDP-style):**
+
+Tensor Parallel in TTML implements FSDP (Fully Sharded Data Parallel) semantics:
+- **Parameter sharding**: Model weights are sharded across devices using `shard_tensor_to_mesh_mapper`
+- **Gather on demand**: Parameters are gathered when needed during forward pass (via `all_gather`)
+- **Reduce gradients**: Gradients are reduced across devices during backward pass (via `reduce_scatter`)
+
+```python
+# 32-device TP (e.g., Galaxy)
+device_config:
+  mesh_shape: [1, 32]  # 32 devices
+  enable_ddp: false
+  enable_tp: true  # Enables FSDP-style parameter sharding
+
+# Vocab size automatically rounded to (32 * 32) = 1024 boundary
+transformer_config:
+  vocab_size: 32000  # Will be padded to 32768
+```
+
+**Key difference from DDP:**
+- **DDP**: Full model replication → higher memory usage, only gradients synchronized
+- **TP (FSDP)**: Parameter sharding → lower memory usage per device, parameters gathered/reduced as needed
+
+**Pipeline Parallel Example:**
+
+```python
+# Multi-host pipeline parallel
+multihost_config:
+  enabled: true
+  num_workers: 4
+  socket_type: "fabric"  # or "mpi"
+  pipeline_parallel_config:
+    num_blocks: 24
+    blocks_per_rank:
+      0: 6  # First 6 blocks on rank 0
+      1: 6  # Next 6 blocks on rank 1
+      2: 6  # Next 6 blocks on rank 2
+      3: 6  # Last 6 blocks on rank 3
+```
+
+**Device Mesh Shapes:**
+- **Single device**: `[1, 1]` (N150, P150) - 1 process, 1 device
+- **Dual device**: `[1, 2]` (N300, P300) - 1 process, 2 devices
+- **LoudBox**: `[1, 8]` (8 devices) - 1 process, 8 devices
+- **Galaxy**: `[1, 32]` (32 devices) - 1 process, 32 devices
+- **Multi-host**: Multiple processes (1 per host), each managing its device mesh
+
+**Process Model Comparison:**
+| Scenario | PyTorch | TTML |
+|----------|---------|------|
+| 8 GPUs on 1 host | 8 processes | **1 process** |
+| 32 devices on 1 host | 32 processes | **1 process** |
+| 5 hosts, 8 devices each | 40 processes | **5 processes** (1 per host) |
+
+See [configs/README.md](../configs/README.md) for detailed configuration options.
 
 ## **Profiling**
 
-Perf / Memory / Tracy links
+TTML provides comprehensive profiling tools for performance analysis and memory tracking.
+
+### **Performance Profiling (Tracy)**
+
+Profile kernel execution times and identify bottlenecks:
+
+**Build with profiling:**
+```bash
+./build_metal.sh -b Release --build-tt-train
+```
+
+**Run with Tracy:**
+```bash
+env -u TT_METAL_DPRINT_CORES \
+TT_METAL_WATCHER_NOINLINE=1 \
+python -m tracy -r -v -p ./build/sources/examples/nano_gpt/nano_gpt
+```
+
+**Output:**
+- `ops_perf_results_<timestamp>.csv`: Per-kernel performance data
+- `tracy_profile_log_host.tracy`: Tracy GUI file for visualization
+
+**Analyze results:**
+```bash
+jupyter lab notebooks/profiler_results.ipynb
+```
+
+See [PROFILER.md](./PROFILER.md) for detailed profiling guide.
+
+### **Memory Tracking**
+
+Track memory usage across training phases:
+
+```python
+from ttml.utils.memory_utils import MemoryUsageTracker
+
+# Begin tracking
+guard = MemoryUsageTracker.begin_capture()
+
+# Take snapshots at key points
+MemoryUsageTracker.snapshot("MODEL_CREATION")
+MemoryUsageTracker.snapshot("FORWARD_PASS")
+MemoryUsageTracker.snapshot("BACKWARD_PASS")
+
+# Print results
+MemoryUsageTracker.end_capture("ITERATION_COMPLETE")
+MemoryUsageTracker.print_memory_usage()
+```
+
+**Analyze memory logs:**
+```bash
+python scripts/analyze_memory.py \
+  --logs memory.log \
+  --visualize_peak \
+  --title "Training Memory Analysis"
+```
+
+See [MEMORY_TRACKING.md](./MEMORY_TRACKING.md) for detailed memory tracking guide.
+
+### **Performance Metrics**
+
+Track training performance:
+
+```python
+from ttml.common.utils import PerformanceMeter
+
+meter = PerformanceMeter(cfg)
+# ... training loop ...
+samples_per_second, tokens_per_second = meter.get_metrics()
+print(f"Samples/s: {samples_per_second:.2f}, Tokens/s: {tokens_per_second:.2f}")
+```
 
 # **Part 3: Contributing**
 
