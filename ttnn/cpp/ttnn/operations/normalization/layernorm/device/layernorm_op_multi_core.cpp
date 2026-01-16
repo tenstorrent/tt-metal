@@ -9,7 +9,6 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -87,7 +86,22 @@ bool CB_can_fit_in_L1(
 }  // namespace
 
 LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    // Create a new program and delegate to add_to()
+    Program program = CreateProgram();
+    shared_variables_t shared_vars =
+        add_to(program, operation_attributes, tensor_args, tensor_return_value, std::nullopt);
+    return cached_program_t{std::move(program), std::move(shared_vars)};
+}
+
+LayerNormMultiCoreProgramFactory::shared_variables_t LayerNormMultiCoreProgramFactory::add_to(
+    tt::tt_metal::Program& program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<CoreRangeSet>& core_range_override) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -186,14 +200,63 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_tile_rows_per_core_group_1,
-         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+    // Use override core range if provided, otherwise compute based on device grid
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_cores;
+    uint32_t num_tile_rows_per_core_group_1;
+    uint32_t num_tile_rows_per_core_group_2;
+    CoreCoord grid_size;
+
+    if (core_range_override.has_value()) {
+        // Use the provided core range for parallel composition
+        all_cores = core_range_override.value();
+        num_cores = all_cores.num_cores();
+        grid_size = {num_cores, 1};  // Simplified - treat as 1D
+
+        // Simple work distribution across provided cores
+        uint32_t tile_rows_per_core = num_tile_rows / num_cores;
+        uint32_t remainder = num_tile_rows % num_cores;
+
+        if (remainder == 0) {
+            core_group_1 = all_cores;
+            core_group_2 = CoreRangeSet();
+            num_tile_rows_per_core_group_1 = tile_rows_per_core;
+            num_tile_rows_per_core_group_2 = 0;
+        } else {
+            // Split cores into two groups
+            std::vector<CoreRange> group1_ranges;
+            std::vector<CoreRange> group2_ranges;
+            uint32_t core_idx = 0;
+            for (const auto& range : all_cores.ranges()) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
+                    for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                        if (core_idx < remainder) {
+                            group1_ranges.push_back(CoreRange({x, y}, {x, y}));
+                        } else {
+                            group2_ranges.push_back(CoreRange({x, y}, {x, y}));
+                        }
+                        core_idx++;
+                    }
+                }
+            }
+            core_group_1 = CoreRangeSet(group1_ranges);
+            core_group_2 = CoreRangeSet(group2_ranges);
+            num_tile_rows_per_core_group_1 = tile_rows_per_core + 1;
+            num_tile_rows_per_core_group_2 = tile_rows_per_core;
+        }
+    } else {
+        grid_size = device->compute_with_storage_grid_size();
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_tile_rows_per_core_group_1,
+            num_tile_rows_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+    }
 
     // Create the sharded reciprocal LUT tensor if using Welford
     auto [recip_tensor, reciprocal_CB_size_bytes] =
@@ -287,8 +350,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
-
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
     const auto fuse_pre_add = b.has_value();
@@ -507,6 +568,23 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
+        // For custom core ranges, iterate through the actual cores
+        if (core_range_override.has_value()) {
+            uint32_t core_idx = 0;
+            bool found = false;
+            for (const auto& range : all_cores.ranges()) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x && !found; x++) {
+                    for (auto y = range.start_coord.y; y <= range.end_coord.y && !found; y++) {
+                        if (core_idx == i) {
+                            core = {x, y};
+                            found = true;
+                        }
+                        core_idx++;
+                    }
+                }
+            }
+        }
+
         uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
@@ -537,17 +615,30 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         curr_row += num_tile_rows_per_core;
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .reader_kernel_id = reader_kernels_id,
-            .writer_kernel_id = writer_kernels_id,
-            .num_cores = num_cores,
-            .grid_size = grid_size}};
+    return shared_variables_t{
+        .reader_kernel_id = reader_kernels_id,
+        .writer_kernel_id = writer_kernels_id,
+        .compute_kernel_id = compute_kernels_id,
+        .num_cores = num_cores,
+        .grid_size = grid_size};
 }
 
 void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    override_runtime_arguments(
+        cached_program.program,
+        cached_program.shared_variables,
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
+}
+
+void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    shared_variables_t& shared_vars,
     const LayerNormParams& /*operation_attributes*/,
     const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -560,9 +651,6 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     auto* src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
     auto* gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
     auto* beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
-
-    const auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
 
     for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
         CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
