@@ -21,8 +21,8 @@ struct split_operation_attributes_t {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
-    int32_t chunks;  // Always 3 for now
-    int32_t dim;     // Always -1 for now
+    int32_t chunks;
+    int32_t dim;
 };
 
 struct split_tensor_args_t {

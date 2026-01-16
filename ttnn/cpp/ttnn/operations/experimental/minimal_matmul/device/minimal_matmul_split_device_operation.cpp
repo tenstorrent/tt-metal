@@ -179,7 +179,7 @@ MinimalMatmulSplitDeviceOperation::spec_return_value_t MinimalMatmulSplitDeviceO
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
-    // Create specs for all 3 output tensors
+    // Create specs for output tensors
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
