@@ -62,4 +62,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
     uint32_t N_chunks);
 
+// Common helper for override_runtime_arguments - used by both minimal_matmul and minimal_matmul_split
+void override_runtime_arguments_common(
+    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs);
+
 }  // namespace ttnn::experimental::prim
