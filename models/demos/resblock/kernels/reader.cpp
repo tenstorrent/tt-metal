@@ -81,6 +81,7 @@ void kernel_main() {
     constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(12);
     constexpr uint32_t sender_grid_width = get_compile_time_arg_val(13);
     constexpr uint32_t debug_enabled = get_compile_time_arg_val(14);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(15);
 
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
 
@@ -95,84 +96,12 @@ void kernel_main() {
     cb_reserve_back(weight1_cb, num_tiles_k);
     cb_push_back(weight1_cb, num_tiles_k);
 
-    // LAYER 0
-
     // Compute gather destination tile offset bytes once for reuse
     const uint32_t gather_destination_tile_offset_bytes =
         compute_sender_tile_offset_bytes<sender_logical_x_start, sender_logical_y_start, sender_grid_width>(
             get_tile_size(intermediate_pregather_cb));
 
-    // Gather after first matmul so that we can mcast full result to all cores
-    {
-        DeviceZoneScopedN("layer_0_gather");
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-    {
-        DeviceZoneScopedN("layer_0_wait_for_mcast");
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-
-    // Gather after second matmul so that we can mcast full result to all cores
-    {
-        DeviceZoneScopedN("layer_0_second_gather");
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-    {
-        DeviceZoneScopedN("layer_0_second_wait_for_mcast");
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-
-    // LAYER 1
-    {
-        DeviceZoneScopedN("layer_1_gather");
-        // Gather after second matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_1_wait_for_mcast");
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-    {
-        DeviceZoneScopedN("layer_1_gather");
-        // Gather after second matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_1_wait_for_mcast");
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-
-    // LAYER 2
-    {
-        DeviceZoneScopedN("layer_2_gather");
+    for (uint32_t layer = 0; layer < num_layers; layer++) {
         // Gather after first matmul so that we can mcast full result to all cores
         gather<
             intermediate_pregather_cb,
@@ -181,14 +110,9 @@ void kernel_main() {
             mcast_receiver_noc_x,
             mcast_receiver_noc_y,
             mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_2_wait_for_mcast");
         // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
         wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-    {
-        DeviceZoneScopedN("layer_2_second_gather");
+
         // Gather after second matmul so that we can mcast full result to all cores
         gather<
             intermediate_pregather_cb,
@@ -197,49 +121,13 @@ void kernel_main() {
             mcast_receiver_noc_x,
             mcast_receiver_noc_y,
             mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_2_second_wait_for_mcast");
         // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
         wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
     }
 
-    // LAYER 3
+    // Copy from intermediate_full_cb to out_cb (only after last layer)
     {
-        DeviceZoneScopedN("layer_3_gather");
-        // Gather after first matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_3_wait_for_mcast");
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-    {
-        DeviceZoneScopedN("layer_3_second_gather");
-        // Gather after second matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-    }
-    {
-        DeviceZoneScopedN("layer_3_second_wait_for_mcast");
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
-    }
-    {
-        DeviceZoneScopedN("layer_3_copy");
-        // Copy from intermediate_full_cb to out_cb
+        DeviceZoneScopedN("final_copy");
         constexpr uint32_t number_of_tiles = 1;
         noc_async_write(
             get_read_ptr(intermediate_full_cb),

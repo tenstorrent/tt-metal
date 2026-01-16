@@ -19,16 +19,17 @@ class FusedResblock:
     MCAST_CORE = ttnn.CoreCoord(7, 4)
 
     @staticmethod
-    def golden(input_a, weight0, weight1):
+    def golden(input_a, weight0, weight1, num_layers=2):
         def layer(input):
-            x = input_a @ weight0
+            x = input @ weight0
             x = torch.nn.functional.relu(x)
             x = x @ weight1
             x = x + input
             return x
 
-        x = layer(input_a)
-        x = layer(x)
+        x = input_a
+        for _ in range(num_layers):
+            x = layer(x)
 
         return x
 
@@ -44,6 +45,7 @@ class FusedResblock:
         sender_semaphore_descriptor: ttnn.SemaphoreDescriptor,
         device: ttnn.Device,
         debug: bool,
+        num_layers: int,
     ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
         logger.debug(f"All mcast cores: {all_mcast_cores}")
         logger.debug(f"Number of mcast cores: {all_mcast_cores.num_cores()}")
@@ -104,6 +106,7 @@ class FusedResblock:
                 mcast_sender_noc_coord_x_end,
                 mcast_sender_noc_coord_y_end,
                 1 if debug else 0,
+                num_layers,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -122,7 +125,7 @@ class FusedResblock:
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
     @staticmethod
-    def op(input_tensor, weight0, weight1, output_tensor, fp32_dest_acc_en=False, debug=False):
+    def op(input_tensor, weight0, weight1, output_tensor, num_layers=8, fp32_dest_acc_en=False, debug=False):
         logger.info(
             f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
         )
@@ -317,6 +320,7 @@ class FusedResblock:
             mcast_sender_semaphore_descriptor,
             device,
             debug,
+            num_layers,
         )
 
         sender_core_range = all_matmul_cores.ranges()[0]
@@ -346,6 +350,7 @@ class FusedResblock:
                 sender_logical_y_start,
                 sender_grid_width,
                 1 if debug else 0,
+                num_layers,
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -369,6 +374,7 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
+                num_layers,
             ],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,  # Match C++ op behavior

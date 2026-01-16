@@ -102,33 +102,31 @@ void MAIN {
     constexpr uint32_t intermediate_full_cb = get_compile_time_arg_val(5);
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(8);
 
     constexpr uint32_t num_output_tiles = 1;
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
 
-    {
-        DeviceZoneScopedN("layer_0");
-        mm_block_init(
-            in0_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-        relu_tile_init();
+    // Layer 0: uses in0_cb and weight0_cb
+    mm_block_init(in0_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+    relu_tile_init();
 
-        matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
-        matmul_with_bias_block<
-            intermediate_full_cb,
-            weight1_cb,
-            in0_cb,
-            intermediate_pregather_cb,
-            num_tiles_k,
-            num_output_tiles,
-            0,
-            true,
-            false>();
-    }
+    matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
+    matmul_with_bias_block<
+        intermediate_full_cb,
+        weight1_cb,
+        in0_cb,
+        intermediate_pregather_cb,
+        num_tiles_k,
+        num_output_tiles,
+        0,
+        true,
+        false>();
 
-    {
-        DeviceZoneScopedN("layer_1");
+    // Layers 1 to num_layers-1: use intermediate_full_cb and weight1_cb
+    for (uint32_t layer = 1; layer < num_layers; layer++) {
         mm_block_init(
             intermediate_full_cb,
             weight1_cb,
@@ -138,57 +136,6 @@ void MAIN {
             out_subblock_h,
             in0_block_w);
         relu_tile_init();
-
-        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
-        matmul_with_bias_block<
-            intermediate_full_cb,
-            weight1_cb,
-            intermediate_full_cb,
-            intermediate_pregather_cb,
-            num_tiles_k,
-            num_output_tiles,
-            0,
-            true,
-            false>();
-    }
-
-    {
-        DeviceZoneScopedN("layer_2");
-        mm_block_init(
-            intermediate_full_cb,
-            weight1_cb,
-            intermediate_pregather_cb,
-            false,
-            out_subblock_w,
-            out_subblock_h,
-            in0_block_w);
-        relu_tile_init();
-
-        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
-        matmul_with_bias_block<
-            intermediate_full_cb,
-            weight1_cb,
-            intermediate_full_cb,
-            intermediate_pregather_cb,
-            num_tiles_k,
-            num_output_tiles,
-            0,
-            true,
-            false>();
-    }
-
-    {
-        DeviceZoneScopedN("layer_3");
-        mm_block_init(
-            intermediate_full_cb,
-            weight1_cb,
-            intermediate_pregather_cb,
-            false,
-            out_subblock_w,
-            out_subblock_h,
-            in0_block_w);
-        relu_tile_init();
-
         matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
         matmul_with_bias_block<
             intermediate_full_cb,
