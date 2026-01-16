@@ -324,6 +324,7 @@ set(GPP_FLAGS_common
     -D__DATE__="redacted"
     -D__TIME__="redacted"
     -D__TIMESTAMP__="redacted"
+    -frandom-seed=0
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
