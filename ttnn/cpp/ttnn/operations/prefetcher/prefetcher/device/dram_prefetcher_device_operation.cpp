@@ -78,7 +78,7 @@ void DramPrefetcherOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-spec_return_value_t DramPrefetcherOperation::compute_output_specs(
+TensorSpec DramPrefetcherOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return TensorSpec(
         ttnn::Shape{32, 32},

@@ -91,6 +91,7 @@ class QwenImagePipeline:
         self._height = height
         self._width = width
         self._is_fsdp = is_fsdp
+        self._checkpoint_name = checkpoint_name
 
         # Create submeshes based on CFG parallel configuration
         submesh_shape = list(mesh_device.shape)
@@ -183,7 +184,7 @@ class QwenImagePipeline:
         with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape, synchronize=True):
             logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
             self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                checkpoint_name,
+                self._checkpoint_name,
                 tokenizer_subfolder="tokenizer",
                 encoder_subfolder="text_encoder",
                 device=self._submesh_devices[self.encoder_submesh_idx],
@@ -231,6 +232,9 @@ class QwenImagePipeline:
 
         self._traces = None
 
+        logger.info("warming up for tracing...")
+        self.run_single_prompt(prompt="", num_inference_steps=1, seed=0, traced=False)
+
     def _load_transformers(self, idx) -> None:
         """Load transformer weights to device. Called lazily for device encoder path."""
         if self.transformers[idx].is_loaded():
@@ -239,7 +243,7 @@ class QwenImagePipeline:
         if not cache.initialize_from_cache(
             tt_model=self.transformers[idx],
             torch_state_dict=self._transformer_state_dict,
-            model_name="qwen-image",
+            model_name=self._checkpoint_name,
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._submesh_devices[idx].shape),
@@ -346,6 +350,7 @@ class QwenImagePipeline:
     @staticmethod
     def create_pipeline(
         *,
+        checkpoint_name: str = "Qwen/Qwen-Image",
         mesh_device: ttnn.MeshDevice,
         dit_cfg: tuple[int, int] | None = None,
         dit_sp: tuple[int, int] | None = None,
@@ -354,11 +359,11 @@ class QwenImagePipeline:
         vae_tp: tuple[int, int] | None = None,
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
-        num_links: int,
+        num_links: int | None = None,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         width: int = 1024,
         height: int = 1024,
-        is_fsdp: bool = None,
+        is_fsdp: bool | None = None,
         dynamic_load_encoder: bool | None = None,
         dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
@@ -366,7 +371,7 @@ class QwenImagePipeline:
             # The default cofigurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
             # The encoder is currently hardcoded to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
             (2, 4): {
-                "cfg_config": (2, 1),
+                "cfg_config": (2, 0),
                 "sp": (1, 0),
                 "tp": (4, 1),
                 "encoder_tp": (4, 1),
@@ -417,6 +422,7 @@ class QwenImagePipeline:
 
         return QwenImagePipeline(
             mesh_device=mesh_device,
+            checkpoint_name=checkpoint_name,
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=use_torch_vae_decoder,
             parallel_config=dit_parallel_config,
