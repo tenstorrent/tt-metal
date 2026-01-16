@@ -60,26 +60,29 @@ enum llk_intf_counter_id {
     LLK_INTF_COUNTER_SIZE = 16
 };
 
-// Fast LLK Interface
+// Legacy(slow) LLK Interface
 inline void llk_reg_write(uint64_t addr, uint64_t data) {
     LLK_INTF_WRITE(addr, data);
     asm volatile("fence" : : : "memory");
 }
 
-// Fast LLK Interface
 inline uint64_t llk_reg_read(uint64_t addr) {
     uint64_t data = LLK_INTF_READ(addr);
     asm volatile("fence" : : : "memory");
     return data;
 }
 
+// New (fast) LLK Interface
 inline void fast_llk_reg_write(uint64_t addr, uint64_t data) { LLK_INTF_WRITE(addr, data); }
 
-// Fast LLK Interface
 inline uint64_t fast_llk_reg_read(uint64_t addr) {
     uint64_t data = LLK_INTF_READ(addr);
     return data;
 }
+
+// -----------------------------------------------------------------------------
+// Legacy(slow) interface API below.
+// -----------------------------------------------------------------------------
 
 inline __attribute__((always_inline)) void llk_intf_reset(uint64_t llk_if, uint64_t counter) {
     *((volatile uint32_t*)(TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_REG_MAP_BASE_ADDR + llk_if * LLK_REG_SIZE +
