@@ -4,18 +4,6 @@
 
 Generates parametric fabric test configurations from Mesh Graph Descriptor (MGD) `.textproto` files. This tool parses topology information from MGD files and creates comprehensive test suites for validating fabric connectivity, latency, and bandwidth across device meshes.
 
-## Prerequisites
-
-### Schema Setup
-Compile the `.proto` schema into Python bindings using `protoc`:
-
-```bash
-cd tools/scaleout/fabric_test_gen
-protoc --python_out=. mesh_graph_descriptor.proto
-```
-
-This generates `mesh_graph_descriptor_pb2.py` required by the tool.
-
 ## Quick Start
 
 ### Basic Usage
