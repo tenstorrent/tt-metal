@@ -15,6 +15,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/reg_api.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -114,10 +115,6 @@ struct Rope {
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = 1;
 
-            // Initialize matmul and binary ops (done once)
-            mm_init(args.in_cb, args.trans_mat_cb, args.out_cb);
-            binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
-
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
             // ================================================================
@@ -141,38 +138,51 @@ struct Rope {
                 // ============================================================
                 // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
                 // ============================================================
-                mm_init_short(args.in_cb, args.trans_mat_cb);
-                acquire_dst();
+                mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
+                tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < Wt; ++j) {
                     pack_tile(j, args.rotated_in_interm_cb, j);
                 }
-                release_dst();
+                tile_regs_release();
                 cb_push_back(args.rotated_in_interm_cb, Wt);
                 cb_wait_front(args.rotated_in_interm_cb, Wt);
 
                 // ============================================================
                 // Step 2: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
+                binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
                 mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.sin_cb);
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.sin_cb, j, j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < Wt; ++j) {
                     pack_tile(j, args.sin_interm_cb, j);
                 }
-                release_dst();
+                tile_regs_release();
                 cb_push_back(args.sin_interm_cb, Wt);
                 cb_pop_front(args.rotated_in_interm_cb, Wt);
 
                 // ============================================================
                 // Step 3: cos_interm = input * cos (broadcast multiply)
                 // ============================================================
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_cb, j, j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < Wt; ++j) {
                     pack_tile(j, args.cos_interm_cb, j);
                 }
-                release_dst();
+                tile_regs_release();
                 cb_push_back(args.cos_interm_cb, Wt);
                 cb_pop_front(args.in_cb, Wt);
 
@@ -182,12 +192,16 @@ struct Rope {
                 cb_wait_front(args.sin_interm_cb, Wt);
                 cb_wait_front(args.cos_interm_cb, Wt);
                 add_tiles_init(args.cos_interm_cb, args.sin_interm_cb);
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     add_tiles(args.cos_interm_cb, args.sin_interm_cb, j, j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < Wt; ++j) {
                     pack_tile(j, args.out_cb, j);
                 }
-                release_dst();
+                tile_regs_release();
                 cb_push_back(args.out_cb, Wt);
                 cb_pop_front(args.sin_interm_cb, Wt);
                 cb_pop_front(args.cos_interm_cb, Wt);
