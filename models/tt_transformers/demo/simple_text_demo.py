@@ -1001,6 +1001,7 @@ def test_demo_text(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
+                seed=sampling_params["seed"] if "seed" in sampling_params else None,
                 frequency_penalty=sampling_params["frequency_penalty"]
                 if "frequency_penalty" in sampling_params
                 else 0.0,
@@ -1110,6 +1111,7 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
