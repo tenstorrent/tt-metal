@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 
 namespace ttnn::operations::pool::upsample::program {
 
@@ -23,8 +24,14 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
     const ttnn::Tensor& input = tensor_args.input_tensor;
     const ttnn::Tensor& output = output_tensor;
-    const uint32_t scale_factor_h = operation_attributes.scale_factor_h;
-    const uint32_t scale_factor_w = operation_attributes.scale_factor_w;
+    // This factory only supports integer scale factors
+    TT_FATAL(
+        is_integer_scale(operation_attributes.scale_factor_h) && is_integer_scale(operation_attributes.scale_factor_w),
+        "Bilinear upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
+        operation_attributes.scale_factor_h,
+        operation_attributes.scale_factor_w);
+    const uint32_t scale_factor_h = static_cast<uint32_t>(operation_attributes.scale_factor_h);
+    const uint32_t scale_factor_w = static_cast<uint32_t>(operation_attributes.scale_factor_w);
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();

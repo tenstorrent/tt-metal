@@ -258,6 +258,7 @@ void py_module(nb::module_& mod) {
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
+        .def("get_fabric_node_id", &MeshDevice::get_fabric_node_id, nb::arg("coord"))
         .def(
             "create_submesh",
             &MeshDevice::create_submesh,
