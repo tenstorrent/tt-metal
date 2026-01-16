@@ -225,7 +225,7 @@ std::vector<TensorSpec> RMSAllGatherDeviceOperation::compute_output_specs(
         // Create stats tensor spec: shape (1, 1, 32, ring_size * TILE_WIDTH)
         // Stats buffer collects one tile per device in the ring
         uint32_t stats_width = args.ring_size * TILE_WIDTH;
-        ttnn::SimpleShape stats_shape({1, 1, TILE_HEIGHT, stats_width});
+        ttnn::Shape stats_shape({1, 1, TILE_HEIGHT, stats_width});
 
         // Get the first core from input's shard grid for stats placement
         auto input_shard_spec = input_tensor.shard_spec().value();
