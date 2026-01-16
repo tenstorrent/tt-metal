@@ -67,6 +67,46 @@ uint64_t hash_file_content(std::istream& file) {
     return hasher.digest();
 }
 
+// Get the base directory for making paths relocatable (CCACHE_BASEDIR if set)
+std::filesystem::path get_base_dir() {
+    if (const char* basedir = std::getenv("CCACHE_BASEDIR")) {
+        std::filesystem::path base(basedir);
+        if (!base.empty() && std::filesystem::exists(base)) {
+            return base;
+        }
+    }
+    return std::filesystem::path{};
+}
+
+// Make path relative to base_dir if it's under base_dir, otherwise return absolute path
+std::filesystem::path make_relocatable_path(const std::filesystem::path& path, const std::filesystem::path& base_dir) {
+    if (base_dir.empty()) {
+        return path;
+    }
+    std::error_code ec;
+    auto rel_path = std::filesystem::relative(path, base_dir, ec);
+    if (!ec && !rel_path.empty() && rel_path.string().find("..") != 0) {
+        // Successfully made relative and it's under base_dir (doesn't start with ..)
+        return rel_path;
+    }
+    return path;  // Fall back to absolute if it's outside base_dir
+}
+
+// Resolve a potentially relative path against base_dir, falling back to absolute
+std::filesystem::path resolve_relocatable_path(
+    const std::filesystem::path& path, const std::filesystem::path& base_dir) {
+    if (path.is_absolute()) {
+        return path;
+    }
+    if (!base_dir.empty()) {
+        std::filesystem::path resolved = base_dir / path;
+        if (std::filesystem::exists(resolved)) {
+            return resolved;
+        }
+    }
+    return path;
+}
+
 }  // namespace
 
 void write_dependency_hashes(
@@ -80,6 +120,9 @@ void write_dependency_hashes(
         hash_file.setstate(std::ios::badbit);
         return;
     }
+
+    auto base_dir = get_base_dir();
+
     for (const auto& dep : iter->second) {
         // Need to handle two cases:
         // 1. file is an absolute path
@@ -88,6 +131,15 @@ void write_dependency_hashes(
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
+
+        // Normalize to absolute path
+        std::error_code ec;
+        dep_path = std::filesystem::canonical(dep_path, ec);
+        if (ec) {
+            // If canonical fails, try weakly_canonical or just use the path as-is
+            dep_path = std::filesystem::weakly_canonical(dep_path);
+        }
+
         std::ifstream dep_file(dep_path, std::ios::binary);
         auto hash = hash_file_content(dep_file);
         if (dep_file.fail() && !dep_file.eof()) {
@@ -95,9 +147,10 @@ void write_dependency_hashes(
             hash_file.setstate(std::ios::badbit);
             return;
         }
-        // Always write absolute path to the hash file, so when reading back we don't need to
-        // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
+
+        // Store path relative to CCACHE_BASEDIR to make cache relocatable across workspaces
+        auto relocatable_path = make_relocatable_path(dep_path, base_dir);
+        hash_file << relocatable_path.string() << '\t' << hash << '\n';
     }
 }
 
@@ -128,18 +181,29 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj)
 
 bool dependencies_up_to_date(std::istream& hash_file) {
     size_t count = 0;
-    std::filesystem::path dep;
-    while (hash_file >> dep) {
+    auto base_dir = get_base_dir();
+
+    std::string dep_str;
+    while (hash_file >> dep_str) {
         uint64_t recorded_hash{};
         hash_file >> recorded_hash;
         if (hash_file.fail()) {
             log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
             return false;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
+
+        // Resolve path: if relative, try against CCACHE_BASEDIR; otherwise use as-is
+        std::filesystem::path dep(dep_str);
+        std::filesystem::path resolved_dep = resolve_relocatable_path(dep, base_dir);
+
+        std::ifstream dep_file(resolved_dep, std::ios::binary);
         if (!dep_file.is_open()) {
             // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
-            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            log_debug(
+                tt::LogBuildKernels,
+                "Need to JIT build because file {} no longer exists (resolved from {}).",
+                resolved_dep.string(),
+                dep_str);
             return false;
         }
         auto dep_hash = hash_file_content(dep_file);
@@ -147,7 +211,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
             log_debug(
                 tt::LogBuildKernels,
                 "Need to JIT build because file {} has changed.  Old hash: {} new hash: {}",
-                dep.string(),
+                resolved_dep.string(),
                 recorded_hash,
                 dep_hash);
             return false;
