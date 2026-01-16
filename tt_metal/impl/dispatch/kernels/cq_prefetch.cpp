@@ -1691,14 +1691,10 @@ static uint32_t relay_linear_to_downstream(
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = nullptr;
-    if constexpr (not is_d_variant) {
-        cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
-    } else {
-        cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
-    }
+    cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     uint64_t wlength = cmd->relay_linear_h.length;
     uint32_t scratch_read_addr = scratch_db_top[0];
-    constexpr uint32_t start_offset = is_d_variant ? 0 : sizeof(CQPrefetchHToPrefetchDHeader);
+    constexpr uint32_t start_offset = sizeof(CQPrefetchHToPrefetchDHeader);
     // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
         (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_read_addr;
