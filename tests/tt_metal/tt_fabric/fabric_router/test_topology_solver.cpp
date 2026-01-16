@@ -837,6 +837,8 @@ TEST_F(TopologySolverTest, SearchHeuristicAllAssigned) {
     // target_idx will be SIZE_MAX if no unassigned nodes found
     // This is acceptable behavior - caller should check for this case
     EXPECT_EQ(result.target_idx, SIZE_MAX);
+    // Verify that calling select_and_generate_candidates in this state is safe
+    // and that the candidates list is empty (no out-of-bounds access occurred)
     EXPECT_EQ(result.candidates.size(), 0u);
 }
 
@@ -869,19 +871,21 @@ TEST_F(TopologySolverTest, SearchHeuristicRelaxedModeChannelPreference) {
     mapping[0] = 0;  // target node 1 (index 0) -> global node 10 (index 0)
     used[0] = true;  // 10 is used
 
-    // Select candidates - should select either node 2 or node 3
+    // Select candidates - should select node 2 (index 1) deterministically
+    // Both nodes 2 and 3 have the same cost (same candidate count, same mapped neighbors),
+    // so we break ties by selecting the node with the lower index
     auto result = SearchHeuristic::select_and_generate_candidates(
         graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
-    
-    // Should select one of the unassigned nodes (2 or 3)
-    EXPECT_TRUE(result.target_idx == 1u || result.target_idx == 2u);
+
+    // Should select node 2 (index 1) deterministically (lower index when costs are equal)
+    EXPECT_EQ(result.target_idx, 1u);
     EXPECT_GT(result.candidates.size(), 0u);
     EXPECT_EQ(result.candidates[0], 1u);  // global node 11 (index 1) should be the candidate
-    
+
     // Now verify the channel preference by checking connection counts
     // Node 2 requires 2 channels to node 1, node 3 requires 1 channel to node 1
     // Global node 11 has 3 channels to node 10 (which is mapped from node 1)
-    
+
     // Check connection count from candidate (11, index 1) to mapped node (10, index 0)
     auto it = graph_data.global_conn_count[1].find(0);
     EXPECT_NE(it, graph_data.global_conn_count[1].end());
