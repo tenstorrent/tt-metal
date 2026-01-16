@@ -1074,11 +1074,6 @@ public:
         const uint32_t dram_alignment,
         Common::DeviceData& src_device_data,
         Common::DeviceData& dest_device_data) {
-        const uint32_t max_read_size =
-            std::min(
-                DEFAULT_SCRATCH_DB_SIZE,
-                DEFAULT_PREFETCH_Q_ENTRIES * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type)) -
-            64;
 
         // Destination: DRAM bank 0 on Remote Device
         const uint32_t dest_dram_bank_id = 0;
@@ -1102,7 +1097,7 @@ public:
         while (remaining_bytes > 0) {
             uint32_t length = std::min(
                 tt::align(
-                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, max_read_size - 1)),
+                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, remaining_bytes)),
                     dram_alignment),
                 remaining_bytes);
 
