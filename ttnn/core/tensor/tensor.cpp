@@ -701,6 +701,9 @@ bool can_exec_ops_on_device(DataType type) {
             // Conversion from bfloat16 to bfloat4_b or bfloat8_b loses precision.
             // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
             return false;
+        case DataType::BFLOAT16:
+            // https://github.com/tenstorrent/tt-metal/issues/31406 (nan mangling)
+            return false;
         default: return true;
     }
 };
