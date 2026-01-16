@@ -29,6 +29,10 @@ from loguru import logger
 # Similar to Whisper's chunked input approach
 SUPPORTED_ENCODER_SEQ_LENS = [128, 256, 384, 512, 768]
 
+# Command queue IDs for 2CQ mode (overlapping I/O with compute)
+CQ_OPS = 0  # Model operations, trace execution
+CQ_IO = 1  # Input/output transfers
+
 
 def get_padded_encoder_seq_len(seq_len: int) -> int:
     """Get the smallest supported encoder sequence length >= seq_len."""
@@ -144,6 +148,19 @@ class SpeechT5Generator:
             ttnn.L1_MEMORY_CONFIG,
         )
 
+        # Pre-allocated sync buffer for 2CQ mode
+        # Used by to_memory_config to materialize trace output without:
+        # 1. Allocating a new tensor each iteration (allocation overhead)
+        # 2. Writing in-place to trace output (causes corruption)
+        # Shape matches decoder output: [batch, 1, 1, hidden_size]
+        self.decoder_output_sync = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([max_batch_size, 1, 1, self.hidden_size]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.L1_MEMORY_CONFIG,
+        )
+
         # Pre-allocate tensors for ALL supported encoder sizes
         logger.info(f"Pre-allocating tensors for encoder sizes: {SUPPORTED_ENCODER_SEQ_LENS}")
         for enc_seq_len in SUPPORTED_ENCODER_SEQ_LENS:
@@ -154,6 +171,11 @@ class SpeechT5Generator:
 
         # Cross-attention cache validity flag (per-size, managed via current_encoder_seq_len)
         self.cross_attn_cache_valid = False
+
+        # 2CQ (two command queue) mode for overlapping I/O with compute
+        self.use_2cq = False  # Enabled by caller when 2 command queues are available
+        self.op_event = None  # Event to track CQ_OPS completion
+        self.write_event = None  # Event to track CQ_IO write completion
 
         # Legacy references for backward compatibility
         # These point to the current active size's tensors
@@ -286,17 +308,18 @@ class SpeechT5Generator:
         self.cross_attn_cache_valid = False
         logger.debug("Reset KV caches to zeros for all sizes")
 
-    def _reset_decode_pos(self, value: int, batch_size: int):
+    def _reset_decode_pos(self, value: int, batch_size: int, cq_id: int = 0):
         """
         Reset current_decode_pos to a specific value in-place.
 
         Args:
             value: The position value to set (integer)
             batch_size: Number of batch items
+            cq_id: Command queue ID to use for the transfer (default: 0)
         """
         pos_host = torch.full((batch_size,), value, dtype=torch.int32)
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32)
-        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos)
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos, cq_id=cq_id)
 
     def _release_decoder_trace(self, enc_seq_len: int = None):
         """
@@ -386,16 +409,18 @@ class SpeechT5Generator:
 
         logger.info(f"Decoder trace captured for encoder_seq_len={enc_seq_len}")
 
-    def _execute_decoder_trace(self, preprocessed_hidden_states, enc_seq_len: int = None):
+    def _execute_decoder_trace(self, preprocessed_hidden_states, enc_seq_len: int = None, blocking: bool = True):
         """
         Execute the captured decoder trace with new preprocessed hidden states.
 
         Args:
             preprocessed_hidden_states: New preprocessed hidden states (prenet + PE already applied)
             enc_seq_len: Encoder sequence length. If None, uses current_encoder_seq_len.
+            blocking: If True, wait for trace to complete. If False (2CQ mode), return immediately
+                     and caller should synchronize before using output.
 
         Returns:
-            Decoder output tensor
+            Decoder output tensor (and op_event if non-blocking)
         """
         if enc_seq_len is None:
             enc_seq_len = self.current_encoder_seq_len or self.encoder_seq_len
@@ -417,7 +442,7 @@ class SpeechT5Generator:
         )
 
         # Execute trace
-        ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=blocking)
 
         return trace_output
 
