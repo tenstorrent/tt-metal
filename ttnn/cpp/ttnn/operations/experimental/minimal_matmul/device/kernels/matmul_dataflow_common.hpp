@@ -248,6 +248,8 @@ FORCE_INLINE void write_tile_to_chunk(
 /**
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N
+ *
+ * Note: Unlike write_block_sync, this function takes a tuple of accessors, rather than a single accessor.
  */
 template <
     uint32_t M_block_tiles,
@@ -267,21 +269,26 @@ void write_block_sync_split(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
+    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+
     for (uint32_t i = d0_start; i < d0_end; i++) {
         // Assumes that all chunks have same number of tiles on the M-axis
         if (i >= chunk_shape.logical_d0) {
             break;
         }
 
-        uint32_t chunk_idx = d1_start / N_tiles_per_chunk;
-        uint32_t tile_idx_in_chunk = d1_start % N_tiles_per_chunk;
+        uint32_t chunk_idx = chunk_idx_start;
+        uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
 
         for (uint32_t j = d1_start; j < d1_end; j++, tile_idx_in_chunk++) {
+            // If we've reached the end of the current chunk, move to the next one
             if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
                 tile_idx_in_chunk = 0;
-                chunk_idx++;
+                chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
             }
 
+            // Skip padding
             if (chunk_idx >= N_chunks) {
                 read_ptr += tile_size_bytes;
                 continue;
@@ -320,19 +327,23 @@ void write_block_sync_granular_split(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
+    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
-            uint32_t chunk_idx = d1_start / N_tiles_per_chunk;
-            uint32_t tile_idx_in_chunk = d1_start % N_tiles_per_chunk;
+            uint32_t chunk_idx = chunk_idx_start;
+            uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
 
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++, tile_idx_in_chunk++) {
+                // If we've reached the end of the current chunk, move to the next one
                 if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
                     tile_idx_in_chunk = 0;
-                    chunk_idx++;
+                    chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
                 }
 
                 if (chunk_idx >= N_chunks) {

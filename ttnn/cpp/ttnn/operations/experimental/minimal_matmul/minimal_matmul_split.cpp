@@ -39,10 +39,10 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
     // Validate that each chunk is tile-aligned (N/chunks must be multiple of TILE_WIDTH=32)
     const uint32_t N_per_chunk = N / chunks;
     TT_FATAL(
-        N_per_chunk % TILE_WIDTH == 0,
+        N_per_chunk % tt::constants::TILE_WIDTH == 0,
         "Each chunk size N/chunks={} must be a multiple of TILE_WIDTH={}",
         N_per_chunk,
-        TILE_WIDTH);
+        tt::constants::TILE_WIDTH);
 
     return ttnn::prim::minimal_matmul_split(
         input_tensor,
