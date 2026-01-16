@@ -29,6 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "tt-metalium/circular_buffer_constants.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -142,7 +143,7 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
-    volatile uint32_t local_cb_mask;
+    volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
@@ -160,7 +161,8 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
+    // Padding adjusted to maintain 16-byte alignment after local_cb_mask changed to uint64_t
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -175,6 +177,9 @@ static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0)
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
+
+// Ensure local_cb_mask size matches CB_MASK_WIDTH
+static_assert(sizeof(((kernel_config_msg_t*)0)->local_cb_mask) * 8 == CB_MASK_WIDTH);
 
 struct go_msg_t {
     union {

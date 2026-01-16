@@ -96,7 +96,7 @@ struct KernelGroup {
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
-        uint32_t local_cb_mask,
+        uint64_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
@@ -355,6 +355,7 @@ private:
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
     uint32_t programmable_core_count_;
+    uint32_t max_cbs_;  // Architecture-specific max CBs
     uint64_t id;  // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;

@@ -33,6 +33,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 enum class AddressableCoreType : uint8_t;
 
@@ -392,6 +393,10 @@ public:
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
+
+    uint32_t get_arch_num_circular_buffers() const {
+        return (arch_ == tt::ARCH::WORMHOLE_B0) ? WORMHOLE_CIRCULAR_BUFFERS : MAX_CIRCULAR_BUFFERS;
+    }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

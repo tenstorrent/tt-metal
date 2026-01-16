@@ -37,8 +37,8 @@ protected:
     static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
     static const uint32_t SEM_VAL = 1;
 
+    uint32_t max_num_cbs_;  // Runtime arch-specific value
     static const uint32_t MIN_NUM_CBS = 0;
-    static const uint32_t MAX_NUM_CBS = NUM_CIRCULAR_BUFFERS;
     static const uint32_t MIN_CB_PAGE_SIZE = 16;
     static const uint32_t MAX_CB_PAGE_SIZE = 64;
     static const uint32_t MIN_CB_TOTAL_SIZE = MAX_CB_PAGE_SIZE;
@@ -54,7 +54,7 @@ protected:
         uint32_t min_num_sems;
         uint32_t max_num_sems;
         uint32_t min_num_cbs;
-        uint32_t max_num_cbs;
+        uint32_t max_num_cbs{0};
         KernelProperties() :
             min_kernel_size_bytes(MIN_KERNEL_SIZE_BYTES),
             max_kernel_size_bytes(MAX_KERNEL_SIZE_BYTES),
@@ -64,8 +64,7 @@ protected:
             max_num_rt_args(MAX_NUM_RUNTIME_ARGS),
             min_num_sems(MIN_NUM_SEMS),
             max_num_sems(MAX_NUM_SEMS),
-            min_num_cbs(MIN_NUM_CBS),
-            max_num_cbs(MAX_NUM_CBS) {}
+            min_num_cbs(MIN_NUM_CBS) {}
     };
 
     static const uint32_t NUM_WORKLOADS = 75;
@@ -77,6 +76,7 @@ protected:
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
+            this->max_num_cbs_ = MetalContext::instance().hal().get_arch_num_circular_buffers();
             this->initialize_seed();
         }
     }
@@ -90,7 +90,11 @@ protected:
         Program& program,
         const CoreType kernel_core_type,
         const bool simple_kernel = false,
-        const KernelProperties& kernel_properties = KernelProperties()) {
+        std::optional<KernelProperties> kernel_properties = std::nullopt) {
+        if (!kernel_properties) {
+            kernel_properties = get_default_kernel_properties();
+        }
+
         CoreRangeSet cores = this->get_cores(kernel_core_type);
         const bool create_eth_config = kernel_core_type == CoreType::ETH;
 
@@ -98,16 +102,16 @@ protected:
             this->create_kernel(program, cores, create_eth_config, 0, 0, 0, 0);
         } else {
             const std::vector<uint32_t> sem_ids = this->generate_semaphores(
-                program, cores, kernel_core_type, kernel_properties.min_num_sems, kernel_properties.max_num_sems);
+                program, cores, kernel_core_type, kernel_properties->min_num_sems, kernel_properties->max_num_sems);
 
             std::vector<uint32_t> cb_page_sizes;
             if (!create_eth_config) {
                 cb_page_sizes = this->generate_circular_buffers(
-                    program, cores, kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
+                    program, cores, kernel_properties->min_num_cbs, kernel_properties->max_num_cbs);
             }
 
             const auto [unique_rt_args, common_rt_args] = this->generate_runtime_args(
-                sem_ids, cb_page_sizes, kernel_properties.min_num_rt_args, kernel_properties.max_num_rt_args);
+                sem_ids, cb_page_sizes, kernel_properties->min_num_rt_args, kernel_properties->max_num_rt_args);
             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - cb_page_sizes.size();
 
             KernelHandle kernel_id = this->create_kernel(
@@ -118,10 +122,10 @@ protected:
                 cb_page_sizes.size(),
                 num_unique_rt_args,
                 common_rt_args.size(),
-                kernel_properties.min_kernel_size_bytes,
-                kernel_properties.max_kernel_size_bytes,
-                kernel_properties.min_kernel_runtime_microseconds,
-                kernel_properties.max_kernel_runtime_microseconds);
+                kernel_properties->min_kernel_size_bytes,
+                kernel_properties->max_kernel_size_bytes,
+                kernel_properties->min_kernel_runtime_microseconds,
+                kernel_properties->max_kernel_runtime_microseconds);
             SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
             SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
         }
@@ -143,10 +147,7 @@ protected:
     }
 
     std::vector<uint32_t> generate_circular_buffers(
-        Program& program,
-        const CoreRangeSet& cores,
-        const uint32_t min = MIN_NUM_CBS,
-        const uint32_t max = MAX_NUM_CBS) {
+        Program& program, const CoreRangeSet& cores, const uint32_t min, const uint32_t max) {
         const uint32_t num_cbs = this->generate_random_num(min, max);
         std::vector<uint32_t> cb_page_sizes;
         for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
@@ -191,35 +192,38 @@ protected:
         return {unique_rt_args, common_rt_args};
     }
 
+    KernelProperties get_default_kernel_properties() {
+        KernelProperties props;
+        props.max_num_cbs = max_num_cbs_;
+        return props;
+    }
+
     KernelProperties get_small_kernel_properties() {
-        KernelProperties small_kernel_properties;
-        small_kernel_properties.min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES;
-        small_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
-        small_kernel_properties.min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS;
-        small_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
-        small_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (3.0 / 10);
-        small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
-        small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
-        small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
-        small_kernel_properties.max_num_cbs = MAX_NUM_CBS * (3.0 / 10);
-        small_kernel_properties.min_num_rt_args =
-            small_kernel_properties.max_num_sems + small_kernel_properties.max_num_cbs;
-        return small_kernel_properties;
+        KernelProperties props = get_default_kernel_properties();
+        props.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
+        props.min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS;
+        props.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
+        props.max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (3.0 / 10);
+        props.min_num_sems = MIN_NUM_SEMS;
+        props.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
+        props.min_num_cbs = MIN_NUM_CBS;
+        props.max_num_cbs = max_num_cbs_ * (3.0 / 10);
+        props.min_num_rt_args = props.max_num_sems + props.max_num_cbs;
+        return props;
     }
 
     KernelProperties get_large_kernel_properties() {
-        KernelProperties large_kernel_properties;
-        large_kernel_properties.min_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (9.0 / 10);
-        large_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES;
-        large_kernel_properties.min_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (9.0 / 10);
-        large_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS;
-        large_kernel_properties.min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
-        large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
-        large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
-        large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
-        large_kernel_properties.min_num_cbs = MAX_NUM_CBS * (8.0 / 10);
-        large_kernel_properties.max_num_cbs = MAX_NUM_CBS;
-        return large_kernel_properties;
+        KernelProperties props = get_default_kernel_properties();
+        props.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES;
+        props.min_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (9.0 / 10);
+        props.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS;
+        props.min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
+        props.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
+        props.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
+        props.max_num_sems = MAX_NUM_SEMS;
+        props.min_num_cbs = max_num_cbs_ * (8.0 / 10);
+        props.max_num_cbs = max_num_cbs_;
+        return props;
     }
 
 private:
@@ -384,6 +388,7 @@ protected:
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
+            this->max_num_cbs_ = MetalContext::instance().hal().get_arch_num_circular_buffers();
             this->initialize_seed();
         }
     }

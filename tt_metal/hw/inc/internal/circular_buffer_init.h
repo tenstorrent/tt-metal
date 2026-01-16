@@ -13,13 +13,16 @@
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-template <bool read, bool write, bool init_wr_tile_ptr>
+// shift_mask: When true (default), shifts mask by start_cb_index before processing
+// Set shift_mask to false when mask bits are already aligned (pre-shifted for upper CBs)
+template <bool read, bool write, bool init_wr_tile_ptr, bool shift_mask = true>
 FORCE_INLINE void setup_local_cb_read_write_interfaces(
     uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index, uint32_t local_cb_mask) {
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr =
         cb_l1_base + start_cb_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-
-    local_cb_mask >>= start_cb_index;
+    if constexpr (shift_mask) {
+        local_cb_mask >>= start_cb_index;
+    }
     uint32_t cb_id = start_cb_index;
     LocalCBInterface* local_interface_ptr = &get_local_cb_interface(cb_id);
 

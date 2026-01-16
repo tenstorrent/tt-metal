@@ -148,7 +148,9 @@ std::vector<DataFormat> get_unpack_dst_formats(
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
-            unpack_to_dest_mode.size() == NUM_CIRCULAR_BUFFERS, "unpack_to_dest_mode vector must have 32 elements");
+            unpack_to_dest_mode.size() == NUM_CIRCULAR_BUFFERS,
+            "unpack_to_dest_mode vector must have {} elements",
+            NUM_CIRCULAR_BUFFERS);
     }
 
     std::vector<DataFormat> unpack_dst_format;

@@ -9,15 +9,10 @@
 
 #include "internal/risc_attribs.h"
 
-// TODO: in ll-buda we can probably just start at stream 0 and not at stream 8?
-/*
-   Kernel operand mapping scheme:
-   - ID 0-7 (inputs, unpacker-only) => streams 8-15
-   - ID 8-15 (params, unpacker-only) => streams 16-23
-   - ID 16-23 (outputs, packer-only) => streams 24-31
-   - ID 24-31 (intermediates, packer/unpacker) => streams 32-39
-*/
-const uint32_t OPERAND_START_STREAM = 8;
+// Changed from OPERAND_START_STREAM = 8 to 0 to support 64 CBs on Blackhole
+// Streams 0-7 were previously reserved for legacy ll-buda compatibility but are now used
+// Mapping: CB/operand ID N -> stream N (0-63)
+const uint32_t OPERAND_START_STREAM = 0;
 
 // Indexed with operand = kernel operand ID (0-31) per the table above
 // Used for tile push/pop operations.

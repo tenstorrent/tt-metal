@@ -155,8 +155,16 @@ int main(int argc, char* argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
+        // Setup CBs 0-31 from low 32 bits, CBs 32-63 from high 32 bits (Blackhole only)
+        // shift_mask=false since masks are pre-shifted
+        uint32_t local_cb_mask_low = launch_msg->kernel_config.local_cb_mask & 0xFFFFFFFF;
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write, false>(
+            cb_l1_base, 0, local_cb_mask_low);
+#ifdef ARCH_BLACKHOLE
+        uint32_t local_cb_mask_upper = launch_msg->kernel_config.local_cb_mask >> 32;
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write, false>(
+            cb_l1_base, 32, local_cb_mask_upper);
+#endif
 
         cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;

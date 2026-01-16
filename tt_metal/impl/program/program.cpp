@@ -204,6 +204,7 @@ detail::ProgramImpl::ProgramImpl() :
 
     cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
+    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -406,7 +407,7 @@ KernelGroup::KernelGroup(
     const detail::ProgramImpl& program,
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
-    uint32_t local_cb_mask,
+    uint64_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -575,8 +576,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
-            uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
-            uint32_t local_cb_mask = 0;
+            uint32_t min_remote_cb_start_index = max_cbs_;
+            uint64_t local_cb_mask = 0;
             uint32_t num_dfbs = 0;
 
             // Map from core X,Y back to the unique KernelGroup
@@ -594,18 +595,23 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
-                            uint32_t used_cbs = local_val->second.to_ulong();
+                            uint64_t used_cbs = local_val->second.to_ullong();
                             local_cb_mask |= used_cbs;
-                            max_local_cb_end_index = std::max(
-                                max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
+                            uint32_t calculated_index = CB_MASK_WIDTH - (uint32_t)__builtin_clzll(used_cbs);
+                            TT_ASSERT(
+                                calculated_index <= CB_MASK_WIDTH,
+                                "Calculated CB index {} exceeds CB_MASK_WIDTH {}",
+                                calculated_index,
+                                CB_MASK_WIDTH);
+                            max_local_cb_end_index = std::max(max_local_cb_end_index, calculated_index);
                             if (!logged_noncontiguous) {
                                 // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
                                 // above a zero bit.
-                                uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
+                                uint64_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
                                 if (non_contiguous_cbs) {
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
-                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    uint32_t first_unused_index = (uint32_t)__builtin_ctzll(~used_cbs);
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);
@@ -619,7 +625,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     std::lock_guard lock(m);
                                     // Keep track of which programs have been logged to avoid spamming the log. This is
                                     // particularly important for mesh devices.
-                                    static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
+                                    static std::set<std::tuple<uint64_t, uint32_t, std::string>> logged;
                                     auto cb_tuple =
                                         std::make_tuple(non_contiguous_cbs, first_unused_index, kernels_str);
 
@@ -632,8 +638,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                                 HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
-                                        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-                                            if (non_contiguous_cbs & (1 << i)) {
+                                        for (int i = 0; i < max_cbs_; i++) {
+                                            if (non_contiguous_cbs & (1ULL << i)) {
                                                 if (!cb_ids.empty()) {
                                                     cb_ids += ",";
                                                 }
@@ -656,7 +662,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
-                                min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
+                                min_remote_cb_start_index, (uint32_t)__builtin_ctzll(remote_val->second.to_ullong()));
                         }
 
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {
@@ -744,16 +750,17 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                auto add_buffer_indices = [&cb_indices](
+                uint32_t max_cbs = max_cbs_;
+                auto add_buffer_indices = [&cb_indices, max_cbs](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
                         // TT_ASSERT since we validate when constructing the config that it's within range
                         TT_ASSERT(
-                            buffer_index < NUM_CIRCULAR_BUFFERS,
+                            buffer_index < max_cbs,
                             "Invalid circular buffer index: {} should be between 0 and {}",
                             buffer_index,
-                            NUM_CIRCULAR_BUFFERS);
+                            max_cbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
