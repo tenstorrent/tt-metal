@@ -22,7 +22,9 @@ namespace tt::tt_fabric::detail {
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
-    const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph) {
+    const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph)
+    : n_target(target_graph.get_nodes().size()),
+      n_global(global_graph.get_nodes().size()) {
 
     // Build node vectors
     const auto& target_nodes_vec = target_graph.get_nodes();
@@ -37,9 +39,6 @@ GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
     for (const auto& node : global_nodes_vec) {
         global_nodes.push_back(node);
     }
-
-    n_target = target_nodes.size();
-    n_global = global_nodes.size();
 
     // Build index mappings
     for (size_t i = 0; i < n_target; ++i) {
