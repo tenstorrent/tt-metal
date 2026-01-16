@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"  // Use pack_untilize for RM output
 #include "compute_kernel_api/eltwise_binary.h"
@@ -37,6 +38,10 @@ void MAIN {
     constexpr uint32_t cb_out_rm = tt::CBIndex::c_16;
 
     constexpr uint32_t TILE_HEIGHT = 32;
+
+    // Initialize compute kernel hardware - MUST be called before any compute operations
+    // This initializes DEST register synchronization between MATH (TRISC1) and PACK (TRISC2)
+    compute_kernel_hw_startup(cb_in_rm, cb_in_tiled);
 
     // Pop gamma and beta to maintain CB balance
     cb_wait_front(cb_gamma_rm, 1);
