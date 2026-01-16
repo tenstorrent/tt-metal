@@ -120,7 +120,7 @@ jobs:
             num_devices: 4
           - name: LoudBox Demo tests
             runner-label: BH-LoudBox
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
             num_devices: 8
           - name: P300 Demo tests
             runner-label: P300-viommu

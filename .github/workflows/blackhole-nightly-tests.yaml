@@ -120,7 +120,7 @@ jobs:
           all_systems='[
             {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
             {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-perf", "num_devices": 8, "key": "loudbox"},
+            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
             {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"}
           ]'
 
