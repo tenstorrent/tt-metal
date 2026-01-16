@@ -65,8 +65,8 @@ At a high level, the host code for multi core matrix multiplication needs to per
 #. **Configure each core**
 
    For each core, we need to configure it to perform the correct subset of the work.
-   While each core will execute the same code, the code is usually parameterizable, so we can pass
-   different parameters to each core, identifying the subset of work that each core should perform.
+   While each core will execute the same code, the code usually needs to be parameterizable so each
+   core can be configured to perform the correct subset of the work.
    For matrix multiplication, the parameters will include the output tiles that each core should process,
    and depending on exact implementation details, may also include the input tiles that each core should process.
 
@@ -117,102 +117,78 @@ color of the square corresponds to the core that is responsible for producing th
    :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD (Each color represents a different core)
 
 TT-Metalium includes utilities to simplify work distribution across cores.
-The ``tt::tt_metal::split_work_to_cores(core_grid, num_work)`` function calculates how many tiles each core should process, based on the total amount of work and the number of available cores. It distributes the work as evenly as possible, even if the number of tiles does not divide evenly among the cores. The function returns several values:
-
-- ``num_cores``: Number of cores used for the operation.
-- ``all_cores``: Set of all cores assigned to the operation.
-- ``core_group_1``: Primary group of cores, each handling more work.
-- ``core_group_2``: Secondary group of cores, each handling less work (empty if the work divides evenly).
-- ``work_per_core1``: Number of output tiles each core in the primary group processes.
-- ``work_per_core2``: Number of output tiles each core in the secondary group processes (0 if the work divides evenly).
-
-For example, if you need to split 81 output tiles across 11 cores, ``split_work_to_cores`` may distribute the work as follows:
-
-* ``num_cores`` = 11 (all 11 cores are used)
-* ``all_cores`` = all 11 cores
-* ``core_group_1`` = first 10 cores (each processes 8 tiles)
-* ``core_group_2`` = last core (processes 1 tile)
-* ``work_per_core1`` = 8 (tiles per core in the primary group)
-* ``work_per_core2`` = 1 (tiles for the secondary group core)
-
+The ``tt::tt_metal::split_work_to_cores(core_grid, work_units)`` function calculates how many work units each core should process,
+based on the total amount of work units and the number of available cores. It distributes the work as evenly as possible,
+even if the number of work units does not divide evenly among the cores.
+In case of matrix multiplication, the work units are the output tiles and the function may be called as follows:
 .. code-block:: cpp
 
     auto core_grid = device->compute_with_storage_grid_size();
-    uint32_t num_output_tiles = (M * N) / TILE_HW; // number of output tiles
+    uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
-        tt::tt_metal::split_work_to_cores(core_grid, num_output_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_  2] =
+        tt::tt_metal::split_work_to_cores(core_grid, work_units);
+
+The function returns a tuple containing several values:
+
+- ``uint32_t num_cores``: Number of cores used for the operation.
+- ``CoreRangeSet all_cores``: Set of all cores assigned to the operation.
+- ``CoreRangeSet core_group_1``: Primary group of cores, each handling more work.
+- ``CoreRangeSet core_group_2``: Secondary group of cores, each handling less work
+  (empty if the work divides evenly).
+- ``uint32_t work_per_core_1``: Number of work units (e.g. output tiles) each core
+  in the primary group processes.
+- ``uint32_t work_per_core_2``: Number of work units (e.g. output tiles) each core
+  in the secondary group processes (0 if the work divides evenly).
+
+A ``CoreRangeSet`` is a compact representation of an arbitrary set of logical cores, implemented as a collection
+of rectangular ``CoreRange`` objects. For example, ``all_cores`` contains every core that will do work, while
+``core_group_1`` and ``core_group_2`` are disjoint subsets of those same cores. Rather than storing every core
+individually, each ``CoreRangeSet`` stores a vector of ``CoreRange`` objects.
+
+Each ``CoreRange`` object is itself defined by two ``CoreCoord`` objects, ``start_coord`` and ``end_coord``, each containing
+``x`` and ``y`` coordinates of the opposite corners of an inclusive rectangle of cores (every ``(x, y)`` with
+``start_coord.x <= x <= end_coord.x`` and ``start_coord.y <= y <= end_coord.y`` is in the range).
+A ``CoreCoord`` is just a pair of integer coordinates ``(x, y)`` naming a single core on the device grid.
+
+``CoreRangeSet`` class exposes a number of helpers, including:
+* ``num_cores()``: Returns the total number of logical cores covered by the ``CoreRangeSet``.
+
+* ``ranges()``: Returns a const reference to ``std::vector<CoreRange>`` to allow iterating over all ``CoreRange`` objects in the set. 
+
+* ``contains(CoreCoord)``: Returns ``true`` if and only if the given ``(x, y)`` core lies inside at least
+  one of the ``CoreRange`` rectangles in the set, and ``false`` otherwise.
 
 .. note::
 
     The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
 
-    - ``all_cores`` is the set of cores assigned work for this operation.
-    - If there is not enough work, ``all_cores`` may be smaller than the total number of cores in ``core_grid``.
-    - ``all_cores`` contains exactly ``num_cores`` cores.
+    - ``all_cores`` is the set of cores assigned work for this operation, contining exactly ``num_cores`` cores.
+    -  If there are more cores than work units, ``all_cores`` may contain fewer cores than ``core_grid``.
     - ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
-    - The total amount of work (``num_work``) is always fully assigned: ``work_per_core1 * num_cores_in_core_group_1 + work_per_core2 * num_cores_in_core_group_2 == num_work``.
-    - The function automatically handles uneven work distribution; you do not need to manage edge cases manually.
+    - The total amount of work ``work_units``  is always fully assigned:
+      ``work_per_core_1 * num_cores_in_core_group_1 + work_per_core_2 * num_cores_in_core_group_2 == work_units``.
+    - The function automatically handles uneven work distribution; there is no need to manage edge cases manually.
 
-You now split ``num_output_tiles`` among a subset of the available cores.
-A helper function such as
+Given the earlier example of splitting 81 output tiles across 11 cores, ``split_work_to_cores`` may distribute the work as follows:
 
-.. code-block:: cpp
-
-    auto [num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        work_per_core1,
-        work_per_core2] =
-        tt::tt_metal::split_work_to_cores(core_grid, num_output_tiles);
-
-can be used to divide the work as evenly as possible across the grid.
-Conceptually, this call returns:
-
-* ``all_cores``: the set of cores that will actually participate in the operation.
-
-* One or two groups of cores (for example, ``core_group_1`` and ``core_group_2``) when the division of tiles is not perfectly even, along with the number of tiles each core in the group should process.
-
-The important invariants are that:
-
-* The union of the groups equals ``all_cores``.
-
-* The total number of tiles assigned across all cores equals ``num_output_tiles``.
+* ``num_cores`` = 11 (all 11 cores are used)
+* ``all_cores`` = all 11 cores
+* ``core_group_1`` = Set containing coordinates of the first 10 cores (each processes 8 tiles)
+* ``core_group_2`` = Set containing a single coordinate of the last core (processes 1 tile)
+* ``work_per_core_1`` = 8 (tiles per core in the primary group)
+* ``work_per_core_2`` = 1 (tiles for the secondary group core)
 
 
-Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload imbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
+It is important to only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`,
+and **not** over all cores in ``core_grid``).
+Creating kernels on unused cores can cause undefined behavior or crashes if kernels are created but runtime arguments are not
+set on the core.
 
-```c++
-auto core_grid = device->compute_with_storage_grid_size();
-auto [num_cores, // number of cores utilized
-    all_cores, // set of all cores used
-    core_group_1, // Primary core group
-    core_group_2, // Secondary core group
-    num_tiles_per_core_group_1, // Number of tiles each core in the primary group processes
-    num_tiles_per_core_group_2 // Number of tiles each core in the secondary group processes
-    ] = tt::tt_metal::split_work_to_cores(grid_size, work_size);
-```
-
-Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
-
-```c++
-// `all_cores` is guaranteed to be the union of `core_group_1` and `core_group_2`.
-for (const auto& core : all_cores) {
-    // Good
-    CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});
-    CreateKernel(program, "/path/to/compute.cpp", all_cores, ComputeConfig{...});
-    CreateKernel(program, "/path/to/writer.cpp", all_cores, DataMovementConfig{...});
-
-    // Bad - all_cores may be smaller than core_grid
-    //                                               vvvvvvv
-    // CreateKernel(program, "/path/to/reader.cpp", core_grid, DataMovementConfig{...});
-    // CreateKernel(program, "/path/to/compute.cpp", core_grid, ComputeConfig{...});
-    // CreateKernel(program, "/path/to/writer.cpp", core_grid, DataMovementConfig{...});
-}
-```
-
-Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count. The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will lead to undefined behavior and issues during execution.
+Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count.
+The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough
+work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will
+lead to undefined behavior and issues during execution.
 
 ```c++
 auto work_groups = {std::make_pair(core_group_1, num_tiles_per_core_group_1),
@@ -233,35 +209,31 @@ for(const auto& [group, work_per_core] : work_groups) {
 // at this point id == work_size as all cores have been assigned work
 ```
 
-
-
-
-
-
 Create Circular Buffers and Kernels on Multiple Cores
 -----------------------------------------------------
 
-Circular buffers are now created on **all cores in ``all_cores``** rather than on a single core.
-Each participating core gets circular buffers for tiles of ``A``, tiles of ``B``, and tiles of ``C``.
+Circular buffers (CBs) have to be created on each core participating in computation, which can be achieved simply by passing
+``all_cores`` to the function creating circular buffers.
+Each participating core will use its CBs to store required tiles of matrices ``A``, ``B`` and ``C``.
 
-You then create reader, compute, and writer kernels on these cores, using compile-time arguments to pass tensor layout information (for example, via ``TensorAccessorArgs`` built from your ``Tensor`` objects).
+Similarly, reader, compute, and writer kernels need to be created on all cores, and this is also achieved simply by passing
+``all_cores`` to the function creating kernels.
 
 Set Per-Core Runtime Arguments
 ------------------------------
 
-For each participating core, you set runtime arguments that specify:
+For each participating core and each kernel, determine what kernel arguments are needed so that kernel on each core has
+sufficient information to perform only those operations that are needed for tiles assigned to that core.
+The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
+needs to loop over the correct number of output tiles and inner-dimension tiles.
 
-* Device addresses of the ``Tensor`` objects representing ``A``, ``B``, and ``C``.
+All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
+Arguments that are the same for all cores can be passed as compile-time arguments or runtime arguments.
+As discussed in Lab 1, the decision is based on a tradeoff between potential performance benefit from using compile-time arguments
+vs. kernel having to be recompiled for each core.
 
-* The starting output-tile index (an integer in ``[0, num_output_tiles)``) for that core.
-
-* The number of output tiles assigned to that core.
-
-* The number of tiles along the inner dimension ``K`` in tiles (for example, ``Kt = K / TILE_WIDTH``), which determines how many tile-pairs need to be processed for each output tile.
-
-The reader and writer kernels use these parameters to generate the correct tile indices into the underlying tensors, while the compute kernel uses them to loop over the correct number of output tiles and inner-dimension tiles.
-
-Once this is in place, the rest of the program (enqueuing, execution, reading back the output tensor, untilizing, and verifying against the CPU reference) follows the same pattern as in Lab 1.
+Once this is in place, the rest of the program (enqueuing, execution, reading back the output tensor, untilizing, and verifying
+against the CPU reference) follows the same pattern as in Lab 1.
 
 
 Inspecting and Choosing Cores
@@ -343,15 +315,15 @@ Exercise 1: Multi Core Matrix Multiplication
 
 In this exercise, you will:
 
-1. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
+#. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
 
-2. Run the same workload using:
+#. Run the same workload using:
 
    * Work distributed over **half** of the compute cores.
 
    * Work distributed over **all** available compute cores.
 
-3. Profile and compare the performance of the two runs using the device profiler introduced in Lab 1.
+#. Profile and compare the performance of the two runs using the device profiler introduced in Lab 1.
 
 You will **not** start from any existing multi-core example.
 Instead, you will extend your own single-core matmul program from Lab 1 to multiple cores, while continuing to use the ``Tensor`` class to represent matrices on the device.
@@ -359,7 +331,7 @@ Instead, you will extend your own single-core matmul program from Lab 1 to multi
 Steps
 -----
 
-1. **Start from your Lab 1 single-core matmul program**
+#. **Start from your Lab 1 single-core matmul program**
 
    Begin with your solution to Exercise 7 in Lab 1.
    This program should already:
@@ -370,7 +342,7 @@ Steps
 
    * Perform matrix multiplication on the device and compare the result against a CPU reference implementation.
 
-2. **Choose matrix dimensions consistent with Lab 1**
+#. **Choose matrix dimensions consistent with Lab 1**
 
    Use the same shapes as in Lab 1:
 
@@ -380,7 +352,7 @@ Steps
 
    Assert (using ``TT_FATAL``) that matrix dimensions are divisible by the tile size, just as you did in Lab 1.
 
-3. **Extend the host code to multiple cores**
+#. **Extend the host code to multiple cores**
 
    Modify your host program as follows:
 
@@ -391,11 +363,15 @@ Steps
    * Call the work-splitting helper to divide these tiles among cores, and obtain a set of participating cores (for example, ``all_cores``) and per-core tile counts.
 
    * Create circular buffers for tiles of ``A``, ``B``, and ``C`` on all participating cores, instead of only on a single core.
+     Note that the ``create_cb`` helper function needs to be updated to accept a ``CoreRangeSet`` of cores
+     and pass it on to the ``CreateCircularBuffer`` function. Alternatively, you could update ``create_cb`` to
+     take a variant argument, like the ``CreateCircularBuffer`` function.
+
 
    * Create reader, compute, and writer kernels on all participating cores.
      Use compile-time arguments built from your ``Tensor`` objects (for example, via ``TensorAccessorArgs``) to pass tensor layout information, as in Lab 1.
 
-4. **Implement the all-cores version**
+#. **Implement the all-cores version**
 
    First implement a version that uses all cores in your chosen core set:
 
@@ -422,7 +398,7 @@ Steps
    Execute the program, read the output tensor back into a host vector, untilize it, and compare against the CPU reference.
    Verify that the results are numerically close to the golden result, as in Lab 1.
 
-5. **Implement the half-cores version**
+#. **Implement the half-cores version**
 
    Next, modify the work distribution so that **only half** of the available compute cores are used:
 
@@ -437,7 +413,7 @@ Steps
 
    Run the program and again compare the result against the CPU golden implementation for correctness.
 
-6. **Profile both versions**
+#. **Profile both versions**
 
    Use the device profiler from Lab 1 to profile both the all-cores and half-cores versions:
 
@@ -453,7 +429,7 @@ Steps
 
    * For each run, compute the total firmware time by subtracting the minimum cycle count from the maximum cycle count and multiplying by the clock period, as you did in Lab 1.
 
-7. **Compare performance**
+#. **Compare performance**
 
    Compare the firmware times of the two versions.
    Comment on:
