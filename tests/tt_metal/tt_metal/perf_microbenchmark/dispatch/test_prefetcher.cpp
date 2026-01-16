@@ -2048,68 +2048,8 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
 
     auto commands_per_iteration =
         generate_prefetch_relay_h_commands(first_worker, mmio_dram_base, dram_alignment, mmio_device_data, device_data);
-
-    // Debug: Check if the DRAM core is registered
-    const uint32_t debug_dest_dram_bank_id = 0;
-    const auto debug_dest_dram_channel =
-        remote_device_->allocator_impl()->get_dram_channel_from_bank_id(debug_dest_dram_bank_id);
-    const CoreCoord debug_dest_dram_logical_core =
-        remote_device_->logical_core_from_dram_channel(debug_dest_dram_channel);
-    log_info(
-        tt::LogTest,
-        "DEBUG: dest_dram_logical_core = {}, bank = {}",
-        debug_dest_dram_logical_core.str(),
-        debug_dest_dram_bank_id);
-    log_info(
-        tt::LogTest,
-        "DEBUG: Core is registered in device_data: {}",
-        device_data.core_and_bank_present(debug_dest_dram_logical_core, debug_dest_dram_bank_id));
-    log_info(
-        tt::LogTest,
-        "DEBUG: Data size at dest core/bank: {}",
-        device_data.size(debug_dest_dram_logical_core, debug_dest_dram_bank_id));
-
-    // Debug: Show first few expected values vs actual values on remote device
-    {
-        const uint32_t debug_bank_id = 0;
-        const uint32_t debug_read_size = 32;  // Read 8 words
-        std::vector<uint32_t> actual_data;
-        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-            remote_device_, debug_bank_id, remote_dram_base, debug_read_size, actual_data);
-
-        log_info(tt::LogTest, "DEBUG: First 8 words of EXPECTED data (from mmio shadow model):");
-        for (int i = 0; i < 8; i++) {
-            const auto src_dram_channel =
-                mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(debug_bank_id);
-            const CoreCoord src_dram_logical_core = mmio_device_->logical_core_from_dram_channel(src_dram_channel);
-            uint32_t expected = mmio_device_data.at(src_dram_logical_core, debug_bank_id, i);
-            log_info(tt::LogTest, "  [{}] Expected: 0x{:08x}", i, expected);
-        }
-
-        log_info(tt::LogTest, "DEBUG: First 8 words of ACTUAL data on REMOTE device DRAM:");
-        for (int i = 0; i < 8 && i < actual_data.size(); i++) {
-            log_info(tt::LogTest, "  [{}] Actual: 0x{:08x}", i, actual_data[i]);
-        }
-
-        // Also read from MMIO device to compare
-        std::vector<uint32_t> mmio_actual_data;
-        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-            mmio_device_, debug_bank_id, mmio_dram_base, debug_read_size, mmio_actual_data);
-        log_info(tt::LogTest, "DEBUG: First 8 words of ACTUAL data on MMIO device DRAM:");
-        for (int i = 0; i < 8 && i < mmio_actual_data.size(); i++) {
-            log_info(tt::LogTest, "  [{}] MMIO Actual: 0x{:08x}", i, mmio_actual_data[i]);
-        }
-    }
-
-    // Validation BEFORE executing should fail if writes are actually needed
-    log_info(tt::LogTest, "Validating BEFORE execution (should fail if test is correct):");
-    //const bool pass_before = device_data.validate(remote_device_);
-    //log_info(tt::LogTest, "DEBUG: pass_before = {}", pass_before);
     
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
-    
-    // Validation AFTER executing should pass
-    log_info(tt::LogTest, "Validating AFTER execution (should pass):");
     const bool pass_after = device_data.validate(remote_device_);
     EXPECT_TRUE(pass_after) << "Dispatcher test failed validation";
 }
