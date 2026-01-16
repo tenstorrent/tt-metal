@@ -71,7 +71,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -274,7 +274,7 @@ def test_tt_model_acc(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -317,18 +317,16 @@ def test_tt_model_acc(
         )
 
         if tt_model.args.num_devices > 1:
-            cluster_axis = 0 if tt_model.args.is_galaxy else None
-            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
             tt_out_gathered = ttnn.experimental.all_gather_async(
                 tt_out,
                 persistent_output_buffer=None,
                 dim=3,
-                multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=num_links,
+                multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(None),
+                num_links=1,
                 memory_config=tt_out.memory_config(),
-                cluster_axis=cluster_axis,
-                topology=tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear,
-                barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                cluster_axis=None,
+                topology=tt_model.args.ccl_topology(),
+                barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(None),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
