@@ -63,6 +63,7 @@ void MAIN {
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
+    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -110,6 +111,19 @@ void MAIN {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+
+    // Tree reduction runtime arguments
+    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
+
+    // Read children_per_round array
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     // Idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
@@ -454,16 +468,32 @@ void MAIN {
             }
         }
         /* END OF FLASH ATTENTION LOOP */
-        // Perform reduction across intermediates from other cores if this is the reduction core
-        if (do_reduce) {
-            // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
-            // cb_prev_max and cb_prev_sum should contain m_1 and l_1 (max and sum of logits of itself's core)
 
-            if (k_chunk_end - k_chunk_start < k_num_chunks) {
-                // This indicates that there are computes done by other workers.
-                // We need to wait for them and send to reducer's compute
-                // Iterate through each worker
-                for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+        /******************************************************************************
+         *                      TREE REDUCTION LOGIC                                  *
+         ******************************************************************************/
+        /**
+         * Tree reduction replaces the flat worker->reducer pattern with O(log n) rounds.
+         *
+         * For each round r (0 to my_active_rounds-1):
+         *   - If children_per_round[r] != UINT32_MAX, receive from that child
+         *   - Combine received data with local accumulator using softmax correction
+         *
+         * After all receives:
+         *   - If is_tree_root: finalize (1/sum normalization) and output
+         *   - Else: output intermediate results for writer to send to parent
+         */
+
+        // Tree reduction: receive from children and combine
+        if (num_children > 0 && k_chunk_end - k_chunk_start < k_num_chunks) {
+            // cb_out_accumulate_im should contain o_1 (output from FA of this core)
+            // cb_prev_max and cb_prev_sum should contain m_1 and l_1 (max and sum of logits of this core)
+
+            // Iterate through each round and receive from child if one exists
+            for (uint32_t round = 0; round < my_active_rounds; ++round) {
+                uint32_t child_id = children_per_round[round];
+                if (child_id != UINT32_MAX) {
+                    // Writer kernel handles the wait and data transfer to cb_m_in, cb_l_in, cb_out_o
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
                     // Fused Softmax Correction
@@ -474,10 +504,9 @@ void MAIN {
                     // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    // */
                     correction_block<scale_fp32, vector_mode>(
-                        cb_m_in,        // cb worker max
-                        cb_prev_sum_2,  // cb worker sum
+                        cb_m_in,        // cb child max
+                        cb_prev_sum_2,  // cb child sum
                         cb_cur_max,
                         cb_prev_max,
                         cb_cur_sum,
@@ -486,11 +515,11 @@ void MAIN {
                         cb_exp_max_diff_2,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- WORKER_OUT
+                    // OUT_ACC_2 <- CHILD_OUT
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
-                    // OUT_ACC_2 *= EXP_MAX_DIFF
-                    // OUT_ACC *= EXP_MAX_DIFF_2
+                    // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
+                    // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
@@ -505,6 +534,11 @@ void MAIN {
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
+        }
+
+        // Finalize output based on tree role
+        if (is_tree_root) {
+            // Root node: perform final normalization and output
 
             /* CUR_SUM = 1.0 / CUR_SUM */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
@@ -573,6 +607,12 @@ void MAIN {
             // Free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
             cb_pop_front(cb_prev_sum, Sq_chunk_t);
+        } else if (parent_core_in_group != UINT32_MAX) {
+            // Non-root node: output intermediate results for writer to send to parent
+            // Writer will read from cb_out_worker (cb_out_o), cb_out_m, cb_out_l
+            move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+            move_block<true>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
 

@@ -37,8 +37,9 @@ void kernel_main() {
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
+    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
 
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<27>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -51,6 +52,26 @@ void kernel_main() {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+
+    // Tree reduction parameters
+    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t reduction_group_base_idx = get_arg_val<uint32_t>(arg_idx++);
+
+    // Read children_per_round array
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    // Read reduction group physical core coordinates
+    tt_l1_ptr uint32_t* reduction_group_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_per_head;
+    tt_l1_ptr uint32_t* reduction_group_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_per_head;
 
     // idle core
     if (out_addr == 0) {
@@ -145,22 +166,17 @@ void kernel_main() {
             k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
     }
 
-    if (is_worker) {
-        ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
-                                          // should not be more than one head per core
-        worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
-            in0_sender_semaphore_noc_addr, worker_id_for_reduce, reduce_core_noc_x, reduce_core_noc_y);
-        noc_async_atomic_barrier();
-        return;
-    }
+    // *** Tree Reduction Logic ***
+    // Each core participates in tree reduction by:
+    // 1. Computing its local attention (done in compute kernel)
+    // 2. For each round it receives: wait for child, receive data, combine with local (done in compute kernel)
+    // 3. If not root: send combined result to parent
+    // 4. If root: write final output
 
-    // *** Reducer Compute Below ***
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-
-    uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out));
 
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
@@ -169,7 +185,6 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // generate and send mask to compute if causal
-
     if constexpr (is_causal) {
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
@@ -180,43 +195,44 @@ void kernel_main() {
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
-        if (k_chunk_end - k_chunk_start < k_num_chunks) {
-            ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
-                                              // should not be more than one head per core
-            // This indicates that there are computes done by other workers. Needs to wait for them and send to
-            // reducer's compute Wait for compute to deliver output chunk, and write to compute again for reduction data
-            // in cb_intermed_out is arranged as [o,m,l,o,m,l,...] with size (out_chunk_tiles +
-            // 2*PNHt)*num_cores_to_wait wait on in0 semaphore value to become VALID (set by sender)
-            noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, num_cores_to_wait);
-            // noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        // Tree reduction: receive from children at each round
+        if (num_children > 0 && k_chunk_end - k_chunk_start < k_num_chunks) {
+            ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers
 
-            // cb_wait_front(cb_intermed_out, num_tiles_to_wait);
-            constexpr uint32_t q_read_size = out_chunk_tiles * tile_bytes_intermed;
-            constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
-            for (uint32_t block = 0; block < num_cores_to_wait; ++block) {
-                cb_reserve_back(cb_out_o, out_chunk_tiles);
-                cb_reserve_back(cb_m_in, PNHt);
-                cb_reserve_back(cb_l_in, PNHt);
+            // Wait for all children to send their results
+            // In tree reduction, we receive from at most one child per round
+            // The number of children equals the number of active rounds for this core
+            noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, num_children);
 
-                uint32_t m_write_ptr = get_read_ptr(cb_m_in);
-                noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
-                intermed_l1_read_addr += ml_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_m_in, PNHt);
-
-                uint32_t l_write_ptr = get_read_ptr(cb_l_in);
-                noc_async_read(intermed_l1_read_addr, l_write_ptr, ml_read_size);
-                intermed_l1_read_addr += ml_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_l_in, PNHt);
-
-                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
-                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
-                intermed_l1_read_addr += q_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
+            // Receive from each child in order of rounds
+            for (uint32_t round = 0; round < my_active_rounds; ++round) {
+                uint32_t child_id = children_per_round[round];
+                if (child_id != UINT32_MAX) {
+                    // Receive data from child at this round
+                    tree_reduction_receive_from_child<
+                        out_chunk_tiles,
+                        cb_out_o,
+                        cb_m_in,
+                        cb_l_in,
+                        cb_intermed_out,
+                        PNHt>(round);
+                }
             }
         }
+
+        // If not the tree root, send combined result to parent
+        if (!is_tree_root && parent_core_in_group != UINT32_MAX) {
+            uint32_t parent_noc_x = reduction_group_core_xs[parent_core_in_group];
+            uint32_t parent_noc_y = reduction_group_core_ys[parent_core_in_group];
+
+            tree_reduction_send_to_parent<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
+                parent_noc_x, parent_noc_y, reducer_semaphore_addr, send_at_round);
+
+            noc_async_atomic_barrier();
+            return;  // Non-root cores exit after sending to parent
+        }
+
+        // *** Root node processing (or single-core case) ***
         // Offset for current batch
         const uint32_t out_batch_offset = cur_batch * out_chunk_tiles;
 

@@ -442,6 +442,105 @@ void worker_compute(
     cb_pop_front(cb_out_l, PNHt);
 }
 
+/******************************************************************************
+ *                   Tree Reduction Worker Functions                          *
+ ******************************************************************************/
+
+/**
+ * Tree reduction send function: sends intermediate results (o, m, l) to parent core
+ *
+ * @param parent_noc_x Physical X coordinate of parent core
+ * @param parent_noc_y Physical Y coordinate of parent core
+ * @param semaphore_addr Local semaphore address
+ * @param round The current round in tree reduction (determines write offset)
+ */
+template <
+    uint32_t out_chunk_tiles,
+    uint32_t cb_out,
+    uint32_t cb_out_m,
+    uint32_t cb_out_l,
+    uint32_t cb_intermed_out,
+    uint32_t PNHt>
+void tree_reduction_send_to_parent(
+    uint32_t parent_noc_x, uint32_t parent_noc_y, uint32_t semaphore_addr, uint32_t round) {
+    // Wait for compute to deliver output chunk
+    cb_wait_front(cb_out, out_chunk_tiles);
+    cb_wait_front(cb_out_m, PNHt);
+    cb_wait_front(cb_out_l, PNHt);
+
+    // In tree reduction, each round has a specific offset in the parent's intermediate buffer
+    // Round 0 children write at offset 0, round 1 children write at offset 1, etc.
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes;
+    constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes;
+    constexpr uint32_t ml_write_size = PNHt * tile_bytes;
+
+    uint64_t output_write_addr =
+        get_noc_addr(parent_noc_x, parent_noc_y, get_write_ptr(cb_intermed_out)) + block_offset;
+
+    // send m, l, o to parent (same order as original worker_compute)
+    noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
+    output_write_addr += ml_write_size;
+    noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
+    output_write_addr += ml_write_size;
+    noc_async_write(get_read_ptr(cb_out), output_write_addr, o_write_size);
+
+    // increment parent's semaphore
+    noc_async_write_barrier();
+    uint64_t parent_semaphore_noc_addr = get_noc_addr(parent_noc_x, parent_noc_y, semaphore_addr);
+    noc_semaphore_inc(parent_semaphore_noc_addr, 1);
+
+    // pop front
+    cb_pop_front(cb_out, out_chunk_tiles);
+    cb_pop_front(cb_out_m, PNHt);
+    cb_pop_front(cb_out_l, PNHt);
+}
+
+/**
+ * Tree reduction receive function: receives intermediate results from a child core
+ * Data is read from this core's intermediate buffer and pushed to compute CBs
+ *
+ * @param round The round from which the child is sending (determines read offset)
+ */
+template <
+    uint32_t out_chunk_tiles,
+    uint32_t cb_out_o,
+    uint32_t cb_m_in,
+    uint32_t cb_l_in,
+    uint32_t cb_intermed_out,
+    uint32_t PNHt>
+void tree_reduction_receive_from_child(uint32_t round) {
+    constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
+    constexpr uint32_t o_read_size = out_chunk_tiles * tile_bytes_intermed;
+    constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
+
+    // Calculate offset based on round
+    uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_intermed;
+    uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out)) + block_offset;
+
+    // Reserve and read m, l, o (same order as send)
+    cb_reserve_back(cb_m_in, PNHt);
+    cb_reserve_back(cb_l_in, PNHt);
+    cb_reserve_back(cb_out_o, out_chunk_tiles);
+
+    uint32_t m_write_ptr = get_read_ptr(cb_m_in);
+    noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
+    intermed_l1_read_addr += ml_read_size;
+    noc_async_read_barrier();
+    cb_push_back(cb_m_in, PNHt);
+
+    uint32_t l_write_ptr = get_read_ptr(cb_l_in);
+    noc_async_read(intermed_l1_read_addr, l_write_ptr, ml_read_size);
+    intermed_l1_read_addr += ml_read_size;
+    noc_async_read_barrier();
+    cb_push_back(cb_l_in, PNHt);
+
+    uint32_t o_write_ptr = get_read_ptr(cb_out_o);
+    noc_async_read(intermed_l1_read_addr, o_write_ptr, o_read_size);
+    noc_async_read_barrier();
+    cb_push_back(cb_out_o, out_chunk_tiles);
+}
+
 template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType>
 uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);

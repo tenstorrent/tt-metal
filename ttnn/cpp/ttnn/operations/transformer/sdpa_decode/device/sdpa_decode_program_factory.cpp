@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -17,6 +18,152 @@
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+
+/******************************************************************************
+ *                   Tree Reduction Helper Functions (Host-side)              *
+ ******************************************************************************/
+
+// Maximum number of reduction rounds (supports up to 2^MAX_TREE_REDUCTION_ROUNDS cores)
+constexpr uint32_t MAX_TREE_REDUCTION_ROUNDS = 6;  // Supports up to 64 cores per reduction group
+
+/**
+ * Count trailing zeros in a number (position of lowest set bit)
+ * Returns bit_width if n == 0
+ */
+inline uint32_t count_trailing_zeros(uint32_t n) {
+    if (n == 0) {
+        return 32;
+    }
+    uint32_t count = 0;
+    while ((n & 1) == 0) {
+        n >>= 1;
+        count++;
+    }
+    return count;
+}
+
+/**
+ * Calculate ceil(log2(n))
+ */
+inline uint32_t ceil_log2(uint32_t n) {
+    if (n <= 1) {
+        return 0;
+    }
+    uint32_t log = 0;
+    n--;
+    while (n > 0) {
+        n >>= 1;
+        log++;
+    }
+    return log;
+}
+
+/**
+ * Tree reduction structure for a single core
+ *
+ * In binary tree reduction with N cores (0 to N-1):
+ * - Round r: cores where (core_id & ((1 << (r+1)) - 1)) == (1 << r) - 1 + (1 << r)
+ *   receive from (core_id - (1 << r))
+ *
+ * Example for 8 cores:
+ * - Round 0: 1 receives from 0, 3 receives from 2, 5 receives from 4, 7 receives from 6
+ * - Round 1: 3 receives from 1, 7 receives from 5
+ * - Round 2: 7 receives from 3, 7 is root
+ */
+struct TreeReductionParams {
+    uint32_t num_rounds;                                     // Total rounds = ceil(log2(num_cores))
+    uint32_t my_active_rounds;                               // How many rounds this core participates in
+    bool is_root;                                            // Whether this core is the final reducer
+    uint32_t parent_core_in_group;                           // Which core to send to (-1 if root)
+    uint32_t send_at_round;                                  // At which round this core sends to parent (-1 if root)
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];  // Child core index at each round (-1 if none)
+    uint32_t num_children;                                   // Total number of children across all rounds
+};
+
+/**
+ * Compute tree reduction parameters for a given core
+ *
+ * @param core_id_in_group The core's index within the reduction group (0 to num_cores-1)
+ * @param num_cores_in_group Total number of cores in the reduction group
+ * @return TreeReductionParams structure with all tree info
+ */
+inline TreeReductionParams get_tree_reduction_params(uint32_t core_id_in_group, uint32_t num_cores_in_group) {
+    TreeReductionParams params;
+
+    // Initialize
+    params.num_rounds = ceil_log2(num_cores_in_group);
+    params.is_root = false;
+    params.parent_core_in_group = UINT32_MAX;
+    params.send_at_round = UINT32_MAX;
+    params.num_children = 0;
+
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; r++) {
+        params.children_per_round[r] = UINT32_MAX;
+    }
+
+    if (num_cores_in_group <= 1) {
+        // Single core case - it's the root with no children
+        params.is_root = true;
+        params.my_active_rounds = 0;
+        return params;
+    }
+
+    // Determine when this core sends to its parent
+    // A core sends at round r if bit r is 0 and all lower bits are 1
+    // i.e., the trailing 1s pattern: core_id ends with (r) 1s followed by 0
+    uint32_t trailing_ones = count_trailing_zeros(~core_id_in_group);  // Count trailing 1s
+
+    // Root is the last core (num_cores - 1)
+    uint32_t root_core = num_cores_in_group - 1;
+
+    // Find children at each round
+    params.my_active_rounds = 0;
+    for (uint32_t r = 0; r < params.num_rounds; r++) {
+        uint32_t step = 1u << r;
+
+        // A core receives at round r if:
+        // - (core_id & step) != 0 (bit r is set)
+        // - All bits below r are also set: (core_id & (step - 1)) == (step - 1)
+        // This means core_id ends with (r+1) 1-bits
+
+        uint32_t mask = (step << 1) - 1;  // mask for bits 0..r
+        uint32_t expected = mask;         // all 1s in bits 0..r means we receive
+
+        if ((core_id_in_group & mask) == expected) {
+            // We receive from (core_id - step) at round r
+            uint32_t child = core_id_in_group - step;
+            if (child < num_cores_in_group) {
+                params.children_per_round[r] = child;
+                params.num_children++;
+            }
+            params.my_active_rounds = r + 1;
+        }
+    }
+
+    // Determine when this core sends (if not root)
+    if (core_id_in_group == root_core) {
+        params.is_root = true;
+        params.parent_core_in_group = UINT32_MAX;
+        params.send_at_round = UINT32_MAX;
+    } else {
+        // Find the first round where this core doesn't receive
+        uint32_t send_round = trailing_ones;
+        uint32_t step = 1u << send_round;
+        params.parent_core_in_group = core_id_in_group + step;
+        params.send_at_round = send_round;
+
+        // If parent is out of bounds, adjust
+        if (params.parent_core_in_group >= num_cores_in_group) {
+            // This shouldn't happen in a properly constructed tree
+            // But handle edge case for non-power-of-2 cores
+            params.is_root = true;
+            params.parent_core_in_group = UINT32_MAX;
+            params.send_at_round = UINT32_MAX;
+        }
+    }
+
+    return params;
+}
 
 namespace ttnn::operations::transformer::sdpa_decode::program {
 
@@ -694,6 +841,24 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     log_debug(tt::LogOp, "reduce_core_physical_xs: {}", reduce_core_physical_xs);
     log_debug(tt::LogOp, "reduce_core_physical_ys: {}", reduce_core_physical_ys);
 
+    // Build physical core coordinates for each reduction group (for tree reduction)
+    // This allows each core to look up physical coordinates of its parent/children
+    // reduction_group_core_xs[group_idx * num_cores_per_head + core_idx_in_group]
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
+
+    for (uint32_t i = 0; i < num_active_cores; ++i) {
+        CoreCoord core = core_group[i];
+        auto physical_core = device->worker_core_from_logical_core(core);
+        reduction_group_core_xs.push_back((uint32_t)physical_core.x);
+        reduction_group_core_ys.push_back((uint32_t)physical_core.y);
+    }
+
+    log_debug(tt::LogOp, "reduction_group_core_xs: {}", reduction_group_core_xs);
+    log_debug(tt::LogOp, "reduction_group_core_ys: {}", reduction_group_core_ys);
+
     // Create core ggroups for output cores
     std::vector<uint32_t> output_core_physical_xs;
     std::vector<uint32_t> output_core_physical_ys;
@@ -777,6 +942,11 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         reader_compile_time_args_common.push_back(0);
     }
 
+    // Calculate tree reduction parameters
+    // num_tree_reduction_rounds = ceil(log2(num_cores_per_head))
+    uint32_t num_tree_reduction_rounds = ceil_log2(num_cores_per_head);
+    log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
+
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
         PNHt,
@@ -804,6 +974,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
+        num_tree_reduction_rounds,  // New: number of rounds for tree reduction
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -838,6 +1009,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_half_tile,
         scale_union.u,
         sliding_window_size.value_or(0),
+        num_tree_reduction_rounds,  // New: number of rounds for tree reduction
     };
 
     // Determine granularity for compute loops
@@ -942,6 +1114,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t cur_pos =
             (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at((uint32_t)(cur_batch / q_heads_parallel_factor));
 
+        // Compute tree reduction parameters for this core
+        TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
+
         log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
         log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
         log_debug(tt::LogOp, "worker_id_for_output: {}", worker_id_for_output);
@@ -952,6 +1127,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
         log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
         log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
+        log_debug(tt::LogOp, "tree_params.is_root: {}", tree_params.is_root);
+        log_debug(tt::LogOp, "tree_params.parent_core_in_group: {}", tree_params.parent_core_in_group);
+        log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
+        log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
+        log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
+
+        // Calculate base index for this reduction group's cores in the physical coordinate arrays
+        // Each batch has multiple heads, each head has its own reduction group
+        uint32_t reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
 
         // reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -973,7 +1157,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
-        // writer runtime args
+        // writer runtime args - now includes tree reduction parameters
         std::vector<uint32_t> writer_rt_args = {
             out_addr,
             worker_id_for_reduce,
@@ -984,15 +1168,53 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             cur_batch,
             core_num_in_reduce,
             core_num_in_output,
-            cur_pos};
+            cur_pos,
+            // Tree reduction parameters
+            tree_params.is_root ? 1u : 0u,
+            tree_params.parent_core_in_group,
+            tree_params.send_at_round,
+            tree_params.num_children,
+            tree_params.my_active_rounds,
+            reduction_group_base_idx,
+        };
+        // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
+        for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+            writer_rt_args.push_back(tree_params.children_per_round[r]);
+        }
+        // Add reduction group physical core coordinates (for tree communication)
+        // First add the x coordinates for all cores in this reduction group
+        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+            writer_rt_args.push_back(reduction_group_core_xs[reduction_group_base_idx + c]);
+        }
+        // Then add the y coordinates for all cores in this reduction group
+        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+            writer_rt_args.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
+        }
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
-        // compute runtime args
+        // compute runtime args - now includes tree reduction parameters
         std::vector<uint32_t> compute_rt_args = {
-            do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
+            do_reduce,
+            do_output,
+            cur_head,
+            cur_batch,
+            core_num_in_reduce,
+            core_num_in_output,
+            cur_pos,
+            // Tree reduction parameters for compute
+            tree_params.is_root ? 1u : 0u,
+            tree_params.parent_core_in_group,
+            tree_params.send_at_round,
+            tree_params.num_children,
+            tree_params.my_active_rounds,
+        };
+        // Add children_per_round array for compute
+        for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+            compute_rt_args.push_back(tree_params.children_per_round[r]);
+        }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
@@ -1003,15 +1225,22 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         // Set the rest of the cores to idle
         for (auto core : core_group_idle) {
             log_debug(tt::LogOp, "Setting core {} to idle", core);
-            // reader runtime args
+            // reader runtime args - same size as active cores
             std::vector<uint32_t> reader_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-            // writer runtime args
-            std::vector<uint32_t> writer_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            // writer runtime args - need to match the size with tree reduction params
+            // Base args (16) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords (2*num_cores_per_head)
+            // + reducer coords + output coords
+            std::vector<uint32_t> writer_rt_args(16 + MAX_TREE_REDUCTION_ROUNDS + 2 * num_cores_per_head, 0);
+
+            // compute runtime args - 65 indicates idle core
+            // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
+            std::vector<uint32_t> compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
+            compute_rt_args[0] = 65;  // Idle marker
 
             SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
             SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-            SetRuntimeArgs(program, compute_kernels_id, core, {65, 0, 0, 0, 0, 0, 0});
+            SetRuntimeArgs(program, compute_kernels_id, core, compute_rt_args);
         }
     }
 
