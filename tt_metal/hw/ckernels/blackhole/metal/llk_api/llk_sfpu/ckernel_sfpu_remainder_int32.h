@@ -11,6 +11,9 @@
 
 namespace ckernel::sfpu {
 
+// 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
+constexpr float TWO_POW_31 = 2147483648.0f;
+
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
 // Returns: r (unsigned remainder), a_signed, b_signed (original signed values)
@@ -28,7 +31,7 @@ sfpi_inline void compute_unsigned_remainder_int32(
     // Convert to float for reciprocal computation
     // Handle edge case: if conversion results in negative
     sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
-    v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
+    v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
     v_endif;
 
     // Compute reciprocal of b
@@ -39,7 +42,7 @@ sfpi_inline void compute_unsigned_remainder_int32(
     sfpi::vInt a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
+    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
 
     // Initial quotient approximation : q = a * 1/b
@@ -87,7 +90,6 @@ sfpi_inline void compute_unsigned_remainder_int32(
 }
 
 // Remainder = a - floor(a / b) * b
-// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
 sfpi_inline void calculate_remainder_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
