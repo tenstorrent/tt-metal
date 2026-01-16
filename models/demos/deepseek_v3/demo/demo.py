@@ -116,6 +116,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of times to repeat the generation process.",
+    )
     p.add_argument(
         "--signpost",
         action="store_true",

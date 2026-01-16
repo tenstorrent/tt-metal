@@ -449,7 +449,6 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kv_rope
-        # TODO: Split batch when adding DP
         kv_rope_shape = (1, USERS_PER_ROW, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
@@ -594,7 +593,9 @@ class MLA1D(AbstractModule):
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, 128, 576), core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.HEIGHT
+            shape=(USERS_PER_ROW, num_heads, kv_lora_rank + qk_rope_head_dim),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
         )
         wq_a2a_reshard_config = ReshardConfig(
             memory_config=wq_a2a_reshard_out_mem_config,
@@ -843,217 +844,57 @@ class MLA1D(AbstractModule):
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
 
-        ##############################################
-        ### Fused Linear + AR: wq_kv_a (wq_a + wkv_a) ###
-        ##############################################
+        # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
 
-        # Fused wq_kv_a matmul
-        # 1,1,32,896, width sharded 7x4 [32,32]
-        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
-        # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
-
-        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
-        )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(
-            tt_q_kv,
-            **cfg["wq_kv_a_r_decode"],
-        )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-
-        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
-        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
-        tt_kv_nope = ttnn.slice(
-            tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, bsz, q_lora_rank + kv_lora_rank], **cfg["kv_nope_slice_decode"]
-        )
-        tt_kv_rope = ttnn.slice(
-            tt_q_kv,
-            [0, 0, 0, q_lora_rank + kv_lora_rank],
-            [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
-            **cfg["kv_rope_slice_decode"],
-        )
-        ttnn.deallocate(tt_q_kv)
-
-        #####################
-        ### Norm and Rope ###
-        #####################
-
-        # Q Norm
-        # 1,1,32,1536, width sharded 8x2 [32,96]
-        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
-        # 1,1,32,1536, width sharded 8x2 [32,96]
-
-        # KV Norm
-        # 1,1,32,512 8x2 [32,32]
-        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
-        # 1,1,32,512 8x2 [32,32]
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # 1,1,32,512 L1 interleaved
-
-        # KV RoPE
-        # 1,1,32,64 1x2 [32,32]
-        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, bsz, 1, qk_rope_head_dim]
-        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
-        tt_kv_rope = ttnn.to_memory_config(
-            tt_kv_rope, **cfg["kv_rope_reshard"]
-        )  # Needs interleaved inputs because "HC transpose does not support sharded+tilized inputs"
-        # 1,32,1,64 4x8 [32,64]
-        # TODO: Use DP tensors
-        # Currently, not using DP tensors because sub-tile RS is not supported
-        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=True,
-        )
-        # 1,32,1,64 4x8 [32,64]
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
-        # 1,32,1,64 L1 interleaved
-        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, 1, bsz, qk_rope_head_dim]
-        # 1,1,32,64 L1 interleaved
-
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
-        # 1,1,32,576 L1 interleaved
-
-        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
-        # 1,32,1(32),576 L1 interleaved
-        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
-        # 1,32,1(32),576 L1 interleaved
-        tt_kvpe = ttnn.mesh_partition(
-            tt_kvpe,
-            dim=1,
-            cluster_axis=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        # 1,4,1(32),576 L1 interleaved
-
-        tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.deallocate(tt_kv_nope)
-        ttnn.deallocate(tt_kv_rope)
-
-        ##########################
-        ### Paged Update Cache ###
-        ##########################
-
-        # Update KVPE Cache
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache,
-            tt_kvpe,
-            update_idxs_tensor=position_idxs,
-            page_table=page_table,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        tt_q, tt_kv_nope, tt_kv_rope = cls._fwd_decode_wq_kv_a(
+            x,
+            cfg,
+            ccl,
+            bsz,
+            q_lora_rank,
+            kv_lora_rank,
+            qk_rope_head_dim,
         )
 
-        #####################
-        ### Q Rope + Nope ###
-        #####################
+        # Norm and Rope
 
-        # 1,1,32,1536, width sharded 8x2 [32,96]
-        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-        # 1,1,32,3072, L1 interleaved
-        tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        # 1,32,16,128 L1 interleaved
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
-        # 1,32,16,192 L1 interleaved
-        tt_q_rope = ttnn.slice(
-            tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
-        )
-        # 1,32,16,64 height sharded 8x4 [32,64]
+        tt_q, tt_kvpe = cls._fwd_decode_norm_and_rope(tt_q, tt_kv_nope, tt_kv_rope, cfg, rope_tensors)
 
-        # Q Rope: wkv_b1
-        # 1,32,16,192 L1 interleaved
-        tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
-        # 1,16,32,192 L1 interleaved
-        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
-        # 1,16,32,512 L1 interleaved
-        tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
-        # 1,132,16,512 L1 interleaved
+        # Paged Update Cache
 
-        # Q RoPE
-        # 1,32,16,64 height sharded 8x4 [32,64]
-        tt_q_rope = ttnn.permute(
-            tt_q_rope, **cfg["q_rope_permute"]
-        )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
-        # 32,1,16,64 height sharded 8x4 [32,64]
-        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_q_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=True,
-        )
-        # 32,1,16,64 width sharded 8x4 [32,64]
-        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
-        # 32,1,16,64 L1 interleaved
+        cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx)
 
-        # Concat Q Nope and Q Rope
-        # 1,132,16,512 L1 interleaved | # 32,1,16,64 L1 interleaved
-        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
-        # 1,32,16,576 L1 interleaved
+        # Q Rope + Nope
 
-        ###################################
-        ### All To All before FlashMLA ###
-        ###################################
-
-        # 1,32,16,576 L1 interleaved
-        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
-        # 1,4,128,576  L1 interleaved
-        tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
-        # 1,4,128,576 L1 height sharded 8x9 [32,576]
-
-        #################
-        ### Flash MLA ###
-        #################
-
-        # 1,4,128,576 L1 height sharded 8x9 [32,576]
-        attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+        tt_q = cls._fwd_decode_q_rope_nope(
             tt_q,
-            kvpe_cache,
-            page_table_tensor=page_table,
-            cur_pos_tensor=position_idxs,
-            **cfg["flash_mla"],
-        )  #  [1, bsz_local, num_heads, kv_lora_rank]
-        ttnn.deallocate(tt_q)
-        # 1,4,128,512 height sharded 8x9 [32,512]
+            cfg,
+            rope_tensors,
+            bsz,
+            num_heads_local,
+            qk_head_dim,
+            qk_nope_head_dim,
+        )
 
-        ##############
-        ### Wkv_b2 ###
-        ##############
+        # All To All before FlashMLA
 
-        # 1,4,128,512 height sharded 8x9 [32,512]
-        attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
-        # 1,4,128,512 L1 interleaved
-        # wkv_b2: DP
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
-        # 1,128,4,512 L1 interleaved
-        v_out = ttnn.linear(
-            attn_out, **cfg["wkv_b2"]
-        )  # TODO: file issue for "Number of shards along height 16 must not exceed number of cores 1" when passsing in memory_config=height_sharded_memory_config
-        # 1,128,4,128 L1 interleaved = [1, num_heads_local, bsz, v_head_dim]
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))
-        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        # TODO: what sharding to use here? Or interleaved?
+        tt_q = cls._fwd_decode_all_to_all_pre_flash_mla(tt_q, cfg)
 
-        ####################
-        ### AG + Reshape ###
-        ####################
+        # Flash MLA
 
-        # 1,4,128,128 L1 interleaved
-        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
-        # 1,32,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
-        v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
-        # 1,1,32,16384 L1 interleaved
+        attn_out = cls._fwd_decode_flash_mla(tt_q, kvpe_cache, page_table, position_idxs, cfg)
 
-        ##########
-        ### WO ###
-        ##########
+        # Wkv_b2
 
-        # 1,1,32,16384 L1 interleaved
-        out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-        # 1,1,32,896 width sharded 7x4 [32,32]
+        v_out = cls._fwd_decode_wkv_b2(attn_out, cfg)
+
+        # AG + Reshape
+
+        v_out = cls._fwd_decode_ag_reshape(v_out, cfg, ccl, bsz, num_heads, v_head_dim)
+
+        # WO
+
+        out = cls._fwd_decode_wo(v_out, cfg)
 
         return out
 
@@ -1098,30 +939,17 @@ class MLA1D(AbstractModule):
 
         seq_len = x.shape[2]
 
-        ##############################################
-        ### Fused Linear + AR: wq_kv_a (wq_a + wkv_a) ###
-        ##############################################
+        # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
 
-        # Fused wq_kv_a matmul
-        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
-
-        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
-        )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(
-            tt_q_kv, **cfg["wq_kv_a_r_prefill"]
-        )  # [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-
-        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
-        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, seq_len, q_lora_rank])
-        tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, seq_len, q_lora_rank + kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_q_kv,
-            [0, 0, 0, q_lora_rank + kv_lora_rank],
-            [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+        tt_q, tt_kv_nope, tt_kv_rope = cls._fwd_prefill_wq_kv_a(
+            x,
+            cfg,
+            ccl,
+            seq_len,
+            q_lora_rank,
+            kv_lora_rank,
+            qk_rope_head_dim,
         )
-        ttnn.deallocate(tt_q_kv)
 
         # Q path: norm + wq_b
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
@@ -1161,13 +989,11 @@ class MLA1D(AbstractModule):
         )
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-        # TODO: Add Norm here for KVPE
+
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
-        tt_kvpe_fp16 = tt_kvpe
-        tt_kvpe = ttnn.typecast(tt_kvpe_fp16, dtype=kvpe_cache.dtype)
-        ttnn.deallocate(tt_kvpe_fp16)
+        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
@@ -1192,7 +1018,7 @@ class MLA1D(AbstractModule):
 
         # DP wkv_b2 to match decode weights
         v_out = ttnn.experimental.all_gather_async(
-            attn_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            attn_out, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
         # wkv_b2
@@ -1202,7 +1028,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
 
         # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
-        # Strategy: Process each chunk independently to keep all_gather buffers small
+        # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
             num_heads_local = v_out.shape[2]
@@ -1216,40 +1042,301 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
-            output_chunks = []
-            num_heads = cfg["num_heads"]
-            hidden_dim = num_heads * v_head_dim
-            for chunk_idx in range(num_chunks):
-                start = chunk_idx * SEQ_LEN_CHUNK_SIZE
-                end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
-                v_chunk = ttnn.experimental.all_gather_async(
-                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-                )  # [1, chunk_size, num_heads, v_head_dim]
-                v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
-                out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
-                output_chunks.append(out_chunk)
-                ttnn.deallocate(v_chunk)
+            # Reshape to [num_chunks, chunk_size, num_heads_local, v_head_dim] (4D with chunks as batch)
+            v_out = ttnn.reshape(v_out, (num_chunks, SEQ_LEN_CHUNK_SIZE, num_heads_local, v_head_dim))
 
-            ttnn.deallocate(v_out)
+            out = ttnn.linear(v_out, **cfg["wo"])  # [num_chunks, 1, chunk_size, dim]
 
-            out = ttnn.concat(output_chunks, dim=2)
+            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, padded_seq_len, dim]
             output_dim = out.shape[3]
-            for chunk in output_chunks:
-                ttnn.deallocate(chunk)
+            out = ttnn.reshape(out, (1, 1, padded_seq_len, output_dim))
 
             # Trim padding if we added any
             if seq_len != padded_seq_len:
                 out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
         else:
-            # Non-chunked path for shorter sequences
-            v_out = ttnn.experimental.all_gather_async(
-                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-            )  # [1, seq_len, num_heads, v_head_dim]
-
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
-            ttnn.deallocate(v_out)
 
         return out
+
+    @classmethod
+    def _fwd_decode_wq_kv_a(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        ccl: CCL,
+        bsz: int,
+        q_lora_rank: int,
+        kv_lora_rank: int,
+        qk_rope_head_dim: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        # Fused wq_kv_a matmul
+        # 1,1,32,896, width sharded 7x4 [32,32]
+        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+        # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
+
+        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
+        tt_q_kv = ttnn.experimental.all_gather_async(
+            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
+        )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(
+            tt_q_kv,
+            **cfg["wq_kv_a_r_decode"],
+        )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+
+        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
+        tt_kv_nope = ttnn.slice(
+            tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, bsz, q_lora_rank + kv_lora_rank], **cfg["kv_nope_slice_decode"]
+        )
+        tt_kv_rope = ttnn.slice(
+            tt_q_kv,
+            [0, 0, 0, q_lora_rank + kv_lora_rank],
+            [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            **cfg["kv_rope_slice_decode"],
+        )
+        ttnn.deallocate(tt_q_kv)
+        return tt_q, tt_kv_nope, tt_kv_rope
+
+    @classmethod
+    def _fwd_decode_norm_and_rope(
+        cls,
+        tt_q: ttnn.Tensor,
+        tt_kv_nope: ttnn.Tensor,
+        tt_kv_rope: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        rope_tensors: dict,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        # Q Norm
+        # 1,1,32,1536, width sharded 8x2 [32,96]
+        tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
+        # 1,1,32,1536, width sharded 8x2 [32,96]
+
+        # KV Norm
+        # 1,1,32,512 8x2 [32,32]
+        tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
+        # 1,1,32,512 8x2 [32,32]
+        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # 1,1,32,512 L1 interleaved
+
+        # KV RoPE
+        # 1,1,32,64 1x2 [32,32]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, bsz, 1, qk_rope_head_dim]
+        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
+        tt_kv_rope = ttnn.to_memory_config(
+            tt_kv_rope, **cfg["kv_rope_reshard"]
+        )  # Needs interleaved inputs because "HC transpose does not support sharded+tilized inputs"
+        # 1,32,1,64 4x8 [32,64]
+        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
+            tt_kv_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=True,
+        )
+        # 1,32,1,64 4x8 [32,64]
+        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
+        # 1,32,1,64 L1 interleaved
+        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, 1, bsz, qk_rope_head_dim]
+        # 1,1,32,64 L1 interleaved
+
+        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
+        # 1,1,32,576 L1 interleaved
+
+        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        # 1,32,1(32),576 L1 interleaved
+        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
+        # 1,32,1(32),576 L1 interleaved
+        tt_kvpe = ttnn.mesh_partition(
+            tt_kvpe,
+            dim=1,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        # 1,4,1(32),576 L1 interleaved
+
+        tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
+        # 1,4,1(32),576 height sharded 1x4 [32,576]
+        ttnn.deallocate(tt_kv_nope)
+        ttnn.deallocate(tt_kv_rope)
+        return tt_q, tt_kvpe
+
+    @classmethod
+    def _fwd_decode_paged_update_cache(
+        cls,
+        kvpe_cache: ttnn.Tensor,
+        tt_kvpe: ttnn.Tensor,
+        position_idxs: ttnn.Tensor,
+        page_table: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        row_idx: int | None,
+    ) -> None:
+        # Update KVPE Cache
+        # 1,4,1(32),576 height sharded 1x4 [32,576]
+        ttnn.experimental.paged_update_cache(
+            kvpe_cache,
+            tt_kvpe,
+            update_idxs_tensor=position_idxs,
+            page_table=page_table,
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        )
+
+    @classmethod
+    def _fwd_decode_q_rope_nope(
+        cls,
+        tt_q: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        rope_tensors: dict,
+        bsz: int,
+        num_heads_local: int,
+        qk_head_dim: int,
+        qk_nope_head_dim: int,
+    ) -> ttnn.Tensor:
+        # 1,1,32,1536, width sharded 8x2 [32,96]
+        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        # 1,1,32,3072, L1 interleaved
+        tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
+        # 1,32,16,128 L1 interleaved
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
+        # 1,32,16,192 L1 interleaved
+        tt_q_rope = ttnn.slice(
+            tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
+        )
+        # 1,32,16,64 height sharded 8x4 [32,64]
+
+        # Q Rope: wkv_b1
+        # 1,32,16,192 L1 interleaved
+        tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        # 1,16,32,192 L1 interleaved
+        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
+        # 1,16,32,512 L1 interleaved
+        tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
+        # 1,132,16,512 L1 interleaved
+
+        # Q RoPE
+        # 1,32,16,64 height sharded 8x4 [32,64]
+        tt_q_rope = ttnn.permute(
+            tt_q_rope, **cfg["q_rope_permute"]
+        )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
+        # 32,1,16,64 height sharded 8x4 [32,64]
+        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
+            tt_q_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=True,
+        )
+        # 32,1,16,64 width sharded 8x4 [32,64]
+        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
+        # 32,1,16,64 L1 interleaved
+
+        # Concat Q Nope and Q Rope
+        # 1,32,16,512 L1 interleaved | # 32,1,16,64 L1 interleaved
+        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        # 1,32,16,576 L1 interleaved
+        return tt_q
+
+    @classmethod
+    def _fwd_decode_all_to_all_pre_flash_mla(cls, tt_q: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # 1,32,16,576 L1 interleaved
+        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
+        # 1,4,128,576  L1 interleaved
+        tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
+        # 1,4,128,576 L1 height sharded 8x9 [32,576]
+        return tt_q
+
+    @classmethod
+    def _fwd_decode_flash_mla(
+        cls,
+        tt_q: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        page_table: ttnn.Tensor,
+        position_idxs: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+    ) -> ttnn.Tensor:
+        # 1,4,128,576 L1 height sharded 8x9 [32,576]
+        attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            tt_q,
+            kvpe_cache,
+            page_table_tensor=page_table,
+            cur_pos_tensor=position_idxs,
+            **cfg["flash_mla"],
+        )  #  [1, bsz_local, num_heads, kv_lora_rank]
+        ttnn.deallocate(tt_q)
+        # 1,4,128,512 height sharded 8x9 [32,512]
+        return attn_out
+
+    @classmethod
+    def _fwd_decode_wkv_b2(cls, attn_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # 1,4,128,512 height sharded 8x9 [32,512]
+        attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
+        # 1,4,128,512 L1 interleaved
+        # wkv_b2: DP
+        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
+        # 1,128,4,512 L1 interleaved
+        v_out = ttnn.linear(
+            attn_out, **cfg["wkv_b2"]
+        )  # NOTE: Known limitation: "Number of shards along height 16 must not exceed number of cores 1" when passing in memory_config=height_sharded_memory_config
+        # 1,128,4,128 L1 interleaved = [1, num_heads_local, bsz, v_head_dim]
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))
+        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
+        return v_out
+
+    @classmethod
+    def _fwd_decode_ag_reshape(
+        cls,
+        v_out: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        ccl: CCL,
+        bsz: int,
+        num_heads: int,
+        v_head_dim: int,
+    ) -> ttnn.Tensor:
+        # 1,4,128,128 L1 interleaved
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
+        # 1,32,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
+        v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
+        # 1,1,32,16384 L1 interleaved
+        return v_out
+
+    @classmethod
+    def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # 1,1,32,16384 L1 interleaved
+        out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        # 1,1,32,896 width sharded 7x4 [32,32]
+        return out
+
+    @classmethod
+    def _fwd_prefill_wq_kv_a(
+        cls,
+        x: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+        ccl: CCL,
+        seq_len: int,
+        q_lora_rank: int,
+        kv_lora_rank: int,
+        qk_rope_head_dim: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        # Fused wq_kv_a matmul
+        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+
+        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
+        tt_q_kv = ttnn.experimental.all_gather_async(
+            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+        )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(
+            tt_q_kv, **cfg["wq_kv_a_r_prefill"]
+        )  # [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+
+        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, seq_len, q_lora_rank])
+        tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, seq_len, q_lora_rank + kv_lora_rank])
+        tt_kv_rope = ttnn.slice(
+            tt_q_kv,
+            [0, 0, 0, q_lora_rank + kv_lora_rank],
+            [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+        )
+        ttnn.deallocate(tt_q_kv)
+        return tt_q, tt_kv_nope, tt_kv_rope
