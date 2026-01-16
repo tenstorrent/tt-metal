@@ -855,7 +855,7 @@ def pytest_addoption(parser):
         "--trace-params",
         action="store_true",
         default=False,
-        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files)",
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files just at python level, please check ttnn/documentation/OperationTracing.md for more details)",
     )
 
 
