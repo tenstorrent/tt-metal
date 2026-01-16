@@ -597,7 +597,7 @@ ALWI void INSERT_SFPNOP() {
  * @tparam ITERATIONS Number of 32-element vectors to process per tile
  * @tparam NUM_TERMS Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
  */
-template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool is_fp32_dest_acc_en = false>
+template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool is_fp32_dest_acc_en>
 void calculate_exponential_polynomial() {
     // Clamp values < -88.5 to 0.
     run_clamp_loadmacro();
@@ -747,9 +747,9 @@ void calculate_exponential_first_column(int scale_bf16) {
         }
     } else {
         if constexpr (DST_ACCUM_MODE) {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4>();
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4, true>();
         } else {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, true>();
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, false>();
         }
     }
 }
