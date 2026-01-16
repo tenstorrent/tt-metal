@@ -1772,11 +1772,10 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-    constexpr auto additional_page = is_d_variant ? 1 : 0;
 #if defined(FABRIC_RELAY)
-    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + additional_page);
+    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 #else
-    DispatchRelayInlineState::cb_writer.release_pages(npages + additional_page, downstream_data_ptr);
+    DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr);
 #endif
 
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
