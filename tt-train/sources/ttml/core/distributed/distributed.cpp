@@ -37,7 +37,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
     }
 }
 
-void synchronize_gradients(const serialization::NamedParameters& parameters) {
+void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim) {
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
             tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_dim));

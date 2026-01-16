@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DP groups (average gradients for data parallelism)
-            ttml::core::distributed::synchronize_parameters(model->parameters(), 0U);
+            ttml::core::distributed::synchronize_gradients(model->parameters(), 0U);
 
             // Optimizer step
             optimizer.step();
