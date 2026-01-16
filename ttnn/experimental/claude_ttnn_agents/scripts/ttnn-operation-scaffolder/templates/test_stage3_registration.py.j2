@@ -25,6 +25,81 @@ def device():
     ttnn.close_device(device)
 
 
+def _get_valid_shape(tensor_info):
+    """Get a valid shape for a tensor based on its requirements."""
+    rank = tensor_info.get("required_rank")
+    if rank == 4:
+        return (1, 1, 32, 32)
+    elif rank == 3:
+        return (1, 32, 32)
+    elif rank == 2:
+        return (32, 32)
+    elif rank == 1:
+        return (32,)
+    elif rank:
+        return tuple([32] * rank)
+    else:
+        return (1, 1, 32, 32)  # Default 4D
+
+
+def _get_layout(tensor_info):
+    """Get the appropriate layout for a tensor."""
+    layout = tensor_info.get("required_layout")
+    if layout == "Layout::ROW_MAJOR":
+        return ttnn.ROW_MAJOR_LAYOUT
+    else:
+        return ttnn.TILE_LAYOUT
+
+
+def _create_tensor(device, tensor_info, override_shape=None, override_layout=None):
+    """Create a tensor based on tensor requirements."""
+    shape = override_shape or _get_valid_shape(tensor_info)
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    layout = override_layout or _get_layout(tensor_info)
+    return ttnn.from_torch(torch_tensor, device=device, layout=layout)
+
+
+# Store tensor info for helper functions
+_tensor_infos = [
+{% for tensor in input_tensors %}
+    {
+        "name": "{{ tensor.name }}",
+        "cpp_name": "{{ tensor.cpp_name }}",
+        "required_rank": {{ tensor.required_rank | default('None') }},
+        "required_layout": {{ '"{}"'.format(tensor.required_layout) if tensor.required_layout else 'None' }},
+{% if tensor.shape_relative_to %}
+        "shape_relative_to": "{{ tensor.shape_relative_to }}",
+{% endif %}
+    },
+{% endfor %}
+]
+
+# Store parameter info for helper functions
+_param_defaults = {
+{% for param in parameters %}
+{% if param.default is defined %}
+    "{{ param.name }}": {{ param.default }},
+{% elif param.cpp_type == "float" %}
+    "{{ param.name }}": 1e-6,
+{% elif param.cpp_type == "bool" %}
+    "{{ param.name }}": True,
+{% elif param.cpp_type == "int" or param.cpp_type == "uint32_t" %}
+    "{{ param.name }}": 1,
+{% else %}
+    "{{ param.name }}": None,
+{% endif %}
+{% endfor %}
+}
+
+
+def _call_operation(tensors, **kwargs):
+    """Call the operation with all required tensors and parameters."""
+    params = {**_param_defaults, **kwargs}
+    # Filter out None values
+    params = {k: v for k, v in params.items() if v is not None}
+    return ttnn.{{ operation_name }}({% for tensor in input_tensors %}tensors[{{ loop.index0 }}], {% endfor %}**params)
+
+
 def test_reaches_program_factory(device):
     """
     Verify operation reaches program factory (may fail there, but gets past validation).
@@ -37,29 +112,11 @@ def test_reaches_program_factory(device):
     1. The operation fails with a validation error (Stage 2 issue)
     2. The operation is not found (Stage 1 issue)
     """
-{% if input_tensors[0].required_rank %}
-{% if input_tensors[0].required_rank == 4 %}
-    shape = (1, 1, 32, 32)
-{% elif input_tensors[0].required_rank == 3 %}
-    shape = (1, 32, 32)
-{% elif input_tensors[0].required_rank == 2 %}
-    shape = (32, 32)
-{% else %}
-    shape = tuple([32] * {{ input_tensors[0].required_rank }})
-{% endif %}
-{% else %}
-    shape = (1, 1, 32, 32)  # Default 4D shape
-{% endif %}
-    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
-
-{% if input_tensors[0].required_layout == "Layout::ROW_MAJOR" %}
-    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-{% else %}
-    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-{% endif %}
+    # Create all tensors with valid configurations
+    tensors = [_create_tensor(device, info) for info in _tensor_infos]
 
     try:
-        result = ttnn.{{ operation_name }}(valid_tensor)
+        result = _call_operation(tensors)
         # If we get here, operation completed successfully - great!
         assert result is not None, "Operation returned None"
         print(f"Operation completed successfully with output shape: {result.shape}")
@@ -89,29 +146,11 @@ def test_operation_returns_tensor_or_fails_in_program(device):
     """
     Verify operation either returns a tensor or fails in program factory.
     """
-{% if input_tensors[0].required_rank %}
-{% if input_tensors[0].required_rank == 4 %}
-    shape = (1, 1, 32, 32)
-{% elif input_tensors[0].required_rank == 3 %}
-    shape = (1, 32, 32)
-{% elif input_tensors[0].required_rank == 2 %}
-    shape = (32, 32)
-{% else %}
-    shape = tuple([32] * {{ input_tensors[0].required_rank }})
-{% endif %}
-{% else %}
-    shape = (1, 1, 32, 32)
-{% endif %}
-    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
-
-{% if input_tensors[0].required_layout == "Layout::ROW_MAJOR" %}
-    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-{% else %}
-    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-{% endif %}
+    # Create all tensors with valid configurations
+    tensors = [_create_tensor(device, info) for info in _tensor_infos]
 
     try:
-        result = ttnn.{{ operation_name }}(valid_tensor)
+        result = _call_operation(tensors)
         # Verify it's a tensor
         assert isinstance(result, ttnn.Tensor), f"Expected ttnn.Tensor, got {type(result)}"
     except RuntimeError:
