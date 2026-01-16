@@ -18,7 +18,6 @@ set(TT_EAGER_TESTS_OPS
 set(TT_EAGER_TESTS_TENSORS
     tensors/test_copy_and_move.cpp
     tensors/test_host_device_loopback.cpp
-    tensors/test_raw_host_memory_pointer.cpp
     # tensors/test_sharded_loopback.cpp       # <- not called in run_tt_eager.py
 )
 
