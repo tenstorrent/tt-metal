@@ -117,7 +117,7 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
 // clang-format off
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles in two
- * specified input CBs and writes the result to DST. The DST register buffer
+ * specified input CBs and accumulates the result to DST (DST += C). The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
@@ -145,7 +145,7 @@ ALWI void matmul_tiles(
 // clang-format off
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
- * located in SRCA and SRCB and writes the result to DST. The DST register buffer
+ * located in SRCA and SRCB and accumulates the result to DST (DST += C). The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
@@ -155,7 +155,7 @@ ALWI void matmul_tiles(
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
@@ -246,7 +246,7 @@ ALWI void mm_block_init(
 // clang-format off
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
- * different input CBs and writes the result to DST. The DST register buffer
+ * different input CBs and accumulates the result to DST (DST += C). The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *

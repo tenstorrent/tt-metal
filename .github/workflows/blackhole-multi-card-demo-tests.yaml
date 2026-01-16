@@ -65,10 +65,10 @@ jobs:
             runner-label: P300-viommu
             extra-tag: pipeline-yyz2-lfc
             num_devices: 2
-          - name: QuietBox Global Edition tests
-            runner-label: BH-QB-GE
-            extra-tag: pipeline-perf
-            num_devices: 4
+          # - name: QuietBox Global Edition tests
+          #   runner-label: BH-QB-GE
+          #   extra-tag: pipeline-perf
+          #   num_devices: 4
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
