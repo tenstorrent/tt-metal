@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -107,7 +108,8 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
-    const auto& pad_value = operation_attributes.pad_value;
+    // pad_value is always defined at API level; padding is decided purely by shape
+    const float pad_value = operation_attributes.pad_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
@@ -117,7 +119,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     uint32_t C = input_tensor.logical_shape()[1];
-    bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_padding = (C % tile_shape[1] != 0);
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -147,17 +149,26 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     uint32_t num_writes = 0;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
 
-    if (pad_value.has_value() && C % tile_shape[1] != 0) {
+    if (C % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
-        if (input_tensor.dtype() == DataType::BFLOAT16) {
-            padding_val_packed =
-                pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
-        } else if (num_packed_values == 2) {
-            padding_val_packed =
-                static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
-        } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
+        switch (input_tensor.dtype()) {
+            case DataType::INT32:
+            case DataType::UINT32: padding_val_packed = pad_value; break;
+            case DataType::BFLOAT16:
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+                break;
+            case DataType::UINT16:
+                padding_val_packed =
+                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+                break;
+            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            default:
+                padding_val_packed = 0;
+                TT_ASSERT(
+                    false,
+                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                    "FLOAT32");
         }
     }
 
