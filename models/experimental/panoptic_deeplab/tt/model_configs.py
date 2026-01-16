@@ -1027,14 +1027,14 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             head_layers,
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-            deallocate_activation=False,
+            deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
             "semantic_head.predictor",
             activation=None,  # Raw logits, no ReLU
-            deallocate_activation=False,
+            deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
 
@@ -1044,18 +1044,20 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         Same configuration as semantic head.
         """
         head_layers = ["instance_head.center_head.0", "instance_head.center_head.1"]
-        self.config._register_multiple_layers(
-            head_layers,
+        self.config.register_layer_override(
+            "instance_head.center_head.0",
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=False,
             enable_weights_double_buffer=True,
         )
 
-        # Working with L1 sharded tensors, no need to keep input
         self.config.register_layer_override(
             "instance_head.center_head.1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=True,
+            enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
@@ -1077,14 +1079,8 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             head_layers,
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-            deallocate_activation=False,
-            enable_weights_double_buffer=True,
-        )
-
-        # Working with L1 sharded tensors, no need to keep input
-        self.config.register_layer_override(
-            "instance_head.offset_head.1",
             deallocate_activation=True,
+            enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
