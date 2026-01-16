@@ -48,7 +48,7 @@ namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
-constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;  // 20MB for large DRAM transfers
+constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
