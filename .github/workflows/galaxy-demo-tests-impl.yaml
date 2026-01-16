@@ -143,7 +143,7 @@ jobs:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         run: |
           # Install requirements
-          pip install -r models/demos/gpt_oss/requirements.txt
+          uv pip install -r models/demos/gpt_oss/requirements.txt
 
           # Test GPT-OSS 20B model
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
