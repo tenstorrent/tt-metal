@@ -1,4 +1,3 @@
-
 Lab 2: Multi Core Matrix Multiplication
 #######################################
 
@@ -6,7 +5,7 @@ Introduction
 ************
 
 In Lab 1, you reviewed the standard matrix multiplication algorithm, implemented a tiled CPU version, and then mapped
-the same computation to a single Tensix core using TT‑Metalium.
+the same computation to a single Tensix core using TT-Metalium.
 In this lab, you will learn how to ake advantage of the parallelism of the Tensix core architecture and extend your
 matrix multiplication implementation to multiple Tensix cores.
 Then you will introduce a data reuse optimization that reduces traffic to device memory by keeping partial results in on-chip SRAM.
@@ -16,7 +15,7 @@ Then you will introduce a data reuse optimization that reduces traffic to device
 From Single Core to Multi Core Matrix Multiplication
 ****************************************************
 
-The single-core TT‑Metalium matmul implementation from Lab 1 created tiled tensors in the device DRAM and used two dataflow kernels
+The single-core TT-Metalium matmul implementation from Lab 1 created tiled tensors in the device DRAM and used two dataflow kernels
 to transfer data between the device DRAM and on-chip circular buffers, and a compute kernel to perform the matrix multiplication.
 In this lab, you will keep the same basic structure, but instead of running on a single core, you will:
 
@@ -181,6 +180,64 @@ The important invariants are that:
 
 * The total number of tiles assigned across all cores equals ``num_output_tiles``.
 
+
+Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload imbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
+
+```c++
+auto core_grid = device->compute_with_storage_grid_size();
+auto [num_cores, // number of cores utilized
+    all_cores, // set of all cores used
+    core_group_1, // Primary core group
+    core_group_2, // Secondary core group
+    num_tiles_per_core_group_1, // Number of tiles each core in the primary group processes
+    num_tiles_per_core_group_2 // Number of tiles each core in the secondary group processes
+    ] = tt::tt_metal::split_work_to_cores(grid_size, work_size);
+```
+
+Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
+
+```c++
+// `all_cores` is guaranteed to be the union of `core_group_1` and `core_group_2`.
+for (const auto& core : all_cores) {
+    // Good
+    CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});
+    CreateKernel(program, "/path/to/compute.cpp", all_cores, ComputeConfig{...});
+    CreateKernel(program, "/path/to/writer.cpp", all_cores, DataMovementConfig{...});
+
+    // Bad - all_cores may be smaller than core_grid
+    //                                               vvvvvvv
+    // CreateKernel(program, "/path/to/reader.cpp", core_grid, DataMovementConfig{...});
+    // CreateKernel(program, "/path/to/compute.cpp", core_grid, ComputeConfig{...});
+    // CreateKernel(program, "/path/to/writer.cpp", core_grid, DataMovementConfig{...});
+}
+```
+
+Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count. The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will lead to undefined behavior and issues during execution.
+
+```c++
+auto work_groups = {std::make_pair(core_group_1, num_tiles_per_core_group_1),
+                    std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+uint32_t id = 0; // Offset for the next core in the group
+for(const auto& [group, work_per_core] : work_groups) {
+    for (const auto& range : group) {
+        for(const auto& core : range) {
+            // Set runtime arguments for each kernel based on the core and tile count
+            SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), work_per_core, id});
+            SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), work_per_core});
+            SetRuntimeArgs(program, compute, core, {/*compute parameters*/work_per_core, id});
+            id += work_per_core;
+        }
+    }
+}
+
+// at this point id == work_size as all cores have been assigned work
+```
+
+
+
+
+
+
 Create Circular Buffers and Kernels on Multiple Cores
 -----------------------------------------------------
 
@@ -228,7 +285,7 @@ For example:
 should display information about the installed device(s), including the number of compute cores.
 If this command is not available or does not show core counts, consult your local installation documentation or system administrator.
 
-As shown earlier, you can also obtain this information directly from your TT‑Metalium C++ program using:
+As shown earlier, you can also obtain this information directly from your TT-Metalium C++ program using:
 
 .. code-block:: cpp
 
@@ -416,7 +473,7 @@ Motivation
 
 In the multi-core SPMD implementation above, each core processes a subset of the output tiles.
 For each output tile, the reader kernel streams in all required tiles of ``A`` and ``B`` across the inner dimension ``K``, and the compute kernel accumulates the results.
-Once a tile’s contribution is computed, intermediate results are written to the output tensor and no longer reside in on-chip buffers.
+Once a tile's contribution is computed, intermediate results are written to the output tensor and no longer reside in on-chip buffers.
 
 However, matrix multiplication has significant structure that allows **partial results and inputs to be reused**.
 Repeatedly writing intermediate results to device memory and reading them back is expensive in both time and bandwidth.
@@ -509,7 +566,7 @@ A multi-core matmul with data reuse typically uses three kinds of kernels, as be
 * A **compute kernel** that initializes the matmul engine, uses an intermediate circular buffer to reload and update partial results, and calls ``matmul_tiles`` for each pair of input tiles in a block/subblock.
 
 On the host side, compile-time arguments for the compute kernel specify block and subblock sizes and counts, while runtime arguments for reader and writer kernels specify concrete tensor addresses, strides, and output regions.
-The device-side behavior still follows the reader–compute–writer pattern from Lab 1, but now each core:
+The device-side behavior still follows the reader-compute-writer pattern from Lab 1, but now each core:
 
 * Owns a region of the output tensor defined in terms of blocks and subblocks.
 
@@ -606,12 +663,12 @@ Conclusion
 In this lab you extended your understanding of matrix multiplication on Tenstorrent devices beyond a single core.
 You saw how:
 
-* The same reader–compute–writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully distributing output tiles among cores, while continuing to use high-level ``Tensor`` objects to represent device-resident matrices.
+* The same reader-compute-writer kernel structure from Lab 1 can be reused in a **multi-core** setting by carefully distributing output tiles among cores, while continuing to use high-level ``Tensor`` objects to represent device-resident matrices.
 
-* TT‑Metalium’s static parallelism model requires you to **explicitly choose which cores participate** and how many tiles each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.
+* TT-Metalium's static parallelism model requires you to **explicitly choose which cores participate** and how many tiles each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.
 
 * Introducing **data reuse** through blocks, subblocks, and intermediate circular buffers allows partial results to remain on-chip across multiple passes over the inner dimension, reducing traffic to device memory and often improving performance.
 
-The concepts introduced here—multi-core work distribution and data reuse—are fundamental when scaling workloads on Tenstorrent devices.
+The concepts introduced here, multi-core work distribution and data reuse, are fundamental when scaling workloads on Tenstorrent devices.
 They also provide a foundation for more advanced topics such as data multicast and fused kernels.
-For further details and advanced examples, you can refer to the TT‑Metalium documentation and associated programming examples in the TT‑Metalium repository.
+For further details and advanced examples, you can refer to the TT-Metalium documentation and associated programming examples in the TT-Metalium repository.
