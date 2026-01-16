@@ -807,7 +807,7 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    print_to_file = False  # Enable this flag to print the output of all users to a file
+    print_to_file = os.environ.get("SAVE_OUTPUT_TO_FILE", "0") == "1"  # Set SAVE_OUTPUT_TO_FILE=1 to save outputs
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -894,7 +894,8 @@ def test_demo_text(
         output_directory = "models/tt_transformers/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
-        output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
+        output_filename = os.environ.get("OUTPUT_FILE", f"{output_directory}/llama_text_demo_output_{timestamp}.txt")
+        logger.info(f"Saving outputs to: {output_filename}")
 
     # Start profiler
     logger.info(f"Start profiler")
@@ -1045,6 +1046,7 @@ def test_demo_text(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
+                seed=sampling_params["seed"] if "seed" in sampling_params else None,
                 frequency_penalty=sampling_params["frequency_penalty"]
                 if "frequency_penalty" in sampling_params
                 else 0.0,
@@ -1103,6 +1105,7 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,

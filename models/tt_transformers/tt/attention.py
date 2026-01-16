@@ -710,6 +710,7 @@ class Attention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
+            batch_size=batch_size,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -953,6 +954,7 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                batch_size=batch_size,
             )
 
         return output_11SH

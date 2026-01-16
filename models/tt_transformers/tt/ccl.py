@@ -80,6 +80,7 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    batch_size=1,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -87,10 +88,15 @@ def tt_all_reduce(
 
     # Ensure dim 0 and 1 are 1
     original_shape = input_tensor.shape
-    if original_shape[0] != 1 or original_shape[1] != 1:
-        input_tensor = ttnn.reshape(
-            input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-        )
+    total_rows = original_shape[-4] * original_shape[-3] * original_shape[-2]
+
+    # For batched prefill (batch_size > 1), use different reshape to avoid
+    # floating-point associativity issues in reduce_scatter_minimal_async
+    # See: https://github.com/tenstorrent/tt-metal/pull/35059
+    if batch_size > 1:
+        input_tensor = ttnn.reshape(input_tensor, (1, batch_size, total_rows // batch_size, original_shape[-1]))
+    elif original_shape[0] != 1 or original_shape[1] != 1:
+        input_tensor = ttnn.reshape(input_tensor, (1, 1, total_rows, original_shape[-1]))
 
     # N300 and T3K: reduce_scatter
     if 1 in list(mesh_device.shape):
