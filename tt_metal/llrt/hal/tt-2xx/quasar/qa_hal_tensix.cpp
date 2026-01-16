@@ -181,11 +181,14 @@ HalCoreInfoType create_tensix_mem_map() {
             {"TR2", "TRISC2"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
+
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
