@@ -163,7 +163,7 @@ class Generator:
                 empty_slots,
                 tt_out_logits_all_users,
             )
-        print("sampling_params", sampling_params, "empty_slots", empty_slots)
+
         return_logits = sampling_params is None
 
         if self.model.is_prefill_setup is False:
@@ -190,8 +190,6 @@ class Generator:
             batch >= 16
             and len(set(prefill_seq_lens)) == 1
             and prefill_seq_lens[0] == 128
-            and tt_out_logits_all_users is None
-            and not return_logits
         ):
             use_batched_prefill = True
 
