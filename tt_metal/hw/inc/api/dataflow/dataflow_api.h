@@ -1856,6 +1856,22 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
     WAYPOINT("NABD");
 }
 
+FORCE_INLINE
+void noc_async_posted_atomic_barrier(uint8_t noc_idx = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER, false);
+
+    WAYPOINT("NPABW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx));
+    } else {
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NPABD");
+}
+
 /**
  * This blocking call waits for all the outstanding read, write, and atomic NOC
  * transactions issued on the current Tensix core to complete. After returning
@@ -1889,6 +1905,10 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx)) {
             invalidate_l1_cache();
         }
+        WAYPOINT("NFGW");
+        while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFBD");
     } else {
         WAYPOINT("NFBW");
@@ -1901,6 +1921,8 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
         WAYPOINT("NFFW");
         while (!ncrisc_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFGW");
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
         WAYPOINT("NFBD");
     }
 }
