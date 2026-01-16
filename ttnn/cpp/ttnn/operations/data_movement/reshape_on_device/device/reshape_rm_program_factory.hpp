@@ -20,14 +20,14 @@ struct ReshapeRMProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const reshape_on_device::operation_attributes_t& operation_attributes,
-        const reshape_on_device::tensor_args_t& tensor_args,
+        const reshape_on_device::ReshapeOnDeviceParams& operation_attributes,
+        const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
         reshape_on_device::tensor_return_value_t& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const reshape_on_device::operation_attributes_t& operation_attributes,
-        const reshape_on_device::tensor_args_t& tensor_args,
+        const reshape_on_device::ReshapeOnDeviceParams& operation_attributes,
+        const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
         reshape_on_device::tensor_return_value_t& output_tensor);
 };
 

@@ -71,7 +71,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
+TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
@@ -101,7 +101,7 @@ spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
     return TensorSpec(output_tensor_shape, tensor_layout);
 }
 
-tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
+Tensor PaddedSliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -111,13 +111,14 @@ tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "PaddedSliceDeviceOperation::compute_program_hash is called");
+
     auto program_factory = select_program_factory(args, tensor_args);
+
     // Include input shape last dimension as it affects pad_output_row decision (RM factory)
     // and max_num_tiles_per_row calculation (Tile factory), which affect kernel selection and CB configs
-    operation::Hash hash =
-        operation::hash_operation<PaddedSliceDeviceOperation>(args, program_factory.index(), tensor_args);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<PaddedSliceDeviceOperation>(
+        args, tensor_args, program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::padded_slice
