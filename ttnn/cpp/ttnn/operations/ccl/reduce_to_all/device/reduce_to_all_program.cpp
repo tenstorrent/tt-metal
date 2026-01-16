@@ -366,8 +366,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     constexpr auto packet_cb_id_2 = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig cb_packet_config_2 =
-        tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id_2, input_dataformat}})
-            .set_page_size(packet_cb_id_2, packet_size_bytes)
+        tt::tt_metal::CircularBufferConfig(total_pkt_size, {{packet_cb_id_2, input_dataformat}})
+            .set_page_size(packet_cb_id_2, total_pkt_size)
             .set_tile_dims(packet_cb_id_2, stats_tile);
     CreateCircularBuffer(program, all_cores, cb_packet_config_2);
 
@@ -873,6 +873,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                     CoreCoord mux_virtual_core_fwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
 
+                    auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
+                    auto paired_writer2_core = worker_cores_for_link[core_idx + num_worker_cores_per_link_per_dir];
+                    auto paired_writer2_noc = mesh_device->worker_core_from_logical_core(paired_writer2_core);
+
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
                         input_tensor_s.buffer()->address(),
@@ -898,6 +902,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         get_bwd_mux_term_sem(link_idx),
                         reader_runtime_args);
                     reader_runtime_args.push_back(core_idx == 0 ? 1 : 0);  // is_barrier_leader
+                    reader_runtime_args.push_back(paired_writer2_noc.x);
+                    reader_runtime_args.push_back(paired_writer2_noc.y);
+
                     writer_runtime_args = {
                         fw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_fw.address(),
@@ -976,8 +983,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
-                        core_noc_x,
-                        core_noc_y,
                     };
 
                     fabric_mux_rt_args(
@@ -1047,8 +1052,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         current_core_y,
                         round1_intermediate_tensor.buffer()->address(),
                         coord_semaphore.address(),
-                        core_noc_x,
-                        core_noc_y,
                     };
 
                     fabric_mux_rt_args(
@@ -1073,6 +1076,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2]);
                     CoreCoord mux_virtual_core_fwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[(link_idx * 2) + 1]);
+
+                    auto& worker_cores_for_link = (link_idx == 0) ? worker_cores_link_1 : worker_cores_link_2;
+                    auto paired_writer2_core = worker_cores_for_link[core_idx - num_worker_cores_per_link_per_dir];
+                    auto paired_writer2_noc = mesh_device->worker_core_from_logical_core(paired_writer2_core);
 
                     reader_runtime_args = {
                         input_tensor_l.buffer()->address(),
@@ -1100,6 +1107,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                         reader_runtime_args);
                     reader_runtime_args.push_back(
                         core_idx == num_worker_cores_per_link_per_dir ? 1 : 0);  // is_barrier_leader
+                    reader_runtime_args.push_back(paired_writer2_noc.x);         // writer2_noc_x
+                    reader_runtime_args.push_back(paired_writer2_noc.y);         // writer2_noc_y
+
                     writer_runtime_args = {
                         bw_intermediate_tensor.buffer()->address(),
                         semaphore_round1_bw.address(),

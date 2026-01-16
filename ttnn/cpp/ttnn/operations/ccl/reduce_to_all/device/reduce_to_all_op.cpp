@@ -97,10 +97,10 @@ ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
     std::vector<TensorSpec> intermediate_specs;
     if (tensor_args.optional_fw_intermediate_tensor.has_value() &&
         tensor_args.optional_bw_intermediate_tensor.has_value() &&
-        tensor_args.optional_coord_intermediate_tensor.has_value()) {
+        tensor_args.optional_round1_intermediate_tensor.has_value()) {
         intermediate_specs.push_back(tensor_args.optional_fw_intermediate_tensor.value().tensor_spec());
         intermediate_specs.push_back(tensor_args.optional_bw_intermediate_tensor.value().tensor_spec());
-        intermediate_specs.push_back(tensor_args.optional_coord_intermediate_tensor.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_round1_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
     // intermediate shape is the shape of the 3 tensors combined so that we can send them all in a single packet
@@ -133,9 +133,9 @@ ReduceToAllOp::tensor_return_value_t ReduceToAllOp::create_output_tensors(
     if (tensor_args.optional_bw_intermediate_tensor.has_value()) {
         bw_intermediate_output_tensor = tensor_args.optional_bw_intermediate_tensor.value();
     }
-    auto coord_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[2], mesh_device);
-    if (tensor_args.optional_coord_intermediate_tensor.has_value()) {
-        coord_intermediate_output_tensor = tensor_args.optional_coord_intermediate_tensor.value();
+    auto round1_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[2], mesh_device);
+    if (tensor_args.optional_round1_intermediate_tensor.has_value()) {
+        round1_intermediate_output_tensor = tensor_args.optional_round1_intermediate_tensor.value();
     }
 
     auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
@@ -154,7 +154,7 @@ ReduceToAllOp::tensor_return_value_t ReduceToAllOp::create_output_tensors(
     }
 
     intermediate_output_tensors = {
-        fw_intermediate_output_tensor, bw_intermediate_output_tensor, coord_intermediate_output_tensor};
+        fw_intermediate_output_tensor, bw_intermediate_output_tensor, round1_intermediate_output_tensor};
     final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
 
     return {intermediate_output_tensors, final_output_tensors};
@@ -242,7 +242,7 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_output_tensor_m,
     const std::optional<Tensor>& optional_fw_intermediate_tensor,
     const std::optional<Tensor>& optional_bw_intermediate_tensor,
-    const std::optional<Tensor>& optional_coord_intermediate_tensor,
+    const std::optional<Tensor>& optional_round1_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
     const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores) {
     using OperationType = ttnn::operations::ccl::ReduceToAllOp;
@@ -263,6 +263,6 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
             optional_output_tensor_m,
             optional_fw_intermediate_tensor,
             optional_bw_intermediate_tensor,
-            optional_coord_intermediate_tensor});
+            optional_round1_intermediate_tensor});
 }
 }  // namespace ttnn::prim

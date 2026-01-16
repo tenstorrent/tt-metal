@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
-def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
+def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=512):
     """
     Compute the online softmax reduction of two partial results.
     Returns (l_new, s_new, m_new)
@@ -88,11 +88,24 @@ def compute_reference_reduce_to_all(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 389120}),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 409600,
+                "fabric_router_config": create_fabric_router_config(12288),
+            }
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_ring_trace"],
@@ -107,14 +120,14 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     root_coord = (1, 0)
     root_device_idx = root_coord[0]
     num_cores = 8
-    l_width = 128
+    l_width = 512
     s_m_width = 32
 
     batch_size = 8
     l_shape = [batch_size, l_width * num_cores]
     s_shape = [batch_size, s_m_width * num_cores]
     m_shape = [batch_size, s_m_width * num_cores]
-    intermediate_shape = [batch_size, 192 * num_cores]
+    intermediate_shape = [batch_size, 576 * num_cores]
 
     scale_value = 1.0
     topology = ttnn.Topology.Ring
@@ -150,9 +163,16 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
         }
     )
-    shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    round1_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 7)),
+        }
+    )
+    shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 512], ttnn.ShardOrientation.ROW_MAJOR)
     shard_spec_s = ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_int = ttnn.ShardSpec(shard_grid, [8, 192], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_int = ttnn.ShardSpec(shard_grid, [8, 576], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_round1_int = ttnn.ShardSpec(round1_grid, [8, 576], ttnn.ShardOrientation.ROW_MAJOR)
 
     mem_config_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_l
@@ -162,6 +182,9 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     )
     mem_config_int = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_int
+    )
+    mem_config_round1_int = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_round1_int
     )
 
     mesh_mapper_config = ttnn.MeshMapperConfig(
@@ -243,13 +266,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
         memory_config=mem_config_int,
         mesh_mapper=mesh_mapper2,
     )
-    coord_intermediate = ttnn.from_torch(
+    round1_intermediate = ttnn.from_torch(
         torch.zeros(intermediate_shape, dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
         tile=tile,
         dtype=dtype,
-        memory_config=mem_config_int,
+        memory_config=mem_config_round1_int,
         mesh_mapper=mesh_mapper2,
     )
 
@@ -265,7 +288,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
         scale_fp32=scale_value,
         fw_intermediate_tensor=fw_intermediate,
         bw_intermediate_tensor=bw_intermediate,
-        coord_intermediate_tensor=coord_intermediate,
+        round1_intermediate_tensor=round1_intermediate,
         topology=topology,
         input_mux_cores=mux_cores,
         extra_worker_cores=extra_worker_cores,
@@ -286,7 +309,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,
             bw_intermediate_tensor=bw_intermediate,
-            coord_intermediate_tensor=coord_intermediate,
+            round1_intermediate_tensor=round1_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,
@@ -308,7 +331,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,
             bw_intermediate_tensor=bw_intermediate,
-            coord_intermediate_tensor=coord_intermediate,
+            round1_intermediate_tensor=round1_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
             extra_worker_cores=extra_worker_cores,

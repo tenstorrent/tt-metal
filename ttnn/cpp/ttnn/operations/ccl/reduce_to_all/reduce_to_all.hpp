@@ -26,7 +26,7 @@ struct ExecuteReduceToAll {
         const std::optional<ttnn::Tensor>& optional_output_tensor_m = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_round1_intermediate_tensor = std::nullopt,
         const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
         const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
 };

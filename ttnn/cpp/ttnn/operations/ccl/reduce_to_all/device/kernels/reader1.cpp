@@ -103,6 +103,9 @@ void kernel_main() {
     // Barrier optimization: only one core sends the fabric barrier
     const bool is_barrier_leader = get_arg_val<uint32_t>(arg_idx++);
 
+    const uint32_t writer2_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t writer2_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -149,24 +152,26 @@ void kernel_main() {
 
     uint32_t round1_l1_write_addr = get_write_ptr(round1_interm_cb_id);
 
-    // noc read the round1 intermediate tensor then push it to compute cbs
     noc_async_read(
-        get_noc_addr(core_noc_x, core_noc_y, round1_interm_tensor_addr), round1_l1_write_addr, new_packet_size_bytes);
+        get_noc_addr(writer2_noc_x, writer2_noc_y, round1_interm_tensor_addr),
+        round1_l1_write_addr,
+        new_packet_size_bytes);
 
     noc_async_read_barrier();
 
-    // push to compute cbs
     cb_reserve_back(compute_cb_l, input_num_tiles);
     cb_reserve_back(compute_cb_s, 1);
     cb_reserve_back(compute_cb_m, 1);
 
-    tt_memmove<true, false, false, 0>(get_write_ptr(compute_cb_l), round1_l1_write_addr, packet_size_bytes);
+    uint32_t compute_cb_l_addr = get_write_ptr(compute_cb_l);
+    uint32_t compute_cb_s_addr = get_write_ptr(compute_cb_s);
+    uint32_t compute_cb_m_addr = get_write_ptr(compute_cb_m);
+
+    tt_memmove<true, false, false, 0>(compute_cb_l_addr, round1_l1_write_addr, packet_size_bytes);
     tt_memmove<true, false, false, 0>(
-        get_write_ptr(compute_cb_s), round1_l1_write_addr + packet_size_bytes, aligned_page_size_bytes);
+        compute_cb_s_addr, round1_l1_write_addr + packet_size_bytes, aligned_page_size_bytes);
     tt_memmove<true, false, false, 0>(
-        get_write_ptr(compute_cb_m),
-        round1_l1_write_addr + packet_size_bytes + aligned_page_size_bytes,
-        aligned_page_size_bytes);
+        compute_cb_m_addr, round1_l1_write_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
 
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_push_back(compute_cb_s, 1);
@@ -182,24 +187,25 @@ void kernel_main() {
     uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
+    cb_reserve_back(receiver_cb_id_s, 1);
+    cb_reserve_back(receiver_cb_id_m, 1);
+
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
+    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+
     uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, pkt_base_addr);
 
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();  // Wait for Round 2 data to be read before memmove
 
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    cb_push_back(receiver_cb_id_l, input_num_tiles);
-
-    cb_reserve_back(receiver_cb_id_s, 1);
-    cb_reserve_back(receiver_cb_id_m, 1);
-    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
-
     tt_memmove<true, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     tt_memmove<true, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+
+    cb_push_back(receiver_cb_id_l, input_num_tiles);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
 

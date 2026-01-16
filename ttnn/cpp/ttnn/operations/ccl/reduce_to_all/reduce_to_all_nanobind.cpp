@@ -84,7 +84,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& output_tensor_m,
                const std::optional<ttnn::Tensor>& fw_intermediate_tensor,
                const std::optional<ttnn::Tensor>& bw_intermediate_tensor,
-               const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
+               const std::optional<ttnn::Tensor>& round1_intermediate_tensor,
                const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
                const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores,
                const tt::tt_fabric::Topology topology) {
@@ -100,7 +100,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                     output_tensor_m,
                     fw_intermediate_tensor,
                     bw_intermediate_tensor,
-                    coord_intermediate_tensor,
+                    round1_intermediate_tensor,
                     input_mux_cores,
                     extra_worker_cores);
             },
@@ -115,7 +115,7 @@ void bind_reduce_to_all(nb::module_& mod) {
             nb::arg("output_tensor_m") = nb::none(),
             nb::arg("fw_intermediate_tensor") = nb::none(),
             nb::arg("bw_intermediate_tensor") = nb::none(),
-            nb::arg("coord_intermediate_tensor") = nb::none(),
+            nb::arg("round1_intermediate_tensor") = nb::none(),
             nb::arg("input_mux_cores") = nb::none(),
             nb::arg("extra_worker_cores") = nb::none(),
             nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});

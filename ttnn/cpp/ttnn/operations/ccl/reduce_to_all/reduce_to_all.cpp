@@ -21,7 +21,7 @@ std::vector<ttnn::Tensor> ExecuteReduceToAll::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor_m,
     const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor,
-    const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor,
+    const std::optional<ttnn::Tensor>& optional_round1_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
     const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores) {
     // first output tensor in list is intermediate and is discarded
@@ -37,7 +37,7 @@ std::vector<ttnn::Tensor> ExecuteReduceToAll::invoke(
                optional_output_tensor_m,
                optional_fw_intermediate_tensor,
                optional_bw_intermediate_tensor,
-               optional_coord_intermediate_tensor,
+               optional_round1_intermediate_tensor,
                input_mux_cores,
                extra_worker_cores)
         .at(1);
