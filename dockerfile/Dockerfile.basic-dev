@@ -44,11 +44,6 @@ COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
 
-# Install uv with version pinning (centralized in install-uv.sh) for better
-# venv handling
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
-
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN python3 -m venv $PYTHON_ENV_DIR
