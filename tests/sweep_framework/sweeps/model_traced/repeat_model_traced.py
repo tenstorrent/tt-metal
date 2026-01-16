@@ -58,7 +58,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     output_memory_config,
-    shape,
+    repeat_shape,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -77,11 +77,11 @@ def run(
     )(in_shape)
 
     # ttnn.repeat takes repetition_vector - number of repetitions for each dimension
-    # The shape parameter in our test is the repetition vector
-    if isinstance(shape, (tuple, list)):
-        repetition_vector = tuple(shape)
+    # The repeat_shape parameter in our test is the repetition vector
+    if isinstance(repeat_shape, (tuple, list)):
+        repetition_vector = tuple(repeat_shape)
     else:
-        repetition_vector = shape
+        repetition_vector = repeat_shape
 
     # torch.repeat uses the same repetition vector
     torch_output_tensor = torch_input_tensor_a.repeat(repetition_vector)
@@ -96,13 +96,9 @@ def run(
     }
 
     # Only add device and memory_config if not HOST storage
-    # Always use DRAM to avoid OOM - repeat can create very large outputs
     if not is_host:
         from_torch_kwargs["device"] = device
         from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-
-        # Also ensure output uses DRAM
-        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 

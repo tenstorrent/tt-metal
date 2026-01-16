@@ -59,17 +59,17 @@ python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-g
 The tool provides specialized fabric stream register modes for different aspects of fabric debugging:
 
 #### Flow Control Debugging (Buffer Free Slots)
-- **`sender_free_slots`**: Monitor sender channel buffer space (streams 19-25)
-- **`receiver_free_slots`**: Monitor receiver channel buffer space (streams 13-18)
+- **`sender_free_slots`**: Monitor sender channel buffer space (streams 22-29, 8 channels including Z)
+- **`receiver_free_slots`**: Monitor receiver channel buffer space (streams 14-21, 4 edges per VC including Z)
 - **`all_fabric_free_slots`**: Complete view of all fabric flow control registers (DEFAULT)
 
 **Interpretation:** HIGH values = good (buffers have space for more packets)
 
 #### Acknowledgment and Completion Stream Monitoring (Remote Buffer Status)
 - **`sender_acks`**: Monitor ack stream remote buffer status (streams 2-5)
-- **`sender_completions`**: Monitor completion stream remote buffer status (streams 6-12)
+- **`sender_completions`**: Monitor completion stream remote buffer status (streams 6-13, 8 channels including Z)
 - **`receiver_pkts_sent`**: Monitor packet sent stream remote buffer status (streams 0-1)
-- **`all_acks_and_completions`**: Combined view of all ack/completion streams (streams 2-12)
+- **`all_acks_and_completions`**: Combined view of all ack/completion streams (streams 2-13)
 
 **Interpretation:** LOW/ZERO values = good (remote side consuming acks/completions immediately)
 These streams send credits/acks to remote routers. The BUF_SPACE_AVAILABLE register shows buffer space at the remote destination. Zero means the remote side is processing immediately (expected when idle or running smoothly). **Increasing values may indicate the remote side is NOT consuming acks/completions**

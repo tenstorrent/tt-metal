@@ -28,6 +28,7 @@
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "dispatch/topology.hpp"
+#include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
@@ -309,27 +310,18 @@ void MetalContext::initialize(
     }
     watcher_server_->init_devices();
 
-    // Parallelize device initialization
+    // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
+    // See https://github.com/tenstorrent/tt-metal/issues/35701
     {
         ZoneScopedN("Resets and FW Launch");
 
-        // Clear and reuse existing task group vectors
-        futures.clear();
-
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(detail::async([this, device_id]() {
-                ClearNocData(device_id);
+            ClearNocData(device_id);
 
-                reset_cores(device_id);
+            reset_cores(device_id);
 
-                initialize_and_launch_firmware(device_id);
-            }));
-        }
-
-        // Wait for all async tasks to complete
-        for (auto& fut : futures) {
-            fut.wait();
+            initialize_and_launch_firmware(device_id);
         }
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
@@ -540,7 +532,7 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    return dispatch_mem_map(dispatch_core_config_.get_core_type());
+    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
@@ -687,7 +679,8 @@ void MetalContext::set_fabric_config(
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config,
     tt_fabric::FabricUDMMode fabric_udm_mode,
-    tt_fabric::FabricManagerMode fabric_manager) {
+    tt_fabric::FabricManagerMode fabric_manager,
+    tt_fabric::FabricRouterConfig router_config) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -745,6 +738,7 @@ void MetalContext::set_fabric_config(
     this->set_fabric_tensix_config(fabric_tensix_config);
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
+    this->fabric_router_config_ = router_config;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -756,7 +750,7 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_);
+        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_router_config_);
     }
     control_plane.configure_routing_tables_for_fabric_ethernet_channels(
         this->fabric_config_, this->fabric_reliability_mode_);
@@ -777,6 +771,8 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
 tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+
+const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const { return fabric_router_config_; }
 
 void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
     fabric_tensix_config_ = fabric_tensix_config;

@@ -504,7 +504,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "merge",
             &CoreRangeSet::merge<CoreRangeSet>,
             nb::arg("other"),
-            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
+            "Merge this CoreRangeSet with another CoreRangeSet and return the result")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     m_tensor.def(
         "corerange_to_cores",

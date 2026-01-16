@@ -37,7 +37,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -80,7 +80,8 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 }
 #else
 
-void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
+void log_external_operation(
+    const operation::ExternalOperation& /*operation*/, const std::vector<Tensor>& /*input_tensors*/) {}
 
 #endif
 
@@ -349,6 +350,12 @@ struct RowMajorHostBuffer {
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
 // If `padded_output` is false, the returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
+    // conversion to Host storage after
+    // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
+    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+        return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
+    }
+
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
     // Performs logical data conversion on the concrete data type.

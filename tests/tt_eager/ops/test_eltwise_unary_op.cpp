@@ -109,7 +109,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
         auto device_output = ttnn::tanh(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
-    TT_ASSERT(false, "Unsupported function");
+    TT_FATAL(false, "Unsupported function");
     return false;
 }
 

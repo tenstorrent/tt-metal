@@ -23,7 +23,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
         topology,
         false,  // no tensix
         RouterVariant::MESH,
-        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr);
+        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr,
+        false);
 
     // If Z routers exist in this fabric, add Z_ROUTER mapping
     if (intermesh_vc_config_.router_type == IntermeshRouterType::Z_INTERMESH) {
@@ -31,7 +32,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
             topology,
             false,  // no tensix
             RouterVariant::Z_ROUTER,
-            &intermesh_vc_config_);
+            &intermesh_vc_config_,
+            true);
     }
 
     // Compute max channel counts across all router types in this fabric

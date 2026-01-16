@@ -43,7 +43,7 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {

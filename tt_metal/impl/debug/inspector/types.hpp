@@ -9,14 +9,15 @@
 #include <unordered_map>
 
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal {
     class Inspector;
     class MetalContext;
 
     namespace distributed {
-        class MeshDevice;
-        class MeshWorkloadImpl;
+    class MeshDeviceImpl;
+    class MeshWorkloadImpl;
     }
 }
 
@@ -42,7 +43,7 @@ struct ProgramData {
 };
 
 struct MeshDeviceData {
-    const distributed::MeshDevice* mesh_device = nullptr;
+    const distributed::MeshDeviceImpl* mesh_device = nullptr;
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;

@@ -124,9 +124,7 @@ static std::vector<uint32_t> get_ctime_args_single_core(
 }
 
 ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& dim = operation_attributes.dim;
@@ -188,9 +186,9 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
 
 void ArgMaxSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ArgmaxParams& /*operation_attributes*/,
+    const ArgmaxInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 

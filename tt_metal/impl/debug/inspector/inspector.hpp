@@ -6,12 +6,13 @@
 
 #include <memory>
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
 namespace distributed {
-class MeshDevice;
+class MeshDeviceImpl;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
@@ -44,9 +45,9 @@ public:
         const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
 
     static void mesh_device_created(
-        const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept;
-    static void mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept;
-    static void mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept;
+        const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept;
+    static void mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept;
+    static void mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept;
 
     static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;

@@ -14,8 +14,7 @@
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program {
 
 struct MatmulReduceScatterAsyncSharedVariables {
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
-        reduce_scatter_override_runtime_arguments_callback;
+    reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
     matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
 };
 
