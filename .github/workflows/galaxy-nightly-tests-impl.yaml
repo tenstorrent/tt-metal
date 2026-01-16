@@ -105,7 +105,7 @@ jobs:
       matrix:
         test-group: [
           { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar, Camilo Vega
-          { name: "BH Galaxy Fabric unit tests", arch: blackhole, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 45, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
+          { name: "BH Galaxy Fabric unit tests", arch: blackhole, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 30, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           { name: "BH Galaxy Fabric Torus Stability Tests", arch: blackhole, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml, timeout: 20, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
         ]
     name: ${{ matrix.test-group.name }}
