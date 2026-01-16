@@ -209,10 +209,6 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
 
-    // Write Round 2 received data to data core's intermediate shard
-    uint64_t bw_interm_data_core_addr = get_noc_addr(core_noc_x, core_noc_y, pkt_base_addr);
-    noc_async_write(packet_l1_addr, bw_interm_data_core_addr, new_packet_size_bytes);
-    noc_async_write_barrier();
     cb_push_back(packet_cb_id, 1);
 
     // Disconnect from mux
