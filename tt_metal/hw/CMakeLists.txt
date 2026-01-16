@@ -317,6 +317,13 @@ set(GPP_FLAGS_common
     -Wno-unused-function
     -Os
     -fno-tree-loop-distribute-patterns
+    # Reproducible build flags to ensure consistent .o files across builds
+    -ffile-prefix-map=${PROJECT_SOURCE_DIR}=.
+    -fdebug-prefix-map=${PROJECT_SOURCE_DIR}=.
+    -Wno-builtin-macro-redefined
+    -D__DATE__="redacted"
+    -D__TIME__="redacted"
+    -D__TIMESTAMP__="redacted"
 )
 
 # We are going to build 5 or 6 object files foreach ARCH
