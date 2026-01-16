@@ -15,9 +15,11 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <iterator>
 #include <memory>
@@ -45,10 +47,15 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
+#include <tracy/TracyTTDevice.hpp>
+#include <common/TracyTTDeviceData.hpp>
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
+#include "llrt/hal.hpp"
 
 #include "allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/dispatch/perf_telemetry_tracy_handler.hpp"
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -352,6 +359,11 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+
+    // Initialize D2H socket for real-time performance telemetry streaming
+    // This uses the dispatch core which runs dispatch_subordinate kernel
+    mesh_device->init_perf_telemetry_socket();
+
     return mesh_device;
 }
 
@@ -444,6 +456,13 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+
+    // Initialize D2H socket for real-time performance telemetry streaming on each submesh
+    // (parent mesh_device is not fully initialized, but each submesh is)
+    for (auto& [device_id, submesh] : result) {
+        submesh->init_perf_telemetry_socket();
+    }
+
     return result;
 }
 
@@ -732,6 +751,16 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // Stop the perf telemetry scrubbing thread if running
+    if (perf_telemetry_thread_.joinable()) {
+        perf_telemetry_stop_.store(true);
+        perf_telemetry_thread_.join();
+        log_trace(tt::LogMetal, "Perf telemetry receiver thread stopped");
+    }
+
+    // Destroy Tracy handler (unregisters callback and cleans up all Tracy contexts)
+    perf_telemetry_tracy_handler_.reset();
 
     if (this->is_initialized()) {
         ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
@@ -1195,6 +1224,388 @@ void MeshDeviceImpl::init_fabric() {
     reference_device()->init_fabric();
 }
 
+// Sync marker ID - must match device-side TELEMETRY_SYNC_MARKER_ID
+constexpr uint32_t TELEMETRY_SYNC_MARKER_ID = 0xFFFFFFFF;
+
+void MeshDeviceImpl::run_perf_telemetry_sync(PerfTelemetryDeviceState& dev_state, uint32_t num_samples) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    int64_t host_start_time = TracyGetCpuTime();
+    std::vector<std::pair<uint64_t, uint32_t>> samples;  // (device_time, host_time)
+
+    // Enter sync mode - write sync_request = 1
+    std::vector<uint32_t> sync_req_data = {1};
+    tt::tt_metal::detail::WriteToDeviceL1(
+        dev_state.device, dev_state.telemetry_core, dev_state.sync_request_addr, sync_req_data, CoreType::WORKER);
+
+    // Collect samples (+1 for the first one we discard)
+    for (uint32_t i = 0; i < num_samples + 1; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        // Capture host time relative to start
+        uint32_t host_time = static_cast<uint32_t>(TracyGetCpuTime() - host_start_time);
+
+        // Write host timestamp to device
+        std::vector<uint32_t> host_time_data = {host_time};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device, dev_state.telemetry_core, dev_state.sync_host_ts_addr, host_time_data, CoreType::WORKER);
+
+        // Wait for response from D2H socket
+        dev_state.socket->wait_for_pages(1);
+        uint32_t* data = dev_state.socket->get_read_ptr();
+
+        // Extract device timestamp and echoed host timestamp
+        uint64_t device_time = (static_cast<uint64_t>(data[0]) << 32) | data[1];
+        uint32_t echoed_host_time = data[2];
+        uint32_t marker = data[3];
+
+        dev_state.socket->pop_pages(1);
+        dev_state.socket->notify_sender();
+
+        // Discard first sample - can be very off
+        if (i == 0) {
+            continue;
+        }
+
+        if (marker == TELEMETRY_SYNC_MARKER_ID) {
+            samples.push_back({device_time, echoed_host_time});
+        }
+    }
+
+    // Exit sync mode - write sync_request = 0
+    sync_req_data[0] = 0;
+    tt::tt_metal::detail::WriteToDeviceL1(
+        dev_state.device, dev_state.telemetry_core, dev_state.sync_request_addr, sync_req_data, CoreType::WORKER);
+
+    // Compute sync parameters using linear regression
+    if (samples.size() >= 2) {
+        double host_sum = 0, device_sum = 0;
+        double host_sq_sum = 0, host_device_sum = 0;
+
+        for (const auto& [device_time, host_time] : samples) {
+            host_sum += host_time;
+            device_sum += device_time;
+            host_sq_sum += static_cast<double>(host_time) * host_time;
+            host_device_sum += static_cast<double>(host_time) * device_time;
+        }
+
+        double n = static_cast<double>(samples.size());
+        double tracy_ratio = TracyGetTimerMul();
+
+        // frequency = device_cycles per ns (GHz)
+        double denominator = (host_sq_sum * n - host_sum * host_sum) * tracy_ratio;
+        if (std::abs(denominator) > 1e-10) {
+            dev_state.sync_frequency = (host_device_sum * n - host_sum * device_sum) / denominator;
+        } else {
+            // Fallback to device AICLK
+            dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
+        }
+
+        // delay = device time (in cycles) at host_start_time (our smallest_host_time)
+        // From linear regression: device_time = delay + (host_time - smallest_host_time) * freq * tracy_ratio
+        // At host_start_time (smallest), device_time = delay
+        double delay = (device_sum - dev_state.sync_frequency * host_sum * tracy_ratio) / n;
+        dev_state.first_timestamp = static_cast<uint64_t>(delay);
+        dev_state.sync_host_start = host_start_time;
+
+        log_info(
+            tt::LogMetal,
+            "[Perf Telemetry] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
+            "device_time_at_sync={} cycles",
+            dev_state.chip_id,
+            samples.size(),
+            dev_state.sync_frequency,
+            dev_state.first_timestamp);
+    } else {
+        // Fallback if not enough samples
+        dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
+        dev_state.first_timestamp = 0;
+        dev_state.sync_host_start = host_start_time;
+        log_warning(
+            tt::LogMetal,
+            "[Perf Telemetry] Device {} sync failed - not enough samples, using default frequency",
+            dev_state.chip_id);
+    }
+}
+
+void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    if (!perf_telemetry_devices_.empty()) {
+        return;
+    }
+
+    // Configuration for perf telemetry socket
+    // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
+    constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
+    constexpr uint32_t kPerfTelemetryPageSize = 64;    // 64 bytes per telemetry page
+    // L1 data buffer for telemetry - kernel reads address from config
+    constexpr uint32_t kL1DataBufferSize = kPerfTelemetryPageSize;
+
+    // HAL offsets are the same for all devices (same arch)
+    const auto& hal = MetalContext::instance().hal();
+    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    uint32_t perf_telemetry_offset =
+        factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::perf_telemetry);
+    uint32_t config_buffer_addr_offset =
+        factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::config_buffer_addr);
+    uint32_t sync_request_offset =
+        factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::sync_request);
+    uint32_t sync_host_timestamp_offset =
+        factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::sync_host_timestamp);
+    uint32_t perf_telemetry_base_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset;
+    uint32_t perf_telemetry_mailbox_addr = perf_telemetry_base_addr + config_buffer_addr_offset;
+
+    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+    const std::string telemetry_kernel_path = "tt_metal/impl/dispatch/kernels/cq_telemetry.cpp";
+
+    // Set up telemetry for each local device in the mesh
+    for (const auto& coord : MeshCoordinateRange(view_->shape())) {
+        if (!this->is_local(coord)) {
+            continue;
+        }
+
+        IDevice* device = this->get_device(coord);
+        auto device_id = device->id();
+
+        // Find the closest available dispatch core to PCIe for telemetry
+        std::optional<tt_cxy_pair> telemetry_core_opt =
+            dispatch_core_manager.get_closest_available_dispatch_core_to_pcie(device_id);
+
+        TT_FATAL(
+            telemetry_core_opt.has_value(),
+            "No available dispatch core found for telemetry on device {}. "
+            "Ensure dispatch core descriptor allocates enough cores for dispatch kernels and telemetry.",
+            device_id);
+
+        CoreCoord telemetry_core(telemetry_core_opt->x, telemetry_core_opt->y);
+        log_info(
+            tt::LogMetal,
+            "Using closest available dispatch core ({}, {}) to PCIe for telemetry on device {}",
+            telemetry_core.x,
+            telemetry_core.y,
+            device_id);
+
+        // Create per-device state
+        PerfTelemetryDeviceState dev_state;
+        dev_state.device = device;
+        dev_state.chip_id = device_id;
+        dev_state.mesh_coord = coord;
+        dev_state.telemetry_core = telemetry_core;
+
+        // Create D2H socket for this device
+        auto sender_core = MeshCoreCoord{coord, telemetry_core};
+
+        log_info(
+            tt::LogMetal,
+            "Initializing perf telemetry D2H socket for device {} on MeshDevice {}",
+            device_id,
+            this->id());
+
+        dev_state.socket = std::make_unique<D2HSocket>(
+            mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize, kL1DataBufferSize);
+        dev_state.socket->set_page_size(kPerfTelemetryPageSize);
+
+        // Populate L1 data buffer with test data
+        uint32_t l1_data_addr = dev_state.socket->get_l1_data_buffer_address();
+        if (l1_data_addr != 0) {
+            std::vector<uint32_t> test_data(kPerfTelemetryPageSize / sizeof(uint32_t));
+            for (uint32_t i = 0; i < test_data.size(); i++) {
+                test_data[i] = 0xDEAD0000 + i;
+            }
+            tt::tt_metal::detail::WriteToDeviceL1(device, telemetry_core, l1_data_addr, test_data, CoreType::WORKER);
+        }
+
+        // Write config buffer address to mailbox
+        uint32_t config_buffer_addr = dev_state.socket->get_config_buffer_address();
+        std::vector<uint32_t> addr_data = {config_buffer_addr};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            device, telemetry_core, perf_telemetry_mailbox_addr, addr_data, CoreType::WORKER);
+
+        log_info(
+            tt::LogMetal,
+            "Device {}: wrote perf telemetry config buffer addr 0x{:x} to mailbox addr 0x{:x}",
+            device_id,
+            config_buffer_addr,
+            perf_telemetry_mailbox_addr);
+
+        // Store sync addresses
+        dev_state.sync_request_addr = perf_telemetry_base_addr + sync_request_offset;
+        dev_state.sync_host_ts_addr = perf_telemetry_base_addr + sync_host_timestamp_offset;
+
+        // Write telemetry core info to dispatch_s core's mailbox for termination signaling
+        if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
+            const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
+            CoreCoord dispatch_s_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
+
+            CoreCoord telemetry_virtual = device->virtual_core_from_logical_core(telemetry_core, CoreType::WORKER);
+            uint32_t telemetry_noc_xy = hal.noc_xy_encoding(telemetry_virtual.x, telemetry_virtual.y);
+
+            uint32_t telemetry_core_noc_xy_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                dev_msgs::perf_telemetry_msg_t::Field::telemetry_core_noc_xy);
+            uint32_t telemetry_mailbox_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                dev_msgs::perf_telemetry_msg_t::Field::telemetry_mailbox_addr);
+            uint32_t telemetry_state_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                dev_msgs::perf_telemetry_msg_t::Field::telemetry_state);
+            uint32_t telemetry_core_state_addr = perf_telemetry_base_addr + telemetry_state_offset;
+            uint32_t dispatch_s_mailbox_base = perf_telemetry_base_addr;
+
+            std::vector<uint32_t> noc_xy_data = {telemetry_noc_xy};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device,
+                dispatch_s_core,
+                dispatch_s_mailbox_base + telemetry_core_noc_xy_offset,
+                noc_xy_data,
+                CoreType::WORKER);
+
+            std::vector<uint32_t> mailbox_addr_data = {telemetry_core_state_addr};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device,
+                dispatch_s_core,
+                dispatch_s_mailbox_base + telemetry_mailbox_addr_offset,
+                mailbox_addr_data,
+                CoreType::WORKER);
+
+            log_info(
+                tt::LogMetal,
+                "Device {}: wrote telemetry core info (noc_xy=0x{:x}, mailbox_addr=0x{:x}) to dispatch_s ({}, {})",
+                device_id,
+                telemetry_noc_xy,
+                telemetry_core_state_addr,
+                dispatch_s_core.x,
+                dispatch_s_core.y);
+        }
+
+        // Compile and launch telemetry kernel via slow dispatch
+        {
+            Program telemetry_program;
+
+            uint32_t dispatch_core_noc_x = 0;
+            uint32_t dispatch_core_noc_y = 0;
+            uint32_t dispatch_data_addr_a = 0;
+            uint32_t dispatch_data_addr_b = 0;
+            if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
+                const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
+                CoreCoord dispatch_s_virtual = device->virtual_core_from_logical_core(
+                    CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y), CoreType::WORKER);
+                dispatch_core_noc_x = dispatch_s_virtual.x;
+                dispatch_core_noc_y = dispatch_s_virtual.y;
+
+                uint32_t kernel_start_a_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                    dev_msgs::perf_telemetry_msg_t::Field::kernel_start_a);
+                uint32_t kernel_start_b_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                    dev_msgs::perf_telemetry_msg_t::Field::kernel_start_b);
+                dispatch_data_addr_a = perf_telemetry_base_addr + kernel_start_a_offset;
+                dispatch_data_addr_b = perf_telemetry_base_addr + kernel_start_b_offset;
+            }
+
+            DataMovementConfig telemetry_config;
+            telemetry_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
+            telemetry_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
+            telemetry_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
+            telemetry_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
+            CreateKernel(telemetry_program, telemetry_kernel_path, telemetry_core, telemetry_config);
+
+            tt::tt_metal::detail::CompileProgram(device, telemetry_program, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, telemetry_program, /*force_slow_dispatch=*/true);
+            ::tt::tt_metal::detail::LaunchProgram(
+                device, telemetry_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
+            log_info(
+                tt::LogMetal,
+                "Device {}: launched telemetry kernel on core ({}, {})",
+                device_id,
+                telemetry_core.x,
+                telemetry_core.y);
+        }
+
+        perf_telemetry_devices_.push_back(std::move(dev_state));
+    }
+
+    if (perf_telemetry_devices_.empty()) {
+        log_warning(tt::LogMetal, "[Perf Telemetry] No local devices found in mesh, skipping telemetry setup");
+        return;
+    }
+
+    // Run host-device sync for each device
+    for (auto& dev_state : perf_telemetry_devices_) {
+        run_perf_telemetry_sync(dev_state, 100);  // 100 samples, discard first
+    }
+
+    // Create Tracy handler and register all device contexts
+    perf_telemetry_tracy_handler_ = std::make_unique<PerfTelemetryTracyHandler>();
+    for (const auto& dev_state : perf_telemetry_devices_) {
+        perf_telemetry_tracy_handler_->AddDevice(
+            dev_state.chip_id,
+            dev_state.sync_host_start,
+            static_cast<double>(dev_state.first_timestamp),
+            dev_state.sync_frequency);
+    }
+
+    // Start background receiver thread that polls all device sockets round-robin
+    perf_telemetry_stop_.store(false);
+    perf_telemetry_thread_ = std::thread([this]() {
+        uint64_t pages_received = 0;
+
+        log_info(
+            tt::LogMetal, "[Perf Telemetry] Receiver thread started for {} devices", perf_telemetry_devices_.size());
+
+        while (!perf_telemetry_stop_.load()) {
+            bool any_data = false;
+
+            for (auto& dev_state : perf_telemetry_devices_) {
+                try {
+                    uint32_t available = dev_state.socket->pages_available();
+                    if (available == 0) {
+                        continue;
+                    }
+
+                    dev_state.socket->wait_for_pages(1);
+                    uint32_t* read_ptr = dev_state.socket->get_read_ptr();
+
+                    // Extract timestamps: kernel_start (words 0-3), kernel_end (words 4-7)
+                    // Each telemetry_timestamp_t: time_hi, time_lo, id, header
+                    uint64_t start_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
+                    uint32_t start_id = read_ptr[2];
+                    uint64_t end_time = (static_cast<uint64_t>(read_ptr[4]) << 32) | read_ptr[5];
+
+                    // Invoke registered program perf callbacks
+                    {
+                        tt::ProgramPerfRecord record;
+                        record.program_id = start_id;
+                        record.start_timestamp = start_time;
+                        record.end_timestamp = end_time;
+                        record.frequency = dev_state.sync_frequency;
+                        record.chip_id = dev_state.chip_id;
+                        record.kernel_sources =
+                            start_id > 0 ? tt::GetKernelSourcesVecForRuntimeId(start_id) : std::vector<std::string>{};
+                        tt::InvokeProgramPerfCallbacks(record);
+                    }
+
+                    dev_state.socket->pop_pages(1);
+                    dev_state.socket->notify_sender();
+                    pages_received++;
+                    any_data = true;
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Perf Telemetry] Exception in receiver for device {}: {}",
+                        dev_state.chip_id,
+                        e.what());
+                }
+            }
+
+            if (!any_data) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+
+        log_info(tt::LogMetal, "[Perf Telemetry] Receiver thread stopped after {} pages", pages_received);
+    });
+}
+
+D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const {
+    return perf_telemetry_devices_.empty() ? nullptr : perf_telemetry_devices_.front().socket.get();
+}
+
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
@@ -1292,6 +1703,8 @@ std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
+    TT_FATAL(
+        sub_device_manager_tracker_ != nullptr, "sub_device_manager_tracker_ is NULL! MeshDeviceImpl not initialized.");
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
@@ -1443,6 +1856,8 @@ void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
 void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
+void MeshDevice::init_perf_telemetry_socket() { pimpl_->init_perf_telemetry_socket(shared_from_this()); }
+D2HSocket* MeshDevice::get_perf_telemetry_socket() const { return pimpl_->get_perf_telemetry_socket(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }

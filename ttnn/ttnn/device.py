@@ -245,4 +245,9 @@ SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
+# Perf telemetry callbacks (experimental)
+ProgramPerfRecord = ttnn._ttnn.device.ProgramPerfRecord
+RegisterProgramPerfCallback = ttnn._ttnn.device.RegisterProgramPerfCallback
+UnregisterProgramPerfCallback = ttnn._ttnn.device.UnregisterProgramPerfCallback
+
 __all__ = []

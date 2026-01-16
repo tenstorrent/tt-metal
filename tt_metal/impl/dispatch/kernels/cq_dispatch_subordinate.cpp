@@ -15,6 +15,9 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/perf_telemetry.hpp"
+#include "hostdevcommon/profiler_common.h"
+#include "hostdev/dev_msgs.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -51,6 +54,10 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
+
+// Pointer to perf telemetry config in mailbox (for setting terminate flag)
+volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
@@ -134,6 +141,28 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
+// Record end timestamp, signal telemetry core, and switch local state.
+// Call this at the end of each iteration to complete the telemetry cycle.
+FORCE_INLINE
+void signal_telemetry_and_switch(volatile tt_l1_ptr perf_telemetry_msg_t* mailbox) {
+    DeviceZoneScopedN("signal_telemetry_and_switch");
+    // Determine which buffer we just wrote to
+    TelemetryState current_state = static_cast<TelemetryState>(mailbox->telemetry_state);
+    bool used_buffer_a = (current_state == TELEMETRY_STATE_PUSH_B);
+
+    // New state: push the buffer we just wrote to
+    TelemetryState new_state = used_buffer_a ? TELEMETRY_STATE_PUSH_A : TELEMETRY_STATE_PUSH_B;
+
+    // Update local mailbox state (so next iteration writes to other buffer)
+    mailbox->telemetry_state = new_state;
+
+    // Signal telemetry core if configured
+    if (mailbox->telemetry_core_noc_xy != 0) {
+        uint64_t telemetry_addr = get_noc_addr_helper(mailbox->telemetry_core_noc_xy, mailbox->telemetry_mailbox_addr);
+        dispatch_s_noc_inline_dw_write(telemetry_addr, static_cast<uint32_t>(new_state), my_noc_index);
+    }
+}
+
 FORCE_INLINE
 uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
@@ -151,9 +180,11 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    // DPRINT << wait_count << "," << wait_stream << ENDL();
     while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
     WAYPOINT("WCD");
+    record_telemetry_timestamp(perf_telemetry_mailbox, false);
 }
 
 template <bool flush_write = false>
@@ -187,6 +218,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
 
     WAYPOINT("DAPW");
+
     uint32_t heartbeat = 0;
     // Stall until the number of pages already acquired + the number that need to be acquired is greater
     // than the number available
@@ -206,6 +238,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
+    DeviceZoneScopedN("GO");
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -356,6 +389,9 @@ void kernel_main() {
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        // Record start timestamp (buffer selection based on mailbox state)
+        record_telemetry_timestamp(perf_telemetry_mailbox, true);
+        set_program_id(perf_telemetry_mailbox);
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
@@ -365,7 +401,17 @@ void kernel_main() {
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
-            case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                // Signal local TRISC to terminate
+                perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_TERMINATE;
+                // Signal remote telemetry core to terminate (if configured)
+                if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
+                    uint64_t telemetry_terminate_addr = get_noc_addr_helper(
+                        perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
+                    dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, TELEMETRY_STATE_TERMINATE, my_noc_index);
+                }
+                done = true;
+                break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
@@ -378,6 +424,8 @@ void kernel_main() {
             cmd_ptr = cb_base;
         }
         total_pages_acquired++;
+
+        signal_telemetry_and_switch(perf_telemetry_mailbox);
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);

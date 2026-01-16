@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/perf_telemetry.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -45,6 +47,10 @@ namespace nb = nanobind;
 // NOLINTBEGIN(bugprone-unused-raii)
 
 namespace {
+
+// Prevent Python callback GC while registered.  Keyed by handle returned from C++ RegisterProgramPerfCallback.
+// Access only from the Python thread (always under GIL), so no mutex needed.
+std::unordered_map<uint64_t, PyObject*> python_perf_callback_refs;
 
 void ttnn_device(nb::module_& mod) {
     mod.def(
@@ -130,6 +136,27 @@ void py_device_module_types(nb::module_& m_device) {
     nb::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
     nb::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
+
+    nb::class_<tt::tt_metal::experimental::ProgramPerfRecord>(
+        m_device, "ProgramPerfRecord", "Record containing real-time program performance telemetry data from a device.")
+        .def_ro("program_id", &tt::tt_metal::experimental::ProgramPerfRecord::program_id, "Runtime program ID")
+        .def_ro(
+            "start_timestamp",
+            &tt::tt_metal::experimental::ProgramPerfRecord::start_timestamp,
+            "Device start timestamp (raw ticks)")
+        .def_ro(
+            "end_timestamp",
+            &tt::tt_metal::experimental::ProgramPerfRecord::end_timestamp,
+            "Device end timestamp (raw ticks)")
+        .def_ro(
+            "frequency",
+            &tt::tt_metal::experimental::ProgramPerfRecord::frequency,
+            "Device clock frequency (cycles per ns)")
+        .def_ro("chip_id", &tt::tt_metal::experimental::ProgramPerfRecord::chip_id, "Device chip ID")
+        .def_ro(
+            "kernel_sources",
+            &tt::tt_metal::experimental::ProgramPerfRecord::kernel_sources,
+            "Kernel source paths for this program");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -486,6 +513,61 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "RegisterProgramPerfCallback",
+        [](nb::callable callback) -> uint64_t {
+            // Hold a strong ref to the Python callable so it isn't garbage-collected
+            // while the C++ callback is alive.
+            PyObject* raw_cb = callback.ptr();
+            Py_INCREF(raw_cb);
+
+            auto handle = tt::tt_metal::experimental::RegisterProgramPerfCallback(
+                [raw_cb](const tt::tt_metal::experimental::ProgramPerfRecord& record) {
+                    nb::gil_scoped_acquire gil;
+                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
+                });
+
+            python_perf_callback_refs[handle] = raw_cb;
+            return handle;
+        },
+        nb::arg("callback"),
+        R"doc(
+            Register a callback to be invoked when real-time program performance
+            telemetry data arrives from a device. The callback receives a
+            ProgramPerfRecord and is called from the telemetry receiver thread.
+
+            Multiple callbacks can be registered.
+
+            Args:
+                callback: A callable that accepts a single ProgramPerfRecord argument.
+
+            Returns:
+                int: A handle that can be passed to UnregisterProgramPerfCallback.
+
+            Example:
+                >>> def my_callback(record):
+                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
+                >>> handle = ttnn.device.RegisterProgramPerfCallback(my_callback)
+        )doc");
+
+    m_device.def(
+        "UnregisterProgramPerfCallback",
+        [](uint64_t handle) {
+            tt::tt_metal::experimental::UnregisterProgramPerfCallback(handle);
+            auto it = python_perf_callback_refs.find(handle);
+            if (it != python_perf_callback_refs.end()) {
+                Py_DECREF(it->second);
+                python_perf_callback_refs.erase(it);
+            }
+        },
+        nb::arg("handle"),
+        R"doc(
+            Unregister a previously registered program performance telemetry callback.
+
+            Args:
+                handle (int): The handle returned by RegisterProgramPerfCallback.
+        )doc");
 }
 
 void py_device_module(nb::module_& mod) {

@@ -47,4 +47,39 @@ void RecordProgramRun(uint64_t program_id) {
     tt::tt_metal::MetalContext::instance().data_collector()->RecordProgramRun(program_id);
 }
 
+void RecordKernelSourceMap(ProgramImpl& program) {
+    tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelSourceMap(program);
+}
+
+std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
+}
+
+std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesVecForRuntimeId(runtime_id);
+}
+
+ProgramPerfCallbackHandle RegisterProgramPerfCallback(ProgramPerfCallback callback) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramPerfCallback(std::move(callback));
+}
+
+void UnregisterProgramPerfCallback(ProgramPerfCallbackHandle handle) {
+    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramPerfCallback(handle);
+}
+
+void InvokeProgramPerfCallbacks(const ProgramPerfRecord& record) {
+    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramPerfCallbacks(record);
+}
+
 }  // namespace tt
+
+// Public experimental API — delegates to the internal tt:: functions.
+namespace tt::tt_metal::experimental {
+
+ProgramPerfCallbackHandle RegisterProgramPerfCallback(ProgramPerfCallback callback) {
+    return tt::RegisterProgramPerfCallback(std::move(callback));
+}
+
+void UnregisterProgramPerfCallback(ProgramPerfCallbackHandle handle) { tt::UnregisterProgramPerfCallback(handle); }
+
+}  // namespace tt::tt_metal::experimental

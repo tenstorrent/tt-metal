@@ -434,13 +434,13 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
 
 template <typename T>
 __attribute__((__noinline__)) DebugPrinter operator<<(DebugPrinter dp, T val) {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(PROFILE_KERNEL)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
     DebugPrintData data{
         .sz = DebugPrintTypeToSize<T>(val),  // includes terminating 0 for char*
         .data_ptr = DebugPrintTypeAddr<T>(&val),
         .type_id = DebugPrintTypeToId<T>()};
     debug_print(dp, data);
-#endif  // ENABLE_DEBUG_PRINT && !PROFILE_KERNEL
+#endif  // DEBUG_PRINT_ENABLED && !FORCE_DPRINT_OFF
     return dp;
 }
 

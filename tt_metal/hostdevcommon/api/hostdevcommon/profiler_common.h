@@ -82,7 +82,7 @@ struct TimestampedDataSize<TS_DATA_16B> {
 };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
-constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 28;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
