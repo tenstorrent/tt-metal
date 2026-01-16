@@ -569,6 +569,9 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // std::cout << "fast_and_approximate_mode: " << fast_and_approximate_mode.value_or(false) << std::endl;
+    if (lhs.dtype() != DataType::BFLOAT16 && rhs.dtype() != DataType::BFLOAT16 && fast_and_approximate_mode == true) {
+        TT_THROW("fast_and_approximate_mode is only supported for multiplication of BFLOAT16 inputs");
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return detail::invoke_binary_ng(
@@ -599,6 +602,9 @@ Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (lhs.dtype() != DataType::BFLOAT16 && fast_and_approximate_mode == true) {
+        TT_THROW("fast_and_approximate_mode is only supported for multiplication of BFLOAT16 inputs");
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return detail::invoke_binary_ng(
@@ -856,6 +862,9 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (lhs.dtype() != DataType::BFLOAT16 && rhs.dtype() != DataType::BFLOAT16 && fast_and_approximate_mode == true) {
+        TT_THROW("fast_and_approximate_mode is only supported for multiplication of BFLOAT16 inputs");
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return BinaryOperationWithFastApprox<binary_op_type>::invoke(
@@ -882,6 +891,9 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (lhs.dtype() != DataType::BFLOAT16 && fast_and_approximate_mode == true) {
+        TT_THROW("fast_and_approximate_mode is only supported for multiplication of BFLOAT16 inputs");
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return BinaryOperationWithFastApprox<binary_op_type>::invoke(
