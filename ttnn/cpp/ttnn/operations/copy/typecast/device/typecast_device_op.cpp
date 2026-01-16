@@ -54,18 +54,30 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            args.sub_core_grids.has_value() == false,
+            "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
+        TT_FATAL(
+            input_tensor.padded_shape()[-1] % 32 == 0,
+            "Typecast operation requires Row-Major input tensor's padded shape to be multiple of 32. "
+            "Padded shape: {}",
+            input_tensor.padded_shape());
+    }
+
+    const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
     TT_FATAL(
-        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
+        input_tensor_memory_layout == out_memory_config.memory_layout(),
         "Typecast operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+        input_tensor_memory_layout,
+        out_memory_config.memory_layout());
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            input_tensor_memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Typecast operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout()));
+            input_tensor_memory_layout);
     } else {
         TT_FATAL(
             !args.sub_core_grids.has_value(),
