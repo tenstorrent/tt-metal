@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -14,9 +14,10 @@ from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape",
+    "image_resolution, input_shape",
     [
-        (1, 512, 128, 128),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 512, 128, 128)),
     ],
 )
 @pytest.mark.parametrize(
@@ -27,7 +28,7 @@ from models.common.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_midblock(device, input_shape, block_name, debug_mode, is_ci_env, reset_seeds):
+def test_vae_midblock(device, image_resolution, input_shape, block_name, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -43,7 +44,7 @@ def test_vae_midblock(device, input_shape, block_name, debug_mode, is_ci_env, re
     else:
         torch_midblock = vae.decoder.mid_block
 
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     tt_midblock = TtUNetMidBlock2D(
         device, state_dict, f"{block_name}.mid_block", model_config=model_config, debug_mode=debug_mode
     )

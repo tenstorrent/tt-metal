@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import TtUpsample2D
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -18,14 +18,20 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 @pytest.mark.parametrize(
-    "input_shape, up_block_id", [((1, 512, 128, 128), 0), ((1, 512, 256, 256), 1), ((1, 256, 512, 512), 2)]
+    "image_resolution, input_shape, up_block_id",
+    [
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 512, 128, 128), 0),
+        ((1024, 1024), (1, 512, 256, 256), 1),
+        ((1024, 1024), (1, 256, 512, 512), 2),
+    ],
 )
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_upsample2d(
-    device, input_shape, up_block_id, stride, padding, dilation, debug_mode, is_ci_env, reset_seeds
+    device, image_resolution, input_shape, up_block_id, stride, padding, dilation, debug_mode, is_ci_env, reset_seeds
 ):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -40,7 +46,7 @@ def test_vae_upsample2d(
     torch_upsample = vae.decoder.up_blocks[up_block_id].upsamplers[0]
     groups = 1
 
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     tt_upsample = TtUpsample2D(
         device,
         state_dict,
