@@ -751,17 +751,6 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
-        if (exec_on_device && construct_on_device && pydata_type_borrowable) {
-            return Tensor::from_borrowed_data(
-                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
-        }
-
-        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype &&
-            !memory_config.is_sharded()) {
-            return Tensor::from_borrowed_data(
-                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
-        }
-
         if (mesh_mapper != nullptr) {
             // sharded tensor must be created using factory function to avoid validation errors in the
             // `TensorSpec` constructor. Example `test_paged_cache_mask.py::test_update_cache`, fails
@@ -784,6 +773,17 @@ Tensor create_tt_tensor_from_host_data(
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
                 static_cast<T>(pad_value));
+        }
+
+        if (exec_on_device && construct_on_device && pydata_type_borrowable) {
+            return Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
+        }
+
+        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype &&
+            !memory_config.is_sharded()) {
+            return Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
         TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
