@@ -107,14 +107,17 @@ class RopeSingleCore:
         shard_shape = shard_spec.shape
 
         # Calculate dimensions in tiles
-        # shard_shape[0] = n_heads * TILE_HEIGHT, shard_shape[1] = head_dim
+        # With tiny tiles: shard_shape[0] = n_heads, shard_shape[1] = head_dim
         head_dim_t = shard_shape[1] // ttnn.TILE_SIZE  # head_dim in tiles (Wt)
 
         # Get core grid from shard spec
         core_grid = shard_spec.grid
 
         # Calculate tile sizes
-        tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
+        # For tiny tiles, the tile height matches the shard height (num_q_heads_per_core)
+        # This is derived from the input tensor's shard shape
+        num_q_heads_per_core = shard_shape[0]  # Get from input tensor's shard height
+        tile = ttnn.Tile((num_q_heads_per_core, ttnn.TILE_SIZE))
         tile_size = tile.get_tile_size(data_format)
 
         # Number of tiles for intermediate buffers
