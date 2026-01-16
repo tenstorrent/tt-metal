@@ -301,6 +301,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_hardmish,
         "pytorch_op": pytorch_ops.hardmish,
     },
+    "eltwise-quickgelu": {
+        "tt_op": ttnn_ops.eltwise_quickgelu,
+        "pytorch_op": pytorch_ops.quickgelu,
+    },
     "eltwise-multigammaln": {
         "tt_op": ttnn_ops.eltwise_multigammaln,
         "pytorch_op": pytorch_ops.multigammaln,

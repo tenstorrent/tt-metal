@@ -36,6 +36,21 @@ def register_ttnn_cpp_unary_function(unary_function):
 
             return final_result
 
+        def torch_quickgelu(x):
+            x_f32 = x.to(torch.float32)
+            result_f32 = x_f32 * torch.sigmoid(x_f32 * 1.702)
+
+            if x.dtype == torch.bfloat16:
+                # Simulate SFPSTORE truncating
+                result_int32 = result_f32.view(torch.int32)
+                shifted_int32 = torch.bitwise_right_shift(result_int32, 16)
+                truncated_int16 = shifted_int32.to(torch.int16)
+                final_result = truncated_int16.view(torch.bfloat16)
+            else:
+                final_result = result_f32
+
+            return final_result
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
@@ -97,6 +112,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "log1p": torch.log1p,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
             "hardmish": lambda _x: torch_hardmish(_x),
+            "quickgelu": lambda _x: torch_quickgelu(_x),
             "multigammaln": torch_multigammaln,
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
@@ -188,6 +204,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.swish,
     ttnn.tril,
     ttnn.triu,
+    ttnn.quickgelu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)

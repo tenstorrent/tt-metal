@@ -2041,6 +2041,12 @@ void py_module(nb::module_& mod) {
         R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation(
         mod,
+        ttnn::quickgelu,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|quickgelu|(\mathrm{{input\_tensor}}_i))doc",
+        "[Supported range -20 to inf]",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        mod,
         ttnn::gez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         "",

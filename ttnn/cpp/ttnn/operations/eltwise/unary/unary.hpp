@@ -244,6 +244,13 @@ struct Hardmish {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Quickgelu {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Hardshrink {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -488,6 +495,7 @@ constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::una
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto hardmish = ttnn::register_operation<"ttnn::hardmish", ttnn::operations::unary::Hardmish>();
+constexpr auto quickgelu = ttnn::register_operation<"ttnn::quickgelu", ttnn::operations::unary::Quickgelu>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto logit = ttnn::register_operation<"ttnn::logit", ttnn::operations::unary::Logit>();
 constexpr auto elu = ttnn::register_operation<"ttnn::elu", ttnn::operations::unary::Elu>();

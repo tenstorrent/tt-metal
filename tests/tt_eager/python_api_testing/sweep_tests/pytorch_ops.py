@@ -363,6 +363,10 @@ def hardmish(x, *args, **kwargs):
     return x * (x + 2.8).clamp(0.0, 5.0) / 5
 
 
+def quickgelu(x, *args, **kwargs):
+    return x * torch.sigmoid(1.702 * x)
+
+
 def recip(x, *args, **kwargs):
     return torch.reciprocal(x)
 

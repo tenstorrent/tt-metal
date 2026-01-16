@@ -9,6 +9,7 @@
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_exp.h"
 
 namespace ckernel {
 namespace sfpu {

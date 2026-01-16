@@ -139,4 +139,5 @@ enum class SfpuType {
     rdiv,
     typecast,
     addcmul,
+    quickgelu,
 };

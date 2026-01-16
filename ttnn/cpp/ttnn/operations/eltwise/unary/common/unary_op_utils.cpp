@@ -94,6 +94,8 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::QUICKGELU: return "SFPU_OP_QUICKGELU_INCLUDE";
+
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -518,6 +520,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
+        case UnaryOpType::QUICKGELU: {
+            return {
+                fmt::format("quickgelu_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("quickgelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        }
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
@@ -713,6 +720,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::CBRT:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
+        case UnaryOpType::QUICKGELU: return {"quickgelu_tile_init();", fmt::format("quickgelu_tile({});", idst)};
+
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }
@@ -829,6 +838,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH);
+    }
+    if (name == "quickgelu") {
+        return UnaryWithParam(UnaryOpType::QUICKGELU, static_cast<float>(true));
     }
     TT_THROW("Unknown unary op: {}", name);
 }
