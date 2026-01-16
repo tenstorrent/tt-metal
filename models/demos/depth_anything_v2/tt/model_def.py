@@ -14,30 +14,48 @@ class TtDPTReassembleLayer:
         self.parameters = parameters
         self.read_idx = read_idx
 
-    def __call__(self, hidden_state):
-        # 1. Read (Slice CLS token if needed) - handled in backbone output
-        # 2. Resample (Spatial manipulation)
-        # 3. Projection (Conv2d 1x1)
-        # Stub: Just linear projection if possible or return as is for now
-        return hidden_state
+    def __call__(self, x):
+        # x is (B, C, H, W)
+        # 1. Projection (Conv2d 1x1)
+        # In ttnn, we use matmul for now if we don't use ttnn.conv2d
+        # For simplicity in this port, we assume the weights are mapped to parameters.projection
+        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # x = x @ self.parameters.projection.weight + self.parameters.projection.bias
+        
+        # 2. Resample (Spatial manipulation - resize)
+        # read_idx maps to different spatial levels
+        # In a real DPT:
+        # 0: stride=4 (down)
+        # 1: stride=2 (down)
+        # 2: stride=1
+        # 3: stride=0.5 (up)
+        return x
 
 class TtDPTFusionStage:
     def __init__(self, parameters):
         self.parameters = parameters
     
     def __call__(self, features):
-        # Fusion logic: Add + Upsamle + Conv
-        # Returning last feature for testing validity of graph
-        return features[-1]
+        # Fusion logic: Add + Upsample + Conv
+        # Starting from the lowest resolution (feature 3)
+        # fused = features[3]
+        # for i in reversed(range(3)):
+        #     fused = ttnn.upsample(fused, scale_factor=2)
+        #     fused = fused + features[i]
+        #     fused = fused @ self.parameters.layers[i].weight + ...
+        
+        return features[-1] # Placeholder
 
 class TtDPTHead:
     def __init__(self, parameters):
         self.parameters = parameters
         
-    def __call__(self, hidden_state):
-        # Final Conv sequence
-        # conv1 -> conv2 -> conv3
-        return hidden_state
+    def __call__(self, x):
+        # Final prediction head
+        # conv1 -> upsample -> conv2
+        # x = ttnn.upsample(x, scale_factor=2)
+        # x = x @ self.parameters.prediction.weight + ...
+        return x
 
 
 # ----------------------------------------------------------------------------
@@ -123,19 +141,30 @@ class TtDepthAnythingV2:
         
     def __call__(self, pixel_values):
         # 1. Embeddings (Placeholder)
-        # In a real implementation, we would use vit_embeddings here
+        # pixel_values shape: (B, 3, 518, 518)
         embeddings = pixel_values 
         
         # 2. Encoder (ViT-Large)
         hidden_states = embeddings
         features = []
-        out_indices = [5, 11, 17, 23] # for DPT usage
+        out_indices = [5, 11, 17, 23] # Layers to extract features from
         
-        for i in range(24): # Large has 24 layers
+        # Large has 24 layers. Typically ViT-L has (B, 1370, 1024) for 518x518 (patch 14)
+        # (518/14)^2 + 1 = 37*37 + 1 = 1369 + 1 = 1370
+        batch_size = hidden_states.shape[0]
+        grid_h, grid_w = 37, 37 
+
+        for i in range(24):
             layer_params = self.parameters.backbone.encoder.layer[i]
             hidden_states = vit_layer(hidden_states, layer_params, self.config)
             
             if i in out_indices:
+                # Reshape (B, Seq, Hidden) -> (B, H, W, Hidden)
+                # Remove CLS token (first token)
+                # seq_feature = hidden_states[:, 1:, :]
+                # ... ttnn slice and reshape ...
+                # feature = ttnn.reshape(seq_feature, (batch_size, grid_h, grid_w, hidden_size))
+                # feature = ttnn.permute(feature, (0, 3, 1, 2)) # (B, C, H, W)
                 features.append(hidden_states)
         
         # 3. Neck (DPT Reassemble & Fusion)
