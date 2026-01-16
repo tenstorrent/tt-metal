@@ -25,10 +25,9 @@ struct ScatterReduceBfloat16ProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, Tensor&);
+    static cached_program_t create(const ScatterParams&, const ScatterInputs&, Tensor&);
 
-    static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, Tensor&);
+    static void override_runtime_arguments(cached_program_t&, const ScatterParams&, const ScatterInputs&, Tensor&);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter

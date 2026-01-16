@@ -28,7 +28,9 @@ namespace ttnn::operations::transformer::sdpa_windowed::program {
 // [INFO] a natural thought for potentially faster implementation is to only compute the SDPA within each windown as
 // defined by cu_window_seqlens; this should be driven by performance analysis results of whole ML model
 WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const SdpaWindowedParams& operation_attributes,
+    const SdpaWindowedInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v;
@@ -619,8 +621,8 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
 
 void WindowedSDPAProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
+    const SdpaWindowedParams&,
+    const SdpaWindowedInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;

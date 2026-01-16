@@ -20,9 +20,9 @@ struct IsInProgramFactory {
 
     using cached_program_t = device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const IsinParams&, const IsinInputs&, tensor_return_value_t&);
     static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+        cached_program_t&, const IsinParams&, const IsinInputs&, tensor_return_value_t&);
 };
 
 }  // namespace ttnn::operations::experimental::isin

@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
-struct operation_attributes_t {
+struct ScatterParams {
     // scatter dim
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_memory_config;
@@ -21,7 +21,7 @@ struct operation_attributes_t {
     const std::optional<CoreRangeSet> sub_core_grid;
 };
 
-struct tensor_args_t {
+struct ScatterInputs {
     const Tensor& input_tensor;
     const Tensor& index_tensor;
     const Tensor& src_tensor;

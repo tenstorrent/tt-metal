@@ -137,7 +137,17 @@ jobs:
               "timeout": 50,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
               "owner_id": "U09ELB03XRU"
-            } # Stephen Osborne
+            }, # Stephen Osborne
+            {
+              "name": "Galaxy DiT Qwen-Image model perf tests",
+              "model-type": "QwenImage",
+              "model-name": "qwenimage",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 20,
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
+              "owner_id": "U08TED0JM9D"
+            } # Samuel Adesoye
           ]' --compact-output)
 
           # Combine both arrays into full matrix

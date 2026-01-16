@@ -95,9 +95,9 @@ if [[ "$ID" == "fedora" ]]; then
     toolchain_path="cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake"
 elif [[ "$ID" == "ubuntu" && "$VERSION" == "20.04" ]]; then
     echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
-    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+    toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 else
-    toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+    toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 fi
 
 configure_only="OFF"

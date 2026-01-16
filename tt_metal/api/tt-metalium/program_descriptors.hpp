@@ -14,6 +14,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <bitset>
 #include <optional>
 
 /**
@@ -104,7 +105,7 @@ struct KernelDescriptor {
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
-    using CommonRuntimeArgs = std::vector<uint32_t>;
+    using CommonRuntimeArgs = CoreRuntimeArgs;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
         WriterConfigDescriptor,
@@ -140,6 +141,8 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
+
+    std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
 
 }  // namespace tt::tt_metal

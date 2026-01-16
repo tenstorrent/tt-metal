@@ -14,12 +14,16 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY scripts/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
+ENV PYTHON_VERSION="3.10"
+
+RUN umask 000 && uv python install ${PYTHON_VERSION}
+
 #############################################################
 
 FROM base AS ci-build
-
-# Re-declare ARG to make it available in this stage
-ARG UBUNTU_VERSION
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -66,17 +70,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY dockerfile/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
+# Set up virtual environment using uv
+# Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
-# Copy Python version configuration for consistent version across all stages
-COPY dockerfile/python-version.conf /tmp/python-version.conf
 
 # Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN UBUNTU_VERSION=$UBUNTU_VERSION . /tmp/python-version.conf && \
-    umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN  umask 000 && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -199,20 +204,13 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
-# Re-declare ARG to make it available in this stage
-ARG UBUNTU_VERSION
-
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY dockerfile/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
-
-# Copy Python version configuration
-COPY dockerfile/python-version.conf /tmp/python-version.conf
-
-# Set up virtual environment using uv with centralized Python version
+# Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN UBUNTU_VERSION=$UBUNTU_VERSION . /tmp/python-version.conf && \
-    uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -232,13 +230,6 @@ RUN uv pip install $WHEEL_FILENAME
 
 FROM base AS release-models
 
-# Re-declare ARG to make it available in this stage
-ARG UBUNTU_VERSION
-
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY dockerfile/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
-
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
@@ -257,8 +248,12 @@ RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
 WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
-RUN /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && /bin/bash -c "./build_metal.sh \
+    && ./create_venv.sh --python-version ${PYTHON_VERSION} \
     && source $PYTHON_ENV_DIR/bin/activate \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 

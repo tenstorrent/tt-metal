@@ -23,14 +23,14 @@ struct SplitProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const split::operation_attributes_t& operation_attributes,
-        const split::tensor_args_t& tensor_args,
+        const split::SplitParams& operation_attributes,
+        const split::SplitInputs& tensor_args,
         split::tensor_return_value_t& output_tensors);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const split::operation_attributes_t& operation_attributes,
-        const split::tensor_args_t& tensor_args,
+        const split::SplitParams& operation_attributes,
+        const split::SplitInputs& tensor_args,
         split::tensor_return_value_t& output_tensors);
 };
 

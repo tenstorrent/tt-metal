@@ -668,8 +668,8 @@ bool is_split_reader_viable(
 
 void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
     Tensor& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
