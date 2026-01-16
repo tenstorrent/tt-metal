@@ -4,8 +4,10 @@
 
 #pragma once
 
-// Tensor related constructs
+#include <cstddef>
 #include <cstdint>
+
+// Tensor related constructs
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/spec_fwd.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
@@ -71,15 +73,19 @@ public:
 
     // Getters
 
-    distributed::MeshDevice* get_device() const;
+    /**
+     * Get the device this DeviceTensor is on.
+     *
+     * throws or nullptr when deallocated?
+     */
+    distributed::MeshDevice& get_device() const;
 
     // TODO: Should we make this mean something?
     std::string write_to_string() const;
 
     // TODO(River): understand what is sharding better
     bool is_sharded() const;
-    // TODO: what is the return type here?
-    Shape element_size() const;
+    std::size_t element_size() const;
 
     // "misc getters"
     DataType dtype() const;
@@ -103,18 +109,23 @@ public:
     const TensorTopology& tensor_topology() const;
 
     // TODO(River): learn this
+    // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     // TODO: Is there a way to express this "either or"?
     const std::optional<ShardSpec> shard_spec() const;
     const std::optional<NdShardSpec> nd_shard_spec() const;
 
+    // Shape is a weird class to return, isn't a vector sufficient?
     Shape strides() const;
-    // Do we need this?
+    // Do we need this? This was meant to be pair with item() which is removed?
     bool is_scalar() const;
-    // TODO: would this be better as "is_deallocated"?
+
+    // TODO: Would this be better if it's called is_deallocated
     bool is_allocated() const;
 
     // We prob need to leak this for compatability:
+    //
+    // // TODO-ask Alex: can we retire this method in favor of mesh_buffer()
     // Buffer* buffer() const;
     //
     // /**

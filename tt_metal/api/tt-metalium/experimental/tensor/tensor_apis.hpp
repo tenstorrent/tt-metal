@@ -13,6 +13,7 @@ namespace tt::tt_metal {
 
 namespace distributed {
 class MeshCommandQueue;
+class MeshDevice;
 }
 
 // TODO:
@@ -53,13 +54,41 @@ void to_layout(HostTensor&, Layout);
 // TODO: why is the pad value a float???, shouldn't this be a T?
 void pad(HostTensor&, const Shape&, const Shape&, float);
 void unpad(HostTensor&, const Shape&, const Shape&);
-// TODO: shouldn't be a flot
+// TODO: shouldn't be a float, should be generic over T like the Tensor creation APIs.
 void pad_to_tile(HostTensor&, float);
 void unpad_to_tile(HostTensor&, const Shape&);
 
+// Do we want this?
+HostTensor allocate_tensor_on_host(const TensorSpec&, distributed::MeshDevice& device);
+
 // New APIs
-DeviceTensor EnqueueWriteTensor(distributed::MeshCommandQueue&, const HostTensor&);
+
+// H2D, CommandQueue should have enough infomation using HostTensor.TensorSpec.MemoryConfig
+// to figure out where to place this tensor.
+
+// this is the semantic proposed in Audrey's doc,
+// we will need to throw/ fault if src and dst isn't the same size.
+void EnqueueWriteTensor(distributed::MeshCommandQueue&, const HostTensor& src, DeviceTensor& dst, bool blocking);
+
+// I think this should exists in parallel, just a short-hand for
+//
+// ```
+// EnqueueWriteTensor(cq, src) {
+//  DeviceTensor dst;
+//  EnqueueWriteTensor(cq, src, dst);
+//  return dst;
+// }
+// ```
+//
+DeviceTensor EnqueueWriteTensor(distributed::MeshCommandQueue&, const HostTensor& src, bool blocking);
+
 // Should this return a HostTensor or take a HostTensor& as dst??
-void EnqueueReadTensor(distributed::MeshCommandQueue&, const DeviceTensor&);
+
+// Inplace transfer, allows reuse of memory region, the problem is if dst cannot fit in src we need to fault
+// e.g. Tensor from borrowed memory.
+void EnqueueReadTensor(distributed::MeshCommandQueue&, const DeviceTensor& src, HostTensor& dst, bool blocking);
+
+// Nice to have as well?
+HostTensor EnqueueReadTensor(distributed::MeshCommandQueue&, const DeviceTensor&, bool blocking);
 
 }  // namespace tt::tt_metal

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -117,7 +118,8 @@ public:
 
     // TODO(River): understand what is sharding better
     bool is_sharded() const;
-    Shape element_size() const;
+    // what's the difference between this and logical volum?
+    std::size_t element_size() const;
 
     // "other getters"
 
@@ -144,22 +146,29 @@ public:
     const TensorTopology& tensor_topology() const;
 
     // TODO(River): learn this
+    // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     // TODO: Is there a way to express this "either or"?
     const std::optional<ShardSpec> shard_spec() const;
     const std::optional<NdShardSpec> nd_shard_spec() const;
 
     // "Extra helper functions"
+    // Shape is a weird class to return, isn't a vector sufficient?
     Shape strides() const;
 
-    // Do we need this?
+    // Do we need this? This was meant to be pair with item() which is removed?
     bool is_scalar() const;
 
     // Host buffer is always allocated:
     // bool is_allocated() const;
 
-    // We prob need to leak this for compatability:
+    // // From orignal Tensor:
+    // // Returns device `Buffer`.
+    // // Throws if the tensor is not allocated on a device.
     // Buffer* buffer() const;
+    //
+    // Host Tensor doesn't have an associated device,
+    // I don't think this is needed?
     //
     // /**
     //  * From original tensor:
