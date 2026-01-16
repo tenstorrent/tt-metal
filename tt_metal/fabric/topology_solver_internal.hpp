@@ -267,7 +267,7 @@ struct ConsistencyChecker {
         size_t global_idx,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        const std::vector<int>& mapping,
+        std::vector<int>& mapping,
         const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
 
