@@ -56,6 +56,9 @@ def create_sharded_memory_config(layout_type, grid_size, input_shape):
 
     logger.debug(f"Creating {layout_type} config for tensor 2D shape: ({height}, {width})")
 
+
+    TILE_WIDTH = 32
+
     if layout_type == "height_sharded":
         # Shard along height (B*T*H*W dimension)
         # Use as many cores as possible while ensuring even division
@@ -68,21 +71,23 @@ def create_sharded_memory_config(layout_type, grid_size, input_shape):
         shard_height = height // num_cores
         shard_width = width
 
-        # Create core grid - distribute cores row-wise
-        cores_x = min(num_cores, grid_size.x)
-        cores_y = (num_cores + cores_x - 1) // cores_x
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(cores_x - 1, cores_y - 1),
-                )
-            }
-        )
-        memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        orientation = ttnn.ShardOrientation.ROW_MAJOR
+        # Find best factorization for core grid
+        cores_x = 1
+        cores_y = num_cores
+        for cx in range(1, min(num_cores, grid_size.x) + 1):
+            if num_cores % cx == 0:
+                cy = num_cores // cx
+                if cy <= grid_size.y:
+                    cores_x = cx
+                    cores_y = cy
 
-        logger.debug(f"HEIGHT_SHARDED: {num_cores} cores, shard shape: ({shard_height}, {shard_width})")
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     elif layout_type == "width_sharded":
         # Shard along width (C_aligned dimension)
@@ -96,66 +101,94 @@ def create_sharded_memory_config(layout_type, grid_size, input_shape):
         shard_height = height
         shard_width = width // num_cores
 
-        # Create core grid - distribute cores column-wise
-        cores_y = min(num_cores, grid_size.y)
-        cores_x = (num_cores + cores_y - 1) // cores_y
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(cores_x - 1, cores_y - 1),
-                )
-            }
-        )
-        memory_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        orientation = ttnn.ShardOrientation.ROW_MAJOR
+        # Find best factorization for core grid
+        cores_x = num_cores
+        cores_y = 1
+        for cy in range(1, min(num_cores, grid_size.y) + 1):
+            if num_cores % cy == 0:
+                cx = num_cores // cy
+                if cx <= grid_size.x:
+                    cores_x = cx
+                    cores_y = cy
 
-        logger.debug(f"WIDTH_SHARDED: {num_cores} cores, shard shape: ({shard_height}, {shard_width})")
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     elif layout_type == "block_sharded":
         # Block sharding: shard along both height and width
-        # Find factors that evenly divide both dimensions
+        # IMPORTANT: For ROW_MAJOR layout, shard_width must be tile-aligned (multiple of 32)
+        # to ensure correct address calculation in TensorAccessor
+        
         max_cores_x = min(grid_size.x, 8)
         max_cores_y = min(grid_size.y, 8)
 
-        # Find best core grid that evenly divides both dimensions
-        # For BLOCK_SHARDED: cores_x divides width, cores_y divides height
+        # Find best core grid that:
+        # 1. Evenly divides both dimensions
+        # 2. Produces tile-aligned shard_width (multiple of 32)
         cores_x = 1
         cores_y = 1
+        best_cores = 1
+        
         for cy in range(1, max_cores_y + 1):
+            if height % cy != 0:
+                continue
             for cx in range(1, max_cores_x + 1):
-                if height % cy == 0 and width % cx == 0:
-                    if cx * cy > cores_x * cores_y:
-                        cores_x = cx
-                        cores_y = cy
+                if width % cx != 0:
+                    continue
+                
+                shard_w = width // cx
+                # Check if shard width is tile-aligned
+                if shard_w % TILE_WIDTH != 0:
+                    continue
+                
+                # Prefer configurations with more cores (better parallelism)
+                if cx * cy > best_cores:
+                    cores_x = cx
+                    cores_y = cy
+                    best_cores = cx * cy
 
         if cores_x == 1 and cores_y == 1:
-            raise ValueError(
-                f"Cannot create BLOCK_SHARDED config: no valid core grid found for "
-                f"tensor shape ({height}, {width}) with grid_size ({grid_size.x}, {grid_size.y})"
-            )
+            # Fallback: try to find any valid configuration, even if not tile-aligned
+            # This may fail at runtime, but at least we tried
+            for cy in range(1, max_cores_y + 1):
+                for cx in range(1, max_cores_x + 1):
+                    if height % cy == 0 and width % cx == 0:
+                        if cx * cy > cores_x * cores_y:
+                            cores_x = cx
+                            cores_y = cy
+            
+            if cores_x == 1 and cores_y == 1:
+                raise ValueError(
+                    f"Cannot create BLOCK_SHARDED config: no valid core grid found for "
+                    f"tensor shape ({height}, {width}) with grid_size ({grid_size.x}, {grid_size.y})"
+                )
 
         shard_height = height // cores_y
         shard_width = width // cores_x
 
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(cores_x - 1, cores_y - 1),
-                )
-            }
-        )
-        memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        orientation = ttnn.ShardOrientation.ROW_MAJOR
+        # Warn if shard width is not tile-aligned
+        if shard_width % TILE_WIDTH != 0:
+            logger.warning(f"BLOCK_SHARDED shard_width={shard_width} is not tile-aligned ")
 
         logger.debug(f"BLOCK_SHARDED: grid ({cores_x}, {cores_y}), shard: ({shard_height}, {shard_width})")
 
+
+
+        return ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     else:
         raise ValueError(f"Unsupported layout_type: {layout_type}")
-
-    shard_spec = ttnn.ShardSpec(shard_grid, [shard_height, shard_width], orientation)
-    return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
 
 
 def run_conv3d_with_memory_config(
