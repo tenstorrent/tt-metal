@@ -61,12 +61,12 @@ tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "ReshapeDeviceOperation::compute_program_hash is called");
+    log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
-    return tt::tt_metal::operation::hash_operation<ReshapeDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),
