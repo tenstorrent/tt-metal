@@ -26,8 +26,7 @@ import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-# TODO: Accuracy for 10 unet iterations has been decreased from 0.923 to 0.900 in order for test to pass. This has to be investigated why the accuracy has decreased.
-UNET_LOOP_PCC = {"10": 0.900, "50": 0.911}
+UNET_LOOP_PCC = {"10": 0.923, "50": 0.911}
 
 
 @torch.no_grad()
