@@ -47,12 +47,16 @@ Tensor _addcdiv(
         return result;
     }
 
-    // For non-FP32: 0.5 * inf != inf but 1.7014e+3 and 0/0 = 0 for non-fp32
-    Tensor t_inf = ttnn::multiply(
-        ttnn::sign(t_factor, output_mem_config),
-        std::numeric_limits<float>::infinity(),
-        std::nullopt,
-        output_mem_config);
+    // For non-FP32: 0.5 * inf != inf but 1.7014e+3 and 0/0 = 0
+    // To match Torch behavior after golden normalization, we explicitly
+    // inject an "infinite term" whenever input_c == 0:
+    //   (value * input_b) / 0  ->  sign(input_b) * (value * inf)
+    // If input_b == 0 and input_c ==0: force sign = +1 so the result becomes (value * inf)
+    // Note: We intentionally avoid using sign(t_factor) here, since (value * input_b) can underflow to 0 in BF16.
+    const float signed_inf = value * std::numeric_limits<float>::infinity();  // value * torch.tensor(float("inf"))
+    Tensor sign_b = ttnn::sign(input_b, output_mem_config);
+    Tensor sign_or_one = ttnn::where(ttnn::eqz(input_b, output_mem_config), 1.0f, sign_b, output_mem_config);
+    Tensor t_inf = ttnn::multiply(sign_or_one, signed_inf, std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_inf, result, output_mem_config);
     return result;
 }
