@@ -100,6 +100,7 @@ class DRAMStreamingMatmul:
         fp32_dest_acc_en: bool = False,
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
         math_approx_mode: bool = False,
+        subblock_k: int = None,  # K subblock size in tiles, None means full K
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -140,6 +141,15 @@ class DRAMStreamingMatmul:
         assert Mt == 1, f"Mt must be 1 for simplified matmul, got {Mt}"
         assert K == K_from_in1, f"K dimension mismatch: {K} vs {K_from_in1}"
 
+        # Determine subblock_k (K subblock size in tiles)
+        # Default to full K if not specified
+        if subblock_k is None:
+            subblock_k = Kt
+        assert Kt % subblock_k == 0, f"Kt ({Kt}) must be divisible by subblock_k ({subblock_k})"
+        num_subblocks_k = Kt // subblock_k
+
+        logger.debug(f"Kt={Kt}, subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}")
+
         # Determine subblock_w based on fp32_dest_acc_en and per_core_N
         # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
         # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
@@ -179,9 +189,9 @@ class DRAMStreamingMatmul:
         out_tile_size = out_tile.get_tile_size(out_dtype)
 
         # Calculate page size for NOC transfers (respects max NOC burst size)
-        # Each block is Kt tiles (one Kx1 stick)
-        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, Kt, in1_tile_size)
-        in1_block_size_bytes = Kt * in1_tile_size
+        # Each block is subblock_k tiles (one K subblock)
+        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, in1_tile_size)
+        in1_block_size_bytes = subblock_k * in1_tile_size
 
         logger.debug(
             f"in1_page_size={in1_page_size}, in1_num_pages={in1_num_pages}, in1_block_size={in1_block_size_bytes}"
@@ -189,8 +199,8 @@ class DRAMStreamingMatmul:
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: K tiles at a time (one column stick), triple buffered for pipelining
-        in1_CB_tiles = Kt * 3
+        # in1: subblock_k tiles at a time, triple buffered for pipelining
+        in1_CB_tiles = subblock_k * 3
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
         # Output: per_core_N tiles (tensor-backed - size determined by tensor)
@@ -268,10 +278,11 @@ class DRAMStreamingMatmul:
             in1_buffer_addr,
             in1_page_size,
             in1_num_pages,
-            Kt,  # num_tiles_k (for CB push/pop)
+            subblock_k,  # tiles per K subblock
             per_core_N,
             in1_block_size_bytes,
             out_num_tiles,
+            num_subblocks_k,
         ]
 
         # Compute compile args
@@ -279,9 +290,10 @@ class DRAMStreamingMatmul:
             cb_id_in0,
             cb_id_in1,
             cb_id_out,
-            Kt,  # num_tiles_k
+            subblock_k,  # tiles per K subblock
             per_core_N,
             subblock_w,
+            num_subblocks_k,
         ]
 
         # Runtime args (per-core: bank_id and vc)

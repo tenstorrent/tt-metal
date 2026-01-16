@@ -9,7 +9,7 @@
 /**
  * Simplified in1 reader for DRAM streaming matmul.
  *
- * Reads in1 from DRAM one Kx1 column stick at a time.
+ * Reads in1 from DRAM one K subblock at a time (subblock_k tiles).
  * in1 is pre-shuffled on host so K tiles are contiguous for each N column.
  *
  * Uses transaction IDs for pipelining DRAM reads (triple buffering).
@@ -23,10 +23,13 @@ void kernel_main() {
     constexpr uint32_t in1_tensor_addr = get_compile_time_arg_val(2);
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t in1_num_pages = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(5);
+    constexpr uint32_t subblock_k = get_compile_time_arg_val(5);  // tiles per K subblock
     constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
     constexpr uint32_t in1_block_size_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t out_num_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(9);
+
+    constexpr uint32_t num_iterations = num_subblocks_k * per_core_N;
 
     // Runtime args (per-core values)
     const uint32_t dram_bank_id = get_arg_val<uint32_t>(0);
@@ -46,15 +49,16 @@ void kernel_main() {
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_reserve_back(cb_id_in1, num_tiles_k);
+    cb_reserve_back(cb_id_in1, subblock_k);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = get_write_ptr(cb_id_in1);
     l1_write_addr_in1 = l1_write_addr_in1_start;
 
-    for (uint32_t n = 0; n < per_core_N; n++) {
+    // Read in1: for each N column, read num_subblocks_k K subblocks
+    for (uint32_t n = 0; n < num_iterations; ++n) {
         noc_async_read_set_trid(curr_block_trid);
 
-        // Read pages for this Kx1 stick (broken into NOC-sized pages)
+        // Read pages for this K subblock (broken into NOC-sized pages)
         for (uint32_t p = 0; p < in1_num_pages; p++) {
             noc_async_read_one_packet_with_state_with_trid(
                 in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
@@ -64,11 +68,11 @@ void kernel_main() {
 
         if (num_free_blocks_in_buffer == 2) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
-            cb_push_back(cb_id_in1, num_tiles_k);
+            cb_push_back(cb_id_in1, subblock_k);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
             // reserve for next block
-            cb_reserve_back(cb_id_in1, num_tiles_k * 2);
+            cb_reserve_back(cb_id_in1, subblock_k * 2);
         } else {
             num_free_blocks_in_buffer -= 1;
         }
@@ -85,7 +89,7 @@ void kernel_main() {
 
     // Wait for last block
     noc_async_read_barrier_with_trid(block_trid_to_wait);
-    cb_push_back(cb_id_in1, num_tiles_k);
+    cb_push_back(cb_id_in1, subblock_k);
 
     // Wait for compute to finish writing all output tiles
     // CB4 is backed by output tensor - data goes directly there
