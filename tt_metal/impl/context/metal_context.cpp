@@ -1115,10 +1115,13 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 
     // Cache the bank_id -> dram_view mapping for use by WH proximity-based routing
-    bank_id_to_dram_view_[device_id].clear();
-    bank_id_to_dram_view_[device_id].resize(num_dram_banks);
-    for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
+    // Skip for Mock devices as they don't have real device coordinates
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+        bank_id_to_dram_view_[device_id].clear();
+        bank_id_to_dram_view_[device_id].resize(num_dram_banks);
+        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+            bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
+        }
     }
 
     dram_bank_to_noc_xy_[device_id].clear();
@@ -1130,8 +1133,12 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
-            CoreCoord dram_noc_coord =
-                soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
+            CoreCoord dram_noc_coord;
+            if (cluster_->get_target_device_type() != tt::TargetDevice::Mock && !bank_id_to_dram_view_[device_id].empty()) {
+                dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
+            } else {
+                dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
+            }
             if (dram_is_virtualized) {
                 noc_x = dram_noc_coord.x;
                 noc_y = dram_noc_coord.y;
@@ -1190,7 +1197,7 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
 
     // bank_id_to_dram_view must be pre-populated by generate_device_bank_to_noc_tables
     TT_ASSERT(
-        bank_id_to_dram_view_.find(device_id) != bank_id_to_dram_view_.end() &&
+        bank_id_to_dram_view_.contains(device_id) &&
         !bank_id_to_dram_view_[device_id].empty(),
         "bank_id_to_dram_view mapping must be populated before calling generate_dram_bank_to_noc_table_by_proximity");
 
