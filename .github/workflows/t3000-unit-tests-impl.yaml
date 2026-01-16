@@ -103,7 +103,8 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent --memory 256g
     defaults:
       run:
         shell: bash
@@ -120,7 +121,35 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Verify container memory limit (256GB)
+        run: |
+          set -e
 
+          # Read memory limit for container cgroup from cgroup v2 or v1
+          memory_bytes=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || \
+                          cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)
+
+          if [ -z "$memory_bytes" ]; then
+              echo "::error::Unable to read memory limit from cgroup (v1 or v2)"
+              exit 1
+          fi
+
+          # 256GB = 274877906944 bytes
+          expected_max_bytes=274877906944
+
+          # Convert bytes to GB for display (using integer division)
+          memory_gb=$((memory_bytes / 1024 / 1024 / 1024))
+          expected_gb=$((expected_max_bytes / 1024 / 1024 / 1024))
+
+          echo "Container memory limit: ${memory_bytes} bytes (~${memory_gb} GB)"
+          echo "Expected maximum: ${expected_max_bytes} bytes (${expected_gb} GB)"
+
+          if [ "$memory_bytes" -gt "$expected_max_bytes" ]; then
+              echo "::error::Container memory limit ${memory_bytes} bytes (~${memory_gb} GB) exceeds maximum of 256GB (${expected_max_bytes} bytes)"
+              exit 1
+          fi
+
+          echo "✅ Memory limit validated: ${memory_bytes} bytes (~${memory_gb} GB) is within the 256GB limit"
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
