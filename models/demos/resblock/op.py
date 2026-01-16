@@ -20,10 +20,16 @@ class FusedResblock:
 
     @staticmethod
     def golden(input_a, weight0, weight1):
-        x = input_a @ weight0
-        x = torch.nn.functional.relu(x)
-        x = x @ weight1
-        x = x + input_a
+        def layer(input):
+            x = input_a @ weight0
+            x = torch.nn.functional.relu(x)
+            x = x @ weight1
+            x = x + input
+            return x
+
+        x = layer(input_a)
+        x = layer(x)
+
         return x
 
     @staticmethod

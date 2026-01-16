@@ -152,6 +152,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     logger.info("Converting TTNN output to torch")
     torch_output = ttnn.to_torch(ttnn_output)[:B, :]  # Slice off padding
     print("actual:", torch_output)
+    print("expected:", expected)
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 

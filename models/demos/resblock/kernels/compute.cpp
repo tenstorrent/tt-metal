@@ -4,14 +4,17 @@
 
 #include <cstdint>
 
+#include <tools/profiler/kernel_profiler.hpp>
+
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_unary/relu.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTilesK, uint32_t OutputTileId = 0>
+template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTilesK, uint32_t OutputTileId = 0, bool PopA = false>
 FORCE_INLINE void matmul_with_relu_block() {
+    DeviceZoneScopedN("matmul_with_relu_block");
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     constexpr uint32_t num_output_tiles = 1;
@@ -26,8 +29,10 @@ FORCE_INLINE void matmul_with_relu_block() {
 
     tile_regs_commit();
 
-    // cb_pop_front(CbA, NumTiles); // Don't pop here because we need to use the input again for next stage
-    cb_pop_front(CbB, NumTilesK);
+    if constexpr (PopA) {
+        cb_pop_front(CbA, NumTilesK);  // Don't pop here because we need to use the input again for next stage
+    }
+    // cb_pop_front(CbB, NumTilesK);
 
     tile_regs_wait();
     pack_tile(0, CbOut, OutputTileId);  // Pack at offset OutputTileId
@@ -46,8 +51,11 @@ template <
     uint32_t CbOut,
     uint32_t NumTilesK,
     uint32_t NumTilesBias,
-    uint32_t OutputTileId = 0>
+    uint32_t OutputTileId = 0,
+    bool PopA = false,
+    bool PopBias = false>
 FORCE_INLINE void matmul_with_bias_block() {
+    DeviceZoneScopedN("matmul_with_bias_block");
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     cb_wait_front(CbBias, NumTilesBias);
@@ -69,9 +77,13 @@ FORCE_INLINE void matmul_with_bias_block() {
 
     tile_regs_commit();
 
-    cb_pop_front(CbA, NumTilesK);
-    cb_pop_front(CbB, NumTilesK);
-    cb_pop_front(CbBias, NumTilesBias);
+    if constexpr (PopA) {
+        cb_pop_front(CbA, NumTilesK);
+    }
+    if constexpr (PopBias) {
+        cb_pop_front(CbBias, NumTilesBias);
+    }
+    // cb_pop_front(CbB, NumTilesK);
 
     tile_regs_wait();
     pack_tile(MATMUL_ACC_REG_ID, CbOut, OutputTileId);  // Pack at offset OutputTileId
@@ -95,16 +107,99 @@ void MAIN {
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
-    mm_block_init(in0_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-    relu_tile_init();
 
-    matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k>();
-    matmul_with_bias_block<
-        intermediate_full_cb,
-        weight1_cb,
-        in0_cb,
-        intermediate_pregather_cb,
-        num_tiles_k,
-        num_output_tiles>();
+    {
+        DeviceZoneScopedN("layer_0");
+        mm_block_init(
+            in0_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+        relu_tile_init();
+
+        matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
+        matmul_with_bias_block<
+            intermediate_full_cb,
+            weight1_cb,
+            in0_cb,
+            intermediate_pregather_cb,
+            num_tiles_k,
+            num_output_tiles,
+            0,
+            true,
+            false>();
+    }
+
+    {
+        DeviceZoneScopedN("layer_1");
+        mm_block_init(
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_pregather_cb,
+            false,
+            out_subblock_w,
+            out_subblock_h,
+            in0_block_w);
+        relu_tile_init();
+
+        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
+        matmul_with_bias_block<
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_full_cb,
+            intermediate_pregather_cb,
+            num_tiles_k,
+            num_output_tiles,
+            0,
+            true,
+            false>();
+    }
+
+    {
+        DeviceZoneScopedN("layer_2");
+        mm_block_init(
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_pregather_cb,
+            false,
+            out_subblock_w,
+            out_subblock_h,
+            in0_block_w);
+        relu_tile_init();
+
+        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
+        matmul_with_bias_block<
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_full_cb,
+            intermediate_pregather_cb,
+            num_tiles_k,
+            num_output_tiles,
+            0,
+            true,
+            false>();
+    }
+
+    {
+        DeviceZoneScopedN("layer_3");
+        mm_block_init(
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_pregather_cb,
+            false,
+            out_subblock_w,
+            out_subblock_h,
+            in0_block_w);
+        relu_tile_init();
+
+        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
+        matmul_with_bias_block<
+            intermediate_full_cb,
+            weight1_cb,
+            intermediate_full_cb,
+            intermediate_pregather_cb,
+            num_tiles_k,
+            num_output_tiles,
+            0,
+            true,
+            false>();
+    }
 }
 }  // namespace NAMESPACE

@@ -6,25 +6,19 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include <tools/profiler/kernel_profiler.hpp>
+
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
 FORCE_INLINE void wait_for_gather(
     volatile tt_l1_ptr uint32_t* mcast_receiver_semaphore_addr_ptr, uint32_t num_senders, uint32_t debug_enabled) {
-    if (debug_enabled) {
-        DPRINT << "mcast: wait senders (" << (uint32_t)get_absolute_logical_x() << ","
-               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
-    }
+    DeviceZoneScopedN("wait_for_gather");
     // Wait for all senders to finish sending data
     noc_semaphore_wait(mcast_receiver_semaphore_addr_ptr, num_senders);
 
     // Reset the local semaphore for reuse
     noc_semaphore_set(mcast_receiver_semaphore_addr_ptr, 0);
-
-    if (debug_enabled) {
-        DPRINT << "mcast: got senders (" << (uint32_t)get_absolute_logical_x() << ","
-               << (uint32_t)get_absolute_logical_y() << ")" << ENDL();
-    }
 }
 
 FORCE_INLINE void mcast(
@@ -37,6 +31,7 @@ FORCE_INLINE void mcast(
     uint64_t mcast_sender_noc_coord_x_end,
     uint64_t mcast_sender_noc_coord_y_end,
     uint32_t debug_enabled) {
+    DeviceZoneScopedN("mcast");
     // Mcast to all cores and then update semaphore
     const uint64_t mcast_sender_noc_addr = get_noc_multicast_addr(
         mcast_sender_noc_coord_x_start,
@@ -61,10 +56,6 @@ FORCE_INLINE void mcast(
         mcast_sender_semaphore_addr);
     noc_semaphore_set_multicast(semaphore_valid_addr, mcast_sender_semaphore_noc_addr, num_senders);
     noc_async_posted_writes_flushed();
-    if (debug_enabled) {
-        DPRINT << "mcast: sent (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-               << ")" << ENDL();
-    }
 }
 
 void kernel_main() {
@@ -85,29 +76,127 @@ void kernel_main() {
     constexpr uint64_t mcast_sender_noc_coord_y_end = get_compile_time_arg_val(8);
     constexpr uint32_t debug_enabled = get_compile_time_arg_val(9);
 
-    // Between matmul+relu and matmul+bias we gather+mcast the result
-    wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
-    mcast(
-        mcast_cb,
-        mcast_sender_cb,
-        num_senders,
-        mcast_sender_semaphore_addr,
-        mcast_sender_noc_coord_x_start,
-        mcast_sender_noc_coord_y_start,
-        mcast_sender_noc_coord_x_end,
-        mcast_sender_noc_coord_y_end,
-        debug_enabled);
+    {
+        // LAYER 0
+        DeviceZoneScopedN("layer_0");
 
-    // After matmul+bias we gather+mcast the result
-    wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
-    mcast(
-        mcast_cb,
-        mcast_sender_cb,
-        num_senders,
-        mcast_sender_semaphore_addr,
-        mcast_sender_noc_coord_x_start,
-        mcast_sender_noc_coord_y_start,
-        mcast_sender_noc_coord_x_end,
-        mcast_sender_noc_coord_y_end,
-        debug_enabled);
+        // Between matmul+relu and matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+
+        // After matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+    }
+
+    {
+        DeviceZoneScopedN("layer_1");
+        // LAYER 1
+
+        // After matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+
+        // After matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+    }
+
+    {
+        DeviceZoneScopedN("layer_2");
+        // LAYER 2
+
+        // Between matmul+relu and matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+
+        // After matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+    }
+
+    {
+        DeviceZoneScopedN("layer_3");
+        // LAYER 3
+
+        // Between matmul+relu and matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+
+        // After matmul+bias we gather+mcast the result
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        mcast(
+            mcast_cb,
+            mcast_sender_cb,
+            num_senders,
+            mcast_sender_semaphore_addr,
+            mcast_sender_noc_coord_x_start,
+            mcast_sender_noc_coord_y_start,
+            mcast_sender_noc_coord_x_end,
+            mcast_sender_noc_coord_y_end,
+            debug_enabled);
+    }
 }
