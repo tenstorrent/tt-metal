@@ -7,6 +7,7 @@
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
 #include "context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
