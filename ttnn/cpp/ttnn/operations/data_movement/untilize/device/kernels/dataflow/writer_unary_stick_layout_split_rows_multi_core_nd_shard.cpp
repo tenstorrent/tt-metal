@@ -76,6 +76,7 @@ void kernel_main() {
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block) {
+        // uint32_t num_tiles_to_fetch = num_unpadded_cols_per_input_block / tile_width;
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
 
         // Base address of the row of elements we are going to be writing.
@@ -113,6 +114,7 @@ void kernel_main() {
 
             // Iterate through all columns in the input block that this core is processing
             uint32_t num_input_cols_processed = 0;
+            int uk = 0;
             while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
                 // How many elements to write from the input block to the output block.
                 // Min of the number of remaining unprocessed columns in the input block
@@ -136,7 +138,12 @@ void kernel_main() {
                 // then this has no effect as the while loop terminates. If we wrote to a subset of the
                 // input block, then that subset corresponds to an entire output block, so we increment
                 // the output_page_id to the following output block.
+                // DPRINT << "WRITING TO output_page_id: " << output_page_id << ENDL();
+                if (uk != 0) {
+                    DPRINT << "ADJHADGHjkfgdaksUGhjefgkjdhsgjsf,hgkfsjdh uk: " << uk << ENDL();
+                }
                 output_page_id++;
+                uk++;
 
                 // Only the first output block we write to can have some of it's columns already processed/written-to
                 num_cols_remaining_in_current_output_block = num_cols_per_output_block;
@@ -147,74 +154,27 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
-#if 0
-    // Each input block processed separately
-    // uint32_t height_wise_input_block_index = height_wise_input_block_start_index;
-    DPRINT << "num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
-    for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-        //get page id
-        //compute parameters for this block
-        //call the write block function
-        //advance to next page id ???
-        uint32_t height_wise_input_block_index =
-            get_arg_val<uint32_t>(rt_arg_index + i);  // height_wise_input_block_start_indices[i];
-        uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(
-            rt_arg_index + i + num_input_blocks_to_process);  // width_wise_output_block_start_indices[i];
-        uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(
-            rt_arg_index + i + num_input_blocks_to_process * 2);  // vector_num_unpadded_cols_per_input_block[i];
-        uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(
-            rt_arg_index + i +
-            num_input_blocks_to_process * 3);  // vector_num_cols_already_processed_in_first_output_block[i];
-        DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
-        DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
-        DPRINT << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << ENDL();
-        DPRINT << "num_cols_already_processed_in_first_output_block: "
-               << num_cols_already_processed_in_first_output_block << ENDL();
-        // Process the current block
-        write_tiles_in_current_block(
-            height_wise_input_block_index,
-            width_wise_output_block_start_index,
-            num_unpadded_cols_per_input_block,
-            num_cols_already_processed_in_first_output_block);
-
-        // auto coord = get_core_coord();
-        //         bool is_core00 = (get_absolute_logical_x() == 0) && (get_absolute_logical_y() == 0);
-        // if (is_core00) {
-        //     DPRINT << "i: " << i << ENDL();
-        //     // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
-
-        //     if (i == 0) {
-        //         height_wise_input_block_index = 2;
-        //     }
-        //     if ( i == 1) {
-        //         num_cols_already_processed_in_first_output_block = 32;
-        //         height_wise_input_block_index = 1;
-        //     }
-        //     if ( i == 2) {
-        //         // num_cols_already_processed_in_first_output_block = 32;
-        //         height_wise_input_block_index = 3;
-        //     }
-        //     // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
-        // }
-        // else {
-        //         height_wise_input_block_index += 2;  // WAS ++. HARDCODED MUST FIGURE OUT CORRECT LOGIC
-        // }
-    }
-#endif
     // Access pages within kernel
+    DPRINT << "num_blocks_to_process: " << num_input_blocks_to_process << ENDL();
+    uint32_t blocks_processed = 0;
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_src.shard_pages(shard_id);
-        DPRINT << "shard_id: " << shard_id << ENDL();
+        // DPRINT << "shard_id: " << shard_id << ENDL();
         uint32_t idx_in_shard = 0;
-        // for (const auto& page : shard_pages) {
-        //     auto page_id = page.page_id();
-        //     if (idx_in_shard % num_tiles_per_input_block == 0) {
-        //         DPRINT << "first_page_id_in_row: " << page_id << ENDL();
-        //     }
-        //     idx_in_shard++;
-        // }
-        for (auto it = shard_pages.begin(); it != shard_pages.end(); it += num_tiles_per_input_block) {
+        for (const auto& page : shard_pages) {
+            auto page_id = page.page_id();
+            DPRINT << "page_id: " << page_id << ENDL();
+            //     if (idx_in_shard % num_tiles_per_input_block == 0) {
+            //         DPRINT << "first_page_id_in_row: " << page_id << ENDL();
+            //     }
+            //     idx_in_shard++;
+        }
+
+        auto it = shard_pages.begin();
+        while (it != shard_pages.end()) {
+            // for (auto it = shard_pages.begin(); it != shard_pages.end(); it += num_tiles_per_input_block) {
             auto page_id = it->page_id();
+            DPRINT << "\t\tpage_id start block: " << page_id << ENDL();
             uint32_t height_wise_input_block_index =
                 page_id / num_tiles_per_row;  // add compile time arg for num_tiles_per_row
             uint32_t tile_index_width = page_id % num_tiles_per_row;
@@ -233,16 +193,48 @@ void kernel_main() {
             uint32_t num_cols_already_processed_in_first_output_block =
                 input_block_global_col_index % num_cols_per_output_block;
             // Process the current block
+            // DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
+            // DPRINT << "num_cols_already_processed_in_first_output_block: " <<
+            // num_cols_already_processed_in_first_output_block << ENDL();
+            DPRINT << height_wise_input_block_index << " " << width_wise_output_block_start_index << " "
+                   << num_unpadded_cols_per_input_block << " " << num_cols_already_processed_in_first_output_block
+                   << ENDL();
+            blocks_processed++;
             write_tiles_in_current_block(
                 height_wise_input_block_index,
                 width_wise_output_block_start_index,
                 num_unpadded_cols_per_input_block,
                 num_cols_already_processed_in_first_output_block);
-
-            // if (idx_in_shard % num_tiles_per_input_block == 0) {
-            DPRINT << "first_page_id_in_row: " << page_id << ENDL();
+            // DPRINT << "num_tiles_per_row: " << num_tiles_per_row << ENDL();
+            // // if (idx_in_shard % num_tiles_per_input_block == 0) {
+            // DPRINT << "first_page_id_in_row: " << page_id << ENDL();
+            DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
+            DPRINT << "tile_index_width: " << tile_index_width << ENDL();
+            DPRINT << "width_wise_input_block_index: " << width_wise_input_block_index << ENDL();
+            DPRINT << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << ENDL();
+            DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
+            DPRINT << "num_cols_already_processed_in_first_output_block: "
+                   << num_cols_already_processed_in_first_output_block << ENDL();
+            // DPRINT << "num_cols_per_output_block: " << num_cols_per_output_block << ENDL();
             // }
             // idx_in_shard++;
+            uint32_t num_tiles_to_advance = num_tiles_per_input_block;
+            if (num_unpadded_cols_per_input_block / tile_width < num_tiles_per_input_block) {
+                // DPRINT << "UPDATING SINGLE STEP" << ENDL();
+                num_tiles_to_advance = num_unpadded_cols_per_input_block / tile_width;
+            }
+            it += num_tiles_to_advance;
         }
     }
+    DPRINT << "blocks_processed: " << blocks_processed
+           << " num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
+    // DPRINT << "num_output_blocks_across_width: " << num_output_blocks_across_width << ENDL();
+    // DPRINT << "num_cols_per_output_block: " << num_cols_per_output_block << ENDL();
+    //     DPRINT << "num_cols_per_input_block: " << num_cols_per_input_block << ENDL();
+    //     DPRINT << "tile_width: " << tile_width << ENDL();
+    //     DPRINT << "tile_height: " << tile_height << ENDL();
+    //     DPRINT << "num_tiles_per_input_block: " << num_tiles_per_input_block << ENDL();
+    //     DPRINT << "num_tiles_per_row: " << num_tiles_per_row << ENDL();
+    //     DPRINT << "num_shards: " << num_shards << ENDL();
+    //     DPRINT << "num_cores: " << num_cores << ENDL();
 }

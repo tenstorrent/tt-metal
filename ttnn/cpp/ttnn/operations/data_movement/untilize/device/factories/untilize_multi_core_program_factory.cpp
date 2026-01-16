@@ -168,6 +168,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t input_cb_num_tiles;
     if (input_is_sharded) {
         // Have compute core untilize the entire shard at once
+        std::cout << "setting num_tiles_per_input_block: " << num_tiles_per_input_block << std::endl;
+        std::cout << "setting num_input_blocks_per_full_core: " << num_input_blocks_per_full_core << std::endl;
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
         if (num_input_blocks_per_full_core == 1) {
@@ -187,6 +189,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_cb_num_tiles,
         input_cb_data_format,
         input_is_sharded ? src0_buffer : nullptr);
+    std::cout << "created input CB" << std::endl;
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -525,6 +528,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 }
             }
 #endif
+            std::cout << "core " << i << ": num_input_blocks_to_process: FINAL: " << num_input_blocks_to_process
+                      << std::endl;
             // Reader run-time args
             uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
             std::vector<uint32_t> reader_run_time_args = {num_tiles_to_read};

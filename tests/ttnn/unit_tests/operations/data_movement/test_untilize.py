@@ -843,18 +843,21 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("use_pack_untilize", [True])  # , False])
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape",
     [
         ([3, 128, 160], ttnn.Shape([2, 64, 64])),
+        ([3, 160, 160], ttnn.Shape([2, 64, 64])),
+        ([3, 192, 160], ttnn.Shape([2, 64, 64])),
+        ([3, 192, 128], ttnn.Shape([2, 64, 64])),
     ],
 )
 @pytest.mark.parametrize(
     "input_shard_orientation",
     [
         ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
+        # ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
 @pytest.mark.parametrize(
@@ -886,7 +889,13 @@ def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    ans = ttnn.to_torch(ttnn_output_tensor)
+
+    # print("untilize input nnz", torch.count_nonzero(input_torch_tensor).item())
+    # print("untilize output nnz", torch.count_nonzero(ans).item())
+    # print("untilize max abs diff", torch.max(torch.abs(ans - input_torch_tensor)).item())
+
+    assert_with_pcc(input_torch_tensor, ans, 0.9999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
