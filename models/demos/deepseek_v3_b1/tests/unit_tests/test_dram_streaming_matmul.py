@@ -186,7 +186,7 @@ def test_dram_streaming_matmul(device, k, n, m):
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1_shuffled,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in1_memory_config,
@@ -229,7 +229,7 @@ def test_dram_streaming_matmul(device, k, n, m):
     tt_out = ttnn.to_torch(ttnn_result)
 
     # Verify results
-    expected_pcc = 0.999
+    expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
