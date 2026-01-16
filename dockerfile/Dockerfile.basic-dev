@@ -34,8 +34,11 @@ RUN apt-get update && apt-get install -y \
     git \
     python3-dev \
     python3-pip \
-    python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY scripts/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 # Install the SFPI compiler
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -44,9 +47,13 @@ COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
 
-# Set up virtual environment
+# Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+# This is acceptable for single-user containers but should be reconsidered for multi-tenant
+# or security-sensitive deployments. Consider using user-specific venvs in those cases.
+RUN umask 000 && uv venv $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
