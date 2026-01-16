@@ -843,7 +843,7 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])  # , False])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape",
     [
@@ -857,7 +857,7 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
     "input_shard_orientation",
     [
         ttnn.ShardOrientation.ROW_MAJOR,
-        # ttnn.ShardOrientation.COL_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
 @pytest.mark.parametrize(
