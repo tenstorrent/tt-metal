@@ -34,6 +34,7 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_atomics_num_issued[NUM_NOCS] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
