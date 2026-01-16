@@ -86,9 +86,9 @@ int main(int argc, char** argv) {
     const uint32_t dp_size = logical_mesh_shape[0];
     const uint32_t tp_size = logical_mesh_shape[1];
 
-    assert(num_features % tp_size == 0);
-    assert(num_targets % tp_size == 0);
-    assert(batch_size % dp_size == 0);
+    TT_FATAL(num_features % tp_size == 0, "num_features must be divisible by tp_size (going to be sharded)");
+    TT_FATAL(num_targets % tp_size == 0, "num_targets must be divisible by tp_size (going to be sharded)");
+    TT_FATAL(batch_size % dp_size == 0, "batch_size must be divisible by dp_size (going to be sharded)");
 
     // Validate that batch_size is divisible by dp_size
     if (batch_size == 0) {
