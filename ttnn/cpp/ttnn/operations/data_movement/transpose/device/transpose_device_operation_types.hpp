@@ -14,7 +14,7 @@ enum class TransposeOpParallelizationStrategy { MULTI_CORE_WH, MULTI_CORE_HC, MU
 struct TransposeParams {
     TransposeOpDim dim{};
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<float> pad_value;
+    float pad_value = 0.0f;
 };
 
 struct TransposeInputs {
