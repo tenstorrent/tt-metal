@@ -12,6 +12,7 @@ The order matters: physical validation, then dispatch tests, then fabric tests. 
 
 ### Prerequisites
 
+- Clone tt-metal to `/data/<your-username>/` and run all commands from the repo root
 - Passwordless SSH to all hosts
 - `mpirun` available (Docker-based scripts also need `mpirun-ulfm`)
 - FSD file for your cluster topology (on shared mount, should already exist):
@@ -33,7 +34,7 @@ ssh <host> hostname
 
 **MPI Check**
 
-Verify MPI can reach all hosts:
+Verify MPI can reach all hosts (`<hosts>` = comma-separated list, e.g. `host1,host2,host3,host4`):
 ```bash
 mpirun --host <hosts> hostname
 ```
@@ -90,7 +91,7 @@ Stress tests for the TT-Fabric layer. Ensures TT-Fabric SW and FW is compatible 
 ```
 
 ## Quick Health Check (For Developers)
-comm
+
 For day-to-day use when you just need to verify a cluster is working. Unlike the Docker-based qualification scripts above, these run directly on the host, so you need a local build:
 
 ```bash
