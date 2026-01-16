@@ -90,6 +90,7 @@ void kernel_main() {
         if (num_blocks_in_flight == max_blocks_in_flight) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, subblock_k);
+            cb_reserve_back(cb_id_in1, subblock_k);  // Reserve space for next write
             block_trid_to_wait = (block_trid_to_wait == total_num_blocks_in_buffer) ? 1 : (block_trid_to_wait + 1);
             num_blocks_in_flight -= 1;
         }
