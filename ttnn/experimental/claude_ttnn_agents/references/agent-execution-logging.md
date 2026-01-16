@@ -86,7 +86,7 @@ tests: SKIPPED
 [ttnn-kernel-writer] stage 7: implement tilize+reduce+untilize kernels
 
 - Reader: TensorAccessor for input sticks, generate_reduce_scaler
-- Compute: tilize_helpers, reduce_helpers, untilize_helpers
+- Compute: tilize_helpers, reduce_helpers, binary_op_helpers, untilize_helpers
 - Writer: TensorAccessor for output sticks
 - Fixed CB c_0 config: page_size=tile_size, num_pages=Wt
 
