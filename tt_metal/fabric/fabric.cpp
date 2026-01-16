@@ -259,6 +259,55 @@ void append_fabric_connection_rt_args(
     }
 }
 
+// append runtime parameter for RoutingPlaneConnectionManager 
+// convenience function using RoutingDirection's
+uint32_t append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<RoutingDirection>& attemped_directions,
+    const std::vector<uint32_t>& connection_link_indices,
+    tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type,
+    CoreType core_type) {
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    std::vector<FabricNodeId> dst_nodes;
+    std::unordered_set<RoutingDirection> used_directions;
+    for (int i = 0; i < attemped_directions.size(); i++) {
+        TT_FATAL(
+            !used_directions.contains(attemped_directions[i]),
+            "Multiple ethernet cores in the same direction ({}) are not currently supported. "
+            "This restriction will be removed in a future update when proper multi-core routing is implemented.",
+            attemped_directions[i]);
+
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, attemped_directions[i]);
+            
+        if (!neighbors.empty()) {
+            //TT_FATAL(
+            //    neighbors.size() == 1,
+            //    "Multiple neighbours ({}) found in direction ({}) of src node ({}) {} {}.",
+            //    neighbors.size(), attemped_directions[i], src_fabric_node_id, neighbors[0], neighbors[1]);
+            dst_nodes.push_back(FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]));
+        }
+    }
+
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        dst_nodes,
+        connection_link_indices,
+        worker_program,
+        kernel_id,
+        worker_core,
+        worker_args,
+        api_type,
+        core_type);
+
+    return dst_nodes.size();
+}
+
 // append runtime parameter for RoutingPlaneConnectionManager
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(

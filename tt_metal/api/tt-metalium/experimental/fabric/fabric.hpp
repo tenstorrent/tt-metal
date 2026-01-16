@@ -91,6 +91,19 @@ void append_routing_plane_connection_manager_rt_args(
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
 
+// append runtime parameter for RoutingPlaneConnectionManager 
+// convenience function using RoutingDirection's
+uint32_t append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<RoutingDirection>& attemped_directions,
+    const std::vector<uint32_t>& connection_link_indices,
+    tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type = FabricApiType::Linear,
+    CoreType core_type = CoreType::WORKER);
+
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
 std::vector<uint32_t> get_forwarding_link_indices(

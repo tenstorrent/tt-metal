@@ -37,9 +37,9 @@ public:
 
     // These field for FABRIC_2D are used by fabric_set_unicast_route
 #if defined(FABRIC_2D)
-    uint32_t ew_dim;
-    uint16_t my_mesh_id;
-    uint16_t my_chip_id;
+    uint32_t ew_dim = 0;
+    uint16_t my_mesh_id = 0;
+    uint16_t my_chip_id = 0;
 #endif
 
     struct ConnectionSlot {
@@ -51,7 +51,7 @@ public:
 #endif
     };
 
-    RoutingPlaneConnectionManager() : num_active_(0) {}
+    constexpr RoutingPlaneConnectionManager() : num_active_(0) {}
 
     template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
