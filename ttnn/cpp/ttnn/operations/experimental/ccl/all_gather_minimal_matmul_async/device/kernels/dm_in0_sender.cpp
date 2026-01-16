@@ -432,11 +432,10 @@ void kernel_main() {
 
 #ifdef USE_MUX
                 if ((is_injector_core || (k_block_iter < (K_num_blocks / num_devices))) && n_block_iter == 0) {
-                    // If not the last block
                     if (slices_received <= writes_expected) {
                         // If backward, send forward
                         // If forward, send backward
-                        forward_tile_to_fabric_neighbor(
+                        forward_block_to_fabric_neighbor(
                             m_tile,
                             k_block * K_block_tiles,
                             current_M_block_tiles,

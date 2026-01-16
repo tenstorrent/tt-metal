@@ -71,7 +71,7 @@ def run_test_linear_impl(
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
-                torch_input,
+                torch.zeros_like(torch_input),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
@@ -130,6 +130,8 @@ def run_test_linear_impl(
         num_workers_per_link=4,
         num_buffers_per_channel=2,
     )
+
+    ttnn.synchronize_device(device)
 
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(
