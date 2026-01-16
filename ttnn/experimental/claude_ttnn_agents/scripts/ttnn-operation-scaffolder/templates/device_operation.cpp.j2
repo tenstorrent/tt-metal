@@ -46,7 +46,7 @@ void {{ operation_name_pascal }}DeviceOperation::validate_on_program_cache_miss(
 {% endfor %}
 }
 
-spec_return_value_t {{ operation_name_pascal }}DeviceOperation::compute_output_specs(
+{{ operation_name_pascal }}DeviceOperation::spec_return_value_t {{ operation_name_pascal }}DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
 {% for tensor in input_tensors %}
     const auto& {{ tensor.cpp_name }} = tensor_args.{{ tensor.cpp_name }};
@@ -110,7 +110,7 @@ namespace ttnn::prim {
 {% endfor %}
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = {{ namespace }}::{{ operation_name_pascal }}DeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
 {% for param in parameters %}
             .{{ param.name }} = {{ param.name }},
