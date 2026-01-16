@@ -101,9 +101,10 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
         corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
         corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
         corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * mesh_shape[0] - 1});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
     }
 
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
         fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
     }
@@ -130,9 +131,10 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_t3k_fixed_as
         corner_fabric_node_ids.emplace_back(
             FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] * (mesh_graph.get_mesh_shape(mesh_id)[0] - 1)});
         corner_fabric_node_ids.emplace_back(
-            FabricNodeId{mesh_id, mesh_graph.get_mesh_shape(mesh_id)[1] * mesh_graph.get_mesh_shape(mesh_id)[0] - 1});
+            FabricNodeId{mesh_id, (mesh_graph.get_mesh_shape(mesh_id)[1] * mesh_graph.get_mesh_shape(mesh_id)[0]) - 1});
     }
 
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
         fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
     }

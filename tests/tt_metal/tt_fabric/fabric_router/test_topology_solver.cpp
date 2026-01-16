@@ -1548,9 +1548,9 @@ TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners
         // Verify all 4 target corners mapped to allowed positions
         size_t corners_mapped_to_allowed = 0;
         for (const auto& [target_node, trait] : target_traits) {
-            if (trait == "corner" && result.target_to_global.find(target_node) != result.target_to_global.end()) {
+            if (trait == "corner" && result.target_to_global.contains(target_node)) {
                 TestGlobalNode mapped_global = result.target_to_global.at(target_node);
-                if (global_traits.find(mapped_global) != global_traits.end()) {
+                if (global_traits.contains(mapped_global)) {
                     corners_mapped_to_allowed++;
                 }
             }
