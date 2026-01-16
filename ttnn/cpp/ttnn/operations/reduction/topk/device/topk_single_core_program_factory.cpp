@@ -9,6 +9,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/work_split.hpp"
 
+#include <string>
+
 using namespace tt::tt_metal;
 using namespace std;
 
@@ -146,11 +148,17 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         static_cast<uint32_t>(uint16_output)  // Index format flag
     };
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    if (tensor_args.indices.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.indices->buffer()).append_to(reader_compile_time_args);
+    }
+    const std::map<std::string, std::string> reader_defines = {
+        {"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"},
+    };
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
         core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_val_cb_index,   // CB6: Output values
@@ -199,6 +207,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
                         input_buffer->address(),
                         id,
                         work_per_core,
+                        tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address()
+                                                        : 0,  // Optional indices tensor
                     });
                 SetRuntimeArgs(
                     program,
@@ -245,6 +255,9 @@ void TopKSingleCoreProgramFactory::override_runtime_arguments(
         // Update reader kernel
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
         reader_runtime_args[0] = input_buffer->address();  // Input values
+        if (tensor_args.indices.has_value()) {
+            reader_runtime_args[3] = tensor_args.indices->buffer()->address();  // Optional indices tensor
+        }
 
         // Update writer kernel
         auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, core);
