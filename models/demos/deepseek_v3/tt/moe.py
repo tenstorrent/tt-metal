@@ -248,37 +248,66 @@ class MoE(SharedStateAddOn, AbstractModule):
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
-        ##################
-        ### All Gather ###
-        ##################
+        # All Gather
 
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
+        x = cls._fwd_all_gather(x, cfg)
 
-        ################
-        ### MoE Gate ###
-        ################
+        # MoE Gate
 
-        topk_experts_weights, topk_experts_indices = MoEGate.forward(x, cfg["moe_gate"])
+        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
-        #######################################
-        ### Repeat + Permute Expert weights ###
-        #######################################
+        # Repeat + Permute Expert weights
 
+        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+
+        # MOE
+
+        post_combine_output_tensor = cls._fwd_moe(
+            x,
+            topk_experts_indices,
+            topk_experts_weights,
+            cfg,
+            batch_size_per_device,
+            batch_size,
+            seq_len,
+        )
+
+        # Reduce Scatter
+
+        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+
+        return post_combine_output_tensor
+
+    @classmethod
+    def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return MoEGate.forward(x, cfg["moe_gate"])
+
+    @classmethod
+    def _fwd_repeat_permute_expert_weights(
+        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
+    ) -> ttnn.Tensor:
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
         topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
+        return topk_experts_weights
 
-        ###########
-        ### MOE ###
-        ###########
-
+    @classmethod
+    def _fwd_moe(
+        cls,
+        x: ttnn.Tensor,
+        topk_experts_indices: ttnn.Tensor,
+        topk_experts_weights: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        batch_size_per_device: int,
+        batch_size: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(
             x_rm,
             shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
-            # memory_config=cfg["x_rm_reshape_memory_config"],
         )
 
         topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
@@ -336,16 +365,19 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        return post_combine_output_tensor
 
-        ######################
-        ### Reduce Scatter ###
-        ######################
-
-        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+    @classmethod
+    def _fwd_reduce_scatter(
+        cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
+    ) -> ttnn.Tensor:
+        return ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
         )
 
-        return post_combine_output_tensor
+    @classmethod
+    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
