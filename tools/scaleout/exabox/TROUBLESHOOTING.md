@@ -64,7 +64,52 @@ Real issues encountered and their solutions.
 
 - [Cabling Generator README](https://github.com/tenstorrent/tt-metal/tree/main/tools/scaleout) - explains how to generate Factory System Descriptors (FSD) from cabling and deployment descriptors, and how to generate cluster descriptor YAMLs. Useful if you need to create or modify topology definitions.
 
+- [Exabox README](./README.md) - quick reference for running validation scripts, prerequisites, Docker images, and script purposes
+
 - `#exabox-infra` Slack channel - report issues, request power cycles, coordinate access
+
+**Analyzing validation logs:**
+
+After running `run_validation_*.sh`, use the analysis script:
+```bash
+./tools/scaleout/exabox/analyze_validation_results.sh validation_output/
+```
+
+The script categorizes each log file and gives you a summary with success rate. Here's what each category means and where to look next:
+
+| Category | What it means | Next steps |
+|----------|---------------|------------|
+| **Healthy links** | All links passed validation | Good to go |
+| **Unhealthy links** | Data mismatch, CRC errors, or retrains detected | Check the FAULTY LINKS REPORT in the log. Same channel failing repeatedly = bad cable. Scattered failures = try power cycle. See [Data Mismatch During Traffic Tests](#data-mismatch-during-traffic-tests) |
+| **Timeout issues** | Cores hung waiting for response | Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
+| **Missing connections** | Links in FSD not found in discovered state | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) |
+| **Extra connections** | Unexpected links found | Usually means wrong FSD file for your topology |
+| **DRAM training failures** | Chip memory failed to initialize | Hardware issue. See [GDDR Issue on Chip](#gddr-issue-on-chip). Contact syseng |
+| **Indeterminate** | Log incomplete (test crashed/hung) | Check if machine rebooted (`uptime`). May need power cycle |
+
+**Interpreting success rate:**
+- 100% (50/50): Cluster is solid, ready for workloads
+- 90%+ (45+/50): Mostly stable, isolated failures may be transient. Try power cycle and re-run
+- 70-90%: Likely a flaky link. Check which channel fails most often in the logs
+- <70%: Serious issue. Check for consistent failure patterns, may need cable swap or hardware investigation
+
+**Manual log inspection - error strings to grep for:**
+
+| Pattern | Meaning |
+|---------|---------|
+| `All Detected Links are healthy` | Success - all links passed |
+| `Found Unhealthy Links` | Link failures detected |
+| `Timeout (10000 ms) waiting for physical cores` | Cores hung, need power cycle |
+| `missing port/cable connections` | Links in FSD not found in discovered state |
+| `extra port/cable connections` | Unexpected links found (wrong FSD?) |
+| `DRAM training failed` | Hardware issue, contact syseng |
+
+**mpi-docker wrapper:**
+
+The scripts use `mpi-docker` to run MPI jobs inside Docker containers. Run `./tools/scaleout/exabox/mpi-docker --help` for usage. Key options:
+- `--image <image>` - Docker image to use
+- `--host <hosts>` - comma-separated host list
+- `--empty-entrypoint` - use for most test containers
 
 **Understanding validation output:**
 
