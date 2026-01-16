@@ -54,11 +54,21 @@
               <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Getting Started</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#software-stack-overview">Software Stack Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#programming-philosophy">Programming Philosophy</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#installation">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#key-concepts">Key Concepts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#quick-start-guide">Quick Start Guide</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#intermediate-usage">Intermediate Usage</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#advanced-usage">Advanced Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#resources-and-debugging">Resources and Debugging</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#documentation">Documentation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#related-repositories">Related Repositories</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#debugging-tools">Debugging Tools</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#community-support">Community Support</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#next-steps">Next Steps</a></li>
@@ -70,6 +80,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/labs/index.html">Lab Exercises</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
@@ -108,14 +119,50 @@
   <section id="getting-started">
 <span id="id1"></span><h1>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading"></a>
 </h1>
-<p>TT-Metalium is a framework for accelerating both ML and non-ML workloads on Tenstorrent hardware.</p>
-<p>TT-Metalium provides a C++ API for developers to write custom kernels that runs on Tenstorrent hardware. It gives you full control over the hardware, allowing you to optimize your code for performance and efficiency. And it does not hide the hardware details from you, so you can write code that is tailored to your specific use case.</p>
+<p>TT-Metalium is a framework for accelerating both ML and non-ML workloads on Tenstorrent hardware.
+It offers an abstraction between the host system (e.g., desktop with x86 CPU) and Tenstorrent hardware.</p>
+<p>TT-Metalium provides a C++ API for writing kernels that run on Tensix hardware; for configuring these kernels; and for executing kernels on the hardware. It gives the programmer full control over the hardware and data movement. This allows code to be optimized for performance and efficiency. Since hardware details are exposed, the programmer can write code that is tailored to their specific use case.</p>
 <p>The GitHub repository for the project is located here:
 <a class="reference external" href="https://github.com/tenstorrent/tt-metal">https://github.com/tenstorrent/tt-metal</a></p>
+<section id="software-stack-overview">
+<h2>Software Stack Overview<a class="headerlink" href="#software-stack-overview" title="Permalink to this heading"></a>
+</h2>
+<p>TT-Metalium sits at the foundation of Tenstorrent’s software stack:</p>
+<ul class="simple">
+<li><p><strong>TT-Forge / TT-MLIR</strong>: High-level compilation frameworks for deploying neural networks (see <a class="reference external" href="https://github.com/tenstorrent/tt-forge-fe">https://github.com/tenstorrent/tt-forge-fe</a>)</p></li>
+<li><p><strong>TTNN</strong>: Library of kernels implementing common Machine Learning operations (see <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/">https://docs.tenstorrent.com/tt-metal/latest/ttnn/</a>)</p></li>
+<li><p><strong>TT-Metalium</strong>: Low-level programming interface for Tensix hardware ⬅ This guide</p></li>
+<li><p><strong>TT-LLK (Low Level Kernels)</strong>: Hardware-specific kernel implementations</p></li>
+</ul>
+</section>
+<section id="programming-philosophy">
+<h2>Programming Philosophy<a class="headerlink" href="#programming-philosophy" title="Permalink to this heading"></a>
+</h2>
+<p>Operations on Tenstorrent hardware are typically designed from the <strong>bottom up</strong>:</p>
+<ol class="arabic simple">
+<li><p>Start with a kernel on a single Tensix core</p></li>
+<li><p>Schedule the kernel across multiple Tensix cores (may require synchronization)</p></li>
+<li><p>Scale to multiple devices (critical for large model deployment)</p></li>
+</ol>
+<p>The examples in this guide follow this progression, starting simple and building complexity.</p>
+</section>
 <section id="installation">
 <h2>Installation<a class="headerlink" href="#installation" title="Permalink to this heading"></a>
 </h2>
 <p>Install dependencies and build the project by following the instructions in the <a class="reference external" href="../installing.html">installation guide</a>.</p>
+</section>
+<section id="key-concepts">
+<h2>Key Concepts<a class="headerlink" href="#key-concepts" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Pipeline Dataflow Pattern</strong></p>
+<p>Kernels on Tenstorrent hardware typically follow a three-stage pipeline:</p>
+<ol class="arabic simple">
+<li><p><strong>Reader Kernel</strong> (Data Movement): Reads data from DRAM/SRAM into circular buffers</p></li>
+<li><p><strong>Compute Kernel</strong>: Processes data using Matrix/Vector engines</p></li>
+<li><p><strong>Writer Kernel</strong> (Data Movement): Writes results back to DRAM/SRAM</p></li>
+</ol>
+<p><strong>Circular buffers</strong> enable communication and synchronization between kernels, acting as FIFO data structures. They allow the reader to fetch new data while compute processes previous data, enabling overlapped execution.</p>
+<p>The DRAM Loopback example (Step 1 below) demonstrates the basic data movement pattern. Step 2 introduces the full pipeline with compute kernels and circular buffers.</p>
 </section>
 <section id="quick-start-guide">
 <h2>Quick Start Guide<a class="headerlink" href="#quick-start-guide" title="Permalink to this heading"></a>
@@ -169,13 +216,51 @@
 </dl>
 </section>
 </section>
+<section id="resources-and-debugging">
+<h2>Resources and Debugging<a class="headerlink" href="#resources-and-debugging" title="Permalink to this heading"></a>
+</h2>
+<section id="documentation">
+<h3>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>Metalium Architecture Guide</strong>: Comprehensive guide to architecture and programming model: <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md">https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md</a></p></li>
+<li><p><strong>API Reference</strong>: <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/">https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/</a></p></li>
+</ul>
+</section>
+<section id="related-repositories">
+<h3>Related Repositories<a class="headerlink" href="#related-repositories" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>tt-metal</strong>: Main repository with examples and documentation - <a class="reference external" href="https://github.com/tenstorrent/tt-metal">https://github.com/tenstorrent/tt-metal</a></p></li>
+<li><p><strong>tt-forge</strong>: High-level neural network compiler framework - <a class="reference external" href="https://github.com/tenstorrent/tt-forge-fe">https://github.com/tenstorrent/tt-forge-fe</a></p></li>
+<li><p><strong>tt-isa-documentation</strong>: Hardware instruction set architecture documentation - <a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/">https://github.com/tenstorrent/tt-isa-documentation/</a></p></li>
+</ul>
+</section>
+<section id="debugging-tools">
+<h3>Debugging Tools<a class="headerlink" href="#debugging-tools" title="Permalink to this heading"></a>
+</h3>
+<p>For information on debugging and profiling tools (DPRINT, Tracy Profiler, Device Profiler, Inspector, Watcher, etc.), see the <a class="reference internal" href="../tools/index.html"><span class="doc">Tools documentation</span></a>.</p>
+</section>
+<section id="community-support">
+<h3>Community Support<a class="headerlink" href="#community-support" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>Documentation</strong>: <a class="reference external" href="https://docs.tenstorrent.com/">https://docs.tenstorrent.com/</a></p></li>
+<li><p><strong>GitHub Issues</strong>: <a class="reference external" href="https://github.com/tenstorrent/tt-metal/issues">https://github.com/tenstorrent/tt-metal/issues</a></p></li>
+</ul>
+</section>
+</section>
 <section id="next-steps">
 <h2>Next Steps<a class="headerlink" href="#next-steps" title="Permalink to this heading"></a>
 </h2>
 <dl class="simple">
 <dt><strong>For ML Developers</strong></dt>
 <dd>
-<p>Use the higher-level <a class="reference external" href="../../ttnn">TT-NN</a> API for model development and deployment.</p>
+<p>Use the higher-level <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/">TT-NN</a> API for model development and deployment. TT-NN builds on TT-Metalium but provides PyTorch-like operations and automatic kernel selection.</p>
+</dd>
+<dt><strong>For Architecture Deep Dives</strong></dt>
+<dd>
+<p>Read the comprehensive <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md">Metalium Architecture Guide</a> for deep dives into hardware architecture, NoC topology, and advanced programming patterns.</p>
 </dd>
 <dt><strong>For Contributors</strong></dt>
 <dd>

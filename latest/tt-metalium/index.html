@@ -59,6 +59,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/labs/index.html">Lab Exercises</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tt_metal/environment_variables/index.html">Environment Variables</a></li>
@@ -102,12 +103,23 @@
 <ul>
 <li class="toctree-l1">
 <a class="reference internal" href="get_started/get_started.html">Getting Started</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#software-stack-overview">Software Stack Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#programming-philosophy">Programming Philosophy</a></li>
 <li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#installation">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#key-concepts">Key Concepts</a></li>
 <li class="toctree-l2">
 <a class="reference internal" href="get_started/get_started.html#quick-start-guide">Quick Start Guide</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#basic-usage">Basic Usage</a></li>
 <li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#intermediate-usage">Intermediate Usage</a></li>
 <li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#advanced-usage">Advanced Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="get_started/get_started.html#resources-and-debugging">Resources and Debugging</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#documentation">Documentation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#related-repositories">Related Repositories</a></li>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#debugging-tools">Debugging Tools</a></li>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#community-support">Community Support</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#next-steps">Next Steps</a></li>
@@ -294,6 +306,99 @@
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#conclusion">Conclusion</a></li>
 </ul>
 </li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/labs/index.html">Lab Exercises</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html">Lab 1: Single Core Matrix Multiplication</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#introduction">Introduction</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#basic-algorithm">Basic Algorithm</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#row-major-memory-layout">Row-Major Memory Layout</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#cache-friendly-access-patterns">Cache-Friendly Access Patterns</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#implications-for-matrix-multiplication">Implications for Matrix Multiplication</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#linear-transformation-and-computational-flexibility">Linear Transformation and Computational Flexibility</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#loop-tiling">Loop Tiling</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#simple-tiling-example">Simple Tiling Example</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#original-doubly-nested-loop">Original Doubly Nested Loop</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#tiled-version">Tiled Version</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-1-tiled-matrix-multiplication">Exercise 1: Tiled Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#introduction-to-tenstorrent-architecture">Introduction to Tenstorrent Architecture</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#tile-based-architecture">Tile-Based Architecture</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#memory-layout-and-tiling">Memory Layout and Tiling</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#tt-metalium-programming-model">TT-Metalium Programming Model</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#example-tt-metalium-program">Example TT-Metalium Program</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-2-running-the-example-program">Exercise 2: Running the Example Program</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#program-description">Program Description</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#kernel-types-and-data-flow">Kernel Types and Data Flow</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#kernel-creation-and-configuration">Kernel Creation and Configuration</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#reader-kernel-code">Reader Kernel Code</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#compute-kernel-code">Compute Kernel Code</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#writer-kernel-code">Writer Kernel Code</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#example-program-summary">Example Program Summary</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#kernel-compilation-and-execution">Kernel Compilation and Execution</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-3-observing-jit-compile-errors">Exercise 3: Observing JIT Compile Errors</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#debug-facilities-in-tt-metalium">Debug Facilities in TT-Metalium</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#debug-print-api">Debug Print API</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#printing-a-tile-in-a-dataflow-kernel">Printing a Tile in a Dataflow Kernel</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#caveats-and-best-practices">Caveats and Best Practices</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-4-using-dprint-to-debug-a-kernel">Exercise 4: Using DPRINT to Debug a Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#debugging-hangs-using-stack-traces">Debugging Hangs using Stack Traces</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#tt-triage-dependencies"><code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> Dependencies</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-5-using-tt-triage-to-debug-a-hang">Exercise 5: Using tt-triage to Debug a Hang</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#device-performance-profiling">Device Performance Profiling</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-6-using-device-profiling-to-profile-kernels">Exercise 6: Using Device Profiling to Profile Kernels</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#matrix-multiplication-in-tt-metalium">Matrix Multiplication in TT-Metalium</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#exercise-7-implementing-matrix-multiplication-in-tt-metalium">Exercise 7: Implementing Matrix Multiplication in TT-Metalium</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/labs/matmul/lab1/lab1.html#troubleshooting-and-additional-resources">Troubleshooting and Additional Resources</a></li>
 </ul>
 </li>
 </ul>

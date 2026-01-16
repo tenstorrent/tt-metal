@@ -56,7 +56,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/tutorials/ttnn_intro.html">TT-NN Introduction</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
@@ -138,7 +138,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.generic_op">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">generic_op</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">io_tensors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_descriptor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.ProgramDescriptor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.generic_op" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">generic_op</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">io_tensors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_descriptor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.ProgramDescriptor</span> <span class="pre">or</span> <span class="pre">ttnn.MeshProgramDescriptor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.generic_op" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Executes a custom operation with user-defined kernels on the device.</p>
@@ -151,8 +151,10 @@ on device hardware. It allows specifying custom compute kernels, data movement, 
 <ul class="simple">
 <li><p><strong>io_tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>) – List of input tensors and output tensor(s). Output tensor(s) must be
 pre-allocated and included as the last element(s) in the list.</p></li>
-<li><p><strong>program_descriptor</strong> (<em>ttnn.ProgramDescriptor</em>) – Descriptor containing kernel specifications,
-computational buffer configurations, semaphores, and other execution parameters.</p></li>
+<li><p><strong>program_descriptor</strong> (<em>ttnn.ProgramDescriptor</em><em> or </em><em>ttnn.MeshProgramDescriptor</em>) – Descriptor containing
+kernel specifications, computational buffer configurations, semaphores, and other execution
+parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
+MeshProgramDescriptor for explicit per-device control.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
