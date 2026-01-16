@@ -29,7 +29,6 @@
 namespace ttnn::prim {
 
 namespace unary = ttnn::operations::unary;
-using ttnn::operations::conv::calculate_output_image_size;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;

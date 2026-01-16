@@ -28,9 +28,6 @@ Tensor reduce(
 
 namespace ttnn::prim {
 
-tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
-
 }  // namespace ttnn::prim
 
 namespace reduce_op_utils {

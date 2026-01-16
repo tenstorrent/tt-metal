@@ -38,7 +38,7 @@ IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     auto output_layout{Layout::TILE};
     const auto& input_tensor = tensor_args;
-    const auto output_shape{input_tensor.logical_shape()};
+    const auto& output_shape{input_tensor.logical_shape()};
     return TensorSpec{output_shape, TensorLayout{input_tensor.dtype(), output_layout, input_tensor.memory_config()}};
 }
 
@@ -55,7 +55,7 @@ Tensor intimg(const Tensor& input_tensor) {
     using OperationType = ttnn::experimental::prim::IntImgDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{};
-    auto tensor_args = input_tensor;
+    const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -15,8 +15,8 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    if (input.memory_config().is_sharded()) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded untilize does not support sub core grid specification");
@@ -59,13 +59,13 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    validate_on_program_cache_miss(operation_attributes, input);
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    const auto& input_tensor_a = input;
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor_a = tensor_args;
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -165,9 +165,9 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 }
 
 TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     SmallVector<uint32_t> out_shape;
-    const auto& input_tensor_a = input;
+    const auto& input_tensor_a = tensor_args;
     size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
@@ -201,17 +201,17 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
 }
 
 Tensor UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    auto output_spec = compute_output_specs(operation_attributes, input);
-    return create_device_tensor(output_spec, input.device());
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& input,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    const auto& input_tensor = input;
+    const auto& input_tensor = tensor_args;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();

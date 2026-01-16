@@ -86,7 +86,7 @@ auto create_receiver_buffer(
     return CreateCircularBuffer(program, receiver_core_range, config);
 }
 
-static std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_strides_and_offsets(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_strides_and_offsets(
     uint32_t in_row_tiles, uint32_t in_col_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t in_dim) {
     uint32_t input_row_device_stride = 0;
     uint32_t input_col_device_stride = 0;

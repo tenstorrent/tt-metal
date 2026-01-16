@@ -89,9 +89,9 @@ void TilizeMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const ttnn::prim::TilizeParams& /*operation_attributes*/,
     const ttnn::prim::TilizeInputs& tensor_args,
-    const Tensor& output_tensor) {
+    const Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = output_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.input_cb_handle, *src_buffer);
     UpdateDynamicCircularBufferAddress(

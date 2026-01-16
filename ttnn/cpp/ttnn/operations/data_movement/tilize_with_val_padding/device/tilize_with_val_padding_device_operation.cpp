@@ -128,7 +128,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     if (input_tensor.memory_config().is_sharded()) {
         auto shard_spec = input_tensor.shard_spec().value();
@@ -156,8 +156,8 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
 }
 
 Tensor TilizeWithValPaddingDeviceOperation::create_output_tensors(
-    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    return create_device_tensor(compute_output_specs(operation_attributes, input_tensor), input_tensor.device());
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& tensor_args) {
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
 Tensor tilize_with_val_padding(

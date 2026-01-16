@@ -84,7 +84,7 @@ ttnn::experimental::prim::NlpCreateQkvHeadsFalcon7bResult nlp_create_qkv_heads_f
 
     const tt::tt_metal::MemoryConfig output_mem_config = memory_config.value_or(input.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{output_mem_config};
-    auto tensor_args = input;
+    const auto& tensor_args = input;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
