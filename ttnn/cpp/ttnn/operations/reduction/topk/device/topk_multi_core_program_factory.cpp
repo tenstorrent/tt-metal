@@ -379,15 +379,14 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     // Select appropriate reader variant based on whether indices are provided
     std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp";
-    if (input_indices_tensor.has_value()) {
-        reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_read_index_local_topk.cpp";
-    }
+    std::map<std::string, std::string> reader_specialization_defines = {
+        {"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"},
+    };
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reader_kernel_path,
         local_cores_range_set,  // Runs on all local processing cores
-        tt::tt_metal::ReaderDataMovementConfig(reader_local_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_local_compile_time_args, reader_specialization_defines));
 
     // -------------------------------------------------------------------------------
     // KERNEL 4: FINAL READER - Local TopK Results Aggregation Coordinator
@@ -523,30 +522,19 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     // Configure runtime arguments for each local processing core
     for (auto core : local_cores) {
         // LOCAL READER: Assign specific width chunk to each core
-        if (input_indices_tensor.has_value()) {
-            // Variant with pre-existing index tensor
-            SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {
-                    input_buffer->address(),          // DRAM address of input values tensor
-                    input_indices_buffer->address(),  // DRAM address of input indices tensor
-                    0,                                // Height offset (no height parallelism currently)
-                    core_w * Wt_local,                // Width offset for this core's chunk
-                });
-        } else {
-            // Variant with on-demand index generation
-            SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {
-                    input_buffer->address(),  // DRAM address of input values tensor
-                    0,                        // Height offset (no height parallelism currently)
-                    core_w * Wt_local,        // Width offset for this core's chunk
-                });
-        }
+
+        // Variant with on-demand index generation
+        SetRuntimeArgs(
+            program,
+            unary_reader_kernel_id,
+            core,
+            {
+                input_buffer->address(),  // DRAM address of input values tensor
+                0,                        // Height offset (no height parallelism currently)
+                core_w * Wt_local,        // Width offset for this core's chunk
+                input_indices_tensor.has_value() ? input_indices_buffer->address()
+                                                 : 0u,  // DRAM address of input indices tensor (if provided)
+            });
 
         // LOCAL WRITER: Configure transmission parameters for sending to final core
         SetRuntimeArgs(
@@ -603,9 +591,7 @@ void TopKMultiCoreProgramFactory::override_runtime_arguments(
     for (auto core : local_cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
         reader_runtime_args[0] = input_buffer->address();
-        if (tensor_args.indices.has_value()) {
-            reader_runtime_args[1] = tensor_args.indices.value().buffer()->address();
-        }
+        reader_runtime_args[3] = tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address() : 0u;
     }
 
     auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_final_kernel_id, final_core);
