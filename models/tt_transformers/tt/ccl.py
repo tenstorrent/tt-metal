@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.tt_transformers.tt.model_config import determine_device_name
 
@@ -511,6 +513,7 @@ def tt_sharded_distributed_rmsnorm(
             epsilon=epsilon,
             weight=gamma,
             memory_config=output_mem_config,
+            stats=stats_buffer,  # Pre-allocated stats buffer for intermediate all-gather
             use_noc1_only=False,
         )
     return tt_out

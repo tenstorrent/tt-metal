@@ -165,6 +165,12 @@ class Generator:
                     model_id,
                 )
 
+        # Initialize L1 buffers for decode mode after prefill warmup completes
+        # This must happen before decode trace capture
+        for model_instance in self.model:
+            if hasattr(model_instance, "init_decode_buffers"):
+                model_instance.init_decode_buffers()
+
     def _capture_trace_prefill(
         self,
         prefill_ids,

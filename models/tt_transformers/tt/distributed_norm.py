@@ -44,6 +44,7 @@ class DistributedNorm(LightweightModule):
             packer_l1_acc=False,
         )
         self.TG = TG
+        # Stats buffer for fused_rms_minimal is shared via tt_ccl.stats_buffer
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
@@ -58,45 +59,47 @@ class DistributedNorm(LightweightModule):
                 compute_kernel_config=self.ln_cfg,
             )
 
-        if mode == "decode":
-            if self.use_fused_rms_norm:
-                x = tt_sharded_distributed_rmsnorm(
-                    x,
-                    epsilon=self.norm.eps,
-                    gamma=self.norm.weight_distributed,
-                    mesh_device=self.args.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                    ln_sharded_progcfg=self.ln_prg_cfg,
-                    ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
-                    output_mem_config=self.gather_in_mem_cfg,
-                    use_fused_rms_norm=self.use_fused_rms_norm,
-                )
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
-        # Distributed norm already performs a gather
-        if not self.use_fused_rms_norm:
-            if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-                x = ttnn.experimental.all_gather_async(
-                    x,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
-                    topology=self.args.ccl_topology(),
-                    memory_config=input_mem_cfg,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
-            else:
-                x = ttnn.to_memory_config(x, input_mem_cfg)
+        # Decode mode with fused RMS norm
+        if mode == "decode" and self.use_fused_rms_norm:
+            # fused_rms_minimal does internal all-gather of STATS (for computing norm)
+            # but the OUTPUT is still sharded (1024-wide per device)
+            # We need to all_gather the output data to get full hidden dim (4096)
+            x = tt_sharded_distributed_rmsnorm(
+                x,
+                epsilon=self.norm.eps,
+                gamma=self.norm.weight_distributed,
+                mesh_device=self.args.mesh_device,
+                tt_ccl=self.tt_ccl,
+                ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                ln_sharded_progcfg=self.ln_prg_cfg,
+                ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                output_mem_config=self.gather_in_mem_cfg,
+                use_fused_rms_norm=self.use_fused_rms_norm,
+                stats_buffer=self.tt_ccl.stats_buffer,
+            )
+            # All-gather the normalized output data (fused op only gathers stats, not data)
+            cluster_axis = 1
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=1,
+                cluster_axis=cluster_axis,
+                topology=self.args.ccl_topology(),
+                memory_config=self.norm.sharded_output_config,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            return x
 
-            x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
-
-        # Distributed norm requires a gather
-        if self.args.is_distributed_norm(mode) or self.use_fused_rms_norm:
+        # Prefill mode OR decode mode without fused norm: use standard path
+        # First, all_gather if needed (multi-chip, non-distributed norm)
+        if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
@@ -130,5 +133,4 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-
         return x
