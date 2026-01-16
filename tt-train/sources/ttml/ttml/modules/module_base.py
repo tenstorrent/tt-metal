@@ -144,11 +144,11 @@ class ModuleList(AbstractModuleBase):
 
     @overload
     def __getitem__(self, idx: int) -> CppModuleBase:
-        ...
+        pass
 
     @overload
     def __getitem__(self, idx: slice) -> "ModuleList":
-        ...
+        pass
 
     def __getitem__(self, idx: Union[int, slice]) -> Union[CppModuleBase, "ModuleList"]:
         """Get module(s) by index or slice."""
