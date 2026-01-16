@@ -339,49 +339,8 @@ inline std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     return os;
 }
 
-template <typename T>
-typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
-    std::ostream& os, const T& object) {
-    if constexpr (detail::supports_to_string_v<T>) {
-        os << object.to_string();
-    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
-        constexpr auto num_attributes = detail::get_num_attributes<T>();
-        os << get_type_name<T>();
-        os << "(";
-
-        if constexpr (num_attributes > 0) {
-            const auto attribute_values = object.attribute_values();
-            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-                (
-                    [&os, &object, &attribute_values] {
-                        const auto& attribute = std::get<Ns>(attribute_values);
-                        os << std::get<Ns>(object.attribute_names);
-                        os << "=";
-                        os << attribute;
-                        os << ",";
-                    }(),
-                    ...);
-            }(std::make_index_sequence<num_attributes - 1>{});
-
-            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
-            os << std::get<num_attributes - 1>(object.attribute_names);
-            os << "=";
-            os << attribute;
-        }
-
-        os << ")";
-    } else {
-        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
-    }
-    return os;
-}
-
-template <typename T>
-typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << enchantum::scoped::to_string(value);
-    return os;
-}
-
+// Container operator<< definitions must come before the generic template below,
+// otherwise `os << attribute` will match `operator<<(ostream&, const Attribute&)` via implicit conversion.
 template <typename T1, typename T2>
 std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     os << "{" << pair.first << ", " << pair.second << "}";
@@ -493,6 +452,12 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
+    os << enchantum::scoped::to_string(value);
+    return os;
+}
+
+template <typename T>
     requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
@@ -508,6 +473,45 @@ std::ostream& operator<<(std::ostream& os, const T& object) {
         object);
 
     os << ")";
+    return os;
+}
+
+// This template must be placed after the Reflectable operator<< to ensure proper
+// name lookup when printing objects that contain Reflectable fields.
+template <typename T>
+typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
+    std::ostream& os, const T& object) {
+    if constexpr (detail::supports_to_string_v<T>) {
+        os << object.to_string();
+    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
+        constexpr auto num_attributes = detail::get_num_attributes<T>();
+        os << get_type_name<T>();
+        os << "(";
+
+        if constexpr (num_attributes > 0) {
+            const auto attribute_values = object.attribute_values();
+            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&os, &object, &attribute_values] {
+                        const auto& attribute = std::get<Ns>(attribute_values);
+                        os << std::get<Ns>(object.attribute_names);
+                        os << "=";
+                        os << attribute;
+                        os << ",";
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes - 1>{});
+
+            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
+            os << std::get<num_attributes - 1>(object.attribute_names);
+            os << "=";
+            os << attribute;
+        }
+
+        os << ")";
+    } else {
+        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
+    }
     return os;
 }
 
