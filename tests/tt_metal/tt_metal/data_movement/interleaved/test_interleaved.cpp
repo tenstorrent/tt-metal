@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +39,7 @@ struct InterleavedConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const InterleavedConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -251,7 +252,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocati
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
@@ -532,7 +533,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocation
 
     // Cores
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     auto grid_size = device->compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
