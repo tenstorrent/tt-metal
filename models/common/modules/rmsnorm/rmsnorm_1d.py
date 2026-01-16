@@ -84,10 +84,6 @@ class RMSNorm1DConfig:
     # Compute kernel config (shared across paths)
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
 
-    # Weight settings
-    weight_dtype: ttnn.DataType = ttnn.bfloat16
-    weight_memory_config: ttnn.MemoryConfig | None = None
-
     # Internal: distributed weight LazyWeight (sharded across devices for Path 3)
     # Note: Uses LazyWeight for consistency, but loaded via _load_distributed_weight()
     # to bypass LazyWeight's auto-padding which breaks distributed RMSNorm alignment.
@@ -498,12 +494,7 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
             use_height_and_width_as_shard_shape=True,
         )
 
-    # --- Phase 5: Weight memory config ---
-
-    if config.weight_memory_config is None:
-        to_set["weight_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-
-    # --- Phase 6: Resolve LazyWeight (replicated for decode and local prefill) ---
+    # --- Phase 5: Resolve LazyWeight (replicated for decode and local prefill) ---
 
     if num_devices == 1:
         mesh_mapper_config_replicated = None
@@ -539,10 +530,10 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
 
     resolved_weight = resolve_lazy_weight(
         transformed_weight,
-        dtype=config.weight_dtype,
+        dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper_config=mesh_mapper_config_replicated,
     )
     to_set["weight"] = resolved_weight
@@ -559,10 +550,10 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
         # uses ttnn.as_tensor + ShardTensor2dMesh to bypass LazyWeight's auto-padding
         weight_distributed = replace(
             transformed_weight,
-            dtype=config.weight_dtype,
+            dtype=ttnn.bfloat16,  # RMSNorm weights are always bfloat16
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=to_set.get("weight_memory_config", config.weight_memory_config),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper_config=mesh_mapper_config_sharded,
         )
         to_set["_weight_distributed"] = weight_distributed
