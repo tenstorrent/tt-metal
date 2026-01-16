@@ -53,12 +53,20 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Use software RNE implementation for correct IEEE 754 rounding
-            result = float32_to_bf16_rne(result);
+            // Pre-add tie-breaker LSB before hardware RNE conversion
+            sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
+            sfpi::vUInt lsb = ((~bits) >> 16) & 1;
+            bits = bits - lsb;
+
+            result = sfpi::reinterpret<sfpi::vFloat>(bits);
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+
+            // // Old software RNE approach (kept for reference):
+            // result = float32_to_bf16_rne(result);
+
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;
-            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -89,8 +97,16 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
 
         // Apply RNE rounding outside conditional block to avoid compiler ICE
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
-            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            // Pre-add tie-breaker LSB before hardware RNE conversion
+            sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
+            sfpi::vUInt lsb = ((~bits) >> 16) & 1;
+            bits = bits - lsb;
+
+            result = sfpi::reinterpret<sfpi::vFloat>(bits);
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+
+            // software RNE approach (kept for reference):
+            // result = float32_to_bf16_rne(result);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
