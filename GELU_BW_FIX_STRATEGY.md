@@ -2,6 +2,40 @@
 
 This document consolidates all knowledge gathered from parallel research to help fix GitHub Issue #35971.
 
+## CRITICAL UPDATE: erfc() Approach Does NOT Work
+
+**Discovery (2026-01-16):** The erfc()-based approach documented below does NOT work because **ttnn::erfc() internally uses `1 - erf()`**, which has the SAME catastrophic cancellation.
+
+From `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erf_erfc.h`:
+```cpp
+template <bool APPROXIMATION_MODE>
+inline void calculate_erfc() {
+    for (int d = 0; d < 8; d++) {
+        vFloat x = dst_reg[0];
+        v_if(x < 0.0f) {
+            x = -x;
+            x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x));
+        }
+        v_else {
+            x = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x));  // ← SAME CANCELLATION!
+        }
+        v_endif;
+        dst_reg[0] = x;
+        dst_reg++;
+    }
+}
+```
+
+For `erfc(2.62)` when computing GELU'(-3.7):
+- `erf_body(2.62) ≈ 0.99997...`
+- `erfc(2.62) = 1.0 - 0.99997 ≈ 0.00003` ← **Same precision loss as `1 + erf()`**
+
+**Required Fix:** Sollya-derived polynomial approximation (like `ttnn::tanh` uses to achieve Max ULP = 1).
+
+See `GELU_BW_FIX_IMPLEMENTATION_LOG.md` for the updated implementation plan.
+
+---
+
 ## Problem Summary
 
 **`ttnn.gelu_bw()`** has severe ULP errors affecting 10.69% of BF16 values:
