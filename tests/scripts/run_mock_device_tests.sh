@@ -14,8 +14,7 @@ fi
 
 CLUSTER_DESC="$1"
 
-# Set required environment variables
-export TT_METAL_HOME="$(cd "$(dirname "$0")" && pwd)"
+# Set required environment variable
 export TT_METAL_MOCK_CLUSTER_DESC_PATH="$CLUSTER_DESC"
 
 echo "=========================================="
