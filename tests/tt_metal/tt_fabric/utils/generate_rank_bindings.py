@@ -121,8 +121,8 @@ def generate_supported_rank_bindings():
     # Process Rank ID To Tray ID Mapping for 2x4 + 2x4 + 2x8 (3 mesh) configuration
     WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
         0: [1],  # 2x4 mesh needs 1 tray (8 devices)
-        1: [2],  # 2x4 mesh needs 1 tray (8 devices)
-        2: [3, 4],  # 2x8 mesh needs 2 trays (16 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [2, 4],  # 2x8 mesh needs 2 trays (16 devices)
     }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
