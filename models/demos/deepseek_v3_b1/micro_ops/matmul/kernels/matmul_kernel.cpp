@@ -8,8 +8,9 @@
 // BRISC: Waits for output tiles
 // TRISC: Performs matmul compute via Matmul::Op
 
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/matmul.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/matmul.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -30,13 +31,12 @@ KERNEL_ENTRY {
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
     constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
 
-    // Both in0 and in1 are backed by sharded tensors - signal they're ready
-    cb_reserve_back(in0_cb, num_tiles_k);
-    cb_push_back(in0_cb, num_tiles_k);
-
-    // in1 has num_tiles_k * out_w tiles (K tiles for each output column)
-    cb_reserve_back(in1_cb, num_tiles_k * out_w);
-    cb_push_back(in1_cb, num_tiles_k * out_w);
+    // Setup sharded persistent buffers (in0 and in1 are backed by L1 shards)
+    if constexpr (Core::is_active_core) {
+        unified_kernels::setup_sharded_buffer(in0_cb, num_tiles_k);
+        // in1 has num_tiles_k * out_w tiles (K tiles for each output column)
+        unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
+    }
 
     // Reader args (empty - no-op in Matmul::Op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
@@ -44,9 +44,6 @@ KERNEL_ENTRY {
 #elif defined(COMPILE_FOR_BRISC)
     // CTArgs type alias (required for Op template)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-
-    // Named compile-time args
-    constexpr uint32_t out_cb = get_named_compile_time_arg_val("matmul_out");
 
     // Writer args (empty - no-op in Matmul::Op)
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};

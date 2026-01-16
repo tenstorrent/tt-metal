@@ -5,9 +5,9 @@
 // Single kernel file, compiles correctly for both BRISC (receiver) and NCRISC (sender)
 // Note: This is a dataflow-only op - no compute kernel
 
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/gather.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/gather.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {

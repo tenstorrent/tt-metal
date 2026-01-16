@@ -13,12 +13,12 @@
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
 //          Matmul2 compute (on matmul2 cores)
 
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/rmsnorm.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/matmul.hpp"
-#include "models/demos/deepseek_v3_b1/unified_kernels/gather.hpp"
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/rmsnorm.hpp"
+#include "../../../unified_kernels/mcast.hpp"
+#include "../../../unified_kernels/matmul.hpp"
+#include "../../../unified_kernels/gather.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -32,19 +32,18 @@ KERNEL_ENTRY {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
 // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
-// Runtime args: [epsilon, scalar, gather_addr]
+// Runtime args: [scalar, scalar2]
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs =
-        deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_tiny_tile") == 1>;
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm2_num_faces")>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     // RMSNorm reader runtime args
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<uint32_t>(1),  // scalar (1/sqrt(7168))
+        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(7168))
     };
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
@@ -74,19 +73,14 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("gather_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather_row_major"),
-        get_write_ptr(
-            get_named_compile_time_arg_val("gather_dst_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+        get_write_ptr(get_named_compile_time_arg_val(
+            "rmsnorm2_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
     };
-
-    // Gather dst CB args for copy operation (receiver CB, used on input core)
-    constexpr uint32_t gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
-    constexpr uint32_t gather_dst_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
 
     // RMSNorm2 reader args (uses same scalars_cb, different scalar value)
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
-        get_arg_val<uint32_t>(2),  // scalar2 (1/sqrt(1536))
+        get_arg_val<uint32_t>(1),  // scalar2 (1/sqrt(1536))
     };
 
     // Matmul2 reader args (NCRISC is no-op)
@@ -107,6 +101,7 @@ KERNEL_ENTRY {
 #elif defined(COMPILE_FOR_BRISC)
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
@@ -183,8 +178,14 @@ KERNEL_ENTRY {
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs =
-        deepseek_b1_ops::RMSNorm::ComputeCTArgs<get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1>;
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
@@ -194,9 +195,7 @@ KERNEL_ENTRY {
         get_named_compile_time_arg_val("rmsnorm_interm_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_epsilon_index"),
-        get_named_compile_time_arg_val("rmsnorm_scalar_index"),
+        get_arg_val<uint32_t>(0),  // epsilon
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -219,14 +218,12 @@ KERNEL_ENTRY {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (2 tiles)
+        get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
         get_named_compile_time_arg_val("rmsnorm_scalars_cb"),  // reuse scalars cb
         get_named_compile_time_arg_val("rmsnorm2_interm_cb"),  // separate interm CB (3 tiles)
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
-        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (2 tiles)
-        get_named_compile_time_arg_val("rmsnorm2_num_tiles"),  // 2 tiles
-        get_named_compile_time_arg_val("rmsnorm_epsilon_index"),
-        get_named_compile_time_arg_val("rmsnorm_scalar_index"),
+        get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
+        get_arg_val<uint32_t>(0),                              // epsilon (same as rmsnorm1)
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -255,7 +252,7 @@ KERNEL_ENTRY {
         unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
-        // RMSNorm2 gamma buffer (2 tiles, padded from 1536 elements)
+        // RMSNorm2 gamma buffer (3 tiles of 16x32)
         constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
         constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
@@ -278,18 +275,17 @@ KERNEL_ENTRY {
     }
 #endif
 
-    // Set up reusable operations
-    // pop_input = true (input is consumed after RMSNorm)
-    deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-
     // ========================================================================
     // Input core: RMSNorm + Mcast send
     // ========================================================================
     {
         DeviceZoneScopedN("RMSNORM");
+        // pop_input = true (input is consumed after RMSNorm)
+        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
         rmsnorm(rmsnorm_args);
     }
 
+    // pop_src = true (rmsnorm output is consumed after mcast)
     deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul_core, true>
         mcast;
     mcast.init(mcast_args);
@@ -322,62 +318,20 @@ KERNEL_ENTRY {
     }
 
     // ========================================================================
-    // Copy gather output to RMSNorm input CB with zero padding
-    // Gather dst cb has 1536 bytes (1.5 half tiles), pad to 2048 bytes (32x32 tile)
-    // Only runs on BRISC on input core (where gather receiver runs)
-    // ========================================================================
-#if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_input_core) {
-        DeviceZoneScopedN("GATHER_TO_RMSNORM_HACK");
-
-        constexpr uint32_t rmsnorm2_input_cb = get_named_compile_time_arg_val("rmsnorm2_input_cb");
-        constexpr uint32_t gather_data_size_bytes = 1536 * 2;  // 1.5 half tiles
-        constexpr uint32_t rmsnorm_tile_size_bytes = 4096;     // 2 tiles (32x32 each) in bfloat16
-        constexpr uint32_t padding_size_bytes = rmsnorm_tile_size_bytes - gather_data_size_bytes;
-
-        // Wait for gather dst cb data (already pushed by gather receiver)
-        cb_wait_front(gather_dst_cb, gather_dst_num_pages);
-
-        // Reserve space in rmsnorm2 input cb (2 tiles)
-        cb_reserve_back(rmsnorm2_input_cb, 2);
-
-        // Get source and destination addresses
-        uint32_t src_addr = get_read_ptr(gather_dst_cb);
-        uint32_t dst_addr = get_write_ptr(rmsnorm2_input_cb);
-
-        // Copy gather data to rmsnorm2 cb using local NOC read
-        uint64_t src_noc_addr = get_noc_addr(src_addr);
-        noc_async_read(src_noc_addr, dst_addr, gather_data_size_bytes);
-        noc_async_read_barrier();
-
-        // Zero-pad the remaining bytes (last half tile)
-        volatile tt_l1_ptr uint16_t* pad_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr + gather_data_size_bytes);
-        constexpr uint32_t padding_elements = padding_size_bytes / sizeof(uint16_t);
-        for (uint32_t i = 0; i < padding_elements; ++i) {
-            pad_ptr[i] = 0;
-        }
-
-        // Push the completed 2 tiles to rmsnorm2 input cb
-        cb_push_back(rmsnorm2_input_cb, 2);
-
-        // Pop the gather dst cb
-        cb_pop_front(gather_dst_cb, gather_dst_num_pages);
-    }
-#endif
-
-    // ========================================================================
-    // RMSNorm2: Apply RMSNorm to the gathered/padded data (1536 elements -> 2 tiles)
+    // RMSNorm2: Apply RMSNorm to the gathered data (1536 elements = 3 tiles of 16x32)
+    // Gather writes directly to rmsnorm2_input_cb (3 tiles of 16x32)
     // Uses SEPARATE CBs with exact sizes:
-    //   - Input: rmsnorm2_input_cb (2 tiles from copy)
+    //   - Input: rmsnorm2_input_cb (3 tiles from gather)
     //   - Interm: rmsnorm2_interm_cb (3 tiles)
-    //   - Output: rmsnorm2_output_cb (2 tiles)
-    //   - Gamma: rmsnorm2_gamma_cb (2 tiles, padded from 1536 elements)
+    //   - Output: rmsnorm2_output_cb (3 tiles)
+    //   - Gamma: rmsnorm2_gamma_cb (3 tiles)
     //   - Scalars: reuses scalars_cb (same epsilon, different scalar)
     // ========================================================================
+    // pop_input = true (gathered data is consumed after RMSNorm2)
     {
         DeviceZoneScopedN("RMSNORM2");
-        rmsnorm(rmsnorm2_args);
+        deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
+        rmsnorm2(rmsnorm2_args);
     }
 
     // ========================================================================
@@ -385,10 +339,10 @@ KERNEL_ENTRY {
     // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
     // Uses same grid and semaphores as first mcast
     // ========================================================================
+    // pop_src = true (rmsnorm2 output is consumed after mcast)
     {
         DeviceZoneScopedN("MCAST2");
         // Mcast2: NCRISC sends from input core, BRISC receives on matmul2 cores, TRISC no-op
-        // pop_src = true (rmsnorm2 output is consumed after mcast)
         deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
             mcast2;
         mcast2(mcast2_args);
