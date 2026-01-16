@@ -10,6 +10,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
+#include <numeric>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -59,7 +60,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 5},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 5},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 5},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 6}};  // Can get 6 from other cores
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 72}};  // Can get 6 from other cores
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles8, cb_handles4, cb_handles_all;
 
@@ -79,7 +80,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 6},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 6},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 6},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 6}};
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 72}};
 
     // Create CBs
     for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs1) {
@@ -158,6 +159,56 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    // Create semaphores for ring synchronization between cores
+    // Each core will have a semaphore that its predecessor will signal
+    const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    // Pre-compute physical coordinates for all cores (needed for NOC addressing)
+    const uint32_t num_cores = dram_adjacent_cores.size();
+    std::vector<CoreCoord> physical_coords;
+    physical_coords.reserve(num_cores);
+    for (const auto& logical_core : dram_adjacent_cores) {
+        physical_coords.push_back(tensor_args.input_tensor.device()->worker_core_from_logical_core(logical_core));
+    }
+
+    // Create optimal ring ordering for NOC1 to minimize traffic conflicts
+    // NOC1 routes: decreasing y (top) first, then decreasing x (left)
+    // Sort cores by (descending y, descending x) to create a ring that flows naturally
+    std::vector<uint32_t> ring_order(num_cores);
+    std::iota(ring_order.begin(), ring_order.end(), 0);
+    std::sort(ring_order.begin(), ring_order.end(), [&physical_coords](uint32_t a, uint32_t b) {
+        const auto& pa = physical_coords[a];
+        const auto& pb = physical_coords[b];
+        if (pa.y != pb.y) {
+            return pa.y > pb.y;  // Descending y
+        }
+        return pa.x > pb.x;  // Descending x
+    });
+
+    // Build neighbor mapping: neighbor[i] = index of neighbor for core i in the ring
+    std::vector<uint32_t> neighbor_mapping(num_cores);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        uint32_t current_core = ring_order[i];
+        uint32_t next_core = ring_order[(i + 1) % num_cores];
+        neighbor_mapping[current_core] = next_core;
+    }
+
+    // Log the ring order for debugging
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        uint32_t core_idx = ring_order[i];
+        uint32_t neighbor_idx = neighbor_mapping[core_idx];
+        log_warning(
+            tt::LogOp,
+            "Ring position {}: core {} ({},{}) -> neighbor core {} ({},{})",
+            i,
+            core_idx,
+            physical_coords[core_idx].x,
+            physical_coords[core_idx].y,
+            neighbor_idx,
+            physical_coords[neighbor_idx].x,
+            physical_coords[neighbor_idx].y);
+    }
+
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // Core ID placeholder
@@ -165,6 +216,10 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
+    // Add placeholders for neighbor physical coords and semaphore
+    runtime_args.push_back(0);                  // Neighbor physical x
+    runtime_args.push_back(0);                  // Neighbor physical y
+    runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
 
     std::vector<uint32_t> vchannels;
     uint32_t core_id = 0;
@@ -186,8 +241,17 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         }
         vchannels.push_back(vchannel);
 
+        // Use the optimized ring neighbor mapping
+        const uint32_t neighbor_core_id = neighbor_mapping[core_id];
+        const auto& neighbor_physical = physical_coords[neighbor_core_id];
+
         runtime_args[0] = core_id++;
         runtime_args[1] = vchannel;
+        // Set neighbor physical coordinates
+        runtime_args[7] = static_cast<uint32_t>(neighbor_physical.x);
+        runtime_args[8] = static_cast<uint32_t>(neighbor_physical.y);
+        // runtime_args[9] is already set to ring_semaphore_id
+
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
