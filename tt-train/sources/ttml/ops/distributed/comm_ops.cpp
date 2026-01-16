@@ -73,8 +73,6 @@ autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_back
 autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis) {
     auto out = autograd::create_tensor(tensor->get_value());
     autograd::GradFunction grad = [tensor, out, cluster_axis]() {
-        // auto* device = &autograd::ctx().get_device();
-        // const uint32_t tp_size = cluster_axis.has_value() ? device->shape()[cluster_axis.value()] : device->num_devices();
         tensor->add_grad(ttnn_fixed::distributed::all_reduce(out->get_grad(), cluster_axis));
     };
     auto links = autograd::get_links(tensor);
