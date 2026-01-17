@@ -1088,6 +1088,11 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
+    // Skip for Mock devices as they don't have real device coordinates or need NOC tables
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
@@ -1165,6 +1170,11 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 }
 
 void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
+    // Skip for Mock devices as they don't have real device coordinates
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
