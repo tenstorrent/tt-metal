@@ -104,7 +104,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
+          { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS}, # Naif Tarafdar, Camilo Vega
+          { name: "BH Galaxy Multi-Mesh tests", arch: blackhole, cmd: "python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding bh_4x4_multi_mesh_rank_binding.yaml --mpi-args '--allow-run-as-root --tag-output' ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml", timeout: 15, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
+          { name: "BH Galaxy Multi-Mesh with Z Links tests", arch: blackhole, cmd: "python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py && tt-run --rank-binding bh_4x4_z_multi_mesh_rank_binding.yaml --mpi-args '--allow-run-as-root --tag-output' ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml", timeout: 15, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
