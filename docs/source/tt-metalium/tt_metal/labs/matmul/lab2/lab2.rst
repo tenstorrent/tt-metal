@@ -121,13 +121,16 @@ The ``tt::tt_metal::split_work_to_cores(core_grid, work_units)`` function calcul
 based on the total amount of work units and the number of available cores. It distributes the work as evenly as possible,
 even if the number of work units does not divide evenly among the cores.
 In case of matrix multiplication, the work units are the output tiles and the function may be called as follows:
+
 .. code-block:: cpp
+   #include <tt-metalium/work_split.hpp>
 
-    auto core_grid = device->compute_with_storage_grid_size();
-    uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_  2] =
-        tt::tt_metal::split_work_to_cores(core_grid, work_units);
+   auto core_grid = device->compute_with_storage_grid_size();
+   uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);
+
+   auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_  2] =
+       tt::tt_metal::split_work_to_cores(core_grid, work_units);
 
 The function returns a tuple containing several values:
 
@@ -185,29 +188,6 @@ and **not** over all cores in ``core_grid``).
 Creating kernels on unused cores can cause undefined behavior or crashes if kernels are created but runtime arguments are not
 set on the core.
 
-Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count.
-The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough
-work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will
-lead to undefined behavior and issues during execution.
-
-```c++
-auto work_groups = {std::make_pair(core_group_1, num_tiles_per_core_group_1),
-                    std::make_pair(core_group_2, num_tiles_per_core_group_2)};
-uint32_t id = 0; // Offset for the next core in the group
-for(const auto& [group, work_per_core] : work_groups) {
-    for (const auto& range : group) {
-        for(const auto& core : range) {
-            // Set runtime arguments for each kernel based on the core and tile count
-            SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), work_per_core, id});
-            SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), work_per_core});
-            SetRuntimeArgs(program, compute, core, {/*compute parameters*/work_per_core, id});
-            id += work_per_core;
-        }
-    }
-}
-
-// at this point id == work_size as all cores have been assigned work
-```
 
 Create Circular Buffers and Kernels on Multiple Cores
 -----------------------------------------------------
@@ -276,13 +256,9 @@ In this lab, you will run matrix multiplication with:
 
 * Work distributed over **all** available cores.
 
-The number of cores actually used is entirely controlled by:
-
-1. Which cores you include in your core sets when creating circular buffers and kernels.
-
-2. Which cores you pass to ``SetRuntimeArgs`` for the reader, compute, and writer kernels.
-
-Cores that are not in these sets will remain idle for that program.
+The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
+Other cores will remain idle for that program.
+Of course, runtime arguments should only be set on cores that have been assigned work.
 
 To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then:
 
@@ -348,17 +324,15 @@ Steps
 
    * ``A`` of size ``640x320`` and ``B`` of size ``320x640``, producing ``C`` of size ``640x640``, or
 
-   * A square ``640x640`` by ``640x640`` matmul, as long as all dimensions are multiples of the tile size.
-
-   Assert (using ``TT_FATAL``) that matrix dimensions are divisible by the tile size, just as you did in Lab 1.
 
 #. **Extend the host code to multiple cores**
 
    Modify your host program as follows:
 
    * Open a device and obtain the compute-with-storage grid size using ``compute_with_storage_grid_size()``.
+     You can get the ``device`` object needed to call ``compute_with_storage_grid_size()`` from the program state object (i.e. ``prog_state.mesh_device.get()``).
 
-   * Compute the total number of output tiles ``num_output_tiles = Mt * Nt``.
+   * Compute the total number of output tiles.
 
    * Call the work-splitting helper to divide these tiles among cores, and obtain a set of participating cores (for example, ``all_cores``) and per-core tile counts.
 
@@ -368,33 +342,11 @@ Steps
      take a variant argument, like the ``CreateCircularBuffer`` function.
 
 
-   * Create reader, compute, and writer kernels on all participating cores.
-     Use compile-time arguments built from your ``Tensor`` objects (for example, via ``TensorAccessorArgs``) to pass tensor layout information, as in Lab 1.
+   * Create reader, compute, and writer kernels on all participating cores, and pass appropriate compile-time and runtime arguments to all the kernels.
 
 #. **Implement the all-cores version**
 
-   First implement a version that uses all cores in your chosen core set:
-
-   * For each participating core, set reader runtime arguments that include:
-
-     - Device addresses of the tensors representing ``A`` and ``B``.
-
-     - Tile-grid dimensions (``Mt``, ``Kt``, ``Nt``).
-
-     - The starting output-tile index and the number of output tiles assigned to this core.
-
-   * Set writer runtime arguments that include:
-
-     - The device address of the output tensor representing ``C``.
-
-     - The number of tiles to write and the starting tile index for this core.
-
-   * Set compute kernel runtime arguments that include:
-
-     - The number of output tiles to produce for this core.
-
-     - The number of tiles along the inner dimension (``Kt``).
-
+   First implement a version that uses all cores in your chosen core set
    Execute the program, read the output tensor back into a host vector, untilize it, and compare against the CPU reference.
    Verify that the results are numerically close to the golden result, as in Lab 1.
 
@@ -402,9 +354,9 @@ Steps
 
    Next, modify the work distribution so that **only half** of the available compute cores are used:
 
-   * Determine ``total_compute_cores`` using ``compute_with_storage_grid_size()`` (or cross-check with ``tt-smi``).
+   * Determine ``total_compute_cores`` using ``compute_with_storage_grid_size()``
 
-   * Construct a set of exactly half that many cores (rounding down to at least one core), for example by taking the first several cores in row-major order.
+   * Construct a ``CoreRangeSet`` of exactly half that many cores.
 
    * Recompute the mapping from output tiles to cores using this reduced set.
      Every output tile must still be produced exactly once, and the sum of per-core tile counts must equal ``num_output_tiles``.
