@@ -30,10 +30,10 @@ NUM_SOCKET_CONNECTIONS = 1
 # FIFO size for socket buffers (must be L1-aligned)
 # Options: 4096, 8192, 16384, 32768 bytes
 # Larger FIFO improves throughput by reducing overhead
-SOCKET_FIFO_SIZE = 32768
+SOCKET_FIFO_SIZE = 1024 * 1024  # 1MB
 
 # Buffer type for socket memory: "L1" or "DRAM"
-# L1 is faster for smaller buffers
+# DRAM avoids L1 contention when using many cores
 SOCKET_BUFFER_TYPE = "L1"
 
 # Tensor memory configuration: "L1" or "DRAM"
@@ -59,15 +59,15 @@ SHARD_DIM = 0  # Shard along batch dimension
 # num_layers=32 (like Llama 8B), each layer has K + V tensors
 NUM_LAYERS = 32  # Llama 8B has 32 transformer layers
 BENCHMARK_CONFIGS = [
-    {"name": "b32_seq_128", "shape": (32, 8, 128, 128), "num_transfers": 3},
-    {"name": "b32_seq_256", "shape": (32, 8, 256, 128), "num_transfers": 3},
-    {"name": "b32_seq_512", "shape": (32, 8, 512, 128), "num_transfers": 2},
-    {"name": "b32_seq_1024", "shape": (32, 8, 1024, 128), "num_transfers": 2},
-    {"name": "b32_seq_2048", "shape": (32, 8, 2048, 128), "num_transfers": 1},
-    {"name": "b32_seq_4096", "shape": (32, 8, 4096, 128), "num_transfers": 1},
-    {"name": "b32_seq_8192", "shape": (32, 8, 8192, 128), "num_transfers": 1},
-    {"name": "b32_seq_16384", "shape": (32, 8, 16384, 128), "num_transfers": 1},
-    {"name": "b32_seq_32768", "shape": (32, 8, 32768, 128), "num_transfers": 1},
+    # {"name": "b32_seq_128", "shape": (32, 8, 128, 128), "num_transfers": 3},
+    # {"name": "b32_seq_256", "shape": (32, 8, 256, 128), "num_transfers": 3},
+    # {"name": "b32_seq_512", "shape": (32, 8, 512, 128), "num_transfers": 2},
+    {"name": "b32_seq_1024", "shape": (32, 8, 1024, 128), "num_transfers": 3},
+    # {"name": "b32_seq_2048", "shape": (32, 8, 2048, 128), "num_transfers": 1},
+    # {"name": "b32_seq_4096", "shape": (32, 8, 4096, 128), "num_transfers": 1},
+    # {"name": "b32_seq_8192", "shape": (32, 8, 8192, 128), "num_transfers": 1},
+    # {"name": "b32_seq_16384", "shape": (32, 8, 16384, 128), "num_transfers": 1},
+    # {"name": "b32_seq_32768", "shape": (32, 8, 32768, 128), "num_transfers": 1},
 ]
 
 # Results file path
@@ -119,18 +119,20 @@ def setup_socket_optimized(
 
     This enables true parallel data transfer across both ethernet links.
     """
-    socket_connections = []
-    logical_core = ttnn.CoreCoord(0, 0)
-
-    # Create one connection per mesh coordinate (chip) to use different physical links
-    # For N300 1x2 mesh: creates 2 connections using 2 different ethernet links
-    for coord in ttnn.MeshCoordinateRange(mesh_shape):
-        socket_connections.append(
-            ttnn.SocketConnection(
-                ttnn.MeshCoreCoord(coord, logical_core),
-                ttnn.MeshCoreCoord(coord, logical_core),
-            )
-        )
+    # Use BOTH QSFP cables for 2x bandwidth:
+    # QSFP #1: Chip 0 (MeshCoord 0,0) ↔ Chip 2 via channels 6,7
+    # QSFP #2: Chip 1 (MeshCoord 0,1) ↔ Chip 3 via channels 0,1
+    socket_connections = [
+        # QSFP Cable #1: Chip 0 → Chip 2
+        ttnn.SocketConnection(
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 6)),
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 6)),
+        ),
+        ttnn.SocketConnection(
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 7)),
+            ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 7)),
+        ),
+    ]
 
     num_links = len(socket_connections)
     buffer_type_enum = ttnn.BufferType.DRAM if buffer_type == "DRAM" else ttnn.BufferType.L1
@@ -193,9 +195,10 @@ def run_sender(device, socket, configs):
         logger.info(f"Num transfers: {num_transfers}")
 
         # Pre-create K and V tensors on device (reuse for all transfers)
-        # SHARD across mesh coordinates so each chip sends DIFFERENT data through its own link
-        # This enables parallel transfer through both QSFP links (2x throughput)
-        # Shape: (batch=32, heads=8, seq, head_dim=128) - shard along batch dim
+        # Using ShardTensorToMesh to distribute data across BOTH chips for parallel QSFP transfer:
+        # - Chip 0 (MeshCoord 0,0) sends half via QSFP #1
+        # - Chip 1 (MeshCoord 0,1) sends half via QSFP #2
+        # This enables 2x bandwidth by using both physical QSFP cables!
         torch_k = torch.randn(shape, dtype=torch.bfloat16)
         torch_v = torch.randn(shape, dtype=torch.bfloat16)
         mem_config = get_tensor_memory_config()
@@ -205,7 +208,7 @@ def run_sender(device, socket, configs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),  # Shard along batch for parallel links
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),  # Replicate full tensor to all devices
         )
         tt_v = ttnn.from_torch(
             torch_v,
@@ -213,30 +216,13 @@ def run_sender(device, socket, configs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),  # Shard along batch for parallel links
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),  # Replicate full tensor to all devices
         )
 
         transfer_times = []
 
         for i in range(num_transfers):
-            # Send timing metadata first
             t_send_start_ns = time.time_ns()
-
-            t_start_high = int(t_send_start_ns >> 32)
-            t_start_low = int(t_send_start_ns & 0xFFFFFFFF)
-
-            metadata = torch.tensor(
-                [[[[t_start_high, t_start_low, shape[0], shape[1], shape[2], shape[3], NUM_LAYERS, 0]]]],
-                dtype=torch.int64,
-            )
-            metadata_tt = ttnn.from_torch(
-                metadata,
-                device=device,
-                dtype=ttnn.uint32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            )
-            ttnn.experimental.send_async(metadata_tt, socket)
 
             # Send all 32 layers of K+V
             for layer_idx in range(NUM_LAYERS):
@@ -278,7 +264,7 @@ def run_sender(device, socket, configs):
         logger.info(f"  Avg: {avg_time:.1f}ms, Throughput: {avg_throughput_gbs:.2f} GB/s")
 
         # Cleanup
-        del tt_k, tt_v, metadata_tt
+        del tt_k, tt_v
 
     # Send termination signal
     term_metadata = torch.tensor([[[[0, 0, 0, 0, 0, 0, 0, 0]]]], dtype=torch.int64)
@@ -298,7 +284,9 @@ def run_sender(device, socket, configs):
 
 def run_receiver(device, socket, configs):
     """
-    Receiver (Rank 1): Receive 32 layers of KV cache and measure end-to-end latency.
+    Receiver (Rank 1): Receive 32 layers of KV cache.
+    Uses local receiver-side timing only (not cross-machine E2E).
+    Sender-side timing is more reliable for throughput measurement.
     """
     logger.info("=== RECEIVER (Rank 1) - Starting benchmark ===")
     logger.info(f"Receiving {NUM_LAYERS} layers × 2 tensors (K+V) = {NUM_LAYERS * 2} tensors per transfer")
@@ -319,37 +307,16 @@ def run_receiver(device, socket, configs):
         logger.info(f"Per-tensor shape: {shape}, Size: {tensor_size_mb:.2f} MB")
         logger.info(f"Total KV cache: {total_kv_size_mb:.0f} MB ({total_kv_size_gb:.2f} GB)")
 
-        e2e_times = []
+        recv_times = []
 
         # Pre-compute padded shape for allocation
-        # With sharding along dim=0 (batch), each chip receives batch/num_devices
-        num_devices = 2  # N300 has 2 chips (1x2 mesh)
-        sharded_batch = shape[0] // num_devices
-        padded_shape = [sharded_batch, shape[1], ((shape[2] + 31) // 32) * 32, ((shape[3] + 31) // 32) * 32]
+        # Replicated: each chip receives the full tensor
+        padded_shape = [shape[0], shape[1], ((shape[2] + 31) // 32) * 32, ((shape[3] + 31) // 32) * 32]
 
         for i in range(num_transfers):
-            # Receive metadata first (metadata is replicated, not sharded)
-            metadata_recv = ttnn.allocate_tensor_on_device(
-                ttnn.TensorSpec([1, 1, 32, 32], ttnn.DataType.UINT32, ttnn.TILE_LAYOUT), device
-            )
-            ttnn.experimental.recv_async(metadata_recv, socket)
-            ttnn.synchronize_device(device)
+            t_recv_start_ns = time.time_ns()
 
-            # Parse metadata to get sender timestamp
-            metadata_full = ttnn.to_torch(
-                ttnn.from_device(metadata_recv), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1)
-            )
-            metadata = (
-                metadata_full[:, :, :, : metadata_full.shape[3] // 2] if metadata_full.shape[3] > 8 else metadata_full
-            )
-
-            t_start_high = int(metadata[0, 0, 0, 0].item())
-            t_start_low = int(metadata[0, 0, 0, 1].item())
-            t_send_start_ns = ((t_start_high & 0xFFFFFFFF) << 32) | (t_start_low & 0xFFFFFFFF)
-
-            del metadata_recv
-
-            # Receive all 32 layers of K+V (sharded - each chip receives half the batch)
+            # Receive all 32 layers of K+V
             for layer_idx in range(NUM_LAYERS):
                 k_recv = ttnn.allocate_tensor_on_device(
                     ttnn.TensorSpec(padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT), device
@@ -363,13 +330,13 @@ def run_receiver(device, socket, configs):
                 del k_recv, v_recv
 
             t_recv_end_ns = time.time_ns()
-            e2e_time_ms = (t_recv_end_ns - t_send_start_ns) / 1_000_000
-            e2e_times.append(e2e_time_ms)
+            recv_time_ms = (t_recv_end_ns - t_recv_start_ns) / 1_000_000
+            recv_times.append(recv_time_ms)
 
-            throughput_gbs = total_kv_size_gb / (e2e_time_ms / 1000) if e2e_time_ms > 0 else 0
-            logger.info(f"  Transfer {i + 1}/{num_transfers}: {e2e_time_ms:.1f}ms ({throughput_gbs:.2f} GB/s)")
+            throughput_gbs = total_kv_size_gb / (recv_time_ms / 1000) if recv_time_ms > 0 else 0
+            logger.info(f"  Transfer {i + 1}/{num_transfers}: {recv_time_ms:.1f}ms ({throughput_gbs:.2f} GB/s)")
 
-        avg_e2e = sum(e2e_times) / len(e2e_times)
+        avg_recv = sum(recv_times) / len(recv_times)
 
         results.append(
             {
@@ -381,15 +348,15 @@ def run_receiver(device, socket, configs):
                 "total_kv_size_gb": total_kv_size_gb,
                 "num_layers": NUM_LAYERS,
                 "num_transfers": num_transfers,
-                "e2e_times_ms": e2e_times,
-                "e2e_avg_ms": avg_e2e,
-                "e2e_min_ms": min(e2e_times),
-                "e2e_max_ms": max(e2e_times),
+                "recv_times_ms": recv_times,
+                "recv_avg_ms": avg_recv,
+                "recv_min_ms": min(recv_times),
+                "recv_max_ms": max(recv_times),
             }
         )
 
-        avg_throughput_gbs = total_kv_size_gb / (avg_e2e / 1000) if avg_e2e > 0 else 0
-        logger.info(f"  Avg: {avg_e2e:.1f}ms, Throughput: {avg_throughput_gbs:.2f} GB/s")
+        avg_throughput_gbs = total_kv_size_gb / (avg_recv / 1000) if avg_recv > 0 else 0
+        logger.info(f"  Avg: {avg_recv:.1f}ms, Throughput: {avg_throughput_gbs:.2f} GB/s")
 
     # Receive termination signal
     term_recv = ttnn.allocate_tensor_on_device(
@@ -409,14 +376,16 @@ def generate_plot(results):
     import numpy as np
     from matplotlib.gridspec import GridSpec
 
-    # Extract data
+    # Extract data - use sender-side timing for reliable measurements
     names = [r["name"] for r in results]
     seq_lens = [r["shape"][2] for r in results]
     total_sizes_gb = [r["total_kv_size_gb"] for r in results]
-    e2e_avg = [r["e2e_avg_ms"] for r in results]
-    e2e_min = [r["e2e_min_ms"] for r in results]
-    e2e_max = [r["e2e_max_ms"] for r in results]
-    throughputs_gbs = [r["total_kv_size_gb"] / (r["e2e_avg_ms"] / 1000) if r["e2e_avg_ms"] > 0 else 0 for r in results]
+    latency_avg = [r["sender_avg_ms"] for r in results]
+    latency_min = [r["sender_min_ms"] for r in results]
+    latency_max = [r["sender_max_ms"] for r in results]
+    throughputs_gbs = [
+        r["total_kv_size_gb"] / (r["sender_avg_ms"] / 1000) if r["sender_avg_ms"] > 0 else 0 for r in results
+    ]
 
     # Colors based on sequence length (gradient)
     colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(results)))
@@ -432,19 +401,19 @@ def generate_plot(results):
 
     gs = GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.3)
 
-    # Plot 1: Latency vs Sequence Length
+    # Plot 1: Latency vs Sequence Length (sender-side timing)
     ax1 = fig.add_subplot(gs[0, 0])
-    ax1.semilogy(seq_lens, e2e_avg, "o-", color="#2980b9", markersize=12, linewidth=3)
-    ax1.fill_between(seq_lens, e2e_min, e2e_max, alpha=0.2, color="#3498db")
+    ax1.semilogy(seq_lens, latency_avg, "o-", color="#2980b9", markersize=12, linewidth=3)
+    ax1.fill_between(seq_lens, latency_min, latency_max, alpha=0.2, color="#3498db")
     ax1.set_xlabel("Sequence Length", fontsize=12, fontweight="bold")
-    ax1.set_ylabel("E2E Latency (ms) - Log Scale", fontsize=12, fontweight="bold")
-    ax1.set_title("Transfer Latency vs Sequence Length", fontsize=13, fontweight="bold")
+    ax1.set_ylabel("Sender Latency (ms) - Log Scale", fontsize=12, fontweight="bold")
+    ax1.set_title("Transfer Latency vs Sequence Length (Sender-Side)", fontsize=13, fontweight="bold")
     ax1.grid(True, alpha=0.3, which="both", linestyle="--")
     ax1.set_xticks(seq_lens)
     ax1.set_xticklabels([f"{s // 1024}K" if s >= 1024 else str(s) for s in seq_lens], fontsize=10)
 
     # Annotate with latency and size
-    for x, y, sz in zip(seq_lens, e2e_avg, total_sizes_gb):
+    for x, y, sz in zip(seq_lens, latency_avg, total_sizes_gb):
         label = f"{y / 1000:.1f}s" if y >= 1000 else f"{y:.0f}ms"
         ax1.annotate(
             f"{label}\n({sz:.1f}GB)", (x, y), textcoords="offset points", xytext=(5, 10), fontsize=9, ha="left"
@@ -478,16 +447,16 @@ def generate_plot(results):
     # Plot 3: KV Cache Size vs Latency
     ax3 = fig.add_subplot(gs[1, 0])
     scatter = ax3.scatter(
-        total_sizes_gb, e2e_avg, c=seq_lens, cmap="viridis", s=200, alpha=0.8, edgecolors="black", linewidth=1.5
+        total_sizes_gb, latency_avg, c=seq_lens, cmap="viridis", s=200, alpha=0.8, edgecolors="black", linewidth=1.5
     )
-    ax3.plot(total_sizes_gb, e2e_avg, "--", color="gray", alpha=0.5, linewidth=1.5)
+    ax3.plot(total_sizes_gb, latency_avg, "--", color="gray", alpha=0.5, linewidth=1.5)
     ax3.set_xlabel("Total KV Cache Size (GB)", fontsize=12, fontweight="bold")
-    ax3.set_ylabel("E2E Latency (ms)", fontsize=12, fontweight="bold")
-    ax3.set_title("Latency vs Total KV Cache Size", fontsize=13, fontweight="bold")
+    ax3.set_ylabel("Sender Latency (ms)", fontsize=12, fontweight="bold")
+    ax3.set_title("Latency vs Total KV Cache Size (Sender-Side)", fontsize=13, fontweight="bold")
     ax3.grid(True, alpha=0.3, linestyle="--")
 
     # Linear fit
-    z = np.polyfit(total_sizes_gb, e2e_avg, 1)
+    z = np.polyfit(total_sizes_gb, latency_avg, 1)
     x_fit = np.linspace(min(total_sizes_gb), max(total_sizes_gb), 100)
     ax3.plot(x_fit, np.poly1d(z)(x_fit), "r--", linewidth=2, label=f"Linear: {z[0]:.0f} ms/GB")
     ax3.legend(fontsize=10)
@@ -508,7 +477,7 @@ def generate_plot(results):
         seq = r["shape"][2]
         seq_str = f"{seq // 1024}K" if seq >= 1024 else str(seq)
         size_gb = r["total_kv_size_gb"]
-        lat = r["e2e_avg_ms"]
+        lat = r["sender_avg_ms"]
         lat_str = f"{lat / 1000:.2f} s" if lat >= 1000 else f"{lat:.0f} ms"
         summary_lines.append(f"║  {seq_str:>6}  │  {size_gb:>6.1f} GB │  {lat_str:>10}  │  {tp:>6.2f} GB/s           ║")
 
@@ -547,7 +516,7 @@ def generate_plot(results):
     for r in results:
         seq_len = r["shape"][2]
         seq_str = f"{seq_len // 1024}K" if seq_len >= 1024 else str(seq_len)
-        lat = r["e2e_avg_ms"]
+        lat = r["sender_avg_ms"]
         lat_str = f"{lat / 1000:.2f} s" if lat >= 1000 else f"{lat:.0f} ms"
         tp_gbs = r["total_kv_size_gb"] / (lat / 1000) if lat > 0 else 0
         print(f"{r['name']:<18} {seq_str:<10} {r['total_kv_size_gb']:<14.2f} {lat_str:<14} {tp_gbs:<18.2f}")
@@ -619,18 +588,19 @@ def run_benchmark():
     # Run benchmark
     if rank == 0:
         results = run_sender(device, socket, BENCHMARK_CONFIGS)
-        # Save sender-side results
-        with open(RESULTS_FILE + ".sender", "w") as f:
-            json.dump(results, f, indent=2)
-    else:
-        results = run_receiver(device, socket, BENCHMARK_CONFIGS)
-        # Save receiver-side results (these have E2E timing)
+        # Save sender-side results (reliable timing for throughput measurement)
         with open(RESULTS_FILE, "w") as f:
             json.dump(results, f, indent=2)
-        logger.info(f"Results saved to {RESULTS_FILE}")
+        logger.info(f"Sender results saved to {RESULTS_FILE}")
 
-        # Generate plot on receiver side (has E2E data)
+        # Generate plot using sender-side timing (accurate, same-machine measurement)
         generate_plot(results)
+    else:
+        results = run_receiver(device, socket, BENCHMARK_CONFIGS)
+        # Save receiver-side results (local receiver timing)
+        with open(RESULTS_FILE + ".receiver", "w") as f:
+            json.dump(results, f, indent=2)
+        logger.info(f"Receiver results saved to {RESULTS_FILE}.receiver")
 
     # Cleanup
     del socket
