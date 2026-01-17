@@ -9,12 +9,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::copy::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
 TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -157,9 +157,9 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
 void TypecastProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const TypecastParams& /*operation_attributes*/,
+    const TypecastInputs& tensor_args,
+    Tensor& output) {
     auto& typecast_reader_kernel_id = cached_program.shared_variables.typecast_reader_kernel_id;
     auto& typecast_writer_kernel_id = cached_program.shared_variables.typecast_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -188,7 +188,7 @@ void TypecastProgramFactory::override_runtime_arguments(
 
 // For sub_core_grids
 TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -325,9 +325,9 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
 void TypecastSubgridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const TypecastParams& /*operation_attributes*/,
+    const TypecastInputs& tensor_args,
+    Tensor& output) {
     auto& typecast_reader_kernel_id = cached_program.shared_variables.typecast_reader_kernel_id;
     auto& typecast_writer_kernel_id = cached_program.shared_variables.typecast_writer_kernel_id;
     auto& cores_with_rtargs = cached_program.shared_variables.cores_with_rtargs;
@@ -355,4 +355,4 @@ void TypecastSubgridProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::copy::program
+}  // namespace ttnn::prim

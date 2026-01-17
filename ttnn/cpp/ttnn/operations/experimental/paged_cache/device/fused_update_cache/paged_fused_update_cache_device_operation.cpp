@@ -8,7 +8,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::fused_update {
+namespace ttnn::experimental::prim {
 
 PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -18,15 +18,15 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
 
     if (input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE) {
         if (use_mesh_workload_factory) {
-            return program::tiled::PagedTiledFusedUpdateCacheMeshWorkloadFactory{};
+            return PagedTiledFusedUpdateCacheMeshWorkloadFactory{};
         }
-        return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
+        return PagedTiledFusedUpdateCacheProgramFactory{};
     }
     if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
         if (use_mesh_workload_factory) {
-            return program::rm::PagedRowMajorFusedUpdateCacheMeshWorkloadFactory{};
+            return PagedRowMajorFusedUpdateCacheMeshWorkloadFactory{};
         }
-        return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
+        return PagedRowMajorFusedUpdateCacheProgramFactory{};
     }
     TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
 }
@@ -268,12 +268,11 @@ tt::stl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::fused_update::PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t
-paged_fused_update_cache(
+ttnn::experimental::prim::PagedFusedUpdateCacheResult paged_fused_update_cache(
     const Tensor& cache_tensor1,
     const Tensor& input_tensor1,
     const Tensor& cache_tensor2,
@@ -285,8 +284,7 @@ paged_fused_update_cache(
     const uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    using OperationType =
-        ttnn::operations::experimental::paged_cache::fused_update::PagedFusedUpdateCacheDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PagedFusedUpdateCacheDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;

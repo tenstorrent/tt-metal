@@ -7,11 +7,14 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::unary {
+namespace ttnn::prim {
+
+using ttnn::operations::unary::UnaryOpType;
 
 namespace {
 void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
@@ -51,12 +54,12 @@ void validate_supported_arch_dtype(DataType input_datatype, DataType output_data
 UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
-        return program::UnaryShardedProgramFactory{};
+        return UnaryShardedProgramFactory{};
     }
     if (args.sub_core_grids.has_value()) {
-        return program::UnarySubCoreGridProgramFactory{};
+        return UnarySubCoreGridProgramFactory{};
     }
-    return program::UnaryProgramFactory{};
+    return UnaryProgramFactory{};
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_hit(
@@ -177,10 +180,7 @@ bool UnaryDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-}  // namespace ttnn::operations::unary
-
-namespace ttnn::prim {
-ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
+Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
@@ -190,8 +190,7 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::unary::UnaryDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = UnaryParams{
         .op_chain = op_chain,
         .output_dtype = output_dtype,
         .output_memory_config = output_memory_config,
@@ -200,8 +199,9 @@ ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
         .bfp8_pack_precise = bfp8_pack_precise,
         .sub_core_grids = sub_core_grids,
     };
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+    auto tensor_args = UnaryInputs{.input = input, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<UnaryDeviceOperation>(operation_attributes, tensor_args);
 }
+
 }  // namespace ttnn::prim
