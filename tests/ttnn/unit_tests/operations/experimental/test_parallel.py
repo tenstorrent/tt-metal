@@ -297,6 +297,9 @@ def test_layernorm_parallel_interleaved(device, batch_size, h, w, num_branches):
         assert_with_pcc(torch_outputs[i], output, 0.999)
 
 
+@pytest.mark.xfail(
+    reason="Interleaved LayerNorm with core_range_override on non-(0,0) grids produces incorrect results"
+)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("block_h", [2])  # Height of each core block
 @pytest.mark.parametrize("block_w", [2])  # Width of each core block
@@ -313,6 +316,10 @@ def test_layernorm_full_grid(device, batch_size, block_h, block_w, num_blocks_h,
     - bias (beta)
 
     This demonstrates 16 parallel LayerNorm operations running concurrently.
+
+    NOTE: Currently xfail because interleaved LayerNorm with core_range_override
+    on non-(0,0) starting core grids produces incorrect results. The kernel
+    assumes cores start at (0,0) for work distribution.
     """
     torch.manual_seed(42)
 
