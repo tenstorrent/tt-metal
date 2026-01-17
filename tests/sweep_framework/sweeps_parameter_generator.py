@@ -14,7 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
-from framework.constants import LEAD_MODELS, format_mesh_suffix
+from framework.constants import format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
