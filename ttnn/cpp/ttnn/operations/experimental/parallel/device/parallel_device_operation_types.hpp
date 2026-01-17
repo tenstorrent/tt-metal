@@ -6,13 +6,17 @@
 
 #include <any>
 #include <memory>
+#include <string>
 #include <typeinfo>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::experimental::parallel {
 
@@ -68,6 +72,9 @@ struct BranchDescriptor {
 
     // Type information for hashing
     virtual const std::type_info& type_info() const = 0;
+
+    // Get a human-readable name for this branch's operation (for profiling)
+    virtual std::string operation_name() const = 0;
 };
 
 // =============================================================================
@@ -262,6 +269,11 @@ public:
 
     const std::type_info& type_info() const override { return typeid(DeviceOp); }
 
+    std::string operation_name() const override {
+        // Use tt::stl::get_type_name for a clean, demangled type name
+        return std::string(tt::stl::get_type_name<DeviceOp>());
+    }
+
 private:
     // Helper to visit a variant at a specific index
     template <typename Variant, typename Func>
@@ -413,3 +425,44 @@ namespace ttnn::parallel_internal {
 using ttnn::operations::experimental::parallel::BranchDescriptor;
 using ttnn::operations::experimental::parallel::create_branch;
 }  // namespace ttnn::parallel_internal
+
+// Custom fmt::formatter for BranchDescriptor shared_ptr to show operation names in profiler
+template <>
+struct fmt::formatter<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(
+        const std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>& branch,
+        FormatContext& ctx) const {
+        if (branch) {
+            return fmt::format_to(ctx.out(), "{}", branch->operation_name());
+        }
+        return fmt::format_to(ctx.out(), "<null>");
+    }
+};
+
+// Custom formatter for the branches vector to show as a list of operation names
+template <>
+struct fmt::formatter<std::vector<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>>> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(
+        const std::vector<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>>& branches,
+        FormatContext& ctx) const {
+        auto out = ctx.out();
+        out = fmt::format_to(out, "[");
+        for (size_t i = 0; i < branches.size(); ++i) {
+            if (i > 0) {
+                out = fmt::format_to(out, ", ");
+            }
+            if (branches[i]) {
+                out = fmt::format_to(out, "{}", branches[i]->operation_name());
+            } else {
+                out = fmt::format_to(out, "<null>");
+            }
+        }
+        return fmt::format_to(out, "]");
+    }
+};
