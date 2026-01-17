@@ -18,12 +18,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cached_program_t
 UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -153,9 +153,9 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
 void UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cb_output = cached_program.shared_variables.cb_output;
@@ -165,4 +165,4 @@ void UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

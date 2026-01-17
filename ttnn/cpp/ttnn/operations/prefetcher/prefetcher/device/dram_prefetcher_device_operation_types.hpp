@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 
-namespace ttnn::operations::dram_prefetcher {
+namespace ttnn::prim {
 
 struct DramPrefetcherParams {
     uint32_t num_layers = 0;
@@ -21,4 +21,4 @@ struct DramPrefetcherInputs {
     std::vector<Tensor> input_tensors;
 };
 
-}  // namespace ttnn::operations::dram_prefetcher
+}  // namespace ttnn::prim

@@ -27,9 +27,8 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-// Import the ReduceScatterProgramArtifacts from the detail namespace for backward compatibility
-using ReduceScatterProgramArtifacts =
-    operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
+// Import the ReduceScatterProgramArtifacts from the prim namespace for backward compatibility
+using ReduceScatterProgramArtifacts = experimental::prim::ReduceScatterProgramArtifacts;
 
 void reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,

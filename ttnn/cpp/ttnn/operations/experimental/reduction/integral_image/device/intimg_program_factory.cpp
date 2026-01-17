@@ -60,7 +60,7 @@ KernelHandle create_kernel(
 
 }  // namespace
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
 // it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
 // expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
@@ -68,11 +68,11 @@ constexpr uint32_t CORES_X = 2;
 constexpr uint32_t CORES_Y = 4;
 
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
-    const ReductionParams& /*operation_attributes*/, const ReductionInputs& tensor_args, Tensor& tensor_return_value) {
+    const IntImgParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor{tensor_args.input_tensor};
+    const auto& input_tensor{tensor_args};
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
@@ -155,14 +155,14 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
 void IntImgProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ReductionParams& /*operation_attributes*/,
-    const ReductionInputs& tensor_args,
+    const IntImgParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
+    auto input_buffer_address = tensor_args.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
     for (uint32_t x = 0; x < CORES_X; ++x) {
         for (uint32_t y = 0; y < CORES_Y; ++y) {
@@ -176,4 +176,4 @@ void IntImgProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim

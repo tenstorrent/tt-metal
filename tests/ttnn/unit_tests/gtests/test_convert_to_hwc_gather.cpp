@@ -12,7 +12,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/gather.hpp"
 
-namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test {
+namespace ttnn::experimental::prim::test {
 
 class GatherTransferTest : public ::testing::Test {
 protected:
@@ -1240,4 +1240,4 @@ TEST_F(GatherTransferTest, CrossBlockTransferSplitting) {
     verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
 }
 
-}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test
+}  // namespace ttnn::experimental::prim::test

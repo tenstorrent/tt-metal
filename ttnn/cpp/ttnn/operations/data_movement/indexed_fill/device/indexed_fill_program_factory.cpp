@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::indexed_fill::program {
+namespace ttnn::prim {
 
 IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
     const IndexedFillParams& /*operation_attributes*/, const IndexedFillInputs& tensor_args, Tensor& output) {
@@ -147,4 +147,4 @@ void IndexedFillProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::indexed_fill::program
+}  // namespace ttnn::prim

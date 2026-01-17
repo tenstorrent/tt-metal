@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
-namespace ttnn::operations::data_movement::bcast {
+namespace ttnn::prim {
 
 struct BcastParams {
     ttnn::BcastOpMath math_op;
@@ -22,4 +22,4 @@ struct BcastInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::data_movement::bcast
+}  // namespace ttnn::prim

@@ -6,9 +6,9 @@
 
 #include <cstdint>
 
-namespace ttnn::operations::reduction::topk::constants {
+namespace ttnn::prim::constants {
 
 constexpr uint32_t multi_core_min_width = 8192;
 constexpr uint32_t min_dim_per_core = 64;
 
-}  // namespace ttnn::operations::reduction::topk::constants
+}  // namespace ttnn::prim::constants

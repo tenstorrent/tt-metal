@@ -14,11 +14,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental::prim {
 
 MinimalMatmulDeviceOperation::program_factory_t MinimalMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::MinimalMatmulProgramFactory{};
+    return MinimalMatmulProgramFactory{};
 }
 
 void MinimalMatmulDeviceOperation::validate_on_program_cache_hit(
@@ -172,20 +172,20 @@ MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
+Tensor minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
-    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    using OperationType = operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation;
+    using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,

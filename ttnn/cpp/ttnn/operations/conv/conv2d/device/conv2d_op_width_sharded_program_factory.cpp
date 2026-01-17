@@ -17,7 +17,11 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
+
+namespace unary = ttnn::operations::unary;
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::SkipMcast;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
     const ttnn::Shape& conv_activation_shape,
@@ -680,4 +684,4 @@ void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

@@ -12,20 +12,20 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
-namespace ttnn::operations::matmul {
+namespace ttnn::prim {
 
 struct MatmulDeviceOperation {
-    using operation_attributes_t = matmul::operation_attributes_t;
-    using tensor_args_t = matmul::tensor_args_t;
-    using spec_return_value_t = matmul::spec_return_value_t;
-    using tensor_return_value_t = matmul::tensor_return_value_t;
+    using operation_attributes_t = MatmulParams;
+    using tensor_args_t = MatmulInputs;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<
-        program::MatmulMeshWorkloadMultiCoreFactory,
-        program::MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory,
-        program::MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,
-        program::MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory,
-        program::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>;
+        MatmulMeshWorkloadMultiCoreFactory,
+        MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory,
+        MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,
+        MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory,
+        MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -49,26 +49,26 @@ struct MatmulDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
+MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const MatmulDeviceOperation::operation_attributes_t& parameters,
+    const MatmulParams& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors);
 
-}  // namespace ttnn::operations::matmul
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
-operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<Tensor>& bias = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const operations::matmul::operation_attributes_t& attributes = operations::matmul::operation_attributes_t());
+    const MatmulParams& attributes = MatmulParams());
 
-operations::matmul::MatmulDeviceOperation::tensor_return_value_t matmul(
+MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::vector<Tensor>& input_tensors,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const operations::matmul::operation_attributes_t& attributes = operations::matmul::operation_attributes_t());
+    const MatmulParams& attributes = MatmulParams());
 
 }  // namespace ttnn::prim

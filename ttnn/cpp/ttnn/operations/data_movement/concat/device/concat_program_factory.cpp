@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -250,4 +250,4 @@ void ConcatProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

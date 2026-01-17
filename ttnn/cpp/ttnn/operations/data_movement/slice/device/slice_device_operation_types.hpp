@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::slice {
+namespace ttnn::prim {
 
 struct SliceParams {
     ttnn::Shape slice_start;
@@ -28,4 +28,4 @@ struct SliceInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::data_movement::slice
+}  // namespace ttnn::prim

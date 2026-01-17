@@ -54,6 +54,10 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     return 2;
 }
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+
 void UntilizeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
@@ -224,17 +228,17 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
 
     if (!operation_attributes.use_multicore) {
         // Single core implementation
-        return program::UntilizeSingleCoreProgramFactory{};
+        return UntilizeSingleCoreProgramFactory{};
     }
     if (operation_attributes.sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
         // Note that this implementation does not support sharding, which is enforced in validate().
-        return program::UntilizeMultiCoreSubCoreGridsProgramFactory{};
+        return UntilizeMultiCoreSubCoreGridsProgramFactory{};
     }
     if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
-        return program::UntilizeMultiCoreBlockProgramFactory{};
+        return UntilizeMultiCoreBlockProgramFactory{};
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
         output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout &&
@@ -242,7 +246,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // Optimized special case implementation for when both input and output are sharded, both are located in L1,
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
-        return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
     }
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
@@ -268,21 +272,21 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
                                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (num_compute_cores < ncores_wh.ncores) {
-                return program::UntilizeMultiCoreBlockProgramFactory{};
+                return UntilizeMultiCoreBlockProgramFactory{};
             }
         }
     }
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
-    auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
+    auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
-        return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
+        return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
-        return program::UntilizeSingleCoreProgramFactory{};
+        return UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation
-    return program::UntilizeMultiCoreProgramFactory{};
+    return UntilizeMultiCoreProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
@@ -308,16 +312,14 @@ UntilizeDeviceOperation::create_op_performance_model(
         compute_cycles = num_tiles * latency_untilize;
     }
 
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    int ideal_dev_clock_cycles =
+        ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+Tensor untilize(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     bool use_multicore,
@@ -327,9 +329,8 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
     bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type) {
-    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UntilizeDeviceOperation>(
+        UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,
             .use_pack_untilize = use_pack_untilize,
@@ -338,6 +339,7 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
-        OperationType::tensor_args_t{.input = input});
+        UntilizeTensorArgs{.input = input});
 }
+
 }  // namespace ttnn::prim

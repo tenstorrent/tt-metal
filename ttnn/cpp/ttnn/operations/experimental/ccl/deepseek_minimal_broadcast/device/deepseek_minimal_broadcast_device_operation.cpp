@@ -10,12 +10,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast {
+namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastDeviceOperation::program_factory_t
 DeepseekMinimalBroadcastDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::DeepseekMinimalBroadcastProgramFactory{};
+    return DeepseekMinimalBroadcastProgramFactory{};
 }
 
 void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_hit(
@@ -114,22 +114,19 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation::
-    tensor_return_value_t
-    deepseek_minimal_broadcast(
-        const ttnn::Tensor& input_tensor,
-        const MeshCoordinate& sender_coord,
-        uint32_t num_links,
-        const std::optional<MemoryConfig>& memory_config,
-        tt::tt_fabric::Topology topology,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    using OperationType =
-        ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation;
+Tensor deepseek_minimal_broadcast(
+    const ttnn::Tensor& input_tensor,
+    const MeshCoordinate& sender_coord,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using OperationType = ttnn::experimental::prim::DeepseekMinimalBroadcastDeviceOperation;
 
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();

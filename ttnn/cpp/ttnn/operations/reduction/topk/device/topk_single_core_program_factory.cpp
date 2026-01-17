@@ -11,10 +11,10 @@
 using namespace tt::tt_metal;
 using namespace std;
 
-namespace ttnn::operations::reduction::topk::program {
+namespace ttnn::prim {
 
 TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
-    const TopkParams& args, const TopkInputs& tensor_args, tensor_return_value_t& output_tensors) {
+    const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
     using namespace tt::constants;
 
     const auto& input_tensor = tensor_args.input;
@@ -183,7 +183,7 @@ void TopKSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const TopkParams& /*args*/,
     const TopkInputs& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    std::tuple<Tensor, Tensor>& output_tensors) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
@@ -205,4 +205,4 @@ void TopKSingleCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::topk::program
+}  // namespace ttnn::prim

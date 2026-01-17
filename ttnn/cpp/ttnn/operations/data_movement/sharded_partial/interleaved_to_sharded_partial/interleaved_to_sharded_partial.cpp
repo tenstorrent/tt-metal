@@ -11,8 +11,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor InterleavedToShardedPartialOperation::invoke(
+    const Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2>& shard_shape,
     int64_t& num_slices,

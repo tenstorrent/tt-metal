@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::sampling {
+namespace ttnn::prim {
 
 struct SamplingParams {
     std::optional<uint32_t> seed;
@@ -25,4 +25,4 @@ struct SamplingInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::reduction::sampling
+}  // namespace ttnn::prim

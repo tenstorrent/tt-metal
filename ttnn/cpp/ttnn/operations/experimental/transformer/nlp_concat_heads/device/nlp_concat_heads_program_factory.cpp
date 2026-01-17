@@ -9,16 +9,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::nlp_concat_heads::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
 NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::create(
-    const NlpConcatHeadsParams& /*operation_attributes*/,
-    const NlpConcatHeadsInputs& tensor_args,
-    tensor_return_value_t& output) {
-    const auto& a = tensor_args.input;
+    const NlpConcatHeadsParams& /*operation_attributes*/, const Tensor& input, Tensor& output) {
+    const auto& a = input;
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -208,12 +206,12 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
 void NLPConcatHeadsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NlpConcatHeadsParams& /*operation_attributes*/,
-    const NlpConcatHeadsInputs& tensor_args,
-    tensor_return_value_t& output) {
+    const Tensor& input,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    auto* src_buffer = tensor_args.input.buffer();
+    auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
     if (shared_vars.in_sharded) {
@@ -235,4 +233,4 @@ void NLPConcatHeadsProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads::program
+}  // namespace ttnn::experimental::prim

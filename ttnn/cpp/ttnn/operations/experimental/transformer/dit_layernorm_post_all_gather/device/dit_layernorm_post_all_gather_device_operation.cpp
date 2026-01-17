@@ -11,11 +11,11 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::dit_layernorm {
+namespace ttnn::experimental::prim {
 
 PostAllGatherDeviceOperation::program_factory_t PostAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::PostAllGatherWelfordProgramFactory{};
+    return PostAllGatherWelfordProgramFactory{};
 }
 
 void PostAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -118,7 +118,7 @@ PostAllGatherDeviceOperation::tensor_return_value_t PostAllGatherDeviceOperation
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::transformer::dit_layernorm
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
@@ -131,7 +131,7 @@ Tensor dit_layernorm_post_all_gather(
     const MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype) {
-    using OperationType = ttnn::operations::experimental::transformer::dit_layernorm::PostAllGatherDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PostAllGatherDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .eps = eps,

@@ -10,7 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async {
+namespace ttnn::experimental::prim {
 
 struct AllToAllAsyncProgram {
     struct shared_variables_t {
@@ -24,22 +24,22 @@ struct AllToAllAsyncProgram {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const AllToAllAsyncParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
+        const AllToAllAsyncInputs& tensor_args,
         Tensor& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& operation_attributes,
+        const AllToAllAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
+        const AllToAllAsyncInputs& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const AllToAllAsyncParams& operation_attributes,
+        const AllToAllAsyncInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async
+}  // namespace ttnn::experimental::prim

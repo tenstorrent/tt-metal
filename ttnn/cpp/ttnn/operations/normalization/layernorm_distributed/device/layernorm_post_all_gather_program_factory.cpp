@@ -18,7 +18,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -53,9 +53,9 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // =============================================================================
 
 LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherProgramFactory::create(
-    const LayerNormPostAllGatherOperationAttributes& operation_attributes,
-    const LayerNormPostAllGatherTensorArgs& tensor_args,
-    LayerNormPostAllGatherTensorReturnValue& output) {
+    const LayerNormPostAllGatherParams& operation_attributes,
+    const LayerNormPostAllGatherInputs& tensor_args,
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -300,9 +300,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get program config
-    LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    ttnn::prim::LayerNormDefaultProgramConfig program_config;
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
+        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
@@ -520,9 +520,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
 void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPostAllGatherOperationAttributes& /*operation_attributes*/,
-    const LayerNormPostAllGatherTensorArgs& tensor_args,
-    LayerNormPostAllGatherTensorReturnValue& output) {
+    const LayerNormPostAllGatherParams& /*operation_attributes*/,
+    const LayerNormPostAllGatherInputs& tensor_args,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -558,4 +558,4 @@ void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

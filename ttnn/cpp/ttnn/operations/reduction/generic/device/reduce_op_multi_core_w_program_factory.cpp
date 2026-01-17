@@ -12,13 +12,13 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::reduction::generic::program {
+namespace ttnn::prim {
 
 ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory::create(
-    const GenericParams& operation_attributes, const GenericInputs& tensor_args, Tensor& tensor_return_value) {
+    const ReduceParams& operation_attributes, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args.input_tensor;
+    const auto& a = tensor_args;
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -186,12 +186,12 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
 void ReduceMultiCoreWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const GenericParams& /*operation_attributes*/,
-    const GenericInputs& tensor_args,
+    const ReduceParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
+    auto* src_dram_buffer = tensor_args.buffer();
     auto* dst_dram_buffer = tensor_return_value.buffer();
 
     auto& reader_runtime_args_by_core =
@@ -211,4 +211,4 @@ void ReduceMultiCoreWProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::generic::program
+}  // namespace ttnn::prim

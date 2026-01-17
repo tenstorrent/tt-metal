@@ -10,7 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::send_async {
+namespace ttnn::experimental::prim {
 
 SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
@@ -25,7 +25,7 @@ void SendAsyncDeviceOperation::validate_on_program_cache_hit(
 void SendAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args;
 
     std::vector<Tensor> input_tensors = {input_tensor};
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
@@ -47,7 +47,7 @@ SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create
 tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& input_tensor = tensor_args;
 
     auto program_factory = select_program_factory(args, tensor_args);
 
@@ -55,16 +55,16 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
         args.mesh_socket, input_tensor, program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::send_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tensor_return_value_t send_async(
+ttnn::experimental::prim::SendAsyncDeviceOperation::tensor_return_value_t send_async(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    using OperationType = ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::SendAsyncDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+    const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

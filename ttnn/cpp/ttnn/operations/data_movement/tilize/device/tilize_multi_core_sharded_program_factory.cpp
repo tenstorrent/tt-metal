@@ -13,15 +13,15 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedProgramFactory::create(
-    const tilize::operation_attributes_t& /*operation_attributes*/,
-    const tilize::tensor_args_t& tensor_args,
-    const tilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& /*operation_attributes*/,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     tt::tt_metal::Program program{};
     auto input = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -87,14 +87,14 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
 
 void TilizeMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const tilize::operation_attributes_t& /*operation_attributes*/,
-    const tilize::tensor_args_t& tensor_args,
-    const tilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& /*operation_attributes*/,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.input_cb_handle, *src_buffer);
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.output_cb_handle, *dst_buffer);
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

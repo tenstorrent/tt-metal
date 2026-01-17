@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::experimental::prim {
 
 struct IsinParams {
     const bool assume_unique;
@@ -22,7 +22,4 @@ struct IsinInputs {
     const std::optional<Tensor> optional_out;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::isin
+}  // namespace ttnn::experimental::prim

@@ -29,14 +29,14 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program {
+namespace ttnn::experimental::prim {
 
 LlamaAllGatherMatmulAsyncProgramFactory::cached_mesh_workload_t
 LlamaAllGatherMatmulAsyncProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const LlamaAllGatherMatmulAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
+    LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -50,10 +50,10 @@ LlamaAllGatherMatmulAsyncProgramFactory::create_mesh_workload(
 }
 
 LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAsyncProgramFactory::create_at(
-    const operation_attributes_t& args,
+    const LlamaAllGatherMatmulAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
+    LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;
     const auto& intermediate_tensor = tensor_args.intermediate;
@@ -494,9 +494,9 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
 void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const LlamaAllGatherMatmulAsyncParams& args,
+    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
+    LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
     const auto& input0 = tensor_args.input0;
     const auto& input1 = tensor_args.input1;
     const auto& intermediate_tensor = tensor_args.intermediate;
@@ -533,7 +533,7 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
             worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
         }
 
-        llama_matmul::override_agmm_fusion_program_parameters(
+        ttnn::operations::llama_matmul::override_agmm_fusion_program_parameters(
             shared_vars.matmul_shared_variables,
             args.matmul_struct,
             program,
@@ -543,4 +543,4 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program
+}  // namespace ttnn::experimental::prim

@@ -10,7 +10,8 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::get_num_pages;
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
@@ -80,7 +81,9 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
             packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
             break;
         case DataType::UINT16:
-            packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+            packed_pad_value = ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                {ttnn::operations::data_movement::float_to_uint16(pad_value),
+                 ttnn::operations::data_movement::float_to_uint16(pad_value)});
             break;
         case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
         default:
@@ -261,4 +264,4 @@ void PadTileMulticoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

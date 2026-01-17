@@ -13,14 +13,14 @@
 #include <variant>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::transformer::sdpa {
+namespace ttnn::prim {
 
 struct SDPAOperation {
-    using operation_attributes_t = sdpa::operation_attributes_t;
-    using tensor_args_t = sdpa::tensor_args_t;
-    using spec_return_value_t = sdpa::spec_return_value_t;
-    using tensor_return_value_t = sdpa::tensor_return_value_t;
-    using program_factory_t = std::variant<program::SDPAProgramFactory>;
+    using operation_attributes_t = SDPAParams;
+    using tensor_args_t = SDPAInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<SDPAProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -36,10 +36,7 @@ struct SDPAOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa
-
-namespace ttnn::prim {
-ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
+Tensor sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<Tensor>& input_tensor_v,
@@ -55,4 +52,5 @@ ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
+
 }  // namespace ttnn::prim

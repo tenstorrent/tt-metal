@@ -19,14 +19,14 @@
 #include <variant>
 #include <vector>
 
-namespace ttnn::operations::ccl::all_broadcast {
+namespace ttnn::prim {
 
 struct AllBroadcastDeviceOperation {
     using operation_attributes_t = AllBroadcastParams;
-    using tensor_args_t = AllBroadcastInputs;
-    using spec_return_value_t = all_broadcast::spec_return_value_t;
-    using tensor_return_value_t = all_broadcast::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AllBroadcastProgramFactory>;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+    using program_factory_t = std::variant<AllBroadcastProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,9 +38,6 @@ struct AllBroadcastDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::ccl::all_broadcast
-
-namespace ttnn::prim {
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,

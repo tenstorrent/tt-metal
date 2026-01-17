@@ -25,14 +25,14 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::program {
+namespace ttnn::experimental::prim {
 
 StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
 StridedAllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const StridedAllGatherMinimalMatmulAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
@@ -45,22 +45,22 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
 
 void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const StridedAllGatherMinimalMatmulAsyncParams& attributes,
+    const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(range);
-        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
+        StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
             shared_variables.ag_shared_variables,
             program,
             attributes.strided_all_gather_async_struct,
-            ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
+            StridedAllGatherAsyncInputs(tensor_args.input_tensor),
             output_tensor.at(0));
 
-        auto cached_program_proxy = minimal_matmul::program::MinimalMatmulProgramFactory::cached_program_t::proxy(
+        auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
-        minimal_matmul::program::MinimalMatmulProgramFactory::override_runtime_arguments(
+        ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
             {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
@@ -94,7 +94,7 @@ strided_all_gather_minimal_matmul_async_program(
     /* Matmul Params */
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    operations::experimental::minimal_matmul::MinimalMatmulConfig config,
+    ttnn::experimental::prim::MinimalMatmulConfig config,
     DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
@@ -111,7 +111,7 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
     // Matmul
-    auto mm_shared_variables = operations::experimental::minimal_matmul::program::minimal_matmul_factory_helper(
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper(
         program,
         all_gather_output_tensor,
         weight_tensor,
@@ -131,40 +131,39 @@ strided_all_gather_minimal_matmul_async_program(
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables =
-        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::
-            strided_all_gather_async_minimal_default_helper(
-                program,
-                input_tensor,
-                target_device_coord,
-                forward_coord,
-                backward_coord,
-                all_gather_output_tensor,
-                dim,
-                num_links,
-                ring_size,
-                ring_index,
-                topology,
-                semaphore,
-                all_gather_fused_op_signaler,
-                read_local_slice_from_input,
-                std::nullopt,
-                num_workers_per_direction_opt,
-                num_buffers_per_channel,
-                matmul_fused_op_signaler->num_fused_op_cores_to_signal,
-                config.M_block_size,
-                config.K_block_size,
-                core_grid_offset);
+    StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables =
+        StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_helper(
+            program,
+            input_tensor,
+            target_device_coord,
+            forward_coord,
+            backward_coord,
+            all_gather_output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            semaphore,
+            all_gather_fused_op_signaler,
+            read_local_slice_from_input,
+            std::nullopt,
+            num_workers_per_direction_opt,
+            num_buffers_per_channel,
+            matmul_fused_op_signaler->num_fused_op_cores_to_signal,
+            config.M_block_size,
+            config.K_block_size,
+            core_grid_offset);
 
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
 }
 
 ttnn::device_operation::CachedProgram<StridedAllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
 StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
-    const operation_attributes_t& attributes,
+    const StridedAllGatherMinimalMatmulAsyncParams& attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const StridedAllGatherMinimalMatmulAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor) {
     auto* mesh_device = tensor_args.input_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
 
@@ -215,4 +214,4 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.matmul_struct.compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::program
+}  // namespace ttnn::experimental::prim

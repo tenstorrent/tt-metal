@@ -20,8 +20,7 @@
 namespace ttnn::operations::ccl {
 
 // Import the program artifacts type from the experimental namespace
-using ReduceScatterProgramArtifacts =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
+using ReduceScatterProgramArtifacts = ttnn::experimental::prim::ReduceScatterProgramArtifacts;
 
 struct ReduceScatterDeviceOperation {
     struct operation_attributes_t {
@@ -49,7 +48,7 @@ struct ReduceScatterDeviceOperation {
         struct shared_variables_t {
             std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
             tt::tt_metal::GlobalSemaphore barrier_semaphore;
-            ReduceScatterProgramArtifacts program_artifacts;
+            ttnn::experimental::prim::ReduceScatterProgramArtifacts program_artifacts;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::padded_slice {
+namespace ttnn::experimental::prim {
 
 struct PaddedSliceParams {
     const ttnn::Shape padded_slice_start;
@@ -20,4 +20,4 @@ struct PaddedSliceInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::experimental::padded_slice
+}  // namespace ttnn::experimental::prim

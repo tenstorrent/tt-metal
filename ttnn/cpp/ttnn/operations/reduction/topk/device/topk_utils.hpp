@@ -10,7 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::topk::utils {
+namespace ttnn::prim {
 
 uint32_t largest_power_of_two(uint32_t x);
 
@@ -45,4 +45,4 @@ bool verify_multi_core_cost(
 
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
 
-}  // namespace ttnn::operations::reduction::topk::utils
+}  // namespace ttnn::prim

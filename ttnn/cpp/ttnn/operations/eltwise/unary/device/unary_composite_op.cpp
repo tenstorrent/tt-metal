@@ -25,6 +25,8 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
+// Note: This namespace remains as ttnn::operations::unary because it contains composite operations
+// that are not primitive device operations
 
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
@@ -161,8 +163,12 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
-            { result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result); }
-            { result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result); }
+            {
+                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
+            {
+                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
         }
     }
     return result;

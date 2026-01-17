@@ -11,7 +11,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::neighbor_pad {
+namespace ttnn::experimental::prim {
 
 NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
@@ -124,12 +124,11 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation::tensor_return_value_t
-neighbor_pad_async(
+Tensor neighbor_pad_async(
     const Tensor& input_tensor,
     int32_t dim,
     uint32_t padding_left,
@@ -143,7 +142,7 @@ neighbor_pad_async(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
-    using OperationType = ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
     uint32_t num_devices;

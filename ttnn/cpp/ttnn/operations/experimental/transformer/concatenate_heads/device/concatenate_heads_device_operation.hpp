@@ -15,14 +15,14 @@
 
 #include "concatenate_heads_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental::prim {
 
 struct ConcatenateHeadsDeviceOperation {
-    using operation_attributes_t = TransformerParams;
-    using tensor_args_t = TransformerInputs;
+    using operation_attributes_t = ConcatenateHeadsParams;
+    using tensor_args_t = ConcatenateHeadsInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::ConcatenateHeadsProgramFactory>;
+    using program_factory_t = std::variant<ConcatenateHeadsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -36,11 +36,11 @@ struct ConcatenateHeadsDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::ConcatenateHeadsDeviceOperation::tensor_return_value_t concatenate_heads(
+ttnn::experimental::prim::ConcatenateHeadsDeviceOperation::tensor_return_value_t concatenate_heads(
     const ttnn::Tensor& input_tensor,
     const CoreCoord& compute_with_storage_grid_size,
     const std::optional<MemoryConfig>& memory_config,

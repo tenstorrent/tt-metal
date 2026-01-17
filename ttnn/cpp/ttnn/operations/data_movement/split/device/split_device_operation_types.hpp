@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::split {
+namespace ttnn::prim {
 
 struct SplitParams {
     int num_splits{};
@@ -18,7 +18,4 @@ struct SplitInputs {
     Tensor input;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
-
-}  // namespace ttnn::operations::data_movement::split
+}  // namespace ttnn::prim

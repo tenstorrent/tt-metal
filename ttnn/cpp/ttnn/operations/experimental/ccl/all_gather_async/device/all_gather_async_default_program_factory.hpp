@@ -7,7 +7,7 @@
 #include "all_gather_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_gather_async {
+namespace ttnn::experimental::prim {
 
 struct AllGatherProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -24,31 +24,31 @@ struct DefaultMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const AllGatherAsyncParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
+        const AllGatherAsyncInputs& tensor_args,
         Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const AllGatherAsyncParams& operation_attributes,
+        const AllGatherAsyncInputs& tensor_args,
         Tensor& output_tensor);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const operation_attributes_t& operation_attributes,
+        const AllGatherAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
+        const AllGatherAsyncInputs& tensor_args,
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn {
-using AllGatherProgramArtifacts = operations::experimental::ccl::all_gather_async::AllGatherProgramArtifacts;
+using AllGatherProgramArtifacts = experimental::prim::AllGatherProgramArtifacts;
 
 // Builder function that creates kernels and returns artifacts
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(

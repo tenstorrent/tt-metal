@@ -5,7 +5,7 @@
 #include "ring_fusion.hpp"
 
 using namespace tt::tt_metal;
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::prim {
 
 void RingSDPAFusedOpSignaler::init_all_gather(
     uint32_t ring_size, uint32_t ring_index, uint32_t forward_writes_expected, uint32_t backward_writes_expected) {
@@ -70,4 +70,4 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
 }
-}  // namespace ttnn::operations::transformer::detail
+}  // namespace ttnn::prim

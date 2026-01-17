@@ -10,7 +10,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+
 PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
@@ -144,4 +147,4 @@ void PadTileCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

@@ -5,11 +5,11 @@
 #include "plusone_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::plusone {
+namespace ttnn::experimental::prim {
 
 PlusOneDeviceOperation::program_factory_t PlusOneDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::PlusOneProgramFactory{};
+    return PlusOneProgramFactory{};
 }
 
 void PlusOneDeviceOperation::validate_on_program_cache_hit(
@@ -18,9 +18,7 @@ void PlusOneDeviceOperation::validate_on_program_cache_hit(
 }
 
 void PlusOneDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-
+    const operation_attributes_t&, const tensor_args_t& input_tensor) {
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 || input_tensor.dtype() == tt::tt_metal::DataType::UINT32,
         "Only INT32 and UINT32 is supported for inputs!");
@@ -31,14 +29,13 @@ void PlusOneDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape.size() >= 1 && input_shape.size() <= 4, "must have 1 to 4 dimensions for input tensor");
 }
 
-spec_return_value_t PlusOneDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.input.tensor_spec();
+PlusOneDeviceOperation::spec_return_value_t PlusOneDeviceOperation::compute_output_specs(
+    const operation_attributes_t&, const tensor_args_t& input_tensor) {
+    return input_tensor.tensor_spec();
 }
 
 tt::stl::hash::hash_t PlusOneDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
+    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     const auto& input_shape = input_tensor.padded_shape();
     // Hash operation attributes (both sub_core_grids and skip_negative_entries affect program structure)
     // and specific tensor properties that affect program structure (dtype, memory_config, shape)
@@ -52,24 +49,23 @@ tt::stl::hash::hash_t PlusOneDeviceOperation::compute_program_hash(
     return hash;
 }
 
-tensor_return_value_t PlusOneDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.input;
+PlusOneDeviceOperation::tensor_return_value_t PlusOneDeviceOperation::create_output_tensors(
+    const operation_attributes_t&, const tensor_args_t& input_tensor) {
+    return input_tensor;
 }
 
-}  // namespace ttnn::operations::experimental::plusone
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::plusone::tensor_return_value_t plus_one(
+Tensor plus_one(
     const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids, bool skip_negative_entries) {
-    using OperationType = ttnn::operations::experimental::plusone::PlusOneDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PlusOneDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .sub_core_grids = sub_core_grids, .skip_negative_entries = skip_negative_entries};
-    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
 }
 
 }  // namespace ttnn::prim

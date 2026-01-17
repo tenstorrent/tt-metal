@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
+namespace ttnn::experimental::prim {
 
 struct HcSumReduceParams {
     const tt::tt_metal::MemoryConfig memory_config;
@@ -19,4 +19,4 @@ struct HcSumReduceInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::experimental::prim

@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::padded_slice::program {
+namespace ttnn::experimental::prim {
 
 struct PaddedSliceTileProgramFactory {
     struct shared_variables_t {
@@ -36,4 +36,4 @@ struct PaddedSliceTileProgramFactory {
         Tensor& output);
 };
 
-}  // namespace ttnn::operations::experimental::padded_slice::program
+}  // namespace ttnn::experimental::prim
