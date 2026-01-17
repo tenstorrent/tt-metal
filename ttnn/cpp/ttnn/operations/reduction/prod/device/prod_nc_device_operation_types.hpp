@@ -5,7 +5,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::prod_nc {
+namespace ttnn::prim {
 
 struct ProdNcParams {
     int64_t dim;
@@ -16,4 +16,4 @@ struct ProdNcInputs {
     Tensor output;  // Note: output is passed as input (inplace pattern)
 };
 
-}  // namespace ttnn::operations::reduction::prod_nc
+}  // namespace ttnn::prim

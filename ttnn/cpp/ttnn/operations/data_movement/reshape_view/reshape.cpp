@@ -47,7 +47,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = ttnn::prim::reshape(
+    auto temp_tensor2 = ttnn::prim::reshape_view(
         temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
 
     if (memory_config.is_sharded()) {
@@ -212,7 +212,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    auto output_tensor_3d = ttnn::prim::reshape(
+    auto output_tensor_3d = ttnn::prim::reshape_view(
         tensor3d,
         requested_shape_3d,
         requested_padded_shape_3d,

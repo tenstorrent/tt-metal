@@ -14,9 +14,9 @@
 #include <optional>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllReduceCreateQkvHeadsParams {
     uint32_t num_links;
     uint32_t ring_size;
     MemoryConfig all_reduce_mem_config;
@@ -34,7 +34,7 @@ struct operation_attributes_t {
     uint32_t cluster_axis;
 
     // Constructor required because GlobalSemaphore is not default constructible
-    operation_attributes_t(
+    AllReduceCreateQkvHeadsParams(
         uint32_t num_links,
         uint32_t ring_size,
         MemoryConfig all_reduce_mem_config,
@@ -87,7 +87,7 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllReduceCreateQkvHeadsInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
     Tensor batch_offset_tensor;
@@ -95,18 +95,18 @@ struct tensor_args_t {
 
 // Return types using named structs for Q, K, V heads
 // all_reduce is included as an internal implementation detail
-struct spec_return_value_t {
+struct AllReduceCreateQkvHeadsResultSpec {
     TensorSpec all_reduce;  // Internal: needed for circular buffer setup
     TensorSpec q;
     TensorSpec k;
     TensorSpec v;
 };
 
-struct tensor_return_value_t {
+struct AllReduceCreateQkvHeadsResult {
     Tensor all_reduce;  // Internal: needed for circular buffer setup
     Tensor q;
     Tensor k;
     Tensor v;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads
+}  // namespace ttnn::experimental::prim

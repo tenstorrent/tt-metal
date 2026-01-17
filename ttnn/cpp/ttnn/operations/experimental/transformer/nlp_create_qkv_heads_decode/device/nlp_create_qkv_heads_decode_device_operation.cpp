@@ -7,7 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode {
+namespace ttnn::experimental::prim {
 
 NLPCreateQKVHeadsDecodeDeviceOperation::program_factory_t
 NLPCreateQKVHeadsDecodeDeviceOperation::select_program_factory(
@@ -17,11 +17,11 @@ NLPCreateQKVHeadsDecodeDeviceOperation::select_program_factory(
 
     if (is_input_sharded) {
         if (operation_attributes.input_on_subcoregrids) {
-            return program::NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory{};
+            return NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory{};
         }
-        return program::NLPCreateQKVHeadsDecodeShardedProgramFactory{};
+        return NLPCreateQKVHeadsDecodeShardedProgramFactory{};
     }
-    return program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
+    return NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
 }
 
 void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
@@ -193,7 +193,7 @@ std::vector<Tensor> NLPCreateQKVHeadsDecodeDeviceOperation::create_output_tensor
         create_device_tensor(output_specs[2], input_tensor.device())};
 }
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
@@ -207,8 +207,7 @@ std::vector<Tensor> nlp_create_qkv_heads_decode(
     const std::optional<const Tensor>& batch_offset,
     std::optional<uint32_t> slice_size,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    using OperationType =
-        ttnn::operations::experimental::nlp_create_qkv_heads_decode::NLPCreateQKVHeadsDecodeDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NLPCreateQKVHeadsDecodeDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_q_heads = num_q_heads,

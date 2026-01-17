@@ -14,11 +14,11 @@
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
 
-namespace ttnn::operations::experimental::ccl::slice_reshard_async {
+namespace ttnn::experimental::prim {
 
 SliceReshardAsyncDeviceOperation::program_factory_t SliceReshardAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::SliceReshardAsyncProgramFactory{};
+    return SliceReshardAsyncProgramFactory{};
 }
 
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -29,12 +29,9 @@ void SliceReshardAsyncDeviceOperation::validate_on_program_cache_hit(
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim == 0, "Error, neighbor pad currently only supports sharding dim 0, provided {}", args.dim);
-    TT_FATAL(
-        tensor_args.input.layout() == Layout::ROW_MAJOR,
-        "Unsupported input tensor layout {}.",
-        tensor_args.input.layout());
+    TT_FATAL(tensor_args.layout() == Layout::ROW_MAJOR, "Unsupported input tensor layout {}.", tensor_args.layout());
 
-    TT_FATAL(!tensor_args.input.is_sharded(), "Slice reshard does not support sharded input tensors.");
+    TT_FATAL(!tensor_args.is_sharded(), "Slice reshard does not support sharded input tensors.");
 
     TT_FATAL(
         !(args.output_dim_shape % args.ring_size), "Output dim shape must be divisible by num devices on cluster axis");
@@ -46,7 +43,7 @@ void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] = args.output_dim_shape / args.ring_size;
     return TensorSpec(
@@ -55,7 +52,7 @@ TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
 
 Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
 }
 
 tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
@@ -77,12 +74,11 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation::tensor_return_value_t
-slice_reshard_async(
+Tensor slice_reshard_async(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     uint32_t output_dim_offset,
@@ -93,7 +89,7 @@ slice_reshard_async(
     size_t num_links,
     const MemoryConfig& memory_config,
     ttnn::ccl::Topology topology) {
-    using OperationType = ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::SliceReshardAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
     auto* mesh_device = input_tensor.device();
@@ -114,9 +110,8 @@ slice_reshard_async(
         memory_config,
         topology,
         num_devices);
-    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
 }
 
 }  // namespace ttnn::prim
