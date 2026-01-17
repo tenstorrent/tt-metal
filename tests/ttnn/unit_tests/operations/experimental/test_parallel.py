@@ -70,8 +70,8 @@ def test_parallel_rms_norm(device, batch_size, h, w):
 
     # Define disjoint core ranges for each branch
     # Use single core per branch on different rows (y-axis) which works correctly
-    cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))])
+    cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
 
     # Create branches using ttnn.parallel.branch(operation, *args, cores=..., **kwargs)
     branch_a = ttnn.parallel.branch(
@@ -128,8 +128,8 @@ def test_parallel_rms_norm_different_seed(device, batch_size, h, w):
     weight_b = ttnn.from_torch(torch_weight_b, device=device, layout=ttnn.TILE_LAYOUT)
 
     # Use single core per branch on different rows (y-axis) which works correctly
-    cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))])
+    cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))])
+    cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(0, 3))])
 
     # Using ttnn.parallel.branch() API
     branch_a = ttnn.parallel.branch(ttnn.rms_norm, input_a, cores=cores_a, epsilon=1e-5, weight=weight_a)
@@ -144,7 +144,6 @@ def test_parallel_rms_norm_different_seed(device, batch_size, h, w):
     assert_with_pcc(torch_output_b, output_b, 0.999)
 
 
-@pytest.mark.skip(reason="Multi-core parallel branches not yet supported - causes hang")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])  # 4 tile rows (128/32)
 @pytest.mark.parametrize("w", [64])  # 2 tile columns (64/32)
@@ -215,7 +214,6 @@ def test_rms_full_grid(device, batch_size, h, w):
         assert_with_pcc(torch_outputs[i], output, 0.999)
 
 
-@pytest.mark.skip(reason="LayerNorm parallel with residual/weight/bias not yet fully supported")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
