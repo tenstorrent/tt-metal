@@ -31,8 +31,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: oft, owner_id: U08AWRT6U3E, cmd: pytest models/experimental/oft/tests/pcc/ }, # Boris Janjic
-            { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Ilija Anastasijevic
+            { model: oft, cmd: pytest models/experimental/oft/tests/pcc/ }, # Boris Janjic
+            { model: panoptic-deeplab, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Ilija Anastasijevic
           ]
     name: Nightly 20 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
@@ -75,9 +75,3 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}

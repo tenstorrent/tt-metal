@@ -32,23 +32,20 @@ jobs:
             name: "whisper performance",
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
-            owner_id: U05RWH3QUPM # Salar Hosseini
+            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
           },
           {
             name: "llama3-8b performance",
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1" --max_seq_len 131072,
-            owner_id: U03PUAKE719 # Miguel Tairum
+            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1" --max_seq_len 131072
           },
           { # This should be moved to a BH perf regression pipeline in the future
             name: "unet-shallow performance",
             arch: blackhole,
             runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
-            owner_id: U06ECNVR0EN # Evan Smal
+            cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
           }
         ]
 
@@ -118,11 +115,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   single-card-p150-demo-tests:
@@ -136,14 +128,12 @@ jobs:
             { # This test shall be executed on the BH with 20 cores
               name: "panoptic_deeplab demo - 20 cores",
               arch: blackhole,
-              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline',
-              owner_id: U09LK84G4TF # Nikola Milicevic
+              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline'
             },
             { # This test shall be executed on the BH P150 on 110 cores
               name: "panoptic_deeplab demo - 110 cores",
               arch: blackhole,
-              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10, 9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline',
-              owner_id: U09LK84G4TF # Nikola Milicevic
+              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10, 9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline'
             },
           ]
     name: ${{ matrix.test-group.name }}
@@ -180,9 +170,3 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}

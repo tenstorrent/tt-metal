@@ -54,8 +54,8 @@ jobs:
           # Yousef Al Rawwash - deepseek
 
           disabled_tests='[
-            { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
-            { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45, "owner_id": "U03PUAKE719" },
+            { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60 },
+            { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45 },
           ]'
 
           all_tests='[
@@ -315,11 +315,6 @@ jobs:
             models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py \
             -k "4x8" \
             --timeout 1200
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}
