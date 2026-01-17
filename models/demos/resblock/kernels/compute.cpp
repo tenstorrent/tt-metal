@@ -120,10 +120,9 @@ void MAIN {
     constexpr uint32_t out_cb = get_compile_time_arg_val(3);
     constexpr uint32_t intermediate_pregather_cb = get_compile_time_arg_val(4);
     constexpr uint32_t mm2_full_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(7);
-    constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(8);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(9);
+    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
+    constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(8);
 
     constexpr uint32_t num_output_tiles = 1;
     constexpr uint32_t out_subblock_h = 1;

@@ -12,12 +12,11 @@ class FusedResblock:
         OUT_CB = 3
         INTERMEDIATE_PREGATHER_CB = 4
         MM2_FULL_CB = 5
-        BIAS_CB = 7
 
     class McastCoreCBIndex:
         MCAST_CORE_GATHER_CB = 6
 
-    MCAST_CORE = ttnn.CoreCoord(4, 0)
+    MCAST_CORE = ttnn.CoreCoord(7, 7)
 
     @staticmethod
     def golden(input_a, weight0, weight1, num_layers=1):
@@ -109,7 +108,6 @@ class FusedResblock:
                 mcast_sender_noc_coord_y_start,
                 mcast_sender_noc_coord_x_end,
                 mcast_sender_noc_coord_y_end,
-                1 if debug else 0,
                 num_layers,
             ],
             config=ttnn.ReaderConfigDescriptor(),
@@ -278,17 +276,6 @@ class FusedResblock:
             core_ranges=all_matmul_cores,
             format_descriptors=[intermediate_pregather_cb_format],
         )
-        bias_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.MatmulCoreCBIndex.BIAS_CB,
-            data_format=out_dtype,
-            page_size=out_tile_size,
-            tile=out_tile_descriptor,
-        )
-        bias_cb_descriptor = ttnn.CBDescriptor(
-            total_size=out_tile_size,
-            core_ranges=all_matmul_cores,
-            format_descriptors=[bias_cb_format],
-        )
         mm2_full_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
             data_format=out_dtype,
@@ -308,9 +295,6 @@ class FusedResblock:
         )
         logger.debug(
             f"mm2_full_cb_descriptor: {mm2_full_cb_descriptor.total_size}, page_size: {mm2_full_cb_descriptor.format_descriptors[0].page_size}"
-        )
-        logger.debug(
-            f"bias_cb_descriptor: {bias_cb_descriptor.total_size}, page_size: {bias_cb_descriptor.format_descriptors[0].page_size}"
         )
         logger.debug(
             f"intermediate_pregather_cb_descriptor: {intermediate_pregather_cb_descriptor.total_size}, page_size: {intermediate_pregather_cb_descriptor.format_descriptors[0].page_size}"
@@ -375,7 +359,6 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
                 FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
                 FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
-                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
                 FusedResblock.MatmulCoreCBIndex.OUT_CB,
                 num_tiles_k,
                 gather_destination_core.x,
@@ -386,7 +369,6 @@ class FusedResblock:
                 sender_logical_x_start,
                 sender_logical_y_start,
                 sender_grid_width,
-                1 if debug else 0,
                 num_layers,
             ],
             config=ttnn.ReaderConfigDescriptor(),
@@ -397,8 +379,6 @@ class FusedResblock:
             core_ranges=all_matmul_cores,
             compile_time_args=[
                 FusedResblock.MatmulCoreCBIndex.OUT_CB,
-                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
-                num_layers,
             ],
             config=ttnn.WriterConfigDescriptor(),
         )
@@ -413,7 +393,6 @@ class FusedResblock:
                 FusedResblock.MatmulCoreCBIndex.OUT_CB,
                 FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
                 FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
-                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
@@ -443,7 +422,6 @@ class FusedResblock:
                     out_cb_descriptor,
                     intermediate_pregather_cb_descriptor,
                     mm2_full_cb_descriptor,
-                    bias_cb_descriptor,
                     mcast_cb_descriptor,
                 ],
                 semaphores=[mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor],

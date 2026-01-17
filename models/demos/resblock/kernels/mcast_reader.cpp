@@ -12,7 +12,7 @@
 #include "api/debug/dprint_pages.h"
 
 FORCE_INLINE void wait_for_gather(
-    volatile tt_l1_ptr uint32_t* mcast_receiver_semaphore_addr_ptr, uint32_t num_senders, uint32_t debug_enabled) {
+    volatile tt_l1_ptr uint32_t* mcast_receiver_semaphore_addr_ptr, uint32_t num_senders) {
     DeviceZoneScopedN("wait_for_gather");
     // Wait for all senders to finish sending data
     noc_semaphore_wait(mcast_receiver_semaphore_addr_ptr, num_senders);
@@ -29,8 +29,7 @@ FORCE_INLINE void mcast(
     uint64_t mcast_sender_noc_coord_x_start,
     uint64_t mcast_sender_noc_coord_y_start,
     uint64_t mcast_sender_noc_coord_x_end,
-    uint64_t mcast_sender_noc_coord_y_end,
-    uint32_t debug_enabled) {
+    uint64_t mcast_sender_noc_coord_y_end) {
     DeviceZoneScopedN("mcast");
     // Mcast to all cores and then update semaphore
     // Use the base address directly instead of get_write_ptr to avoid CB setup issues on mcast core
@@ -83,15 +82,14 @@ void kernel_main() {
     constexpr uint64_t mcast_sender_noc_coord_y_start = get_compile_time_arg_val(8);
     constexpr uint64_t mcast_sender_noc_coord_x_end = get_compile_time_arg_val(9);
     constexpr uint64_t mcast_sender_noc_coord_y_end = get_compile_time_arg_val(10);
-    constexpr uint32_t debug_enabled = get_compile_time_arg_val(11);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(12);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(11);
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         DeviceZoneScopedN("gather_and_mcast");
 
         // First mcast: matmul+relu result -> MM2_FULL_CB
         // Use get_write_ptr for mm2_full_cb since it's not bound to input tensor
-        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders);
         {
             const uint32_t mm2_base_addr = get_write_ptr(mm2_full_cb);
             mcast(
@@ -102,14 +100,13 @@ void kernel_main() {
                 mcast_sender_noc_coord_x_start,
                 mcast_sender_noc_coord_y_start,
                 mcast_sender_noc_coord_x_end,
-                mcast_sender_noc_coord_y_end,
-                debug_enabled);
+                mcast_sender_noc_coord_y_end);
         }
         DPRINT << "DONE LAYER MCAST 1" << ENDL();
 
         // Second mcast: matmul+bias result -> MM1_FULL_CB
         // Use input buffer base address for mm1_full_cb since it's bound to input tensor
-        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders, debug_enabled);
+        wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders);
         mcast(
             mcast_cb,
             input_buffer_base_addr,
@@ -118,8 +115,7 @@ void kernel_main() {
             mcast_sender_noc_coord_x_start,
             mcast_sender_noc_coord_y_start,
             mcast_sender_noc_coord_x_end,
-            mcast_sender_noc_coord_y_end,
-            debug_enabled);
+            mcast_sender_noc_coord_y_end);
 
         DPRINT << "DONE LAYER MCAST 2" << ENDL();
     }

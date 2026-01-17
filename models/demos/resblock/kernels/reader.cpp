@@ -12,7 +12,7 @@
 #include "api/debug/dprint_pages.h"
 
 template <uint32_t CbOut, uint32_t NumTiles>
-FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr, uint32_t debug_enabled) {
+FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr) {
     DeviceZoneScopedN("mcast_reader_wait_for_mcast");
     // Reserve space for mcast data before waiting (mcast writes directly to reserved space)
     cb_reserve_back(CbOut, NumTiles);
@@ -68,24 +68,22 @@ void kernel_main() {
     constexpr uint32_t weight1_cb = get_compile_time_arg_val(2);
     constexpr uint32_t intermediate_pregather_cb = get_compile_time_arg_val(3);
     constexpr uint32_t mm2_full_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(7);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
 
-    constexpr uint32_t mcast_receiver_noc_x = get_compile_time_arg_val(8);
-    constexpr uint32_t mcast_receiver_noc_y = get_compile_time_arg_val(9);
-    constexpr uint32_t mcast_receiver_semaphore_id = get_compile_time_arg_val(10);
-    constexpr uint32_t mcast_reciever_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t mcast_receiver_noc_x = get_compile_time_arg_val(7);
+    constexpr uint32_t mcast_receiver_noc_y = get_compile_time_arg_val(8);
+    constexpr uint32_t mcast_receiver_semaphore_id = get_compile_time_arg_val(9);
+    constexpr uint32_t mcast_reciever_cb = get_compile_time_arg_val(10);
 
-    const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
+    const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
     volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
         (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
-    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(13);
-    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(14);
-    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(15);
-    constexpr uint32_t debug_enabled = get_compile_time_arg_val(16);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(17);
+    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(12);
+    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(13);
+    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(14);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(15);
 
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
 
@@ -118,7 +116,7 @@ void kernel_main() {
                 mcast_receiver_noc_y,
                 mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
             // Wait for mcast to complete and then push back to mm2_full_cb which will start the second matmul
-            wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+            wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
         DPRINT << "DONE LAYER GATHER AND MCAST 1" << ENDL();
         {
@@ -132,7 +130,7 @@ void kernel_main() {
                 mcast_receiver_noc_y,
                 mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
             // Wait for mcast to complete and then push back to mm1_full_cb (ping-pong back)
-            wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+            wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
         DPRINT << "DONE LAYER GATHER AND MCAST 2" << ENDL();
     }
