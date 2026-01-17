@@ -10,32 +10,8 @@
 void kernel_main() {
     // run-time args
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    // const uint32_t num_input_blocks_to_process = get_arg_val<uint32_t>(1);
-    // std::vector<uint32_t> height_wise_input_block_start_indices; //= get_arg_val<std::vector<uint32_t>>(2);
-    // std::vector<uint32_t> vector_num_unpadded_cols_per_input_block; //= get_arg_val<std::vector<uint32_t>>(3);
-    // std::vector<uint32_t> width_wise_output_block_start_indices; //= get_arg_val<std::vector<uint32_t>>(4);
-    // std::vector<uint32_t> vector_num_cols_already_processed_in_first_output_block; //=
-    // get_arg_val<std::vector<uint32_t>>(5);
     const uint32_t src0_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_shard_id = get_arg_val<uint32_t>(2);
-    // const uint32_t input_single_tile_size = get_arg_val<uint32_t>(3);
-    // const uint32_t rt_arg_index = 4;
-    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-    //     height_wise_input_block_stasrt_indices.push_back(get_arg_val<uint32_t>(rt_arg_index));
-    //     rt_arg_index++;
-    // }
-    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-    //     vector_num_unpadded_cols_per_input_block.push_back(get_arg_val<uint32_t>(rt_arg_index));
-    //     rt_arg_index++;
-    // }
-    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-    //     width_wise_output_block_start_indices.push_back(get_arg_val<uint32_t>(rt_arg_index));
-    //     rt_arg_index++;
-    // }
-    // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-    //     vector_num_cols_already_processed_in_first_output_block.push_back(get_arg_val<uint32_t>(rt_arg_index));
-    //     rt_arg_index++;
-    // }
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
@@ -76,7 +52,6 @@ void kernel_main() {
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block) {
-        // uint32_t num_tiles_to_fetch = num_unpadded_cols_per_input_block / tile_width;
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
 
         // Base address of the row of elements we are going to be writing.
@@ -114,7 +89,6 @@ void kernel_main() {
 
             // Iterate through all columns in the input block that this core is processing
             uint32_t num_input_cols_processed = 0;
-            int uk = 0;
             while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
                 // How many elements to write from the input block to the output block.
                 // Min of the number of remaining unprocessed columns in the input block
@@ -139,12 +113,7 @@ void kernel_main() {
                 // input block, then that subset corresponds to an entire output block, so we increment
                 // the output_page_id to the following output block.
                 // DPRINT << "WRITING TO output_page_id: " << output_page_id << ENDL();
-                if (uk != 0) {
-                    DPRINT << "ADJHADGHjkfgdaksUGhjefgkjdhsgjsf,hgkfsjdh uk: " << uk << ENDL();
-                }
                 output_page_id++;
-                uk++;
-
                 // Only the first output block we write to can have some of it's columns already processed/written-to
                 num_cols_remaining_in_current_output_block = num_cols_per_output_block;
                 output_offset_within_page_in_bytes = 0;
@@ -155,147 +124,10 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
     // Access pages within kernel
-    // DPRINT << "num_blocks_to_process: " << num_input_blocks_to_process << ENDL();
     const auto& dspec = accessor_src.dspec();
-    // DPRINT << "dspec.rank(): " << dspec.rank() << ENDL();
-    // Get shard dimensions
-    // DPRINT << "shard_shape: " << dspec.shard_shape() << ENDL();
-    // DPRINT << "shard_shape[1]: " << (dspec.shard_shape()[1]) << ENDL();
-    uint32_t num_blocks_per_shard_plane = 1;  // dspec.shard_shape()[-2] / tile_height;
-    uint32_t num_blocks_per_shard = 1;
-    if (dspec.rank() > 1) {
-        num_blocks_per_shard_plane = dspec.shard_shape()[dspec.rank() - 2];
-        uint32_t num_planes_per_shard = 1;
-        for (int i = 0; i < static_cast<int>(dspec.rank()) - 2; ++i) {
-            num_planes_per_shard *= dspec.shard_shape()[i];
-        }
-        num_blocks_per_shard = num_planes_per_shard * num_blocks_per_shard_plane;
-        // DPRINT << "shard_shape[1]: " << (dspec.shard_shape()[1]) << ENDL();
-        // DPRINT << "[dspec.rank() - 2]: " << (dspec.rank() - 2) << ENDL();
-    }
-    DPRINT << "num_blocks_per_shard_plane: " << num_blocks_per_shard_plane << ENDL();
-
-    uint32_t shard_plane_end_height_wise_input_block_index = 0;
-    uint32_t prev_height_wise_input_block_index = 0;
+    // Iterate through all shards and within each shard iterate through all pages (padding and non-padding). Process
+    // only rows in the shards with non padding pages.
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
-        DPRINT << "shard_id: " << shard_id << ENDL();
-#if 0
-        uint32_t blocks_processed = 0;
-        auto shard_pages = accessor_src.shard_pages(shard_id);
-
-        uint32_t idx_in_shard = 0;
-        // for (const auto& page : shard_pages) {
-        //     auto page_id = page.page_id();
-        //     DPRINT << "page_id: " << page_id << ENDL();
-        //     //     if (idx_in_shard % num_tiles_per_input_block == 0) {
-        //     //         DPRINT << "first_page_id_in_row: " << page_id << ENDL();
-        //     //     }
-        //     //     idx_in_shard++;
-        // }
-        auto it = shard_pages.begin();
-        while (it != shard_pages.end()) {
-            // for (auto it = shard_pages.begin(); it != shard_pages.end(); it += num_tiles_per_input_block) {
-            auto page_id = it->page_id();
-            // DPRINT << "\t\tpage_id start block: " << page_id << ENDL();
-            uint32_t height_wise_input_block_index =
-                page_id / num_tiles_per_row;  // add compile time arg for num_tiles_per_row
-            if (it == shard_pages.begin()) {
-                shard_plane_end_height_wise_input_block_index =
-                    height_wise_input_block_index + num_blocks_per_shard_plane - 1;
-            }
-            // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
-            // DPRINT << "shard_plane_end_height_wise_input_block_index: " << shard_plane_end_height_wise_input_block_index
-            //        << ENDL();
-            // DPRINT << "num_blocks_per_shard_plane: " << num_blocks_per_shard_plane << ENDL();
-            if (height_wise_input_block_index > shard_plane_end_height_wise_input_block_index) {
-                uint32_t num_padding_blocks_to_discard =
-                    shard_plane_end_height_wise_input_block_index - prev_height_wise_input_block_index;
-                // DPRINT << "num_padding_blocks_to_discard: " << num_padding_blocks_to_discard << ENDL();
-                for (uint32_t i = 0; i < num_padding_blocks_to_discard; i++) {
-                    // DPRINT << "DISCARDING PADDING BLOCK: " << i << ENDL();
-                    cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                    cb_pop_front(
-                        cb_id_out0, num_tiles_per_input_block);  // discard padding blocks, do not write to output
-                    blocks_processed++;                          // padding proceessed from cb
-                }
-                // DPRINT << "AFTER FOR LOOP" << ENDL();
-                shard_plane_end_height_wise_input_block_index = height_wise_input_block_index +
-                                                                num_blocks_per_shard_plane -
-                                                                1;  // set end height index of the new shard plane
-            }
-            prev_height_wise_input_block_index = height_wise_input_block_index;
-            blocks_processed++;  // processing current non-padding block
-
-            uint32_t tile_index_width = page_id % num_tiles_per_row;
-            uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
-
-            uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-            if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
-                // we have an uneven shard with padding along the width dimension, so ignore those last
-                // padded columns
-                num_unpadded_cols_per_input_block =
-                    (num_tiles_per_row - tile_index_width) * tile_width;  // add compile time arg for tile_width
-            }
-
-            uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
-            uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
-            uint32_t num_cols_already_processed_in_first_output_block =
-                input_block_global_col_index % num_cols_per_output_block;
-            // Process the current block
-            // DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
-            // DPRINT << "num_cols_already_processed_in_first_output_block: " <<
-            // num_cols_already_processed_in_first_output_block << ENDL();
-            // DPRINT << height_wise_input_block_index << " " << width_wise_output_block_start_index << " "
-            //        << num_unpadded_cols_per_input_block << " " << num_cols_already_processed_in_first_output_block
-            //        << ENDL();
-            // blocks_processed++;
-            write_tiles_in_current_block(
-                height_wise_input_block_index,
-                width_wise_output_block_start_index,
-                num_unpadded_cols_per_input_block,
-                num_cols_already_processed_in_first_output_block);
-            // DPRINT << "num_tiles_per_row: " << num_tiles_per_row << ENDL();
-            // // if (idx_in_shard % num_tiles_per_input_block == 0) {
-            // DPRINT << "first_page_id_in_row: " << page_id << ENDL();
-            // DPRINT << "height_wise_input_block_index: " << height_wise_input_block_index << ENDL();
-            // DPRINT << "tile_index_width: " << tile_index_width << ENDL();
-            // DPRINT << "width_wise_input_block_index: " << width_wise_input_block_index << ENDL();
-            // DPRINT << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << ENDL();
-            // DPRINT << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << ENDL();
-            // DPRINT << "num_cols_already_processed_in_first_output_block: "
-            //    << num_cols_already_processeds_in_first_output_block << ENDL();
-            // DPRINT << "num_cols_per_output_block: " << num_cols_per_output_block << ENDL();
-            // }
-            // idx_in_shard++;
-            uint32_t num_tiles_to_advance = num_tiles_per_input_block;
-            if (num_unpadded_cols_per_input_block / tile_width < num_tiles_per_input_block) {
-                // DPRINT << "UPDATING SINGLE STEP" << ENDL();
-                num_tiles_to_advance = num_unpadded_cols_per_input_block / tile_width;
-                // DPRINT << "UPDATING SINGLE STEP TO: " << num_tiles_to_advance << ENDL();
-            }
-            // DPRINT << "num_tiles_to_advance: " << num_tiles_to_advance << ENDL();
-            // DPRINT << "IT BEFORE ADVANCING: " << it->page_id() << ENDL();
-            // DPRINT << (it+1)->page_id() << ENDL();
-            // DPRINT << (it+2)->page_id() << ENDL();
-            // DPRINT << (it+3)->page_id() << ENDL();
-            // DPRINT << (it+4)->page_id() << ENDL();
-            // DPRINT << (it+5)->page_id() << ENDL();
-            it += num_tiles_to_advance;
-            // DPRINT << "ADVANCING IT TO: " << it->page_id() << ENDL();
-        }
-        if (blocks_processed < num_blocks_per_shard) {
-            uint32_t num_padding_blocks_to_discard = num_blocks_per_shard - blocks_processed;
-            for (uint32_t i = 0; i < num_padding_blocks_to_discard; i++) {
-                // DPRINT << "DISCARDING TAIL PADDING BLOCK: " << i << ENDL();
-                cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-                cb_pop_front(cb_id_out0, num_tiles_per_input_block);  // discard padding blocks, do not write to output
-                blocks_processed++;                                   // padding proceessed from cb
-            }
-            // DPRINT << "AFTER FOR LOOP" << ENDL();
-        }
-
-#endif
-
         // Get total pages in shard (including padding)
         uint32_t shard_volume = dspec.shard_volume();
 
@@ -342,9 +174,6 @@ void kernel_main() {
                     for (uint32_t i = 0; i < dspec.rank(); ++i) {
                         page_id += global_page_coord[i] * dspec.tensor_strides()[i];
                     }
-
-                    // Print the page ID (using DPRINT for kernel debugging)
-                    DPRINT << "Non-padding page ID: " << page_id << "\n";
                     uint32_t height_wise_input_block_index = page_id / num_tiles_per_row;
                     uint32_t tile_index_width = page_id % num_tiles_per_row;
                     uint32_t width_wise_input_block_index = tile_index_width / num_tiles_per_input_block;
@@ -352,7 +181,7 @@ void kernel_main() {
                     uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
                     if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
                         // we have an uneven shard with padding along the width dimension, so ignore those last
-                        // padded columns
+                        // padding columns
                         num_unpadded_cols_per_input_block =
                             (num_tiles_per_row - tile_index_width) * tile_width;  // add compile time arg for tile_width
                     }
@@ -369,40 +198,11 @@ void kernel_main() {
                         num_cols_already_processed_in_first_output_block);
 
                 } else {
-                    DPRINT << "PADDING PAGE" << ENDL();
+                    // Discard padding blocks, do not write to output
                     cb_wait_front(cb_id_out0, num_tiles_per_input_block);
                     cb_pop_front(cb_id_out0, num_tiles_per_input_block);
                 }
             }
-            // If not padding, calculate and print page ID
         }
     }
-
-    // if(shard_plane_end_height_wise_input_block_index > prev_height_wise_input_block_index) {
-    //     uint32_t num_padding_blocks_to_discard = shard_plane_end_height_wise_input_block_index -
-    //     prev_height_wise_input_block_index; DPRINT << "num_padding_blocks_to_discard: " <<
-    //     num_padding_blocks_to_discard << ENDL(); for (uint32_t i = 0; i < num_padding_blocks_to_discard; i++) {
-    //         DPRINT << "DISCARDING PADDING BLOCK: " << i << ENDL();
-    //         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
-    //         cb_pop_front(cb_id_out0, num_tiles_per_input_block); //discard padding blocks, do not write to output
-    //     }
-    //     DPRINT << "AFTER FOR LOOP" << ENDL();
-    // }
-    // Drain any remaining tiles in the output CB (e.g., padding rows) without writing them out.
-    // while (!cb_empty(cb_id_out0)) {
-    //     cb_wait_front(cb_id_out0, 1);
-    //     cb_pop_front(cb_id_out0, 1);
-    // }
-    DPRINT << "END OF WRITE KERNEL" << ENDL();
-    // DPRINT << "blocks_processed: " << blocks_processed << ENDL();
-    //    << " num_input_blocks_to_process: " << num_input_blocks_to_process << ENDL();
-    // DPRINT << "num_output_blocks_across_width: " << num_output_blocks_across_width << ENDL();
-    // DPRINT << "num_cols_per_output_block: " << num_cols_per_output_block << ENDL();
-    //     DPRINT << "num_cols_per_input_block: " << num_cols_per_input_block << ENDL();
-    //     DPRINT << "tile_width: " << tile_width << ENDL();
-    //     DPRINT << "tile_height: " << tile_height << ENDL();
-    //     DPRINT << "num_tiles_per_input_block: " << num_tiles_per_input_block << ENDL();
-    //     DPRINT << "num_tiles_per_row: " << num_tiles_per_row << ENDL();
-    //     DPRINT << "num_shards: " << num_shards << ENDL();
-    //     DPRINT << "num_cores: " << num_cores << ENDL();
 }
