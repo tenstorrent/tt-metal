@@ -1015,7 +1015,7 @@ jobs:
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
-          echo "│ Runner:               ${{ matrix.runs_on }}"
+          echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
           echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
           echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
