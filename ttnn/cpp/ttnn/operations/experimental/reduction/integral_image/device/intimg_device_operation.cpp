@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
 IntImgDeviceOperation::program_factory_t IntImgDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
@@ -15,9 +15,9 @@ IntImgDeviceOperation::program_factory_t IntImgDeviceOperation::select_program_f
 
 void IntImgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
-    const auto& input_shape = tensor_args.input_tensor.logical_shape();
-    const auto& input_layout = tensor_args.input_tensor.layout();
-    const auto& input_dtype = tensor_args.input_tensor.dtype();
+    const auto& input_shape = tensor_args.logical_shape();
+    const auto& input_layout = tensor_args.layout();
+    const auto& input_dtype = tensor_args.dtype();
     TT_FATAL(
         input_shape.rank() == 4,
         "intimg supports only 4D tensors, the input tensor has {} instead",
@@ -38,27 +38,25 @@ void IntImgDeviceOperation::validate_on_program_cache_hit(
 IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     auto output_layout{Layout::TILE};
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto output_shape{input_tensor.logical_shape()};
+    const auto& input_tensor = tensor_args;
+    const auto& output_shape{input_tensor.logical_shape()};
     return TensorSpec{output_shape, TensorLayout{input_tensor.dtype(), output_layout, input_tensor.memory_config()}};
 }
 
 IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_value_t intimg(
-    const Tensor& input_tensor) {
-    using OperationType = ttnn::operations::experimental::reduction::IntImgDeviceOperation;
+Tensor intimg(const Tensor& input_tensor) {
+    using OperationType = ttnn::experimental::prim::IntImgDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor};
+    const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

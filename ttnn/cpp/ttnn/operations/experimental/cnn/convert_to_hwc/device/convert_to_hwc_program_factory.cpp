@@ -14,7 +14,7 @@
 
 #include <algorithm>
 
-namespace ttnn::operations::experimental::cnn::detail {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
@@ -31,7 +31,7 @@ struct BlockTilingParams {
 };
 
 struct GroupingResult {
-    std::vector<std::vector<convert_to_hwc::detail::BlockedTransferGroup>> per_core_groups;
+    std::vector<std::vector<BlockedTransferGroup>> per_core_groups;
     uint32_t num_blocks;
 };
 
@@ -117,7 +117,7 @@ GroupingResult group_and_coalesce_transfers(
     uint32_t block_size_width) {
     // Use the actual output shard width for transfer generation (determines which output core)
     // block_size_width is only used for grouping transfers into blocks
-    const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
+    const auto gather_transfers = precompute_gather_transfers(
         config.batch_size,
         config.input_channels,
         effective_hw_for_gather,
@@ -125,7 +125,7 @@ GroupingResult group_and_coalesce_transfers(
         config.output_cores,
         config.gather_l1_output_shard_width);
 
-    const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
+    const auto blocked_result = group_transfers_by_output_column_blocks(
         gather_transfers,
         config.batch_size,
         config.input_channels,
@@ -138,7 +138,7 @@ GroupingResult group_and_coalesce_transfers(
 
     auto blocked_gather_transfers = blocked_result.blocked_transfers;
     auto per_core_blocked_gather_transfers =
-        convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
+        split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
 
     // Verify all cores have the same number of blocks
     // This is critical because the compute kernel expects total_num_blocks blocks from each core
@@ -156,21 +156,21 @@ GroupingResult group_and_coalesce_transfers(
 
     // Coalesce contiguous transfers for each core
     for (auto& core_transfers : per_core_blocked_gather_transfers) {
-        core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
+        core_transfers = coalesce_contiguous_transfers(core_transfers);
     }
     return {std::move(per_core_blocked_gather_transfers), blocked_result.num_logical_blocks};
 }
 
 // Serialize grouped transfers per destination core with the provided source-address mapping.
 inline std::vector<std::vector<uint32_t>> serialize_transfers_per_core(
-    const std::vector<std::vector<convert_to_hwc::detail::BlockedTransferGroup>>& per_core_groups,
+    const std::vector<std::vector<BlockedTransferGroup>>& per_core_groups,
     const std::vector<CoreCoord>& in_cores,
     const std::function<CoreCoord(const CoreCoord&)>& logical_to_addr_id) {
     std::vector<std::vector<uint32_t>> per_core_serialized;
     per_core_serialized.resize(per_core_groups.size());
     for (size_t core_idx = 0; core_idx < per_core_groups.size(); core_idx++) {
-        per_core_serialized[core_idx] = convert_to_hwc::detail::serialize_blocked_transfer_groups(
-            per_core_groups[core_idx], in_cores, logical_to_addr_id);
+        per_core_serialized[core_idx] =
+            serialize_blocked_transfer_groups(per_core_groups[core_idx], in_cores, logical_to_addr_id);
     }
     return per_core_serialized;
 }
@@ -385,9 +385,9 @@ uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     return l1_alignment_bytes / element_size_bytes;
 }
 
-}  // namespace ttnn::operations::experimental::cnn::detail
+}  // namespace ttnn::experimental::prim
 
-namespace ttnn::operations::experimental::cnn::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -423,31 +423,33 @@ void set_runtime_arguments(
 }  // namespace
 
 ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
-    const CnnParams& /*operation_attributes*/, const CnnInputs& tensor_args, Tensor& tensor_return_value) {
+    const ConvertToHwcParams& /*operation_attributes*/,
+    const ConvertToHwcInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
 
     // Create configuration from input tensors
-    auto config = detail::ConvertToHwcConfig::create_from_tensors(a, output);
+    auto config = ConvertToHwcConfig::create_from_tensors(a, output);
     config.validate();
 
     // Select input cores based on source memory (DRAM vs L1)
     const auto& in_cores = config.is_input_in_dram ? config.dram_input_cores : config.l1_input_cores;
 
     // Effective HW for gather transfers (padded capacity per input core)
-    uint32_t effective_hw_for_gather = detail::calculate_effective_hw_for_sharding(
+    uint32_t effective_hw_for_gather = calculate_effective_hw_for_sharding(
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
     // Use smaller block size to reduce L1 consumption
     // Find a block size that evenly divides gather_l1_output_shard_width
     // This reduces the CB_IN_BATCH buffer size significantly
-    const auto block_width = detail::select_block_size(config.gather_l1_output_shard_width);
+    const auto block_width = select_block_size(config.gather_l1_output_shard_width);
 
     // Setup circular buffers on the output cores (where the kernels execute)
-    auto cb_handles = detail::setup_circular_buffers(program, config.output_core_grid, config, a, output, block_width);
-    auto grouping = detail::group_and_coalesce_transfers(config, in_cores, effective_hw_for_gather, block_width);
+    auto cb_handles = setup_circular_buffers(program, config.output_core_grid, config, a, output, block_width);
+    auto grouping = group_and_coalesce_transfers(config, in_cores, effective_hw_for_gather, block_width);
     const uint32_t num_blocks = grouping.num_blocks;
 
     // Source-address mapping for serialization:
@@ -474,10 +476,10 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
 
     // Serialize blocked transfer groups for each core
     auto per_core_serialized_transfers =
-        detail::serialize_transfers_per_core(grouping.per_core_groups, in_cores, logical_to_addr_id);
+        serialize_transfers_per_core(grouping.per_core_groups, in_cores, logical_to_addr_id);
 
     // Compute per-core tiling/state based on the chosen block width
-    const detail::BlockTilingParams tiling = detail::compute_block_tiling_params(config, block_width, num_blocks);
+    const BlockTilingParams tiling = compute_block_tiling_params(config, block_width, num_blocks);
 
     // Split tiles within each block between the two writers
     const uint32_t tiles_per_block_writer0 = tiling.tiles_per_block_writer0;
@@ -489,26 +491,26 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
         "total_tiles_per_core={} must be divisible by num_blocks={}",
         tiling.total_tiles_per_core,
         num_blocks);
-    auto writer_compile_time_args0 = detail::make_writer_compile_args(
+    auto writer_compile_time_args0 = make_writer_compile_args(
         /*is_reader=*/true,
-        detail::CBIndex::CB_IN_TRANSPOSE_0,
+        CBIndex::CB_IN_TRANSPOSE_0,
         config,
         tiling,
         tiles_per_block_writer0,
         /*initial_write_stick_offset=*/0,
         num_blocks);
 
-    auto writer_compile_time_args1 = detail::make_writer_compile_args(
+    auto writer_compile_time_args1 = make_writer_compile_args(
         /*is_reader=*/false,
-        detail::CBIndex::CB_IN_TRANSPOSE_1,
+        CBIndex::CB_IN_TRANSPOSE_1,
         config,
         tiling,
         tiles_per_block_writer1,
         /*initial_write_stick_offset=*/tt::constants::TILE_WIDTH,
         num_blocks);
 
-    auto compute_compile_time_args = detail::make_compute_compile_args(
-        tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);
+    auto compute_compile_time_args =
+        make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
@@ -562,8 +564,8 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
 
 void ConvertToHWCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const CnnParams& /*operation_attributes*/,
-    const CnnInputs& tensor_args,
+    const ConvertToHwcParams& /*operation_attributes*/,
+    const ConvertToHwcInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
@@ -584,4 +586,4 @@ void ConvertToHWCProgramFactory::override_runtime_arguments(
         shared_vars.cb_out);
 }
 
-}  // namespace ttnn::operations::experimental::cnn::program
+}  // namespace ttnn::experimental::prim

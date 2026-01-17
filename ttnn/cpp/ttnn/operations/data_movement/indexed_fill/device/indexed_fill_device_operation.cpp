@@ -10,11 +10,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::indexed_fill {
+namespace ttnn::prim {
 
 IndexedFillDeviceOperation::program_factory_t IndexedFillDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::IndexedFillProgramFactory{};
+    return IndexedFillProgramFactory{};
 }
 
 void IndexedFillDeviceOperation::validate_on_program_cache_hit(
@@ -67,30 +67,27 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<IndexedFillDeviceOperation::t
 IndexedFillDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.batch_id;
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
-}  // namespace ttnn::operations::data_movement::indexed_fill
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
+IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
     const Tensor& batch_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     int64_t dim) {
-    using OperationType = ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<IndexedFillDeviceOperation>(
+        IndexedFillDeviceOperation::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .dim = dim,
         },
-        OperationType::tensor_args_t{
+        IndexedFillDeviceOperation::tensor_args_t{
             .batch_id = batch_id,
             .input_tensor_a = input_tensor_a,
             .input_tensor_b = input_tensor_b,
         });
 }
+
 }  // namespace ttnn::prim

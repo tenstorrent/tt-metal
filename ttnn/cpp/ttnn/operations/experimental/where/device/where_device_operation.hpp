@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <variant>
 
-namespace ttnn::operations::experimental::ternary {
+namespace ttnn::experimental::prim {
 
 template <typename T>
 concept FloatOrTensorConcept = std::is_same_v<T, Tensor> || std::floating_point<T>;
@@ -22,8 +22,8 @@ struct WhereDeviceOperation {
     using spec_return_value_t = TensorSpec;
 
     // Shared types with factory
-    using operation_attributes_t = where_ttt_args::operation_attributes_type;
-    using tensor_args_t = where_ttt_args::tensor_args_type;
+    using operation_attributes_t = WhereParams;
+    using tensor_args_t = WhereInputs;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<ElementWiseMultiCoreWhereProgram>;
@@ -48,4 +48,4 @@ struct WhereDeviceOperation {
         std::optional<Tensor> output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::ternary
+}  // namespace ttnn::experimental::prim

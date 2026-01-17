@@ -10,7 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
-namespace ttnn::operations::data_movement::bcast::program {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -291,4 +291,4 @@ void BcastMultiCoreWProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::bcast::program
+}  // namespace ttnn::prim

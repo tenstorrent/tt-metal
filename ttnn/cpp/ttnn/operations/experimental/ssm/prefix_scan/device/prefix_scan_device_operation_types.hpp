@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
 
-namespace ttnn::operations::experimental::ssm::prefix_scan {
+namespace ttnn::experimental::prim {
 
 struct PrefixScanParams {
     const tt::tt_metal::MemoryConfig memory_config;
@@ -21,4 +21,4 @@ struct PrefixScanInputs {
     Tensor h_prev;
 };
 
-}  // namespace ttnn::operations::experimental::ssm::prefix_scan
+}  // namespace ttnn::experimental::prim

@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
+namespace ttnn::experimental::prim {
 
 NLPConcatHeadsBoltzDeviceOperation::program_factory_t NLPConcatHeadsBoltzDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
@@ -118,15 +118,15 @@ NLPConcatHeadsBoltzDeviceOperation::tensor_return_value_t NLPConcatHeadsBoltzDev
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::nlp_concat_heads_boltz::tensor_return_value_t nlp_concat_heads_boltz(
+Tensor nlp_concat_heads_boltz(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    using OperationType = ttnn::operations::experimental::nlp_concat_heads_boltz::NLPConcatHeadsBoltzDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NLPConcatHeadsBoltzDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{memory_config};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, std::move(optional_output_tensor)};

@@ -13,11 +13,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_decode {
+namespace ttnn::prim {
 
 SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::SdpaDecodeProgramFactory{};
+    return SdpaDecodeProgramFactory{};
 }
 
 void SdpaDecodeDeviceOperation::validate_on_program_cache_hit(
@@ -384,11 +384,7 @@ tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         tensor_args.attention_sink);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_decode
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_return_value_t sdpa_decode(
+Tensor sdpa_decode(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,
@@ -408,7 +404,7 @@ ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_re
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v) {
-    using OperationType = ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation;
+    using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
         .paged_attention = paged_attention,

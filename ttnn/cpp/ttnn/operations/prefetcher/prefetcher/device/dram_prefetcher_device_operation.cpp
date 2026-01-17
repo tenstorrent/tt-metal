@@ -8,11 +8,11 @@
 #include <tt-metalium/constants.hpp>
 #include <optional>
 
-namespace ttnn::operations::dram_prefetcher {
+namespace ttnn::prim {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::DramPrefetcherProgramFactory{};
+    return DramPrefetcherProgramFactory{};
 }
 
 void DramPrefetcherOperation::validate_on_program_cache_miss(
@@ -95,22 +95,19 @@ DramPrefetcherOperation::tensor_return_value_t DramPrefetcherOperation::create_o
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 
-}  // namespace ttnn::operations::dram_prefetcher
-
-namespace ttnn::prim {
-ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_t dram_prefetcher(
+ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
-    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode) {
-    using OperationType = ttnn::operations::dram_prefetcher::DramPrefetcherOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = DramPrefetcherParams{
         .num_layers = num_layers,
         .enable_performance_mode = enable_performance_mode,
         .global_cb = global_cb,
     };
-    auto tensor_args = OperationType::tensor_args_t{.input_tensors = tensors};
+    auto tensor_args = DramPrefetcherInputs{.input_tensors = tensors};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<DramPrefetcherOperation>(operation_attributes, tensor_args);
 }
+
 }  // namespace ttnn::prim
