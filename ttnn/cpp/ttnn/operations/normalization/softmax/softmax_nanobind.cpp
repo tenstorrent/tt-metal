@@ -51,7 +51,7 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
         standard behavior suitable for most use cases. It automatically selects
         appropriate parameters based on the input tensor characteristics.
     )doc")
-        .def(nb::init<>());
+        .def(nb::init<bool>(), nb::kw_only(), nb::arg("recip_legacy_compat").noconvert() = false);
 
     nb::class_<SoftmaxShardedMultiCoreProgramConfig>(mod, "SoftmaxShardedMultiCoreProgramConfig", R"doc(
         Multi-core sharded program configuration for Softmax operations.
@@ -73,12 +73,13 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
             * Proper block sizing can significantly impact performance.
     )doc")
         .def(
-            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t>(),
+            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("subblock_w").noconvert(),
             nb::arg("block_h").noconvert(),
-            nb::arg("block_w").noconvert())
+            nb::arg("block_w").noconvert(),
+            nb::arg("recip_legacy_compat").noconvert() = false)
         .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
 }
 
