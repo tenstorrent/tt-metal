@@ -15,7 +15,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-
+from models.tt_transformers.tt.generator import create_submeshes
 
 @torch.no_grad()
 @pytest.mark.parametrize(
@@ -59,9 +59,10 @@ def test_decoder_inference(
     max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
     dtype = ttnn.bfloat8_b
-
+    submesh_device = create_submeshes(mesh_device, 4)
+    mesh_device = submesh_device[0]
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-
+    generation_length = 1
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
