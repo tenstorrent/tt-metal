@@ -575,7 +575,7 @@ def _compute_norm_core_grid(dim: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGr
 def _find_grid(n_tiles: int, max_rows: int = 8, max_cols: int = 8) -> tuple[int, int]:
     """Find grid dimensions (rows, cols) that evenly divide n_tiles."""
     max_cores = max_rows * max_cols
-    target = 32
+    target = 32  # based on TTTv1 tuned configs
     possible_cores = [k for k in range(1, max_cores + 1) if n_tiles % k == 0]
     possible_cores.sort(key=lambda x: abs(x - target))
 
