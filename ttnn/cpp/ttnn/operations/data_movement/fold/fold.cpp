@@ -35,7 +35,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_w) {
     using namespace tt::constants;
 
-    // Validate we have a device
+    // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
         TT_ASSERT(
             ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
@@ -156,7 +156,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
 
-    // Validate we have a device
+    // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
         TT_ASSERT(
             ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
