@@ -260,6 +260,11 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
     - model_traced.op__mesh_1x1.json (for single-chip)
 
+    IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
+    the sweep_name field. This ensures stable full_test_name and input_hash values
+    for historical comparison in Superset dashboards. The mesh configuration is
+    already captured in traced_machine_info within the vector data.
+
     Args:
         module_name: Name of the test module
         suite_name: Name of the test suite
@@ -274,23 +279,15 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         if not mesh_vectors:
             continue
 
-        # Generate mesh-specific module name
+        # Generate mesh-specific filename (NOT sweep_name)
+        # The mesh suffix is for file routing only, not for modifying vector metadata
         mesh_suffix = format_mesh_suffix(mesh_shape)
         mesh_module_name = f"{module_name}{mesh_suffix}"
 
-        # Prepare a copy of vectors for export, updating sweep_name to include mesh suffix
-        export_vectors = []
-        for vector in mesh_vectors:
-            new_vector = dict(vector)
-            base_sweep_name = new_vector.get("sweep_name", module_name)
-            # Remove existing mesh suffix if present (for idempotency)
-            if "__mesh_" in base_sweep_name:
-                base_sweep_name = base_sweep_name.split("__mesh_")[0]
-            new_vector["sweep_name"] = f"{base_sweep_name}{mesh_suffix}"
-            export_vectors.append(new_vector)
-
-        # Export vectors for this mesh shape
-        _export_mesh_vectors_to_file(mesh_module_name, suite_name, export_vectors)
+        # Export vectors WITHOUT modifying sweep_name
+        # The mesh info is already in traced_machine_info; sweep_name stays stable
+        # for historical comparison (full_test_name in Superset)
+        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
 
 
 def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
