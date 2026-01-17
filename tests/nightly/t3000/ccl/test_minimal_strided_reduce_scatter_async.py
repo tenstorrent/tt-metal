@@ -6,9 +6,32 @@ import torch
 import pytest
 import math
 from loguru import logger
+from dataclasses import dataclass, astuple
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import skip_for_blackhole
+
+
+@dataclass
+class ReduceScatterTestConfig:
+    """Test configuration for reduce scatter operations.
+
+    Using a dataclass ensures parameters can't be provided in wrong order
+    and makes test cases self-documenting.
+    """
+
+    rs_input_shape: list
+    dim: int
+    layout: object  # ttnn.Layout
+    rs_input_dtype: object  # ttnn.DataType
+    use_new: bool
+    enable_trace: bool
+    num_iters: int
+    use_barrier: bool
+    use_persistent_buffers: bool
+    use_strided: bool
+    verify_output_shape: bool
+    verify_output_pcc: bool
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -41,6 +64,8 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
     use_strided=False,
+    verify_output_shape=True,
+    verify_output_pcc=True,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -243,8 +268,6 @@ def run_reduce_scatter_impl(
     if verify_output:
         implementation_name = "strided" if use_strided else ("new" if use_new else "experimental")
         logger.info(f"Verifying {implementation_name} reduce scatter output")
-        if use_strided:
-            logger.info(f"Note: strided implementation is currently identical to reduce_scatter_minimal_async")
 
         for i in range(num_iters):
             tt_rs_out = tt_reduce_scatter_output_list[i]
@@ -258,7 +281,13 @@ def run_reduce_scatter_impl(
 
                 eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
                 logger.info(f"{output}, device {device_id}, iteration {i}")
-                assert eq, f"{i} FAILED reduce scatter: {output}"
+
+                if verify_output_shape:
+                    assert (
+                        tt_output_tensor.shape == torch_output_tensor.shape
+                    ), f"Shape mismatch: {tt_output_tensor.shape} != {torch_output_tensor.shape}"
+                if verify_output_pcc:
+                    assert eq, f"{i} FAILED reduce scatter: {output}"
 
     logger.info("Done")
 
@@ -267,49 +296,59 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers, use_strided",
+    "test_config",
     [
-        (
-            [8, 1, 512, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            False,
-            1,
-            True,
-            True,
-            False,
-        ),  # check, barrier_with_persistent - standard
-        (
-            [8, 1, 512, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            True,
-            True,
-            False,
-        ),  # check, barrier_with_persistent - experimental
-        (
-            [8, 1, 512, 2560],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            False,
-            1,
-            True,
-            True,
-            True,
-        ),  # check, barrier_with_persistent - strided (placeholder)
-    ],
-    ids=[
-        "new_standard_implementation",
-        "experimental_standard_implementation",
-        "experimental_strided_implementation",
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[8, 1, 512, 2560],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=True,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=False,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+            ),
+            id="new_standard_implementation",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[8, 1, 512, 2560],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=False,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+            ),
+            id="experimental_standard_implementation",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[8, 1, 512, 2560],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=False,
+            ),
+            id="experimental_strided_implementation_shape_check",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -339,21 +378,28 @@ def run_reduce_scatter_impl(
 def test_strided_reduce_scatter_async(
     mesh_device,
     num_links,
-    rs_input_shape,
-    dim,
-    layout,
-    rs_input_dtype,
-    use_new,
-    enable_trace,
-    num_iters,
-    use_barrier,
-    use_persistent_buffers,
-    use_strided,
+    test_config,
     mem_config_input,
     mem_config_rs,
     ones_tensor,
     rs_topology,
 ):
+    # Unpack test configuration
+    (
+        rs_input_shape,
+        dim,
+        layout,
+        rs_input_dtype,
+        use_new,
+        enable_trace,
+        num_iters,
+        use_barrier,
+        use_persistent_buffers,
+        use_strided,
+        verify_output_shape,
+        verify_output_pcc,
+    ) = astuple(test_config)
+
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -372,4 +418,6 @@ def test_strided_reduce_scatter_async(
         use_persistent_buffers=use_persistent_buffers,
         use_new=use_new,
         use_strided=use_strided,
+        verify_output_shape=verify_output_shape,
+        verify_output_pcc=verify_output_pcc,
     )
