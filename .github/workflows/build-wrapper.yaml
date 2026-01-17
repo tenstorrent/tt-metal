@@ -38,6 +38,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build for"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
 
 permissions:
   packages: write
@@ -62,6 +67,7 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
+          enable-lto: ${{ inputs.enable-lto }}
 
   build-dispatch:
     if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
@@ -75,7 +81,7 @@ jobs:
       version: ${{ needs.parse-platform.outputs.version }}
       toolchain: ${{ needs.parse-platform.outputs.toolchain }}
       build-type: "Release"
-      enable-lto: true
+      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true

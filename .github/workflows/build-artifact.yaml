@@ -199,7 +199,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: false
+        default: true
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
@@ -210,6 +210,7 @@ jobs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
       toolchain: ${{ steps.parse.outputs.toolchain }}
+      enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -221,6 +222,7 @@ jobs:
           platform: ${{ inputs.platform }}
           distro: ${{ inputs.distro }}
           version: ${{ inputs.version }}
+          enable-lto: ${{ inputs.enable-lto }}
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:

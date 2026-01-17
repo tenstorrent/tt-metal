@@ -49,6 +49,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable-lto:
+        description: "Enable Link Time Optimization (LTO)"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   parse-tests-json:
@@ -69,6 +74,7 @@ jobs:
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
+      enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,6 +84,7 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
+          enable-lto: ${{ inputs.enable-lto }}
 
   build-artifact:
     needs: [parse-tests-json, parse-platform]
@@ -94,6 +101,7 @@ jobs:
       version: ${{ needs.parse-platform.outputs.version || '22.04' }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
+      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
 
   sd-unit-tests:
     needs: [parse-tests-json, build-artifact]
