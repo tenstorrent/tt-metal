@@ -620,14 +620,13 @@ void calculate_exponential_polynomial() {
 
         if constexpr (SCALE_EN) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            // INSERT_SFPNOP();
+            // No-op not needed.
         }
 
         // Multiply by 1/ln(2) and round.
         constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
         TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
         TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
-
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         INSERT_SFPNOP();
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
