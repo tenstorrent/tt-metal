@@ -14,6 +14,7 @@
 FORCE_INLINE void wait_for_gather(
     volatile tt_l1_ptr uint32_t* mcast_receiver_semaphore_addr_ptr, uint32_t num_senders) {
     DeviceZoneScopedN("wait_for_gather");
+
     // Wait for all senders to finish sending data
     noc_semaphore_wait(mcast_receiver_semaphore_addr_ptr, num_senders);
 
@@ -32,14 +33,12 @@ FORCE_INLINE void mcast(
     uint64_t mcast_sender_noc_coord_y_end) {
     DeviceZoneScopedN("mcast");
     // Mcast to all cores and then update semaphore
-    // Use the base address directly instead of get_write_ptr to avoid CB setup issues on mcast core
     const uint64_t mcast_sender_noc_addr = get_noc_multicast_addr(
         mcast_sender_noc_coord_x_start,
         mcast_sender_noc_coord_y_start,
         mcast_sender_noc_coord_x_end,
         mcast_sender_noc_coord_y_end,
         mcast_dest_base_addr);
-    // Link this multicast to the next one (semaphore set) since they share the same destination
     // Use mcast_cb tile size since source and destination have the same tile size
     noc_async_write_multicast(
         get_read_ptr(mcast_cb),
@@ -48,7 +47,7 @@ FORCE_INLINE void mcast(
         num_senders,
         false /* linked */);
 
-    // Set up local L1 scratch to hold VALID value for multicast semaphore set
+    // Use L1 scratch to hold VALID value for multicast semaphore set
     uint32_t semaphore_valid_addr = mcast_dest_base_addr;
     volatile tt_l1_ptr uint32_t* semaphore_valid_addr_ptr = (volatile tt_l1_ptr uint32_t*)semaphore_valid_addr;
     semaphore_valid_addr_ptr[0] = VALID;
@@ -102,7 +101,6 @@ void kernel_main() {
                 mcast_sender_noc_coord_x_end,
                 mcast_sender_noc_coord_y_end);
         }
-        DPRINT << "DONE LAYER MCAST 1" << ENDL();
 
         // Second mcast: matmul+bias result -> MM1_FULL_CB
         // Use input buffer base address for mm1_full_cb since it's bound to input tensor
@@ -116,9 +114,5 @@ void kernel_main() {
             mcast_sender_noc_coord_y_start,
             mcast_sender_noc_coord_x_end,
             mcast_sender_noc_coord_y_end);
-
-        DPRINT << "DONE LAYER MCAST 2" << ENDL();
     }
-
-    DPRINT << "DONE MCAST READER" << ENDL();
 }

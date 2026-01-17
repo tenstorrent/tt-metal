@@ -14,7 +14,6 @@
 template <uint32_t CbOut, uint32_t NumTiles>
 FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr) {
     DeviceZoneScopedN("mcast_reader_wait_for_mcast");
-    // Reserve space for mcast data before waiting (mcast writes directly to reserved space)
     cb_reserve_back(CbOut, NumTiles);
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
     cb_push_back(CbOut, NumTiles);
@@ -30,12 +29,7 @@ template <
     uint32_t MCastReceiverSemaphoreId>
 void gather(uint32_t receiver_data_addr, uint32_t offset) {
     DeviceZoneScopedN("gather");
-    // Note: CbOut reserve is done separately before calling gather, as we need to reserve num_tiles_k tiles
-    // (for mcast data from all sender cores), not just NumTiles (which is 1 tile per core)
     cb_wait_front(CbIn, NumTiles);
-
-    // Write all tiles from CbIn to CbOut using noc_async_write (will remove once the gather+mcast is implemented)
-    // noc_async_write(get_read_ptr(CbIn), get_noc_addr(get_write_ptr(CbOut)), get_tile_size(CbIn) * NumTiles);
 
     // Gather to receiver core (write and then signal using semaphore)
     const uint64_t mcast_reciever_noc_coord = get_noc_addr(MCastReceiverNocX, MCastReceiverNocY, 0);
@@ -118,7 +112,6 @@ void kernel_main() {
             // Wait for mcast to complete and then push back to mm2_full_cb which will start the second matmul
             wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
-        DPRINT << "DONE LAYER GATHER AND MCAST 1" << ENDL();
         {
             DeviceZoneScopedN("layer_gather_and_mcast_2");
             // Gather after second matmul so that we can mcast full result to all cores
@@ -132,10 +125,7 @@ void kernel_main() {
             // Wait for mcast to complete and then push back to mm1_full_cb (ping-pong back)
             wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
-        DPRINT << "DONE LAYER GATHER AND MCAST 2" << ENDL();
     }
-
-    DPRINT << "DONE LAYERS" << ENDL();
 
     {
         DeviceZoneScopedN("copy_output");
@@ -151,5 +141,4 @@ void kernel_main() {
         cb_pop_front(mm1_full_cb, num_tiles_k);
         cb_push_back(out_cb, num_output_tiles);
     }
-    DPRINT << "DONE COPY OUTPUT" << ENDL();
 }

@@ -152,8 +152,6 @@ void MAIN {
             0,
             true,
             true>();
-
-        DPRINT << "COMPUTE DONE LAYER" << ENDL();
     }
 }
 }  // namespace NAMESPACE

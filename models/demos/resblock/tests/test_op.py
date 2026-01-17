@@ -153,7 +153,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     )
 
     logger.info("Converting TTNN output to torch")
-    torch_output = ttnn.to_torch(ttnn_output)[:B, :]  # Slice off padding
+    torch_output = ttnn.to_torch(ttnn_output)[:B, :]  # Slice off padding that we might have when using full tiles
     print("actual:", torch_output)
     print("expected:", expected)
 
