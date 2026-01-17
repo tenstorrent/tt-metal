@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -47,7 +48,8 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         index_tensor_shape[-1] % TILE_WIDTH == 0,
         "Number of columns in the index tensor must be divisible by tile width");
 
-    TT_FATAL(grad_tensor.layout() == Layout::TILE, "Gradient tensor layout must be TILE but got {}", grad_tensor.layout());
+    TT_FATAL(
+        grad_tensor.layout() == Layout::TILE, "Gradient tensor layout must be TILE but got {}", grad_tensor.layout());
     TT_FATAL(
         grad_tensor.dtype() == DataType::BFLOAT16 or grad_tensor.dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");
@@ -85,9 +87,7 @@ EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOpe
     return TensorSpec(
         output_shape,
         TensorLayout(
-            operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
-            operation_attributes.output_mem_config));
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
 EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceOperation::create_output_tensors(

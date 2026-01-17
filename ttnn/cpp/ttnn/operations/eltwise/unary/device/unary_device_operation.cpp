@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>

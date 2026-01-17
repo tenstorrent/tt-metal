@@ -8,6 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>

@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"

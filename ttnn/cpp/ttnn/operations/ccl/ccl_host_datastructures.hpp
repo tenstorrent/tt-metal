@@ -5,10 +5,11 @@
 #pragma once
 
 #include <tt-metalium/hal.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <string>
 
 namespace ttnn {
@@ -53,8 +54,8 @@ public:
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
-    Tensor const& get_input_tensor(std::size_t i) const;
-    Tensor const& get_output_tensor(std::size_t i) const;
+    const Tensor& get_input_tensor(std::size_t i) const;
+    const Tensor& get_output_tensor(std::size_t i) const;
     std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
@@ -66,8 +67,8 @@ private:
     tt::DataFormat df;
     tt::tt_metal::Tile tile;
 
-    std::vector<Tensor> const* input_tensors;
-    std::vector<Tensor> const* output_tensors;
+    const std::vector<Tensor>* input_tensors;
+    const std::vector<Tensor>* output_tensors;
 };
 
 class EriscDatamoverBuilder {
@@ -88,7 +89,7 @@ private:
             largest_message_size_bytes(largest_message_size_bytes),
             is_sender(is_sender) {}
 
-        std::vector<ccl::WorkerXY> const worker_coords;
+        const std::vector<ccl::WorkerXY> worker_coords;
         uint32_t worker_semaphore_id;
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
@@ -97,7 +98,7 @@ private:
         bool is_sender;
     };
 
-    void push_back_channel_args(std::vector<uint32_t>& args, ChannelBufferSpec const& channel) const {
+    void push_back_channel_args(std::vector<uint32_t>& args, const ChannelBufferSpec& channel) const {
         args.push_back(this->local_buffer_addresses.at(channel.channel));
         args.push_back(channel.num_eth_messages_to_forward);
         if (channel.largest_message_size_bytes > 0) {
@@ -111,19 +112,19 @@ private:
         args.push_back(this->local_semaphore_addresses.at(channel.channel));
         args.push_back(channel.worker_semaphore_id);
         args.push_back(channel.worker_coords.size());
-        for (auto const& worker_coord : channel.worker_coords) {
+        for (const auto& worker_coord : channel.worker_coords) {
             args.push_back(worker_coord.to_uint32());
         }
     }
 
     std::vector<ChannelBufferSpec> active_channels;
-    std::vector<uint32_t> const local_semaphore_addresses;
-    std::vector<uint32_t> const local_buffer_addresses;
+    const std::vector<uint32_t> local_semaphore_addresses;
+    const std::vector<uint32_t> local_buffer_addresses;
     uint32_t eth_buffer_size_bytes;
     uint32_t handshake_addr;
-    uint32_t const num_channel_buffers;
-    ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
-    ccl::EriscDataMoverTerminationMode const termination_mode;
+    const uint32_t num_channel_buffers;
+    const ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode;
+    const ccl::EriscDataMoverTerminationMode termination_mode;
     uint32_t num_senders{0};
     uint32_t num_receivers{0};
     std::size_t num_buffers_per_channel;
@@ -163,12 +164,12 @@ public:
         active_channels.reserve(num_channel_buffers);
         TT_ASSERT(eth_buffer_size_bytes < 163000);
         log_trace(tt::LogOp, "EriscDatamoverBuilder:");
-        for (auto const& addr : local_semaphore_addresses) {
+        for (const auto& addr : local_semaphore_addresses) {
             TT_ASSERT(addr > 0);
             TT_ASSERT(addr % 16 == 0);
             log_trace(tt::LogOp, "\tsemaphore_address: {}", addr);
         }
-        for (auto const& addr : local_buffer_addresses) {
+        for (const auto& addr : local_buffer_addresses) {
             TT_ASSERT(addr > 0);
             TT_ASSERT(addr % 16 == 0);
             log_trace(tt::LogOp, "\tbuffer_address: {}", addr);
@@ -179,7 +180,7 @@ public:
     ChannelBufferInterface add_sender_channel(
         uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
-        std::vector<ccl::WorkerXY> const& worker_coords,
+        const std::vector<ccl::WorkerXY>& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
         this->enable_sender = true;
         this->num_senders++;
@@ -219,7 +220,7 @@ public:
     ChannelBufferInterface add_receiver_channel(
         uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
-        std::vector<ccl::WorkerXY> const& worker_coords,
+        const std::vector<ccl::WorkerXY>& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
         this->enable_receiver = true;
         this->num_receivers++;
@@ -264,7 +265,7 @@ public:
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
         uint32_t size = 3 + (active_channels.size() * 6);
-        for (auto const& channel : active_channels) {
+        for (const auto& channel : active_channels) {
             size += channel.worker_coords.size();
         }
         args.reserve(size);
@@ -277,7 +278,7 @@ public:
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
         args.push_back(receiver_channels_offset);
-        for (auto const& channel : this->active_channels) {
+        for (const auto& channel : this->active_channels) {
             if (channel.is_sender) {
                 continue;
             }
@@ -287,7 +288,7 @@ public:
         // Sender channel args
         uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
         args.push_back(sender_channels_offset);
-        for (auto const& channel : this->active_channels) {
+        for (const auto& channel : this->active_channels) {
             if (!channel.is_sender) {
                 continue;
             }
@@ -298,7 +299,7 @@ public:
     }
 
     void dump_to_log() const {
-        auto const rt_args = this->get_runtime_args();
+        const auto rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
         for ([[maybe_unused]] const auto& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
@@ -310,7 +311,7 @@ public:
         return this->eth_buffer_size_bytes;
     }
 
-    std::vector<ChannelBufferSpec> const& get_active_channels() const { return this->active_channels; }
+    const std::vector<ChannelBufferSpec>& get_active_channels() const { return this->active_channels; }
 };
 
 };  // namespace ccl

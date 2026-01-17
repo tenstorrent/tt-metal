@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"

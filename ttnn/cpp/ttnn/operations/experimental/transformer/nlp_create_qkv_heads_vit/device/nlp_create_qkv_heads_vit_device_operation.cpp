@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_vit_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
