@@ -423,6 +423,12 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
         return std::vector<MuxConnectionInfo>();
     }
 
+    // Z direction muxes don't participate in inter-mux forwarding
+    // MUX_TO_MUX channels only support mesh directions (E/W/N/S)
+    if (direction == eth_chan_directions::Z) {
+        return std::vector<MuxConnectionInfo>();
+    }
+
     // UDM mode - collect downstream mux connection info
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
@@ -663,6 +669,11 @@ MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
 std::array<MuxConnectionInfo, FabricTensixDatamoverRelayConfig::NUM_MUX_CONNECTIONS>
 FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    // Z direction relays don't have mux connections (perpendicular directions not defined for Z)
+    if (direction == eth_chan_directions::Z) {
+        return std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS>{};
+    }
+
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
@@ -1014,6 +1025,11 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             // Relay-to-Mux channels: check if relays exist in perpendicular directions (UDM mode only)
             TT_FATAL(num_channels == 3, "RELAY_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
+            // Z direction muxes don't have relay connections (perpendicular directions not defined for Z)
+            if (direction_ == eth_chan_directions::Z) {
+                break;
+            }
+
             // Channel 0: Local relay (not persistent for non-active tensix core)
             const auto* noc_coords =
                 tensix_config.get_active_tensix_noc_coords(local_fabric_node_id_, link_idx_, direction_);
@@ -1040,6 +1056,12 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
         case ChannelTypes::MUX_TO_MUX_CHANNEL: {
             // Mux-to-Mux channels: check if muxes exist in other directions (UDM mode only)
             TT_FATAL(num_channels == 3, "MUX_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
+
+            // Z direction muxes don't have inter-mux connections
+            // MUX_TO_MUX channels only support mesh directions (E/W/N/S)
+            if (direction_ == eth_chan_directions::Z) {
+                break;
+            }
 
             // Exclude Z direction - MUX mode only supports mesh directions (E/W/N/S)
             auto upstream_mux_dirs = builder::get_all_other_directions(direction_, /*exclude_z=*/true);
