@@ -172,8 +172,6 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
               "use-vllm-v1": true,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08BH66EXAL"
             },
             {
               "name": "[WH-GLX][v1] GPT-OSS-120B",
