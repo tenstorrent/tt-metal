@@ -93,6 +93,27 @@ class MasterConfigLoader:
         """Get the current lead models filter setting."""
         return cls._lead_models_only
 
+    @staticmethod
+    def _source_matches_lead_models(source) -> bool:
+        """Check if source matches any lead model pattern.
+
+        Args:
+            source: Either a string path or a list of string paths
+
+        Returns:
+            True if any source path contains a lead model pattern
+        """
+        # Normalize source to a list
+        sources = source if isinstance(source, list) else [source]
+
+        for src in sources:
+            if not isinstance(src, str):
+                continue
+            src_lower = src.lower()
+            if any(pattern.lower() in src_lower for pattern in LEAD_MODELS):
+                return True
+        return False
+
     def _matches_operation(self, operation_name: str, base_name: str) -> bool:
         """Check if operation_name matches any variant of base_name.
 
@@ -221,7 +242,7 @@ class MasterConfigLoader:
 
                         # Filter for lead models if requested
                         if lead_models_only:
-                            if not any(pattern.lower() in source.lower() for pattern in LEAD_MODELS):
+                            if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
                         normalized.append((arguments, source, machine_info))
@@ -232,7 +253,7 @@ class MasterConfigLoader:
 
                     # Filter for lead models if requested
                     if lead_models_only:
-                        if not any(pattern.lower() in source.lower() for pattern in LEAD_MODELS):
+                        if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
                     normalized.append((config["arguments"], source, machine_info))
