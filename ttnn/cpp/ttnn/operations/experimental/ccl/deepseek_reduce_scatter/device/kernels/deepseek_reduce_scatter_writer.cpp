@@ -137,7 +137,7 @@ void kernel_main() {
 
     uint8_t unicast_num_hops[] = {static_cast<uint8_t>(1)};
 
-    // execute pre op barrier
+    // execute pre op barrier send phase
     uint64_t pre_op_barrier_semaphore_noc_address = safe_get_noc_addr(
         pre_op_barrier_semaphore_noc0_x, pre_op_barrier_semaphore_noc0_y, pre_op_barrier_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc(
@@ -145,8 +145,6 @@ void kernel_main() {
         unicast_sem_inc_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
         unicast_num_hops);
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
 
     // TODO: (GR) no_flush causing bad pcc on 3+ links
     // set state for op semaphore
@@ -164,6 +162,11 @@ void kernel_main() {
         unicast_num_hops,
         NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
         page_size * 2);
+
+    // execute pre op barrier wait phase
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pre_op_barrier_semaphore), 0);
+    noc_async_atomic_barrier();
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
