@@ -21,6 +21,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -50,6 +51,21 @@ void py_module(nb::module_& m) {
         },
         nb::arg("tensor"),
         "Create an empty tensor with the same shape and properties as the input tensor");
+
+    // Gradient clipping
+    m.def(
+        "clip_grad_norm",
+        [](const ttml::serialization::NamedParameters& parameters,
+           float max_norm,
+           float p_norm_type,
+           bool error_if_nonfinite) -> ttml::autograd::TensorPtr {
+            return ttml::core::clip_grad_norm(parameters, max_norm, p_norm_type, error_if_nonfinite);
+        },
+        nb::arg("parameters"),
+        nb::arg("max_norm"),
+        nb::arg("p_norm_type") = 2.0f,
+        nb::arg("error_if_nonfinite") = false,
+        "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
