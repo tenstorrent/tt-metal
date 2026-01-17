@@ -5,6 +5,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/experimental/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
@@ -87,6 +88,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas

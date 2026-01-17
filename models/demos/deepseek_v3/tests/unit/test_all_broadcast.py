@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import maybe_trace
 
 
 def _get_tensors(input_shape, dtype, memory_config, layout, device):
+    torch.manual_seed(0)
     torch_input = torch.rand(input_shape).bfloat16()
 
     tt_input = ttnn.from_torch(
@@ -65,7 +66,10 @@ def test_all_broadcast_deepseek(
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     for tt_out_tensor in tt_out_tensors:
-        for tt_out in ttnn.get_device_tensors(tt_out_tensor):
+        coords = list(tt_out_tensor.tensor_topology().mesh_coords())
+        for coord, tt_out in zip(coords, ttnn.get_device_tensors(tt_out_tensor)):
+            if not mesh_device.get_view().is_local(coord):
+                continue
             torch_out = ttnn.to_torch(tt_out)
             eq, output = comp_equal(torch_out, torch_reference)
             assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"

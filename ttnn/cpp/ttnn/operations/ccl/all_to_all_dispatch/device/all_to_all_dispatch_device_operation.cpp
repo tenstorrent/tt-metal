@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_dispatch_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -78,7 +79,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

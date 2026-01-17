@@ -38,6 +38,7 @@ DEEPSEEK_SHAPE_PADDED_FILL_MEM = [
 def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace):
     shape, padded_shape, pad_value, memory_config = test_config
 
+    torch.manual_seed(0)
     torch_input = torch.rand(shape).bfloat16()
 
     tt_input = ttnn.from_torch(
@@ -56,7 +57,11 @@ def test_pad_deepseek(mesh_device, test_config, dtype, layout, enable_trace):
     shape_diff = list(map(lambda x, y: x - y, padded_shape, shape))
     torch_ref = torch.nn.functional.pad(torch_input, sum([[0, pd] for pd in reversed(shape_diff)], []), value=pad_value)
 
-    for tt_out in ttnn.get_device_tensors(tt_outputs):
+    coords = list(tt_outputs.tensor_topology().mesh_coords())
+    view = mesh_device.get_view()
+    for coord, tt_out in zip(coords, ttnn.get_device_tensors(tt_outputs)):
+        if not view.is_local(coord):
+            continue
         torch_out = ttnn.to_torch(tt_out)
         eq, output = comp_equal(torch_out, torch_ref)
         assert eq, f"Output mismatch between torch and ttnn all_broadcast: {output}"

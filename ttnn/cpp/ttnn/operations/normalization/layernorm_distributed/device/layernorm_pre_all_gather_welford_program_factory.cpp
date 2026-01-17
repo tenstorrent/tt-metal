@@ -18,7 +18,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -85,12 +85,10 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
 }  // namespace
 
 LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGatherWelfordProgramFactory::create(
-    const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
-    Tensor& output) {
+    const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args.input;
+    const auto& a = tensor_args;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -213,7 +211,8 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    auto [recip_tensor, reciprocal_CB_size_bytes] = create_reciprocal_tensor_if_needed(device, W, all_cores, true);
+    auto [recip_tensor, reciprocal_CB_size_bytes] =
+        CMAKE_UNIQUE_NAMESPACE::create_reciprocal_tensor_if_needed(device, W, all_cores, true);
 
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
     auto c_recip_config =
@@ -269,13 +268,13 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
 
 void LayerNormPreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPreAllGatherOperationAttributes& /*operation_attributes*/,
-    const LayerNormPreAllGatherTensorArgs& tensor_args,
+    const LayerNormPreAllGatherParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
+    const auto input_addr = tensor_args.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
@@ -296,4 +295,4 @@ void LayerNormPreAllGatherWelfordProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

@@ -636,17 +636,17 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     float scalar,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
 
-    if (round_mode == std::nullopt) {
+    if (rounding_mode == std::nullopt) {
         float t_inf = std::numeric_limits<float>::infinity();
         if (scalar == 0.0) {
             float t_nan = std::nanf("");
@@ -673,7 +673,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<std::string>& round_mode,
+    const std::optional<std::string>& rounding_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
@@ -682,10 +682,10 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     preallocated_tensors_check(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
     TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    if (round_mode == std::nullopt) {
+    if (rounding_mode == std::nullopt) {
         float t_nan = std::nanf("");
         float t_inf = std::numeric_limits<float>::infinity();
         float neg_inf = -std::numeric_limits<float>::infinity();

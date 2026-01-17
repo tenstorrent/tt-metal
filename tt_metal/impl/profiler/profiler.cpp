@@ -26,12 +26,13 @@
 #include <tt_stl/assert.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "profiler.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
@@ -354,7 +355,7 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const st
     std::vector<CoreCoord> virtual_dispatch_cores;
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, dispatch_core_config.get_core_type());
+            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -749,6 +750,9 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // Additional metadata from trailer data
                     if (device_marker.meta_data.contains("dst_addr")) {
                         data["dst_addr"] = device_marker.meta_data["dst_addr"];
+                        data["src_addr"] = device_marker.meta_data["src_addr"];
+                        data["posted"] = device_marker.meta_data["posted"];
+                        data["noc_status_counter"] = device_marker.meta_data["noc_status_counter"];
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
@@ -1736,7 +1740,9 @@ void DeviceProfiler::readTsData16BMarkerData(
         }
 
         EMD trailer_metadata(trailer_data[0]);
-        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().dst_addr;
+        meta_data["dst_addr"] = trailer_metadata.getLocalNocEventDstTrailer().getDstAddr();
+        meta_data["src_addr"] = trailer_metadata.getLocalNocEventDstTrailer().getSrcAddr();
+        meta_data["noc_status_counter"] = trailer_metadata.getLocalNocEventDstTrailer().counter_value;
     } else {
         TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
     }

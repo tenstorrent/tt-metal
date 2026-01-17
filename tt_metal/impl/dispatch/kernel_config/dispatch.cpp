@@ -17,7 +17,7 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"

@@ -4,6 +4,7 @@
 
 #include "fold_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
 
