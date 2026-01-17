@@ -295,3 +295,110 @@ def test_layernorm_parallel_interleaved(device, batch_size, h, w, num_branches):
     for i in range(num_branches):
         output = ttnn.to_torch(ttnn.from_device(results[i][0]))
         assert_with_pcc(torch_outputs[i], output, 0.999)
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("block_h", [2])  # Height of each core block
+@pytest.mark.parametrize("block_w", [2])  # Width of each core block
+@pytest.mark.parametrize("num_blocks_h", [4])  # Number of blocks in height (total 4*2=8 cores)
+@pytest.mark.parametrize("num_blocks_w", [4])  # Number of blocks in width (total 4*2=8 cores)
+def test_layernorm_full_grid(device, batch_size, block_h, block_w, num_blocks_h, num_blocks_w):
+    """
+    Test LayerNorm across the full 8x8 grid using ttnn::parallel.
+
+    This test divides the 8x8 compute grid into 4x4 blocks of 2x2 cores each.
+    Each 2x2 block is a parallel branch running LayerNorm (non-sharded/interleaved) with:
+    - residual input
+    - weight (gamma)
+    - bias (beta)
+
+    This demonstrates 16 parallel LayerNorm operations running concurrently.
+    """
+    torch.manual_seed(42)
+
+    num_branches = num_blocks_h * num_blocks_w  # 16 branches
+
+    # Tensor dimensions per branch
+    h = 128  # 4 tile rows
+    w = 64  # 2 tile cols
+
+    # Create input data for each branch
+    torch_inputs = []
+    torch_residuals = []
+    torch_weights = []
+    torch_biases = []
+    torch_outputs = []
+
+    for _ in range(num_branches):
+        torch_input = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+        torch_residual = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+        torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+        torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+
+        # Compute reference output
+        torch_output = torch_layer_norm(torch_input, torch_weight, torch_bias, torch_residual)
+
+        torch_inputs.append(torch_input)
+        torch_residuals.append(torch_residual)
+        torch_weights.append(torch_weight)
+        torch_biases.append(torch_bias)
+        torch_outputs.append(torch_output)
+
+    # Create branches for each 2x2 block
+    branches = []
+
+    for block_row in range(num_blocks_h):
+        for block_col in range(num_blocks_w):
+            branch_idx = block_row * num_blocks_w + block_col
+
+            # Calculate the core range for this 2x2 block
+            start_x = block_col * block_w
+            start_y = block_row * block_h
+            end_x = start_x + block_w - 1
+            end_y = start_y + block_h - 1
+
+            core_range_set = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y))]
+            )
+
+            # Move tensors to device with interleaved (non-sharded) memory
+            input_tensor = ttnn.from_torch(
+                torch_inputs[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            residual_tensor = ttnn.from_torch(
+                torch_residuals[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            weight_tensor = ttnn.from_torch(
+                torch_weights[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            bias_tensor = ttnn.from_torch(
+                torch_biases[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+            # Create branch for this block using layer_norm (interleaved)
+            branch = ttnn.parallel.branch(
+                ttnn.layer_norm,
+                input_tensor,
+                cores=core_range_set,
+                epsilon=1e-5,
+                weight=weight_tensor,
+                bias=bias_tensor,
+                residual_input_tensor=residual_tensor,
+            )
+            branches.append(branch)
+
+    # Execute all branches in parallel
+    results = ttnn.parallel(branches)
+
+    # Verify each branch output against torch reference
+    for i in range(num_branches):
+        output = ttnn.to_torch(ttnn.from_device(results[i][0]))
+        assert_with_pcc(torch_outputs[i], output, 0.999)
