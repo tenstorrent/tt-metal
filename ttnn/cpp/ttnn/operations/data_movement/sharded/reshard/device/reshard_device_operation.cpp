@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>

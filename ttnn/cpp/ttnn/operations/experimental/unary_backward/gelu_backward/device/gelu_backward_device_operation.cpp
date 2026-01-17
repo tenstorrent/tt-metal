@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gelu_backward_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "gelu_backward_program_factory.hpp"
 
 #include "tt-metalium/host_api.hpp"

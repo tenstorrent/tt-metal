@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 

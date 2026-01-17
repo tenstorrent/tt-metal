@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "concatenate_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "concatenate_heads_program_factory.hpp"
 using namespace tt::tt_metal;

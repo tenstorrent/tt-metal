@@ -6,11 +6,12 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
 
 InterleavedToShardedDeviceOperation::program_factory_t InterleavedToShardedDeviceOperation::select_program_factory(
-    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return InterleavedToShardedProgramFactory{};
 }
 
@@ -44,7 +45,7 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             0 == (*output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
-                        tt::tt_metal::hal::get_l1_alignment(),
+                     tt::tt_metal::hal::get_l1_alignment(),
             "Shard page size must currently have L1 aligned page size");
     }
     if (input_tensor.dtype() != output_dtype) {

@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <optional>
 #include <tuple>
