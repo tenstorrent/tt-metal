@@ -162,12 +162,15 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=mesh_mapper,
         )
 
+        # Use L1 memory for indices and scores to ensure 16B alignment
+        # (DRAM uses 32B alignment which creates padding that doesn't match
+        # the output metadata tensor's 16B aligned layout)
         tt_expert_indices = ttnn.from_torch(
             expert_indices,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
 
@@ -176,7 +179,7 @@ def run_all_to_all_dispatch_metadata_test(
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
 
@@ -220,6 +223,9 @@ def run_all_to_all_dispatch_metadata_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # Use a drain core that's NOT in the sender cores to avoid L1 address overlap
+                # between the metadata tensor and the global semaphore
+                drain_sync_tilizer_core=(0, 0),
             )
 
             if not trace_mode:

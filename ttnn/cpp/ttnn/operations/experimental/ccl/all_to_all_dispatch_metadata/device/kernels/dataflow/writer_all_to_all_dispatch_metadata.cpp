@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 namespace detail {
 
@@ -41,6 +42,60 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 }
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
+
+// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
+// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
+// with just 2 packets instead of (dispatch_devices - 1) unicast packets
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis>
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint64_t semaphore_noc_addr) {
+    using ttnn::operations::ccl::common::ReplicateGroup;
+    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
+
+    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
+    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
+    // dispatch_devices=MeshCols
+    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    // Split the ring: positive direction gets half, negative direction gets the other half
+    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
+    constexpr uint32_t positive_range = dispatch_devices / 2;
+    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+
+    // Determine directions based on axis:
+    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
+    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
+    constexpr uint32_t positive_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+
+    // Send multicast in positive direction (start_distance=1, range=positive_range)
+    if constexpr (positive_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connections[positive_direction],
+            packet_header,
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(positive_range));
+    }
+
+    // Send multicast in negative direction (start_distance=1, range=negative_range)
+    if constexpr (negative_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connections[negative_direction],
+            packet_header,
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(negative_range));
+    }
+}
 
 }  // namespace detail
 
@@ -117,6 +172,9 @@ void kernel_main() {
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    // Drain sync tilizer core coordinates for direct metadata output
+    uint32_t drain_sync_tilizer_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t drain_sync_tilizer_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
 
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
@@ -131,7 +189,6 @@ void kernel_main() {
     detail::zero_buffer_async(
         send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
-#ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
@@ -149,14 +206,6 @@ void kernel_main() {
             ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
             : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
     constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
-#else
-    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
-    constexpr uint32_t dispatch_devices = num_devices;
-    constexpr uint32_t dispatch_index = linearized_mesh_coord;
-    constexpr uint32_t device_begin_idx = 0;
-    constexpr uint32_t device_end_idx = num_devices;
-    constexpr uint32_t device_stride = 1;
-#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
@@ -172,15 +221,10 @@ void kernel_main() {
     open_direction_connections_barrier(directions, fabric_connections);
 
     // Send initialization semaphore to configured targets for synchronization
+    // Use bidirectional multicast for 1D ring topology (2 packets instead of dispatch_devices-1 unicasts)
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
+        fabric_connections, metadata_packet_header, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
@@ -223,37 +267,21 @@ void kernel_main() {
                         // if the expert lives on a remote device, we dispatch the input token to it
                         // if axis is specified then we only send to the devices that are along the axis
                         // if axis is not specified then we send to all devices
-                        if constexpr (is_1d_topology<topology>()) {
-                            fabric_send_chip_unicast_noc_unicast_1d<
-                                linearized_mesh_coord,
-                                topology,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size>(
-                                output_addr_gen,
-                                fabric_connections,
-                                unicast_packet_header,
-                                d,
-                                input_token_read_addr,
-                                global_token,
-                                (int)output_page_size,
-                                alignment);
-                        } else {
-                            fabric_send_chip_unicast_noc_unicast<
-                                src_chip_id,
-                                mesh_rows,
-                                mesh_cols,
-                                fabric_max_packet_size>(
-                                output_addr_gen,
-                                fabric_connections,
-                                unicast_packet_header,
-                                dest_chip_ids[d],
-                                dest_mesh_ids[d],
-                                input_token_read_addr,
-                                global_token,
-                                (int)output_page_size,
-                                alignment);
-                        }
+
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            output_addr_gen,
+                            fabric_connections,
+                            unicast_packet_header,
+                            d,
+                            input_token_read_addr,
+                            global_token,
+                            (int)output_page_size,
+                            alignment);
                     }
                 }
             }
@@ -266,56 +294,50 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
-    // with a semaphore
+    // with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-    uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
-    uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
 
-    uint64_t intermediate_metadata_write_addr = get_noc_addr(get_read_ptr(metadata_buffer_id));
-    uint64_t noc_core_offset_md_write_addr = intermediate_metadata_write_addr + (dispatch_index * indices_size) +
-                                             (token_start_idx * aligned_indices_page_size);
+    // IMPORTANT: Use aligned_metadata_page_size for OUTPUT metadata tensor offsets.
+    // The input indices tensor MUST be in L1 (not DRAM) to ensure its alignment matches the output
+    // metadata tensor's alignment. DRAM uses 32B alignment while L1 uses 16B alignment.
+    // If alignments don't match, the padding bytes in the CB will corrupt the output.
+    // The metadata tensor layout is: [device_0_tokens, device_1_tokens, ..., device_N_tokens]
+    // Each device section is: tokens_per_device * aligned_metadata_page_size bytes
+    uint32_t metadata_size_per_device = aligned_metadata_page_size * tokens_per_device;
+    uint32_t metadata_size_per_core = aligned_metadata_page_size * (token_end_idx - token_start_idx);
+
+    // Write directly to the sharded output metadata tensor on the drain sync tilizer core
+    // The tensor is contiguous in L1 at metadata_tensor_address on the drain core
+    // NOTE: We manually construct the NOC address using drain core coords rather than using
+    // metadata_addr_gen because our offset logic (dispatch_index * metadata_size) assumes
+    // a specific memory layout that may not match the accessor's page indexing.
+    uint64_t metadata_output_base_addr =
+        get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, metadata_tensor_address);
+    uint64_t noc_core_offset_md_write_addr = metadata_output_base_addr + dispatch_index * metadata_size_per_device +
+                                             token_start_idx * aligned_metadata_page_size;
 
     for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
         if (d == linearized_mesh_coord) {
             // dispatch the metadata to the local device
             detail::dispatch_input_local_device_flushed(
-                base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
+                base_indices_addr, noc_core_offset_md_write_addr, metadata_size_per_core);
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-            if constexpr (is_1d_topology<topology>()) {
-                l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols,
-                    fabric_max_packet_size>(
-                    fabric_connections,
-                    metadata_packet_header,
-                    d,
-                    base_indices_addr,
-                    noc_core_offset_md_write_addr,
-                    global_noc_semaphore_address,
-                    (int)indices_size_per_core,
-                    alignment,
-                    1,
-                    true);
-            } else {
-                l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
-                    src_chip_id,
-                    mesh_rows,
-                    mesh_cols,
-                    fabric_max_packet_size>(
-                    fabric_connections,
-                    metadata_packet_header,
-                    dest_chip_ids[d],
-                    dest_mesh_ids[d],
-                    base_indices_addr,
-                    noc_core_offset_md_write_addr,
-                    global_noc_semaphore_address,
-                    (int)indices_size_per_core,
-                    alignment,
-                    1,
-                    true);
-            }
+            l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+                linearized_mesh_coord,
+                topology,
+                mesh_rows,
+                mesh_cols,
+                fabric_max_packet_size>(
+                fabric_connections,
+                metadata_packet_header,
+                d,
+                base_indices_addr,
+                noc_core_offset_md_write_addr,
+                global_noc_semaphore_address,
+                (int)metadata_size_per_core,
+                16,
+                1,
+                true);
         }
     }
     // Need to wait for the local flushed metadata write.

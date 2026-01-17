@@ -144,6 +144,28 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
+    // Debug: print metadata tensor allocation details
+    log_debug(
+        tt::LogOp,
+        "Metadata tensor buffer address: {} size: {}",
+        metadata_tensor.buffer()->address(),
+        metadata_tensor.buffer()->size());
+    const auto& metadata_mem_config = metadata_tensor.memory_config();
+    if (metadata_mem_config.shard_spec().has_value()) {
+        const auto& shard_spec = metadata_mem_config.shard_spec().value();
+        log_debug(
+            tt::LogOp,
+            "Metadata shard spec - core_ranges: {}, shape: [{}, {}]",
+            shard_spec.grid.str(),
+            shard_spec.shape[0],
+            shard_spec.shape[1]);
+    }
+    log_debug(
+        tt::LogOp,
+        "drain_sync_tilizer_core: ({}, {})",
+        operation_attributes.drain_sync_tilizer_core.x,
+        operation_attributes.drain_sync_tilizer_core.y);
+
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
@@ -469,6 +491,26 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     uint32_t reader_token_end_idx = reader_runtime_args.size();
     reader_runtime_args.push_back(0);
 
+    // Get drain sync tilizer core NOC coordinates for direct metadata output
+    auto drain_sync_tilizer_core = operation_attributes.drain_sync_tilizer_core;
+    auto drain_sync_tilizer_noc_core = mesh_device->worker_core_from_logical_core(drain_sync_tilizer_core);
+
+    // Debug: print address comparison for overlap detection
+    log_debug(
+        tt::LogOp,
+        "Address comparison - metadata_tensor: {} (size: {}), cross_device_semaphore: {}, init_semaphore: {}",
+        metadata_tensor.buffer()->address(),
+        metadata_tensor.buffer()->size(),
+        cross_device_semaphore.address(),
+        init_semaphore.address());
+    log_debug(
+        tt::LogOp,
+        "drain_sync_tilizer_core logical: ({}, {}), NOC: ({}, {})",
+        drain_sync_tilizer_core.x,
+        drain_sync_tilizer_core.y,
+        drain_sync_tilizer_noc_core.x,
+        drain_sync_tilizer_noc_core.y);
+
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
     for (const auto& sender_core : sender_cores) {
@@ -487,6 +529,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         writer_runtime_args.push_back(0);
         uint32_t writer_token_end_idx = writer_runtime_args.size();
         writer_runtime_args.push_back(0);
+        // Add drain sync tilizer core NOC coordinates for direct metadata write
+        writer_runtime_args.push_back(drain_sync_tilizer_noc_core.x);
+        writer_runtime_args.push_back(drain_sync_tilizer_noc_core.y);
         reader_runtime_args[reader_token_start_idx] = tokens_per_core_start;
         reader_runtime_args[reader_token_end_idx] =
             std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
