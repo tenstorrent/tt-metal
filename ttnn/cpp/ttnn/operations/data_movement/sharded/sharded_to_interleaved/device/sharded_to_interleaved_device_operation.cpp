@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 

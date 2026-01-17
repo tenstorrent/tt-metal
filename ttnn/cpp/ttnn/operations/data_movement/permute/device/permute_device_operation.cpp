@@ -9,6 +9,7 @@
 #include "permute_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(

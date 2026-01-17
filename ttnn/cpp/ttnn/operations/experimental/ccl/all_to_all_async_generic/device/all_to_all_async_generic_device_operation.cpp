@@ -4,6 +4,7 @@
 
 #include "all_to_all_async_generic_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

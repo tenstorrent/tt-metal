@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <math.h>
 #include <algorithm>
 #include <functional>
 #include <random>
@@ -19,7 +18,6 @@
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "common/tt_backend_api_types.hpp"
 
@@ -39,7 +37,7 @@ public:
         return slow_dispatch == nullptr;
     }
 
-    TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) { }
+    TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) {}
 
     TTNNFixtureBase(int trace_region_size, int l1_small_size) :
         trace_region_size_(trace_region_size), l1_small_size_(l1_small_size), num_devices_(GetNumAvailableDevices()) {
