@@ -6,7 +6,7 @@ Introduction
 
 In Lab 1, you reviewed the standard matrix multiplication algorithm, implemented a tiled CPU version, and then mapped
 the same computation to a single Tensix core using TT-Metalium.
-In this lab, you will learn how to ake advantage of the parallelism of the Tensix core architecture and extend your
+In this lab, you will learn how to take advantage of the parallelism of the Tensix core architecture and extend your
 matrix multiplication implementation to multiple Tensix cores.
 Then you will introduce a data reuse optimization that reduces traffic to device memory by keeping partial results in on-chip SRAM.
 
@@ -30,7 +30,7 @@ Work Distribution for Multi Core Programs
 The key idea in multi-core programs is **work distribution**: a large problem is broken up into smaller,
 ideally independent pieces, and those pieces are assigned to different cores so they can run in parallel.
 In a Single Program, Multiple Data (SPMD) computational model, each core executes the same code but operates on
-a different subset of the data. Achieving optimal performance generally requires keping all cores busy
+a different subset of the data. Achieving optimal performance generally requires keeping all cores busy
 (i.e. minimize idle time), and avoiding unnecessary communication.
 
 Applying this principle to matrix multiplication, the computation itself is unchanged: we still multiply
@@ -123,13 +123,13 @@ even if the number of work units does not divide evenly among the cores.
 In case of matrix multiplication, the work units are the output tiles and the function may be called as follows:
 
 .. code-block:: cpp
-   #include <tt-metalium/work_split.hpp>
 
+   #include <tt-metalium/work_split.hpp>
 
    auto core_grid = device->compute_with_storage_grid_size();
    uint32_t work_units = (M * N) / (TILE_HEIGHT * TILE_WIDTH);
 
-   auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_  2] =
+   auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
        tt::tt_metal::split_work_to_cores(core_grid, work_units);
 
 The function returns a tuple containing several values:
@@ -155,6 +155,7 @@ Each ``CoreRange`` object is itself defined by two ``CoreCoord`` objects, ``star
 A ``CoreCoord`` is just a pair of integer coordinates ``(x, y)`` naming a single core on the device grid.
 
 ``CoreRangeSet`` class exposes a number of helpers, including:
+
 * ``num_cores()``: Returns the total number of logical cores covered by the ``CoreRangeSet``.
 
 * ``ranges()``: Returns a const reference to ``std::vector<CoreRange>`` to allow iterating over all ``CoreRange`` objects in the set. 
@@ -166,7 +167,7 @@ A ``CoreCoord`` is just a pair of integer coordinates ``(x, y)`` naming a single
 
     The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
 
-    - ``all_cores`` is the set of cores assigned work for this operation, contining exactly ``num_cores`` cores.
+    - ``all_cores`` is the set of cores assigned work for this operation, containing exactly ``num_cores`` cores.
     -  If there are more cores than work units, ``all_cores`` may contain fewer cores than ``core_grid``.
     - ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
     - The total amount of work ``work_units``  is always fully assigned:
