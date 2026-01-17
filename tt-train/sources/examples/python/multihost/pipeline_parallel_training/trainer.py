@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Training loop and batch preparation for pipeline parallel transformer models."""
-from time import time
 
 import numpy as np
+import ttnn
 import ttml
-from data import get_batch, build_causal_mask
+from ttml.common.data import get_batch, build_causal_mask
+from ttml.common.utils import PerformanceMeter, no_grad
 
 
 def get_batch_ttml(
@@ -32,47 +33,23 @@ def get_batch_ttml(
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttml.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
             mapper,
         )
         tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
         )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttml.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.DataType.UINT32,
         )
         tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
         )
     return tt_x, tt_y
-
-
-class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
-        self.cfg = cfg
-        self.steps = []
-        self.window_size = window_size
-
-    def step(self):
-        self.steps.append(time())
-        if len(self.steps) > self.window_size:
-            self.steps.pop(0)
-
-    def get_metrics(self):
-        time_window = self.steps[-1] - self.steps[0]
-        if time_window == 0:
-            return 0, 0
-
-        samples = (
-            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        )
-        samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
-        return samples_per_second, tokens_per_second
 
 
 def train(
@@ -109,7 +86,7 @@ def train(
 
     causal_mask = build_causal_mask(cfg.seq_len)
     tt_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
 
     # Setup distributed context
