@@ -283,9 +283,10 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
 
     bool I_am_ew = builder::is_east_or_west(direction);
     bool I_am_ns = builder::is_north_or_south(direction);
+    bool I_am_z = direction == eth_chan_directions::Z;
 
     TT_FATAL(
-        I_am_ew ^ I_am_ns,
+        (I_am_ew ^ I_am_ns) ^ I_am_z,
         "Internal error: In compute_sender_channel_injection_flags_for_vc, I_am_ew and I_am_ns cannot both be true");
 
     for (size_t ch_idx = 1; ch_idx < num_channels; ++ch_idx) {
@@ -474,7 +475,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 "M{}-D{}: Router at x={}, y={}, UpstreamEthernetChannel={}, Direction={} :: Connecting VC{} "
                 "receiver_ch={} to "
                 "downstream "
-                "router at x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
+                "router at M{}-D{} x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
                 "AbsoluteChannel={}",
                 local_node_.mesh_id.get(),
                 local_node_.chip_id,
@@ -484,6 +485,8 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 get_eth_direction(),
                 vc,
                 0,
+                downstream_router.local_node_.mesh_id.get(),
+                downstream_router.local_node_.chip_id,
                 downstream_builder->get_noc_x(),
                 downstream_builder->get_noc_y(),
                 downstream_router.location_.eth_chan,
