@@ -392,7 +392,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
