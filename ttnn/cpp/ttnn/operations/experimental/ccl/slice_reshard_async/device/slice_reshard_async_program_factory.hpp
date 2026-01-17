@@ -8,7 +8,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::slice_reshard_async::program {
+namespace ttnn::experimental::prim {
 
 struct SliceReshardAsyncSharedVariables {
     uint32_t num_directions = 0;
@@ -21,25 +21,25 @@ struct SliceReshardAsyncProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& args,
+        const SliceReshardAsyncParams& args,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
+        const Tensor& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
+        const SliceReshardAsyncParams& args,
+        const Tensor& tensor_args,
         Tensor& tensor_return_value);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const operation_attributes_t& args,
+        const SliceReshardAsyncParams& args,
         const ttnn::MeshCoordinate& mesh_coord,
-        const tensor_args_t& tensor_args,
+        const Tensor& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::slice_reshard_async::program
+}  // namespace ttnn::experimental::prim

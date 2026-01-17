@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-namespace ttnn::operations::ccl::all_broadcast {
+namespace ttnn::prim {
 
 struct AllBroadcastParams {
     uint32_t num_links = 0;
@@ -19,11 +19,4 @@ struct AllBroadcastParams {
     tt::tt_fabric::Topology topology{};
 };
 
-struct AllBroadcastInputs {
-    Tensor input_tensor;
-};
-
-using spec_return_value_t = std::vector<TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
-
-}  // namespace ttnn::operations::ccl::all_broadcast
+}  // namespace ttnn::prim

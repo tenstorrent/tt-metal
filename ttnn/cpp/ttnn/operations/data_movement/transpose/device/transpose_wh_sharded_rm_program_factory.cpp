@@ -13,14 +13,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgramFactory::create(
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
@@ -213,20 +210,19 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
 
 void TransposeWHShardedRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
     const auto& src_tensor = tensor_args.input;
-    auto& dst_tensor = tensor_return_value;
 
     auto* const src_buffer = src_tensor.buffer();
-    auto* const dst_buffer = dst_tensor.buffer();
+    auto* const dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

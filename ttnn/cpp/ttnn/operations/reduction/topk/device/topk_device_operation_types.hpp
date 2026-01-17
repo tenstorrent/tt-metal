@@ -10,7 +10,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::topk {
+namespace ttnn::prim {
 
 struct TopkParams {
     uint32_t k{};
@@ -27,8 +27,4 @@ struct TopkInputs {
     std::optional<std::tuple<Tensor, Tensor>> preallocated_outputs;
 };
 
-using tensor_return_value_t = std::tuple<Tensor, Tensor>;
-
-using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
-
-}  // namespace ttnn::operations::reduction::topk
+}  // namespace ttnn::prim

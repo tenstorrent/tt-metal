@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "pad_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
 
 struct PadRmShardedHeightOnlySharedVariables {
     tt::tt_metal::CBHandle cb_src0{};
@@ -28,4 +28,4 @@ struct PadRmShardedHeightOnlyProgramFactory {
         const PadInputs& tensor_args,
         Tensor& tensor_return_value);
 };
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

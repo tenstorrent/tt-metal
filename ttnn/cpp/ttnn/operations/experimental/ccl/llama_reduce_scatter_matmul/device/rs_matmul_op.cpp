@@ -148,7 +148,7 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     }
 
     bool user_run_batched = ttnn::operations::matmul::utilities::is_input_batched(weight_tensor.logical_shape());
-    auto matmul_struct = operations::matmul::create_matmul_attributes(
+    auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
         weight_tensor,
         /*parameters=*/

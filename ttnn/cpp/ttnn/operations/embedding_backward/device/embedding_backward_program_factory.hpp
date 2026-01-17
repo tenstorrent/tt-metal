@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::embedding_backward::program {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
@@ -24,15 +24,15 @@ struct EmbeddingBackwardProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const embedding_backward::operation_attributes_t& operation_attributes,
-        const embedding_backward::tensor_args_t& tensor_args,
-        embedding_backward::tensor_return_value_t& tensor_return_value);
+        const EmbeddingBackwardParams& operation_attributes,
+        const EmbeddingBackwardInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const embedding_backward::operation_attributes_t& operation_attributes,
-        const embedding_backward::tensor_args_t& tensor_args,
-        embedding_backward::tensor_return_value_t& tensor_return_value);
+        const EmbeddingBackwardParams& operation_attributes,
+        const EmbeddingBackwardInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::embedding_backward::program
+}  // namespace ttnn::prim

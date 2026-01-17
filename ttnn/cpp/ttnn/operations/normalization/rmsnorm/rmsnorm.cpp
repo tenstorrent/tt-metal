@@ -20,7 +20,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& bias,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
@@ -55,10 +55,10 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(create_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_program_config(input_tensor.shard_spec())),
         kernel_config_val,
         std::nullopt,  // dtype
-        LayerNormType::RMSNORM);
+        ttnn::prim::LayerNormType::RMSNORM);
 }
 
 }  // namespace ttnn::operations::normalization

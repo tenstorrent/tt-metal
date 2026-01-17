@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include <array>
 
-namespace ttnn::operations::sliding_window::halo {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
@@ -19,12 +19,12 @@ thread_local std::unordered_map<std::size_t, std::uint32_t>
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 HaloDeviceOperation::program_factory_t HaloDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return data_movement::program::UntilizeWithHaloProgramFactory{};
+    return UntilizeWithHaloProgramFactory{};
 }
 
 void HaloDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args;
 
     // validate input data tensor
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -52,7 +52,7 @@ void HaloDeviceOperation::validate_on_program_cache_hit(
 
 HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();
     ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
@@ -115,13 +115,10 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
 HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    return create_device_tensor(output_spec, tensor_args.device());
 }
 
-}  // namespace ttnn::operations::sliding_window::halo
-
-namespace ttnn::prim {
-ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value_t halo(
+Tensor halo(
     const Tensor& input_tensor,
     const ttnn::operations::sliding_window::SlidingWindowConfig& config,
     uint32_t pad_val,
@@ -130,7 +127,7 @@ ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram) {
-    using OperationType = ttnn::operations::sliding_window::halo::HaloDeviceOperation;
+    using OperationType = HaloDeviceOperation;
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
@@ -168,8 +165,6 @@ ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value
             .output_memory_config = output_memory_config,
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram},
-        OperationType::tensor_args_t{
-            .input_tensor = input_tensor,
-        });
+        input_tensor);
 }
 }  // namespace ttnn::prim

@@ -17,7 +17,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -36,7 +36,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 
 Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::Conv3dProgramFactory{};
+    return Conv3dProgramFactory{};
 }
 
 void Conv3dDeviceOperation::validate_on_program_cache_hit(
@@ -201,15 +201,15 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_value_t conv3d(
+ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
-    const ttnn::operations::experimental::conv3d::Conv3dConfig& config,
+    const ttnn::experimental::prim::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -220,7 +220,7 @@ ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_val
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    using OperationType = ttnn::operations::experimental::conv3d::Conv3dDeviceOperation;
+    using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);

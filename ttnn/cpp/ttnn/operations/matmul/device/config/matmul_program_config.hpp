@@ -34,6 +34,6 @@ MatmulProgramConfig get_program_config(
     bool transpose_a,
     bool transpose_b,
     uint32_t bias_single_tile_size,
-    const matmul::operation_attributes_t& attributes);
+    const ttnn::prim::MatmulParams& attributes);
 
 }  // namespace ttnn::operations::matmul

@@ -9,14 +9,14 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::dropout {
+namespace ttnn::experimental::prim {
 
 DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_per_device_seed) {
-        return program::DropoutMeshWorkloadFactory{};
+        return DropoutMeshWorkloadFactory{};
     }
-    return program::DropoutProgramFactory{};
+    return DropoutProgramFactory{};
 }
 
 void DropoutDeviceOperation::validate_on_program_cache_hit(
@@ -128,11 +128,11 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
+ttnn::experimental::prim::DropoutDeviceOperation::tensor_return_value_t dropout(
     const Tensor& input,
     float prob,
     float scale,
@@ -141,7 +141,7 @@ ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_v
     DataType output_dtype,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::experimental::dropout::DropoutDeviceOperation;
+    using OperationType = ttnn::experimental::prim::DropoutDeviceOperation;
 
     auto resolved_memory_config = preallocated_output.has_value()
                                       ? preallocated_output.value().memory_config()

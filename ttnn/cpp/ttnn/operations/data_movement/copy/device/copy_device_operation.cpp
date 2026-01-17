@@ -8,11 +8,11 @@
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 #include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::data_movement::copy {
+namespace ttnn::prim {
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return copy::program::CopyProgramFactory{};
+    return CopyProgramFactory{};
 }
 
 void CopyDeviceOperation::validate_on_program_cache_miss(
@@ -99,7 +99,7 @@ CopyDeviceOperation::create_op_performance_model(
     std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    const int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    const int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
@@ -115,18 +115,14 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
     return create_device_tensor(spec, input_tensor.device());
 }
 
-}  // namespace ttnn::operations::data_movement::copy
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t copy(
+CopyDeviceOperation::tensor_return_value_t copy(
     const Tensor& input,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
-    using OperationType = ttnn::operations::data_movement::copy::CopyDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
-        OperationType::tensor_args_t{input, preallocated_output});
+    return ttnn::device_operation::launch<CopyDeviceOperation>(
+        CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
 }
+
 }  // namespace ttnn::prim

@@ -10,11 +10,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::cnn::to_chw {
+namespace ttnn::experimental::prim {
 
 ConvertToCHWDeviceOperation::program_factory_t ConvertToCHWDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::ConvertToCHWProgramFactory{};
+    return ConvertToCHWProgramFactory{};
 }
 
 void ConvertToCHWDeviceOperation::validate_on_program_cache_hit(
@@ -26,7 +26,7 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    const auto& input = tensor_args.input;
+    const auto& input = tensor_args;
     const auto& shape = input.logical_shape();
     const auto& C = shape[-1];
     const auto& HW = shape[-2];
@@ -50,7 +50,7 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& shape = tensor_args.input.logical_shape();
+    const auto& shape = tensor_args.logical_shape();
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
@@ -62,12 +62,12 @@ TensorSpec ConvertToCHWDeviceOperation::compute_output_specs(
 
 Tensor ConvertToCHWDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
 }
 
 tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<ConvertToCHWDeviceOperation>(
@@ -76,13 +76,12 @@ tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::cnn::to_chw
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation::tensor_return_value_t convert_to_chw(
-    const Tensor& input, const std::optional<DataType>& dtype) {
-    using OperationType = ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation;
+Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype) {
+    using OperationType = ttnn::experimental::prim::ConvertToCHWDeviceOperation;
 
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded to infer output memory config");
 
@@ -109,9 +108,8 @@ ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation::tensor
         .memory_config = output_memory_config,
         .dtype = dtype.value_or(input.dtype()),
     };
-    auto tensor_args = OperationType::tensor_args_t{.input = input};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, input);
 }
 
 }  // namespace ttnn::prim

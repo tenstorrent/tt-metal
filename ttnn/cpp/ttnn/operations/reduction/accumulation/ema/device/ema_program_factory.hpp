@@ -6,7 +6,7 @@
 #include "ema_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::ema::program {
+namespace ttnn::prim {
 
 struct EmaSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -28,4 +28,4 @@ struct EmaProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::ema::program
+}  // namespace ttnn::prim

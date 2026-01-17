@@ -8,7 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
+namespace ttnn::experimental::prim {
 
 NlpCreateHeadsFalcon7BDeviceOperation::program_factory_t NlpCreateHeadsFalcon7BDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -17,7 +17,7 @@ NlpCreateHeadsFalcon7BDeviceOperation::program_factory_t NlpCreateHeadsFalcon7BD
 
 void NlpCreateHeadsFalcon7BDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -53,7 +53,7 @@ NlpCreateHeadsFalcon7BDeviceOperation::spec_return_value_t NlpCreateHeadsFalcon7
         TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_falcon7b");
     }
 
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args;
     const auto& input_shape = input_tensor.padded_shape();
     tt::tt_metal::TensorLayout layout(
         input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config);
@@ -67,7 +67,7 @@ NlpCreateHeadsFalcon7BDeviceOperation::tensor_return_value_t
 NlpCreateHeadsFalcon7BDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto* device = tensor_args.input.device();
+    auto* device = tensor_args.device();
 
     return {
         .q = create_device_tensor(output_specs.q, device),
@@ -75,18 +75,17 @@ NlpCreateHeadsFalcon7BDeviceOperation::create_output_tensors(
         .v = create_device_tensor(output_specs.v, device)};
 }
 
-}  // namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::qkv_heads_falcon7b::tensor_return_value_t nlp_create_qkv_heads_falcon7b(
+ttnn::experimental::prim::NlpCreateQkvHeadsFalcon7bResult nlp_create_qkv_heads_falcon7b(
     const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-    using OperationType =
-        ttnn::operations::experimental::transformer::qkv_heads_falcon7b::NlpCreateHeadsFalcon7BDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NlpCreateHeadsFalcon7BDeviceOperation;
 
     const tt::tt_metal::MemoryConfig output_mem_config = memory_config.value_or(input.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{output_mem_config};
-    auto tensor_args = OperationType::tensor_args_t{input};
+    const auto& tensor_args = input;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

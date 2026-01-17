@@ -7,7 +7,7 @@
 #include "nlp_concat_heads_decode_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 struct NLPConcatHeadsDecodeSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -26,13 +26,13 @@ struct NLPConcatHeadsDecodeProgramFactory {
     static cached_program_t create(
         const NlpConcatHeadsDecodeParams& operation_attributes,
         const NlpConcatHeadsDecodeInputs& tensor_args,
-        tensor_return_value_t& output);
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const NlpConcatHeadsDecodeParams& operation_attributes,
         const NlpConcatHeadsDecodeInputs& tensor_args,
-        tensor_return_value_t& output);
+        Tensor& output);
 };
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::program
+}  // namespace ttnn::experimental::prim

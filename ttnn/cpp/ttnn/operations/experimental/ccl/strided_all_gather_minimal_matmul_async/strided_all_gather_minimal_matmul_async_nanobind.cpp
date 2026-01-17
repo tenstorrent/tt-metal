@@ -44,7 +44,7 @@ void bind_strided_all_gather_minimal_matmul_async_op(
                std::optional<uint32_t> cluster_axis,
                const std::optional<const Tensor>& bias,
                std::optional<unary::UnaryWithParam> fused_activation,
-               const std::optional<const minimal_matmul::MinimalMatmulConfig>& config,
+               const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                std::optional<uint32_t> num_workers_per_link,

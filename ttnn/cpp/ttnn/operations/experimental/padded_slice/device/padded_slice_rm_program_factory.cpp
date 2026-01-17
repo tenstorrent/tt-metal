@@ -26,7 +26,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::padded_slice::program {
+namespace ttnn::experimental::prim {
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
@@ -45,7 +45,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    [[maybe_unused]] uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
+    [[maybe_unused]] uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
@@ -221,7 +222,8 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
 
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
-    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output);
+    uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output);
 
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
@@ -373,4 +375,4 @@ void PaddedSliceRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice::program
+}  // namespace ttnn::experimental::prim

@@ -13,14 +13,14 @@
 
 #include <variant>
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit {
+namespace ttnn::experimental::prim {
 
 struct NlpCreateHeadsVitDeviceOperation {
     using operation_attributes_t = NlpCreateQkvHeadsVitParams;
     using tensor_args_t = NlpCreateQkvHeadsVitInputs;
-    using spec_return_value_t = nlp_create_qkv_heads_vit::spec_return_value_t;
-    using tensor_return_value_t = nlp_create_qkv_heads_vit::tensor_return_value_t;
-    using program_factory_t = std::variant<program::NlpCreateQkvHeadsVitProgramFactory>;
+    using spec_return_value_t = NlpCreateQkvHeadsVitResultSpec;
+    using tensor_return_value_t = NlpCreateQkvHeadsVitResult;
+    using program_factory_t = std::variant<NlpCreateQkvHeadsVitProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,7 +32,7 @@ struct NlpCreateHeadsVitDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 std::vector<Tensor> nlp_create_qkv_heads_vit(

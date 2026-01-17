@@ -9,13 +9,12 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::ssm::repeat_mul::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace {
-constexpr uint32_t HIDDEN_SIZE = 5120;
 constexpr uint32_t ONE_TILE = 1;
 }  // namespace
 
@@ -289,4 +288,4 @@ void RepeatAndInterleaveEltwiseMulProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, compute_kernel_id, cores, all_compute_runtime_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::repeat_mul::program
+}  // namespace ttnn::experimental::prim

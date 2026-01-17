@@ -8,15 +8,15 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
 NLPConcatHeadsBoltzProgramFactory::cached_program_t NLPConcatHeadsBoltzProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const NLPConcatHeadsBoltzParams& /*operation_attributes*/,
+    const NLPConcatHeadsBoltzInputs& tensor_args,
+    Tensor& output) {
     const auto& a = tensor_args.input;
     CoreCoord compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
 
@@ -204,9 +204,9 @@ NLPConcatHeadsBoltzProgramFactory::cached_program_t NLPConcatHeadsBoltzProgramFa
 
 void NLPConcatHeadsBoltzProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const NLPConcatHeadsBoltzParams& /*operation_attributes*/,
+    const NLPConcatHeadsBoltzInputs& tensor_args,
+    Tensor& output) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
@@ -235,4 +235,4 @@ void NLPConcatHeadsBoltzProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz
+}  // namespace ttnn::experimental::prim

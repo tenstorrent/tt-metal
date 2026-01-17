@@ -7,7 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <vector>
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
+namespace ttnn::prim {
 
 struct UntilizeWithUnpaddingMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id {};
@@ -16,4 +16,4 @@ struct UntilizeWithUnpaddingMultiCoreSharedVariables {
     uint32_t ncores = 0;
 };
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program
+}  // namespace ttnn::prim

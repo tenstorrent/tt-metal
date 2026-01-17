@@ -9,7 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::gelu_backward::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
@@ -193,4 +193,4 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::gelu_backward::program
+}  // namespace ttnn::experimental::prim

@@ -9,14 +9,14 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode {
+namespace ttnn::experimental::prim {
 
 NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.on_subcoregrids) {
-        return program::NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
+        return NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
     }
-    return program::NLPConcatHeadsDecodeProgramFactory{};
+    return NLPConcatHeadsDecodeProgramFactory{};
 }
 
 void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
@@ -74,7 +74,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
+TensorSpec NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -115,7 +115,7 @@ spec_return_value_t NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
         output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config));
 }
 
-tensor_return_value_t NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
+Tensor NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -123,17 +123,17 @@ tensor_return_value_t NLPConcatHeadsDecodeDeviceOperation::create_output_tensors
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::nlp_concat_heads_decode::tensor_return_value_t nlp_concat_heads_decode(
+Tensor nlp_concat_heads_decode(
     const Tensor& input_tensor,
     uint32_t num_heads,
     const std::optional<MemoryConfig>& /*memory_config*/,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::experimental::nlp_concat_heads_decode::NLPConcatHeadsDecodeDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NLPConcatHeadsDecodeDeviceOperation;
 
     bool on_subcoregrids = false;
     if (input_tensor.is_sharded()) {

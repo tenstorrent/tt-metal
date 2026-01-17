@@ -72,9 +72,10 @@ IsInPreprocessingResult preprocess_isin_inputs(const Tensor& elements, const Ten
         is_in_preprocessing_result.preprocessed_test_elements_tensor);
 
     // Convert elements tensor to row-major layout if needed for efficient processing
-    if (is_in_preprocessing_result.preprocessed_elements_tensor.layout() != isin::common::OUTPUT_TENSOR_LAYOUT) {
+    if (is_in_preprocessing_result.preprocessed_elements_tensor.layout() !=
+        ttnn::experimental::prim::OUTPUT_TENSOR_LAYOUT) {
         is_in_preprocessing_result.preprocessed_elements_tensor = ttnn::to_layout(
-            is_in_preprocessing_result.preprocessed_elements_tensor, isin::common::OUTPUT_TENSOR_LAYOUT);
+            is_in_preprocessing_result.preprocessed_elements_tensor, ttnn::experimental::prim::OUTPUT_TENSOR_LAYOUT);
     }
     // Convert test_elements tensor to row-major layout if needed
     if (is_in_preprocessing_result.preprocessed_test_elements_tensor.layout() != Layout::ROW_MAJOR) {
@@ -83,12 +84,12 @@ IsInPreprocessingResult preprocess_isin_inputs(const Tensor& elements, const Ten
     }
 
     // Flatten elements tensor to 1D if it has multiple dimensions
-    if (elements.logical_shape().rank() > isin::common::OUTPUT_TENSOR_RANK) {
+    if (elements.logical_shape().rank() > ttnn::experimental::prim::OUTPUT_TENSOR_RANK) {
         is_in_preprocessing_result.preprocessed_elements_tensor = ttnn::reshape(
             is_in_preprocessing_result.preprocessed_elements_tensor, Shape{is_in_preprocessing_result.elements_size});
     }
     // Flatten test_elements tensor to 1D if needed
-    if (test_elements.logical_shape().rank() > isin::common::OUTPUT_TENSOR_RANK) {
+    if (test_elements.logical_shape().rank() > ttnn::experimental::prim::OUTPUT_TENSOR_RANK) {
         is_in_preprocessing_result.preprocessed_test_elements_tensor = ttnn::reshape(
             is_in_preprocessing_result.preprocessed_test_elements_tensor,
             Shape{is_in_preprocessing_result.test_elements_size});
@@ -99,11 +100,11 @@ IsInPreprocessingResult preprocess_isin_inputs(const Tensor& elements, const Ten
 
 Tensor process_isin_output(Tensor& output_tensor, const IsInPreprocessingResult& is_in_preprocessing_result) {
     // Restore original shape if it was flattened during preprocessing
-    if (is_in_preprocessing_result.original_elements_shape.rank() != isin::common::OUTPUT_TENSOR_RANK) {
+    if (is_in_preprocessing_result.original_elements_shape.rank() != ttnn::experimental::prim::OUTPUT_TENSOR_RANK) {
         output_tensor = ttnn::reshape(output_tensor, is_in_preprocessing_result.original_elements_shape);
     }
     // Restore original layout if it was changed during preprocessing
-    if (is_in_preprocessing_result.original_elements_layout != isin::common::OUTPUT_TENSOR_LAYOUT) {
+    if (is_in_preprocessing_result.original_elements_layout != ttnn::experimental::prim::OUTPUT_TENSOR_LAYOUT) {
         output_tensor = ttnn::to_layout(output_tensor, is_in_preprocessing_result.original_elements_layout);
     }
 
@@ -128,7 +129,7 @@ Tensor IsInOperation::invoke(
     const auto is_in_preprocessing_result = preprocess_isin_inputs(elements, test_elements);
 
     // Execute the device operation to check which elements are in test_elements
-    Tensor output_tensor = ttnn::prim::isin(
+    Tensor output_tensor = ttnn::experimental::prim::isin(
         is_in_preprocessing_result.preprocessed_elements_tensor,
         is_in_preprocessing_result.preprocessed_test_elements_tensor,
         is_in_preprocessing_result.single_fetch_elements_number,

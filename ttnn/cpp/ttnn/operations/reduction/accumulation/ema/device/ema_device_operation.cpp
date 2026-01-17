@@ -9,13 +9,13 @@
 
 #include <cmath>
 
-namespace ttnn::operations::reduction::ema {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
 EmaDeviceOperation::program_factory_t EmaDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::EmaProgramFactory{};
+    return EmaProgramFactory{};
 }
 
 void EmaDeviceOperation::validate_on_program_cache_hit(
@@ -87,9 +87,6 @@ Tensor EmaDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::reduction::ema
-
-namespace ttnn::prim {
 ttnn::Tensor ema_device(
     const Tensor& input,
     float alpha,
@@ -97,7 +94,7 @@ ttnn::Tensor ema_device(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
-    using OperationType = ttnn::operations::reduction::ema::EmaDeviceOperation;
+    using OperationType = EmaDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .alpha = alpha,
@@ -110,4 +107,5 @@ ttnn::Tensor ema_device(
             .optional_output_tensor = std::move(optional_output_tensor),
         });
 }
+
 }  // namespace ttnn::prim

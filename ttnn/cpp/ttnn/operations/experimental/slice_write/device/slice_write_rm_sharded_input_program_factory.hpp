@@ -7,7 +7,7 @@
 #include "slice_write_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 struct SliceWriteRMShardedInputSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> iter_cores;
@@ -33,4 +33,4 @@ struct SliceWriteRMShardedInputProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

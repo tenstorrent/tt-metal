@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::manual_seed::program {
+namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 // Case 1: seed=uint32_t, user_ids=None - set all cores to the same seed
@@ -63,4 +63,4 @@ struct ManualSeedSetSeedsSetCoresProgramFactory {
         cached_program_t&, const ManualSeedParams&, const ManualSeedInputs&, Tensor&);
 };
 
-}  // namespace ttnn::operations::reduction::manual_seed::program
+}  // namespace ttnn::prim

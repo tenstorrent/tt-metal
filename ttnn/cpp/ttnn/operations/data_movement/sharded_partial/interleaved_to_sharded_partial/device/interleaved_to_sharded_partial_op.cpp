@@ -10,17 +10,16 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operation.hpp>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 InterleavedToShardedPartialDeviceOperation::program_factory_t
 InterleavedToShardedPartialDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return detail::InterleavedToShardedPartialProgramFactory{};
+    const operation_attributes_t& /*operation_attributes*/, const Tensor& /*input_tensor*/) {
+    return InterleavedToShardedPartialProgramFactory{};
 }
 
 void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     const auto& num_slices = operation_attributes.num_slices;
     const auto& slice_index = operation_attributes.slice_index;
     const auto& grid_size = operation_attributes.grid_size;
@@ -60,10 +59,8 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
-InterleavedToShardedPartialDeviceOperation::spec_return_value_t
-InterleavedToShardedPartialDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     auto shape = input_tensor.padded_shape();
 
     uint32_t total_height = input_tensor.physical_volume() / shape[-1];
@@ -81,16 +78,15 @@ InterleavedToShardedPartialDeviceOperation::compute_output_specs(
             operation_attributes.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
 }
 
-InterleavedToShardedPartialDeviceOperation::tensor_return_value_t
-InterleavedToShardedPartialDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    auto output_spec = compute_output_specs(operation_attributes, input_tensor);
+    return create_device_tensor(output_spec, input_tensor.device());
 }
 
 tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    auto program_factory = select_program_factory(operation_attributes, input_tensor);
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
@@ -99,14 +95,11 @@ tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_progra
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         program_factory.index(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.layout());
+        input_tensor.dtype(),
+        input_tensor.layout());
 }
-}  // namespace ttnn::operations::data_movement
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation::tensor_return_value_t
-interleaved_to_sharded_partial(
+Tensor interleaved_to_sharded_partial(
     const Tensor& input_tensor,
     const CoreCoord& grid_size,
     const tt::tt_metal::ShardSpec& shard_spec,
@@ -114,15 +107,14 @@ interleaved_to_sharded_partial(
     uint32_t slice_index,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype) {
-    using OperationType = ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<InterleavedToShardedPartialDeviceOperation>(
+        InterleavedToShardedPartialParams{
             .grid_size = grid_size,
             .shard_spec = shard_spec,
             .num_slices = num_slices,
             .slice_index = slice_index,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
 }  // namespace ttnn::prim

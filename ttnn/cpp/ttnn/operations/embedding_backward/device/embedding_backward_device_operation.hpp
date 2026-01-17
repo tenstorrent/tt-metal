@@ -11,14 +11,14 @@
 #include "embedding_backward_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::embedding_backward {
+namespace ttnn::prim {
 
 struct EmbeddingBackwardDeviceOperation {
-    using operation_attributes_t = embedding_backward::operation_attributes_t;
-    using tensor_args_t = embedding_backward::tensor_args_t;
-    using spec_return_value_t = embedding_backward::spec_return_value_t;
-    using tensor_return_value_t = embedding_backward::tensor_return_value_t;
-    using program_factory_t = std::variant<program::EmbeddingBackwardProgramFactory>;
+    using operation_attributes_t = EmbeddingBackwardParams;
+    using tensor_args_t = EmbeddingBackwardInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<EmbeddingBackwardProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,9 +31,6 @@ struct EmbeddingBackwardDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::embedding_backward
-
-namespace ttnn::prim {
 ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,
@@ -41,4 +38,5 @@ ttnn::Tensor embedding_backward(
     const tt::tt_metal::DataType& output_dtype,
     uint32_t num_embeddings,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

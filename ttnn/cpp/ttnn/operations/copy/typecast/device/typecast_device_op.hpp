@@ -15,18 +15,16 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::copy {
+namespace ttnn::prim {
 
 struct TypecastDeviceOperation {
-    using operation_attributes_t = copy::operation_attributes_t;
-    using tensor_args_t = copy::tensor_args_t;
-    using spec_return_value_t = copy::spec_return_value_t;
-    using tensor_return_value_t = copy::tensor_return_value_t;
+    using operation_attributes_t = TypecastParams;
+    using tensor_args_t = TypecastInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<
-        program::TypecastProgramFactory,
-        program::TypecastShardedProgramFactory,
-        program::TypecastSubgridProgramFactory>;
+    using program_factory_t =
+        std::variant<TypecastProgramFactory, TypecastShardedProgramFactory, TypecastSubgridProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -42,10 +40,7 @@ struct TypecastDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
-}  // namespace ttnn::operations::copy
-
-namespace ttnn::prim {
-ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
+Tensor typecast(
     const Tensor& input,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,

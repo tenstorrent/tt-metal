@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn::prim {
 enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
 
 enum class UpdateCacheOpType { FILL, UPDATE };
@@ -25,4 +25,4 @@ struct KvCacheInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::kv_cache
+}  // namespace ttnn::prim

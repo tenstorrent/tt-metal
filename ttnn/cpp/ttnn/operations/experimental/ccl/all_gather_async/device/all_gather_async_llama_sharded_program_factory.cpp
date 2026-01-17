@@ -11,12 +11,12 @@ namespace ttnn {
 using namespace ccl;
 using namespace tt::constants;
 
-namespace operations::experimental::ccl::all_gather_async {
+namespace experimental::prim {
 
 LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -29,9 +29,9 @@ LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkload
 }
 
 LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
+    const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
 
@@ -323,8 +323,8 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
 
 void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const AllGatherAsyncParams& operation_attributes,
+    const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -358,6 +358,6 @@ void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace operations::experimental::ccl::all_gather_async
+}  // namespace experimental::prim
 
 }  // namespace ttnn

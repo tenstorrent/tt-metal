@@ -24,6 +24,11 @@ using namespace ttnn::operations::sliding_window;
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
+using ttnn::operations::conv::conv2d::prepare_conv_bias;
+using ttnn::operations::conv::conv2d::prepare_conv_weights;
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
+
 // Compute all transposed conv2d dimension transformations in one place
 // This uses SlidingWindowConfig as the single source of truth for how transposed conv2d
 // parameters are transformed into conv2d parameters
@@ -171,13 +176,13 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
-    conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
@@ -375,9 +380,9 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
     // full_input dimensions. Calculate these dimensions for bias preparation.
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0

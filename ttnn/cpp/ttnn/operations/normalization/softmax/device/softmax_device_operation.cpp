@@ -9,7 +9,6 @@
 
 #include "ttnn/device_operation.hpp"
 #include "softmax_operation_types.hpp"
-#include "softmax_program_factory.hpp"
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -17,7 +16,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::softmax {
+namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 /**
@@ -108,6 +107,7 @@ bool is_softmax_general_h_small_available(
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
@@ -122,13 +122,13 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             [&](const auto& program_config) -> program_factory_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                    return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
-                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                    return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
             operation_attributes.program_config);
-        return program::SoftmaxProgramFactoryAttentionOptimized{};
+        return SoftmaxProgramFactoryAttentionOptimized{};
     }
     if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
         rank == 4) {
@@ -136,29 +136,29 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             [&](const auto& program_config) -> program_factory_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                    return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
-                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                    return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
             operation_attributes.program_config);
-        return program::SoftmaxProgramFactoryAttentionOptimized{};
+        return SoftmaxProgramFactoryAttentionOptimized{};
     }
     if (rank - 1 == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_w_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
-            return program::SoftmaxProgramFactoryGeneralWSmall{};
+            return SoftmaxProgramFactoryGeneralWSmall{};
         }
-        return program::SoftmaxProgramFactoryGeneralWLarge{};
+        return SoftmaxProgramFactoryGeneralWLarge{};
     }
     if (rank - 2 == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_h_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
-            return program::SoftmaxProgramFactoryGeneralHSmall{};
+            return SoftmaxProgramFactoryGeneralHSmall{};
         }
-        return program::SoftmaxProgramFactoryGeneralHLarge{};
+        return SoftmaxProgramFactoryGeneralHLarge{};
     }
-    return program::SoftmaxProgramFactoryGeneralCLarge{};
+    return SoftmaxProgramFactoryGeneralCLarge{};
 }
 
 void SoftmaxDeviceOperation::validate_on_program_cache_hit(
@@ -343,7 +343,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tenso
 SoftmaxDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
-    int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output_tensor);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
@@ -610,36 +610,32 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
         /*numeric_stable=*/numeric_stable);
 }
-}  // namespace ttnn::operations::normalization::softmax
 
-namespace ttnn::prim {
-ttnn::operations::normalization::softmax::SoftmaxDeviceOperation::tensor_return_value_t softmax(
-    ttnn::operations::normalization::SoftmaxOperationType softmax_type,
+Tensor softmax(
+    SoftmaxOperationType softmax_type,
     const Tensor& input_tensor,
     int8_t dim,
     const std::optional<const Tensor>& mask,
     std::optional<float> scale,
     bool inplace,
     tt::tt_metal::MemoryConfig output_mem_config,
-    ttnn::operations::normalization::SoftmaxProgramConfig program_config,
+    SoftmaxProgramConfig program_config,
     bool is_causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
     bool is_scale_causal_mask_hw_dims_softmax,
     bool numeric_stable) {
-    using OperationType = ttnn::operations::normalization::softmax::SoftmaxDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
-        softmax_type,
-        dim,
-        scale,
-        inplace,
-        std::move(output_mem_config),
-        program_config,
-        is_causal_mask,
-        compute_kernel_config,
-        is_scale_causal_mask_hw_dims_softmax,
-        numeric_stable};
-    auto tensor_args = OperationType::tensor_args_t{input_tensor, mask};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<SoftmaxDeviceOperation>(
+        SoftmaxParams{
+            softmax_type,
+            dim,
+            scale,
+            inplace,
+            std::move(output_mem_config),
+            program_config,
+            is_causal_mask,
+            compute_kernel_config,
+            is_scale_causal_mask_hw_dims_softmax,
+            numeric_stable},
+        SoftmaxInputs{input_tensor, mask});
 }
 }  // namespace ttnn::prim

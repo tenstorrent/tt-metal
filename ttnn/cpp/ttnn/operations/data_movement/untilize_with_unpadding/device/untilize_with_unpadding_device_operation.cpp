@@ -13,23 +13,23 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding {
+namespace ttnn::prim {
 
 UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_tensor.memory_config().is_sharded()) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    if (input.memory_config().is_sharded()) {
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded untilize does not support sub core grid specification");
-        return program::UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
+        return UntilizeWithUnpaddingMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        return program::UntilizeWithUnpaddingSingleCoreProgramFactory{};
+        return UntilizeWithUnpaddingSingleCoreProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+        return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
     }
-    const auto& a = tensor_args.input_tensor;
+    const auto& a = input;
     const auto& input_shape = a.padded_shape();
     auto* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -53,20 +53,20 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
 
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+            return UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
         }
     }
-    return program::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
+    return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    validate_on_program_cache_miss(operation_attributes, input);
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor;
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    const auto& input_tensor_a = input;
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -102,7 +102,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
             }
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            auto output_shape = compute_output_specs(operation_attributes, tensor_args).padded_shape();
+            auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
                 TT_FATAL(
                     input_tensor_a.padded_shape()[i] == output_shape[i],
@@ -165,10 +165,10 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-UntilizeWithUnpaddingDeviceOperation::spec_return_value_t UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
     SmallVector<uint32_t> out_shape;
-    const auto& input_tensor_a = tensor_args.input_tensor;
+    const auto& input_tensor_a = input;
     size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
@@ -192,6 +192,7 @@ UntilizeWithUnpaddingDeviceOperation::spec_return_value_t UntilizeWithUnpaddingD
         }
         shard_spec.shape = shard_shape;
         auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+
         return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
     }
 
@@ -200,18 +201,18 @@ UntilizeWithUnpaddingDeviceOperation::spec_return_value_t UntilizeWithUnpaddingD
         TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }
 
-UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+Tensor UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    auto output_spec = compute_output_specs(operation_attributes, input);
+    return create_device_tensor(output_spec, input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const tensor_args_t& input,
     tensor_return_value_t& output_tensor) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = input;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
@@ -225,16 +226,14 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     } else {
         compute_cycles = num_tiles * latency_untilize;
     }
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    int ideal_dev_clock_cycles =
+        operations::data_movement::common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t
-untilize_with_unpadding(
+Tensor untilize_with_unpadding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
@@ -244,10 +243,8 @@ untilize_with_unpadding(
     bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType =
-        ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UntilizeWithUnpaddingDeviceOperation>(
+        UntilizeWithUnpaddingParams{
             .output_tensor_end = output_tensor_end,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .use_multicore = use_multicore,
@@ -256,6 +253,7 @@ untilize_with_unpadding(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
+
 }  // namespace ttnn::prim

@@ -8,7 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -242,4 +242,4 @@ void HCSumReduceProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_variables.compute_kernel_id, shared_variables.cores, compute_runtime_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program
+}  // namespace ttnn::experimental::prim

@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ttnn::operations::data_movement::reshape::detail {
+namespace ttnn::prim::detail {
 
 struct SegmentMapData {
     using value_type = uint32_t;
@@ -17,4 +17,4 @@ struct SegmentMapData {
     static constexpr uint32_t size = 4;
 };
 
-}  // namespace ttnn::operations::data_movement::reshape::detail
+}  // namespace ttnn::prim::detail

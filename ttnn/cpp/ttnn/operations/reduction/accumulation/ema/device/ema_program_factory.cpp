@@ -12,7 +12,7 @@
 
 #include <bit>
 
-namespace ttnn::operations::reduction::ema::program {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
@@ -201,4 +201,4 @@ void EmaProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::ema::program
+}  // namespace ttnn::prim

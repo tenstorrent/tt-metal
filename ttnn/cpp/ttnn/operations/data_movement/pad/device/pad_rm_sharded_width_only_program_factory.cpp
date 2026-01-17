@@ -10,7 +10,10 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+
 PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgramFactory::create(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
@@ -150,4 +153,4 @@ void PadRmShardedWidthOnlyProgramFactory::override_runtime_arguments(
         cached_program.program, cached_program.shared_variables.output_shard_cb, *output_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

@@ -11,11 +11,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::create_qkv_heads {
+namespace ttnn::experimental::prim {
 
 CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory{};
+    return CreateQKVHeadsProgramFactory{};
 }
 
 void CreateQKVHeadsDeviceOperation::validate_on_program_cache_hit(
@@ -73,7 +73,7 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 
-spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
+CreateQKVHeadsResultSpec CreateQKVHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         const auto& [q_tensor, k_tensor, v_tensor] = tensor_args.preallocated_outputs.value();
@@ -121,7 +121,7 @@ spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
-tensor_return_value_t CreateQKVHeadsDeviceOperation::create_output_tensors(
+CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         return tensor_args.preallocated_outputs.value();
@@ -151,11 +151,11 @@ tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t create_qkv_heads(
+ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads(
     const Tensor& input_tensor,
     uint32_t num_q_heads,
     uint32_t num_kv_heads,
@@ -163,7 +163,7 @@ ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t create_q
     bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs) {
-    using OperationType = ttnn::operations::experimental::create_qkv_heads::CreateQKVHeadsDeviceOperation;
+    using OperationType = ttnn::experimental::prim::CreateQKVHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_q_heads = num_q_heads,

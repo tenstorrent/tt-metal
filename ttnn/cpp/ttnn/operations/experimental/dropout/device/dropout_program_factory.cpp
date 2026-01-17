@@ -14,7 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::dropout::program {
+namespace ttnn::experimental::prim {
 namespace {
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
@@ -382,4 +382,4 @@ void DropoutMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::dropout::program
+}  // namespace ttnn::experimental::prim

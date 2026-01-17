@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshape_on_device {
+namespace ttnn::prim {
 
 namespace {
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm_multi_core(
@@ -116,9 +116,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }  // namespace
 
 ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
-    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
-    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
-    reshape_on_device::tensor_return_value_t& output_tensor) {
+    const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
+    tt::tt_metal::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         input_tensor.dtype() == output_tensor.dtype(),
@@ -220,9 +220,9 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
 
 void ReshapeRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshape_on_device::ReshapeOnDeviceParams& /*operation_attributes*/,
-    const reshape_on_device::ReshapeOnDeviceInputs& tensor_args,
-    reshape_on_device::tensor_return_value_t& output_tensor) {
+    const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
+    const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
+    tt::tt_metal::Tensor& output_tensor) {
     const auto& src_tensor = tensor_args.input_tensor;
     auto& dst_tensor = output_tensor;
 
@@ -274,4 +274,4 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshape_on_device
+}  // namespace ttnn::prim
