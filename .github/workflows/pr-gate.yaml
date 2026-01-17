@@ -349,7 +349,7 @@ jobs:
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        pip install pyyaml # Needed for clang-tidy-diff-20.py
+        uv pip install pyyaml # Needed for clang-tidy-diff-20.py
     - name: Prepare .clang-tidy with extra checks
       run: |
         if [ -f .clang-tidy-light ]; then
