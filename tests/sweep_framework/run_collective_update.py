@@ -252,7 +252,7 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
 
     Args:
         files: List of file paths to process
-        run_type: Type of run - "nightly" or "comprehensive"
+        run_type: Type of run - "nightly", "comprehensive", "model_traced", or "lead_models"
 
     Returns a dict with the common values and computed timestamps.
     """
@@ -315,11 +315,13 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
 
     # Set run_contents based on run type
     if run_type == "comprehensive":
-        common_metadata["run_contents"] = "all sweeps (comprehensive)"
+        common_metadata["run_contents"] = "comprehensive"
     elif run_type == "model_traced":
-        common_metadata["run_contents"] = "all sweeps (model traced)"
+        common_metadata["run_contents"] = "model traced"
+    elif run_type == "lead_models":
+        common_metadata["run_contents"] = "lead models"
     else:
-        common_metadata["run_contents"] = "all sweeps (nightly)"
+        common_metadata["run_contents"] = "nightly"
 
     return common_metadata
 
@@ -331,7 +333,7 @@ def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type
     Args:
         directory: Path to the directory containing op_run*.json files
         dry_run: If True, only print what would be changed without modifying files
-        run_type: Type of run - "nightly" or "comprehensive"
+        run_type: Type of run - "nightly", "comprehensive", "model_traced", or "lead_models"
     """
     # Find all op_run*.json files
     files = find_op_run_files(directory)
@@ -400,9 +402,9 @@ def main():
     parser.add_argument(
         "--run-type",
         type=str,
-        choices=["nightly", "comprehensive", "model_traced"],
+        choices=["nightly", "comprehensive", "model_traced", "lead_models"],
         default="nightly",
-        help="Type of run: 'nightly', 'comprehensive', or 'model_traced' (default: nightly)",
+        help="Type of run: 'nightly', 'comprehensive', 'model_traced', or 'lead_models' (default: nightly)",
     )
 
     args = parser.parse_args()
