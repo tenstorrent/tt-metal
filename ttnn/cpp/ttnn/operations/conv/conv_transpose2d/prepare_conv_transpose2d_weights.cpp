@@ -18,6 +18,7 @@
 #include "conv_transpose2d/conv_transpose2d.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace ttnn::operations::sliding_window;
 
