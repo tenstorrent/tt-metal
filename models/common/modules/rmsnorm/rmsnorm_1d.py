@@ -85,8 +85,8 @@ class RMSNorm1DConfig:
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
 
     # Internal: distributed weight LazyWeight (sharded across devices for Path 3)
-    # Note: Uses LazyWeight for consistency, but loaded via _load_distributed_weight()
-    # to bypass LazyWeight's auto-padding which breaks distributed RMSNorm alignment.
+    # Note: Uses LazyWeight with explicit mesh_mapper_config to shard weights correctly.
+    # The get_device_weight() call respects the mesh_mapper_config for proper distribution.
     _weight_distributed: LazyWeight | None = None
 
     def is_resolved(self) -> bool:
@@ -540,14 +540,13 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
 
     # --- Phase 7: Create distributed weight LazyWeight (for Path 3) ---
     #
-    # Note: We store a LazyWeight but load it via _load_distributed_weight() which
-    # uses ttnn.as_tensor directly with ShardTensor2dMesh. This bypasses LazyWeight's
-    # auto-padding (in get_device_weight) which breaks distributed RMSNorm alignment.
+    # Note: We create a LazyWeight with explicit mesh_mapper_config (ShardTensor2dMesh)
+    # to shard weights across devices. The get_device_weight() call at line 182 respects
+    # this config for proper distributed RMSNorm alignment.
 
     if prefill_distributed and num_devices > 1:
         # Create LazyWeight with sharded mesh_mapper_config
-        # Note: We store the config but load via _load_distributed_weight() which
-        # uses ttnn.as_tensor + ShardTensor2dMesh to bypass LazyWeight's auto-padding
+        # The mesh_mapper_config with ShardTensor2dMesh ensures proper weight distribution
         weight_distributed = replace(
             transformed_weight,
             dtype=ttnn.bfloat16,  # RMSNorm weights are always bfloat16
