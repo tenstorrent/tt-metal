@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
@@ -70,7 +71,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!std::isnan(operation_attributes.alpha), "EMA alpha must be a valid number, got NaN");
 }
 
-spec_return_value_t EmaDeviceOperation::compute_output_specs(
+TensorSpec EmaDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -78,7 +79,7 @@ spec_return_value_t EmaDeviceOperation::compute_output_specs(
     return tensor_args.input.tensor_spec().with_memory_config(operation_attributes.output_mem_config);
 }
 
-tensor_return_value_t EmaDeviceOperation::create_output_tensors(
+Tensor EmaDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();

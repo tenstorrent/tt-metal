@@ -10,6 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
 
@@ -43,7 +44,7 @@ void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
 }
 
-spec_return_value_t SliceReshardAsyncDeviceOperation::compute_output_specs(
+TensorSpec SliceReshardAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.logical_shape();
@@ -52,31 +53,28 @@ spec_return_value_t SliceReshardAsyncDeviceOperation::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-tensor_return_value_t SliceReshardAsyncDeviceOperation::create_output_tensors(
+Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto input_shape = tensor_args.input.padded_shape();
-    auto input_memory_layout = tensor_args.input.layout();
-    auto input_dtype = tensor_args.input.dtype();
-    auto input_memory_config = tensor_args.input.memory_config();
+    log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
         args.dim,
         args.output_dim_offset,
         args.output_dim_shape,
+        args.cluster_axis,
         args.num_links,
         args.output_mem_config,
         args.topology,
-        args.cluster_axis,
         args.ring_size,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        tensor_args,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::slice_reshard_async

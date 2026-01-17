@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
@@ -125,7 +126,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t UnaryDeviceOperation::compute_output_specs(
+TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -144,7 +145,7 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
             tensor_args.input.padded_shape()));
 }
 
-tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+Tensor UnaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;

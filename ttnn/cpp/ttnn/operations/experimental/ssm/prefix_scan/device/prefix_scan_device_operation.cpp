@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
@@ -57,7 +58,7 @@ void PrefixScanDeviceOperation::validate_on_program_cache_miss(
         "Expected h tensor to be row major orientation");
 }
 
-spec_return_value_t PrefixScanDeviceOperation::compute_output_specs(
+TensorSpec PrefixScanDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.a;
     return TensorSpec(
@@ -66,7 +67,7 @@ spec_return_value_t PrefixScanDeviceOperation::compute_output_specs(
             args.dtype, PageConfig(Layout::TILE), args.memory_config, a.logical_shape(), a.padded_shape()));
 }
 
-tensor_return_value_t PrefixScanDeviceOperation::create_output_tensors(
+Tensor PrefixScanDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.a.device());
 }

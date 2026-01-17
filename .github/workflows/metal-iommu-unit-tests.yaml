@@ -37,6 +37,7 @@ jobs:
           - name: Metal IOMMU PinnedMemory tests
             cmd: |
               TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter=*PinnedMemory*
+              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=*PinnedMemory*
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{

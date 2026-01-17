@@ -896,7 +896,6 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         if (hostname_len > 0) {
             TT_FATAL(idx + hostname_len <= record.size(), "Deserializer overflow reading hostname");
             std::string hostname_str(reinterpret_cast<const char*>(record.data() + idx), hostname_len);
-            idx += hostname_len;
             info.hostname = hostname_str;
         }
 

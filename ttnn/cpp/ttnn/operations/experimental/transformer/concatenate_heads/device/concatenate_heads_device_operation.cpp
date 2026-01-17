@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "concatenate_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "concatenate_heads_program_factory.hpp"
 using namespace tt::tt_metal;
@@ -53,7 +54,7 @@ void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
         "Unsupported grid shape");
 }
 
-spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
+TensorSpec ConcatenateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -68,7 +69,7 @@ spec_return_value_t ConcatenateHeadsDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
-tensor_return_value_t ConcatenateHeadsDeviceOperation::create_output_tensors(
+Tensor ConcatenateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;

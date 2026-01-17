@@ -552,7 +552,7 @@ void BM_Matmul_BFLOAT16(benchmark::State& state) {
     const auto device_id = 0;
     auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
 
@@ -693,7 +693,7 @@ void BM_Matmul_BFLOAT8_B(benchmark::State& state) {
     const auto device_id = 0;
     auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
 
@@ -840,7 +840,7 @@ void BM_Matmul_BFLOAT4_B(benchmark::State& state) {
     const auto device_id = 0;
     auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/200000, /*trace_region_size=*/65536);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         RunMatmulBenchmark(state, test_config, matmul_shape, device, device_id);
     }
     // Close device

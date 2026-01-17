@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -209,7 +210,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
+TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -237,7 +238,7 @@ spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
         args.program_config);
 }
 
-tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
+Tensor GroupNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 

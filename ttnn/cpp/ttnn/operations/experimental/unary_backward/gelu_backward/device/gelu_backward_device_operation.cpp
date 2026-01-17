@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gelu_backward_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "gelu_backward_program_factory.hpp"
 
 #include "tt-metalium/host_api.hpp"
@@ -84,7 +85,7 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t GeluBackwardDeviceOperation::compute_output_specs(
+TensorSpec GeluBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_input_grad.has_value()) {
         return tensor_args.preallocated_input_grad->tensor_spec();
@@ -104,7 +105,7 @@ spec_return_value_t GeluBackwardDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(output_dtype, output_layout, args.output_memory_config));
 }
 
-tensor_return_value_t GeluBackwardDeviceOperation::create_output_tensors(
+Tensor GeluBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_input_grad.has_value()) {
         return *tensor_args.preallocated_input_grad;

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -30,30 +32,19 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test verifies that the slow dispatch path can perform device reads and writes when the page size is not a
 // multiple of the DMA alignment requirement.
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
-int main() {
+TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
 
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Write Read Unaligned DRAM Interleaved Buffer
         ////////////////////////////////////////////////////////////////////////////
@@ -64,7 +55,7 @@ int main() {
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
 
         tt_metal::InterleavedBufferConfig dram_interleaved_buffer_config{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -92,7 +83,7 @@ int main() {
             {1, dram_buffer_size / sizeof(uint16_t)},
             {1, 1});
         auto device_dram_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM,
@@ -119,7 +110,7 @@ int main() {
             (single_tile_size * 4) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
         tt_metal::InterleavedBufferConfig l1_interleaved_buffer_config{
-            .device = device,
+            .device = dev,
             .size = l1_buffer_size,
             .page_size = l1_buffer_size,
             .buffer_type = tt_metal::BufferType::L1};
@@ -149,7 +140,7 @@ int main() {
             {1, l1_buffer_size / sizeof(uint16_t)},
             {1, 1});
         auto device_l1_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = device,
+            .device = dev,
             .size = l1_buffer_size,
             .page_size = l1_buffer_size,
             .buffer_type = tt_metal::BufferType::L1,
@@ -169,8 +160,6 @@ int main() {
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Sharded Buffer Test");
 
-        pass &= tt_metal::CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -179,12 +168,5 @@ int main() {
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    ASSERT_TRUE(pass);
 }

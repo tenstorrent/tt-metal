@@ -27,6 +27,7 @@ on:
           - sd35_large
           - flux1
           - motif
+          - qwenimage
           - mistral
           - wan2.2
           - mochi

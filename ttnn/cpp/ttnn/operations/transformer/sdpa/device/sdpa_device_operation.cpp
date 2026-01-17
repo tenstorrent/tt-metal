@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
@@ -269,6 +270,14 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
                 "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
                 attrs.chunk_start_idx.value(),
                 q_chunk_size);
+
+            // Validate that chunk_start_idx is a multiple of k_chunk_size
+            // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % k_chunk_size == 0,
+                "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
+                attrs.chunk_start_idx.value(),
+                k_chunk_size);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx

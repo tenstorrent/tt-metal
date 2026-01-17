@@ -11,8 +11,8 @@
 namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program {
 
 struct NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory {
-    using operation_attributes_t = nlp_create_qkv_heads_decode::operation_attributes_t;
-    using tensor_args_t = nlp_create_qkv_heads_decode::tensor_args_t;
+    using operation_attributes_t = NlpCreateQkvHeadsDecodeParams;
+    using tensor_args_t = NlpCreateQkvHeadsDecodeInputs;
     using tensor_return_value_t = nlp_create_qkv_heads_decode::tensor_return_value_t;
 
     struct shared_variables_t {

@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "fill_rm_program_factory.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement::fill_rm {
 
@@ -50,7 +51,7 @@ void FillRMDeviceOperation::validate_on_program_cache_miss(
         "FillRM does not currently support sharding");
 }
 
-spec_return_value_t FillRMDeviceOperation::compute_output_specs(
+TensorSpec FillRMDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
 
@@ -59,7 +60,7 @@ spec_return_value_t FillRMDeviceOperation::compute_output_specs(
     return TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-tensor_return_value_t FillRMDeviceOperation::create_output_tensors(
+Tensor FillRMDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input;
     return create_device_tensor(compute_output_specs(args, tensor_args), input_tensor.device());

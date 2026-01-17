@@ -38,7 +38,4 @@ struct tensor_args_t {
     std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
 }  // namespace ttnn::operations::experimental::minimal_matmul

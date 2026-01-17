@@ -15,8 +15,8 @@ using namespace tt::constants;
 using namespace tt;
 
 NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegformerProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const NlpCreateQkvHeadsSegformerParams& /*operation_attributes*/,
+    const NlpCreateQkvHeadsSegformerInputs& tensor_args,
     tensor_return_value_t& output) {
     const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
@@ -157,8 +157,8 @@ NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegf
 
 void NlpCreateQkvHeadsSegformerProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const NlpCreateQkvHeadsSegformerParams& /*operation_attributes*/,
+    const NlpCreateQkvHeadsSegformerInputs& tensor_args,
     tensor_return_value_t& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& reader_kernel_id = shared_vars.reader_kernel_id;

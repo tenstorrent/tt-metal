@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
@@ -223,7 +224,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+Tensor SliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
