@@ -52,7 +52,9 @@ class FileVectorSource(VectorSource):
                         vector = suite_content[vector_id]
                         vector["input_hash"] = vector_id
                         vector["suite_name"] = suite_key
-                        vector["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector:
+                            vector["sweep_name"] = module_name
                         vectors.append(vector)
                         break
             else:
@@ -64,7 +66,9 @@ class FileVectorSource(VectorSource):
                     for input_hash, vector_data in suite_content.items():
                         vector_data["input_hash"] = input_hash
                         vector_data["suite_name"] = suite_key
-                        vector_data["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector_data:
+                            vector_data["sweep_name"] = module_name
                         vectors.append(vector_data)
 
             return vectors
@@ -99,11 +103,18 @@ class VectorExportSource(VectorSource):
         else:
             self.export_dir = export_dir
 
-    def _find_module_file(self, module_name: str) -> pathlib.Path | None:
-        """Find the JSON file for a given module"""
-        potential_files = list(self.export_dir.glob(f"{module_name}.json"))
-        if potential_files:
-            return potential_files[0]
+    def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
+        """Find all JSON files for a given module (including mesh variants)"""
+        # First try exact match (backward compatibility)
+        exact_match = list(self.export_dir.glob(f"{module_name}.json"))
+        if exact_match:
+            return exact_match
+
+        # Then look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
+        mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
+        if mesh_variants:
+            logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
+            return sorted(mesh_variants)  # Sort for consistent ordering
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
@@ -114,61 +125,75 @@ class VectorExportSource(VectorSource):
                 logger.info(f"Similar files found: {top_names}")
         except Exception:
             pass
-        return None
+        return []
 
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory"""
-        module_file = self._find_module_file(module_name)
-        if not module_file:
+        """Load test vectors from vectors_export directory (including mesh variants)"""
+        module_files = self._find_module_files(module_name)
+        if not module_files:
             return []
 
-        try:
-            with open(module_file, "r") as file:
-                data = json.load(file)
+        all_vectors = []
 
-            vectors = []
+        # Load vectors from all matching files (e.g., base + mesh variants)
+        for module_file in module_files:
+            try:
+                with open(module_file, "r") as file:
+                    data = json.load(file)
 
-            for suite_key, suite_content in data.items():
-                if suite_name and suite_name != suite_key:
-                    continue
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
+                        continue
 
-                if vector_id:
-                    if vector_id in suite_content:
-                        vector = suite_content[vector_id]
-                        vector["input_hash"] = vector_id
-                        vector["suite_name"] = suite_key
-                        vector["sweep_name"] = module_name
-                        vectors.append(vector)
-                        logger.info(f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}'")
+                    if vector_id:
+                        if vector_id in suite_content:
+                            vector = suite_content[vector_id]
+                            vector["input_hash"] = vector_id
+                            vector["suite_name"] = suite_key
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector:
+                                vector["sweep_name"] = module_name
+                            all_vectors.append(vector)
+                            logger.info(
+                                f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
+                            )
+                        else:
+                            logger.warning(
+                                f"Vector ID '{vector_id}' not found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
+                            )
+                        break
                     else:
-                        logger.warning(
-                            f"Vector ID '{vector_id}' not found in suite '{suite_name}' of module '{module_name}'"
-                        )
-                    break
-                else:
-                    for input_hash, vector_data in suite_content.items():
-                        vector_data["input_hash"] = input_hash
-                        vector_data["suite_name"] = suite_key
-                        vector_data["sweep_name"] = module_name
-                        vectors.append(vector_data)
+                        for input_hash, vector_data in suite_content.items():
+                            vector_data["input_hash"] = input_hash
+                            vector_data["suite_name"] = suite_key
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector_data:
+                                vector_data["sweep_name"] = module_name
+                            all_vectors.append(vector_data)
 
-            return vectors
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to load vectors from {module_file}: {e}")
+                continue
 
-        except (json.JSONDecodeError, IOError):
-            return []
+        return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory"""
-        module_file = self._find_module_file(module_name)
-        if not module_file:
+        """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
+        module_files = self._find_module_files(module_name)
+        if not module_files:
             return []
 
-        try:
-            with open(module_file, "r") as file:
-                data = json.load(file)
-            return list(data.keys())
-        except (json.JSONDecodeError, IOError):
-            return []
+        # Collect unique suite names across all mesh variant files
+        all_suites = set()
+        for module_file in module_files:
+            try:
+                with open(module_file, "r") as file:
+                    data = json.load(file)
+                all_suites.update(data.keys())
+            except (json.JSONDecodeError, IOError):
+                continue
+
+        return sorted(list(all_suites))
 
     def validate_connection(self) -> bool:
         """Validate that the export directory exists"""
