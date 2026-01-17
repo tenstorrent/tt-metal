@@ -879,7 +879,7 @@ class ModelArgs(TTModelArgs):
                 "topology": ttnn.Topology.Linear,
             }
             model_specific_ccl_configs = {
-                "Llama-3.1-8B": {
+                "gemma-3-27b": {
                     "attn_ln_ag": {"num_links": 4, "chunks_per_sync": 10, "num_workers_per_link": 1},
                     "ffn_ln_ag": {"num_links": 4, "chunks_per_sync": 25, "num_workers_per_link": 1},
                     "attn_agmm": {"num_links": 4, "chunks_per_sync": 1, "num_workers_per_link": 1},
@@ -898,7 +898,7 @@ class ModelArgs(TTModelArgs):
                     },
                 }
             }
-            if self.base_model_name in model_specific_ccl_configs:
+            if True:
                 self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
                 self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
                 self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]

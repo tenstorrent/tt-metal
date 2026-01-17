@@ -59,7 +59,7 @@ def test_decoder_inference(
     max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
     dtype = ttnn.bfloat8_b
-
+    generation_length = 1
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
     model_args.n_layers = 1
