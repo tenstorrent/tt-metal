@@ -8,6 +8,7 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
