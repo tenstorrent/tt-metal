@@ -385,7 +385,7 @@ int main() {
         // Validate results
         TT_FATAL(result_vec.size() == reference_result.size(), "Result vector size mismatch");
         // Compare results with some tolerance (loose tolerance because of limited precision of bfloat16).
-        constexpr float RELTOL = 0.15;
+        constexpr float RELTOL = 0.04;
         for (size_t i = 0; i < result_vec.size(); ++i) {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);

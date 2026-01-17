@@ -44,7 +44,7 @@ void kernel_main() {
     const auto src1_addr_gen = TensorAccessor(src1_layout_args, src1_base_addr, tile_size_bytes_1);
 
     // Loop over output tiles 
-    for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {
+    for (uint32_t output_tile = tile_offset; output_tile < tile_offset + num_output_tiles; output_tile++) {
         // Convert linear output tile ID to 2D coordinates.
         uint32_t row = output_tile / Nt;
         uint32_t col = output_tile % Nt;
