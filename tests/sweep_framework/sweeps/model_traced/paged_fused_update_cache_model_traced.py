@@ -54,6 +54,31 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Validate that batch dimensions are compatible.
+    The operation requires: input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[0]
+    """
+    input_shape = test_vector.get("input_shape")
+
+    if isinstance(input_shape, dict):
+        shape_a = input_shape.get("input_a", input_shape.get("self"))
+        shape_b = input_shape.get("input_b", input_shape.get("cache"))
+
+        # Validate batch dimension compatibility
+        # input_tensor shape: [1, batch, seq_len, head_dim]
+        # cache_tensor shape: [batch, cache_len, n_heads, head_dim]
+        if shape_a and shape_b and isinstance(shape_a, (list, tuple)) and isinstance(shape_b, (list, tuple)):
+            if len(shape_a) >= 2 and len(shape_b) >= 1:
+                input_batch = shape_a[1]  # Second dimension of input
+                cache_batch = shape_b[0]  # First dimension of cache
+
+                if input_batch != cache_batch:
+                    return True, f"Batch mismatch: input[1]={input_batch} != cache[0]={cache_batch}"
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,

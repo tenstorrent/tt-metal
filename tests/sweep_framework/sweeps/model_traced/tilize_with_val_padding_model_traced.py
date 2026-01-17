@@ -63,6 +63,33 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Validate that output_padded_shape is >= input_shape in all dimensions.
+    The operation requires: output_padded_shape[i] >= input_shape[i] for all i
+    """
+    input_shape = test_vector.get("input_shape")
+    padded_shape = test_vector.get("padded_shape")
+
+    if input_shape and padded_shape:
+        # Handle both tuple and dict formats
+        if isinstance(input_shape, dict):
+            input_shape = input_shape.get("input_a", input_shape.get("self"))
+        if isinstance(padded_shape, dict):
+            padded_shape = padded_shape.get("padded_shape")
+
+        if isinstance(input_shape, (list, tuple)) and isinstance(padded_shape, (list, tuple)):
+            # Check each dimension
+            if len(input_shape) != len(padded_shape):
+                return True, f"Shape dimension mismatch: input={len(input_shape)}, padded={len(padded_shape)}"
+
+            for i, (inp_dim, pad_dim) in enumerate(zip(input_shape, padded_shape)):
+                if pad_dim < inp_dim:
+                    return True, f"Invalid padding at dim {i}: padded[{i}]={pad_dim} < input[{i}]={inp_dim}"
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,

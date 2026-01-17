@@ -72,8 +72,25 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    # Typecast to output dtype
-    torch_output_tensor = torch_input_tensor_a.to(torch.float32)  # Convert to float32 first for comparison
+    # Map TTNN dtype to PyTorch dtype for reference
+    ttnn_to_torch_dtype = {
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.float32,  # No direct PyTorch equivalent, use float32
+        ttnn.uint16: torch.int32,  # PyTorch doesn't have uint16, use int32
+        ttnn.uint32: torch.int32,  # Approximation
+        ttnn.int32: torch.int32,
+    }
+
+    # Get PyTorch dtype for output
+    target_torch_dtype = ttnn_to_torch_dtype.get(output_dtype, torch.float32)
+
+    # Typecast to output dtype in PyTorch reference
+    # First convert to appropriate dtype for comparison
+    if target_torch_dtype == torch.bfloat16:
+        torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
+    else:
+        torch_output_tensor = torch_input_tensor_a.to(target_torch_dtype)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -96,7 +113,11 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Convert both to float32 for comparison to avoid dtype mismatch in PCC
+    torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
+    output_tensor_f32 = output_tensor.to(torch.float32)
+
     # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, 0.999)
 
     return [pcc, e2e_perf]
