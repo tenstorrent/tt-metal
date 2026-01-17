@@ -63,7 +63,7 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
 
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            // This also protects against underflow when result = 0.0f
+            // This also protects against underflow ( 0 becomes -inf) when result = 0.0f
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;
 
