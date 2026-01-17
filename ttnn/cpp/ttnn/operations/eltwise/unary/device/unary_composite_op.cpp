@@ -35,8 +35,9 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
     Tensor t_log_out = ttnn::log(input, true, output_mem_config);  // negative log is not useful here
 
     // 1/2(z)
-    Tensor output = ttnn::multiply(ttnn::reciprocal(input, output_mem_config), 0.5f, std::nullopt, output_mem_config);
-    Tensor tmp = ttnn::square(ttnn::reciprocal(input, output_mem_config), output_mem_config);
+    Tensor input_recip = ttnn::reciprocal(input, output_mem_config);
+    Tensor output = ttnn::multiply(input_recip, 0.5f, std::nullopt, output_mem_config);
+    Tensor tmp = ttnn::square(input_recip, output_mem_config);
     Tensor val_square = tmp;
     // (1/12) * x^2
     output = ttnn::subtract(output, ttnn::multiply(tmp, 0.083333333f), std::nullopt, output_mem_config);

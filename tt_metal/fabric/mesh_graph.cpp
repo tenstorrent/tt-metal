@@ -104,8 +104,8 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd(filepath, true);
-        this->initialize_from_mgd(mgd, fabric_config);
+        mesh_graph_descriptor_.emplace(filepath, true);
+        this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config);
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
