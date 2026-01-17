@@ -105,9 +105,8 @@ def run(
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs_b)
 
     start_time = start_measuring_time()
-    # ttnn.eq_ is an in-place operation and doesn't take memory_config
-    # Use ttnn.eq instead for non-inplace version
-    output_tensor = ttnn.eq(input_tensor_a, input_tensor_b)
+    # ttnn.eq_ performs in-place equality comparison
+    output_tensor = ttnn.eq_(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
