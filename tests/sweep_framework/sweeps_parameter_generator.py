@@ -57,9 +57,9 @@ def get_mesh_shape_from_vector(vector):
                     mesh_shape = ast.literal_eval(mesh_shape_str)
                     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
                         return tuple(mesh_shape)
-                except (ValueError, SyntaxError):
-                    # Invalid or malformed mesh_device_shape string; fall back to default handling below.
-                    pass
+                except (ValueError, SyntaxError) as e:
+                    # Invalid or malformed mesh_device_shape string; fall back to default (1, 1)
+                    logger.debug(f"Failed to parse mesh_device_shape '{mesh_shape_str}': {e}")
             elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
                 return tuple(mesh_shape_str)
 
