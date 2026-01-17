@@ -49,6 +49,19 @@ FORCE_INLINE void matmul_with_relu_block() {
 constexpr uint32_t MATMUL_ACC_REG_ID = 0;
 constexpr uint32_t BIAS_REG_ID = 1;
 
+/**
+ * Compute this core's tile index in the gathered buffer.
+ *
+ * Calculates the tile index based on this core's position in the sender grid.
+ * Used to determine which tile from the bias CB (MM1_FULL_CB) this core should use.
+ */
+template <uint32_t SenderLogicalXStart, uint32_t SenderLogicalYStart, uint32_t SenderGridWidth>
+FORCE_INLINE uint32_t compute_sender_tile_index() {
+    const uint32_t sender_logical_x = get_absolute_logical_x();
+    const uint32_t sender_logical_y = get_absolute_logical_y();
+    return (sender_logical_y - SenderLogicalYStart) * SenderGridWidth + (sender_logical_x - SenderLogicalXStart);
+}
+
 template <
     uint32_t CbA,
     uint32_t CbB,
@@ -59,7 +72,7 @@ template <
     uint32_t OutputTileId = 0,
     bool PopA = false,
     bool PopBias = false>
-FORCE_INLINE void matmul_with_bias_block() {
+FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     DeviceZoneScopedN("matmul_with_bias_block");
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
@@ -84,8 +97,8 @@ FORCE_INLINE void matmul_with_bias_block() {
 
     {
         DeviceZoneScopedN("copy_tile_init");
-        copy_tile_init(CbBias);  // Hangs if we put this at the beginning of the program
-        copy_tile(CbBias, 0, BIAS_REG_ID);
+        copy_tile_init(CbBias);
+        copy_tile(CbBias, bias_tile_index, BIAS_REG_ID);
     }
 
     {
@@ -103,7 +116,7 @@ FORCE_INLINE void matmul_with_bias_block() {
     if constexpr (PopBias) {
         cb_pop_front(CbBias, NumTilesBias);
     }
-    // cb_pop_front(CbB, NumTilesK);
+    // cb_pop_front(CbB, NumTilesK); // Never pop CbB because it's used for the next layer
 
     tile_regs_wait();
     pack_tile(MATMUL_ACC_REG_ID, CbOut, OutputTileId);  // Pack at offset OutputTileId
@@ -123,11 +136,18 @@ void MAIN {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
     constexpr uint32_t num_layers = get_compile_time_arg_val(8);
+    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(9);
+    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(10);
+    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(11);
 
     constexpr uint32_t num_output_tiles = 1;
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
-    constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
+    constexpr uint32_t in0_block_w = 1;
+
+    // Compute this core's tile index in the gathered bias buffer
+    const uint32_t bias_tile_index =
+        compute_sender_tile_index<sender_logical_x_start, sender_logical_y_start, sender_grid_width>();
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
@@ -151,7 +171,7 @@ void MAIN {
             num_tiles_k,
             0,
             true,
-            true>();
+            true>(bias_tile_index);
     }
 }
 }  // namespace NAMESPACE

@@ -159,7 +159,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.99)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.999)
     logger.info(pcc_message)
 
     assert passing, pcc_message

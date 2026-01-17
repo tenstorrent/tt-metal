@@ -396,6 +396,9 @@ class FusedResblock:
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
+                sender_logical_x_start,
+                sender_logical_y_start,
+                sender_grid_width,
             ],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,  # Match C++ op behavior
