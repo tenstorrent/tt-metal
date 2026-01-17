@@ -154,18 +154,21 @@ def aligned_channels(channels):
     return channels
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT):
+def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, groups=1, ALIGNMENT=ALIGNMENT):
     """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    padded_C_in = aligned_channels(C_in)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
+    out_chan_total, C_per_group, kD, kH, kW = weight.shape
+    out_per_group = out_chan_total // groups
 
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
+    w = weight.view(groups, out_per_group, C_per_group, kD, kH, kW)
+    w = w.permute(0, 3, 4, 5, 2, 1)
 
-    C_in_block = conv_config.C_in_block
+    ALIGN_PAD = (ALIGNMENT - C_per_group % ALIGNMENT) % ALIGNMENT
+    if ALIGN_PAD != 0:
+        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
+
+    groups_dim, kD, kH, kW, C_in_aligned, out_per_group = w.shape
+
+    C_in_block = conv_config.C_in_block if conv_config is not None else 0
     C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
     num_C_in_blocks = C_in_aligned // C_in_block
     assert (
@@ -173,9 +176,9 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALI
     ), f"num_C_in_blocks * C_in_block == C_in_aligned, got {num_C_in_blocks} * {C_in_block} != {C_in_aligned}"
 
     # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
+    w = w.reshape(groups_dim, kD, kH, kW, num_C_in_blocks, C_in_block, out_per_group)
+    w = w.permute(4, 1, 2, 3, 0, 5, 6).contiguous()
+    w = w.reshape(-1, out_per_group)
 
     tt_weight = ttnn.from_torch(
         w,
@@ -199,4 +202,4 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALI
         )
     else:
         tt_bias = None
-    return tt_weight, tt_bias
+    return tt_weight, tt_bias, C_in_block

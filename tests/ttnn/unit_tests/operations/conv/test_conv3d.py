@@ -18,33 +18,42 @@ def _out_size(in_size, pad, stride, k):
 ALIGNMENT = 32  # Valid L1 alignment for Wormhole and Blackhole
 
 
-def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT):
-    """Prepare input tensor for TTNN by permuting and padding."""
-    tt_input = input_tensor.permute(0, 2, 3, 4, 1)
-    ALIGN_PAD = alignment - C % alignment
-    if C % alignment != 0:
-        tt_input = torch.nn.functional.pad(tt_input, (0, ALIGN_PAD))
+def prepare_input_tensor(input_tensor, groups, device, alignment=32):
+    N, C_total, D, H, W = input_tensor.shape
+    C_per_group = C_total // groups
+
+    tt_input = input_tensor.view(N, groups, C_per_group, D, H, W)
+    ALIGN_PAD = (alignment - C_per_group % alignment) % alignment
+    if ALIGN_PAD != 0:
+        tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, 0, 0, 0, 0, ALIGN_PAD))
+
+    tt_input = tt_input.permute(0, 3, 4, 5, 1, 2)
+    tt_input = tt_input.reshape(N, D, H, W, -1)
+
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
-    """Prepare weights and bias for TTNN."""
-    w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = alignment - C % alignment
-    if C % alignment != 0:
+def prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0, alignment=ALIGNMENT):
+    w = conv3d_module.weight.data
+    out_chan_total, C_per_group, kD, kH, kW = w.shape
+    out_per_group = out_chan_total // groups
+
+    w = w.view(groups, out_per_group, C_per_group, kD, kH, kW)
+    w = w.permute(0, 3, 4, 5, 2, 1)
+
+    ALIGN_PAD = (alignment - C_per_group % alignment) % alignment
+    if ALIGN_PAD != 0:
         w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
 
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
+    groups_dim, kD, kH, kW, C_in_aligned, out_per_group = w.shape
     C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
     num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
 
-    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+    w = w.reshape(groups_dim, kD, kH, kW, num_C_in_blocks, C_in_block, out_per_group)
+    w = w.permute(4, 1, 2, 3, 0, 5, 6).contiguous()
+    w_narrow = w.reshape(-1, out_per_group)
+
+    tt_weight = ttnn.from_torch(w_narrow, device=device, dtype=ttnn.DataType.BFLOAT16)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
@@ -52,7 +61,7 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
     )
-    return tt_weight, tt_bias
+    return tt_weight, tt_bias, C_in_block
 
 
 def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
@@ -68,6 +77,7 @@ def create_conv3d_config(
     H_out_block=1,
     C_out_block=0,
     C_in_block=0,
+    iC_per_group_block=32,
     compute_with_storage_grid_size=(1, 1),
 ):
     """Create Conv3d configuration."""
@@ -79,11 +89,12 @@ def create_conv3d_config(
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
+        iC_per_group_block=iC_per_group_block,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
 
-def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, padding_mode, device):
+def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device):
     """Common setup for Conv3D tests, preparing inputs and ground truth."""
     torch.manual_seed(42)
 
@@ -101,6 +112,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
         out_channels,
         kernel_size=kernel_size,
         stride=stride,
+        groups=groups,
         padding=padding,
         dilation=(1, 1, 1),
         bias=True,
@@ -110,7 +122,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     gt_output = conv3d_module(input_tensor)
 
     # Prepare input for TTNN
-    tt_input = prepare_input_tensor(input_tensor, C, device)
+    tt_input = prepare_input_tensor(input_tensor, groups, device)
 
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -123,18 +135,25 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
+def run_conv3d_test(
+    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, grid_size=(1, 1)
+):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight, tt_bias, iC_per_group_block = prepare_weights(
+        conv3d_module, C, out_channels, groups, device, C_in_block=0
+    )
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
+    config = create_conv3d_config(
+        iC_per_group_block=iC_per_group_block,
+        compute_with_storage_grid_size=grid_size,
+    )
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
@@ -144,6 +163,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         output_channels=out_channels,
         kernel_size=kernel_size,
         stride=stride,
+        groups=groups,
         padding=padding,
         padding_mode=padding_mode,
         config=config,
@@ -153,8 +173,6 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     # Reshape output and verify results
     tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
-    print(f"gt output shape = {gt_output.shape}")
-    print(f"tt output shape = {tt_output.shape}")
     assert tt_output.shape == gt_output.shape
 
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
@@ -170,17 +188,21 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 @pytest.mark.parametrize("W", [9, 12])
 @pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
+@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
     kernel_size = kernel_size
     stride = stride
+    groups = groups
     padding = padding
     padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
-    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+    run_conv3d_test(
+        device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, grid_size=grid_size
+    )
 
 
 @pytest.mark.parametrize(

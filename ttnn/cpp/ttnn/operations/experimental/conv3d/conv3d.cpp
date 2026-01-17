@@ -9,6 +9,8 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include "prepare_conv3d_weights.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::conv3d {
@@ -28,9 +30,20 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::Tensor weight_tensor_prepared = weight_tensor;
+
+    if (groups_ > 1) {
+        Conv3dWeightsBiasPrepConfig weight_prep_config;
+        {
+            weight_prep_config.groups = groups_;
+            weight_prep_config.iC_per_group_block = config.iC_per_group_block;
+        }
+        weight_tensor_prepared = prepare_conv_weights(weight_tensor, weight_prep_config, input_tensor.device());
+    }
+
     return ttnn::prim::conv3d(
         input_tensor,
-        weight_tensor,
+        weight_tensor_prepared,
         bias_tensor,
         config,
         dtype_,
