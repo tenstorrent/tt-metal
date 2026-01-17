@@ -667,7 +667,7 @@ uint32_t DeviceManager::get_fabric_router_sync_timeout_ms() {
     auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
 
     // Return user override if set, otherwise use fabric default
-    return timeout.value_or(10000);
+    return timeout.value_or(100000);
 }
 
 void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
