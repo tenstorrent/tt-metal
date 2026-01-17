@@ -10,11 +10,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
+namespace ttnn::experimental::prim {
 
 HCSumReduceDeviceOperation::program_factory_t HCSumReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::HCSumReduceProgramFactory{};
+    return HCSumReduceProgramFactory{};
 }
 
 void HCSumReduceDeviceOperation::validate_on_program_cache_hit(
@@ -86,16 +86,16 @@ tt::stl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation::tensor_return_value_t hc_sum_reduce(
+Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
     std::optional<MathFidelity> math_fidelity) {
-    using OperationType = ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation;
+    using OperationType = ttnn::experimental::prim::HCSumReduceDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(input.memory_config()),

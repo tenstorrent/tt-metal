@@ -10,11 +10,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::gelu_backward {
+namespace ttnn::experimental::prim {
 
 GeluBackwardDeviceOperation::program_factory_t GeluBackwardDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::GeluBackwardProgramFactory{};
+    return GeluBackwardProgramFactory{};
 }
 
 void GeluBackwardDeviceOperation::validate_on_program_cache_hit(
@@ -132,18 +132,18 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::gelu_backward
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation::tensor_return_value_t gelu_bw(
+Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
     const std::string& approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation;
+    using OperationType = ttnn::experimental::prim::GeluBackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate};

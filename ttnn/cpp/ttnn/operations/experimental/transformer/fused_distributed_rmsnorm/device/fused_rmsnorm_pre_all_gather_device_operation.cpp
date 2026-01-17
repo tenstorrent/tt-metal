@@ -10,12 +10,12 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather {
+namespace ttnn::experimental::prim {
 
 FusedRMSNormPreAllGatherDeviceOperation::program_factory_t
 FusedRMSNormPreAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::FusedRMSNormPreAllGatherProgramFactory{};
+    return FusedRMSNormPreAllGatherProgramFactory{};
 }
 
 void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -40,7 +40,7 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
 }
 
-spec_return_value_t FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
+TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -54,20 +54,18 @@ spec_return_value_t FusedRMSNormPreAllGatherDeviceOperation::compute_output_spec
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
-tensor_return_value_t FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(
+Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::tensor_return_value_t
-fused_rmsnorm_pre_all_gather(
+Tensor fused_rmsnorm_pre_all_gather(
     const Tensor& input_tensor, tt::tt_metal::DataType dtype, const DeviceComputeKernelConfig& compute_kernel_config) {
-    using OperationType = ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::
-        FusedRMSNormPreAllGatherDeviceOperation;
+    using OperationType = ttnn::experimental::prim::FusedRMSNormPreAllGatherDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .dtype = dtype,

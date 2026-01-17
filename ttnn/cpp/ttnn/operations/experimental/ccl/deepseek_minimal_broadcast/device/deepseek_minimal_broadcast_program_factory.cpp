@@ -32,7 +32,7 @@
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program {
+namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastProgramFactory::cached_mesh_workload_t
 DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
@@ -339,4 +339,4 @@ void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
         }
     }
 }
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program
+}  // namespace ttnn::experimental::prim

@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 // Shared variables for interleaved concat
 struct ConcatSharedVariables {
@@ -30,4 +30,4 @@ struct ConcatProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

@@ -17,35 +17,35 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::manual_seed {
+namespace ttnn::prim {
 
 ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case 1: seed=uint32_t, user_ids=None - set all cores to the same seed
     if (operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && !tensor_args.user_ids.has_value()) {
-        return program::ManualSeedSingleSeedToAllCoresProgramFactory{};
+        return ManualSeedSingleSeedToAllCoresProgramFactory{};
     }
     // Case 2: seed=uint32_t, user_ids=uint32_t - set seed to one core based on user_id
     if (operation_attributes.seeds.has_value() && operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && !tensor_args.user_ids.has_value()) {
-        return program::ManualSeedSingleSeedSingleCoreProgramFactory{};
+        return ManualSeedSingleSeedSingleCoreProgramFactory{};
     }
     // Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores in user_ids tensor
     if (operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {
-        return program::ManualSeedSingleSeedSetCoresProgramFactory{};
+        return ManualSeedSingleSeedSetCoresProgramFactory{};
     }
     // Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to cores based on tensors
     if (!operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {
-        return program::ManualSeedSetSeedsSetCoresProgramFactory{};
+        return ManualSeedSetSeedsSetCoresProgramFactory{};
     }
     log_warning(
         tt::LogMetal,
         "Logic error during selecting ManualSeed program factory, defaulting to "
         "ManualSeedSingleSeedToAllCoresProgramFactory");
-    return program::ManualSeedSingleSeedToAllCoresProgramFactory{};
+    return ManualSeedSingleSeedToAllCoresProgramFactory{};
 }
 void ManualSeedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -116,9 +116,6 @@ ManualSeedDeviceOperation::tensor_return_value_t ManualSeedDeviceOperation::crea
     return create_device_tensor(output_specs, operation_attributes.device);
 }
 
-}  // namespace ttnn::operations::reduction::manual_seed
-
-namespace ttnn::prim {
 ttnn::Tensor manual_seed(
     const std::variant<uint32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
@@ -128,7 +125,7 @@ ttnn::Tensor manual_seed(
         TT_FATAL(device.has_value(), "Device must be provided when seeds is a uint32_t value.");
     }
 
-    using OperationType = ttnn::operations::reduction::manual_seed::ManualSeedDeviceOperation;
+    using OperationType = ManualSeedDeviceOperation;
     OperationType::operation_attributes_t operation_attributes{};
     if (device.has_value()) {
         operation_attributes.device = std::addressof(device.value().get());

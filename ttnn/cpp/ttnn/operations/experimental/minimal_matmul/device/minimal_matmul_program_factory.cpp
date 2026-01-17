@@ -15,7 +15,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -107,7 +107,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
@@ -661,7 +661,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const MinimalMatmulParams& operation_attributes,
+    const MinimalMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
 
@@ -681,8 +683,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
 
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const MinimalMatmulParams& /*operation_attributes*/,
+    const MinimalMatmulInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& override_variables = cached_program.shared_variables;
@@ -729,4 +731,4 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::program
+}  // namespace ttnn::experimental::prim
