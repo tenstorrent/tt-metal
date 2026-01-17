@@ -355,6 +355,7 @@ import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
+import ttnn.operations.parallel as parallel
 
 divide = ttnn.div
 sub = ttnn.subtract

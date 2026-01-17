@@ -383,4 +383,33 @@ std::shared_ptr<BranchDescriptor> make_descriptor(const Branch<DeviceOp>& branch
     return std::make_shared<TypedBranchDescriptor<DeviceOp>>(branch);
 }
 
+// =============================================================================
+// create_branch - Convenient helper for operations to create branch descriptors
+// =============================================================================
+//
+// Usage in an operation's branch() method:
+//
+//   static std::shared_ptr<BranchDescriptor> branch(
+//       const Tensor& input, float epsilon, const CoreRangeSet& cores, ...) {
+//       return ttnn::parallel::create_branch<LayerNormDeviceOperation>(
+//           cores,
+//           operation_attributes_t{.eps = epsilon, ...},
+//           tensor_args_t{.input = input, ...}
+//       );
+//   }
+//
+template <typename DeviceOp>
+std::shared_ptr<BranchDescriptor> create_branch(
+    const CoreRangeSet& cores,
+    const typename DeviceOp::operation_attributes_t& op_attrs,
+    const typename DeviceOp::tensor_args_t& tensor_args) {
+    return std::make_shared<TypedBranchDescriptor<DeviceOp>>(cores, op_attrs, tensor_args);
+}
+
 }  // namespace ttnn::operations::experimental::parallel
+
+// Convenience alias for easier access
+namespace ttnn::parallel_internal {
+using ttnn::operations::experimental::parallel::BranchDescriptor;
+using ttnn::operations::experimental::parallel::create_branch;
+}  // namespace ttnn::parallel_internal

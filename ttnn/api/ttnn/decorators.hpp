@@ -61,6 +61,13 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
+// Concept to check if an operation supports parallel execution via branch()
+template <typename Op>
+concept HasBranchMethod = requires {
+    // Operation must have at least one branch() static method
+    &Op::branch;
+};
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     // Get "add" from "ttnn::add"
@@ -78,6 +85,17 @@ struct registered_operation_t {
         requires(HasInvoke<operation_t, Args && ...>)
     auto operator()(Args&&... args) const {
         return traced_invoke(std::forward<Args>(args)...);
+    }
+
+    // Check if this operation supports parallel execution
+    static constexpr bool supports_parallel() { return HasBranchMethod<operation_t>; }
+
+    // Create a branch descriptor for parallel execution
+    // Only available if the operation implements a branch() method
+    template <typename... Args>
+        requires(HasBranchMethod<operation_t>)
+    auto branch(Args&&... args) const {
+        return operation_t::branch(std::forward<Args>(args)...);
     }
 
 private:

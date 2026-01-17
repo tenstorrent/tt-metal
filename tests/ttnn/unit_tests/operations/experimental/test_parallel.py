@@ -9,9 +9,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Access the experimental parallel operations from the correct module path
-experimental_ops = ttnn._ttnn.operations.experimental
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -27,8 +24,8 @@ def torch_rms_norm(x, gamma=None, eps=1e-5):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])  # Larger height for more tile rows
 @pytest.mark.parametrize("w", [64])
-def test_parallel_two_rms_norm(device, batch_size, h, w):
-    """Test parallel execution of two RMS norm operations on disjoint cores."""
+def test_parallel_rms_norm(device, batch_size, h, w):
+    """Test parallel execution using ttnn.parallel.branch() API."""
     torch.manual_seed(0)
 
     # Create two input tensors
@@ -53,25 +50,26 @@ def test_parallel_two_rms_norm(device, batch_size, h, w):
     # Use smaller core ranges (2 cores each) to ensure enough work per core
     # 128 height = 4 tile rows, 2 cores = 2 tile rows per core
     cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
-    # Second set of cores for branch B
     cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
 
-    # Create branches
-    branch_a = experimental_ops.rms_norm_branch(
+    # Create branches using ttnn.parallel.branch(operation, *args, cores=..., **kwargs)
+    branch_a = ttnn.parallel.branch(
+        ttnn.rms_norm,
+        input_a,
         cores=cores_a,
-        input=input_a,
         epsilon=1e-5,
         weight=weight_a,
     )
-    branch_b = experimental_ops.rms_norm_branch(
+    branch_b = ttnn.parallel.branch(
+        ttnn.rms_norm,
+        input_b,
         cores=cores_b,
-        input=input_b,
         epsilon=1e-5,
         weight=weight_b,
     )
 
-    # Execute in parallel
-    results = experimental_ops.parallel([branch_a, branch_b])
+    # Execute in parallel using ttnn.parallel([...])
+    results = ttnn.parallel([branch_a, branch_b])
 
     # Extract outputs
     output_a = ttnn.from_device(results[0][0])
@@ -90,7 +88,7 @@ def test_parallel_two_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("h", [128])  # Same as first test
 @pytest.mark.parametrize("w", [64])
 def test_parallel_rms_norm_different_seed(device, batch_size, h, w):
-    """Test parallel RMS norm with larger dimensions."""
+    """Test parallel RMS norm with different random seed."""
     torch.manual_seed(42)
 
     torch_input_a = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
@@ -112,20 +110,11 @@ def test_parallel_rms_norm_different_seed(device, batch_size, h, w):
     cores_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     cores_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
 
-    branch_a = experimental_ops.rms_norm_branch(
-        cores=cores_a,
-        input=input_a,
-        epsilon=1e-5,
-        weight=weight_a,
-    )
-    branch_b = experimental_ops.rms_norm_branch(
-        cores=cores_b,
-        input=input_b,
-        epsilon=1e-5,
-        weight=weight_b,
-    )
+    # Using ttnn.parallel.branch() API
+    branch_a = ttnn.parallel.branch(ttnn.rms_norm, input_a, cores=cores_a, epsilon=1e-5, weight=weight_a)
+    branch_b = ttnn.parallel.branch(ttnn.rms_norm, input_b, cores=cores_b, epsilon=1e-5, weight=weight_b)
 
-    results = experimental_ops.parallel([branch_a, branch_b])
+    results = ttnn.parallel([branch_a, branch_b])
 
     output_a = ttnn.to_torch(ttnn.from_device(results[0][0]))
     output_b = ttnn.to_torch(ttnn.from_device(results[1][0]))

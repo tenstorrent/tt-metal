@@ -458,6 +458,31 @@ class FastOperation:
 
         return result
 
+    def branch(self, *args, **kwargs):
+        """
+        Create a branch descriptor for parallel execution with ttnn.parallel.
+
+        This method is only available for operations that support parallel execution.
+        The operation must implement a C++ branch() method.
+
+        Returns:
+            BranchDescriptor: A branch descriptor for use with ttnn.parallel().
+
+        Raises:
+            AttributeError: If the operation does not support parallel execution.
+        """
+        if not hasattr(self.function, "branch"):
+            raise AttributeError(
+                f"{self.python_fully_qualified_name} does not support parallel execution. "
+                "The operation must implement a branch() method."
+            )
+        return self.function.branch(*args, **kwargs)
+
+    @property
+    def supports_parallel(self) -> bool:
+        """Check if this operation supports parallel execution via branch()."""
+        return hasattr(self.function, "branch")
+
     def __post_init__(self):
         if self.function.__doc__ is None:
             return
