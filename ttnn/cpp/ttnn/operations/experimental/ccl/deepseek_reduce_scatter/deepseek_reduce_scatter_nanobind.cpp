@@ -32,7 +32,7 @@ void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& opera
             [](const ccl_operation_t& self,
                const std::vector<ttnn::Tensor>& input_tensors,
                const ttnn::MemoryConfig& output_memory_config,
-               uint32_t num_links,  // TODO: (GR) leave for iterative testing on T3K, remove after switching to GLX
+               uint32_t num_links,
                std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
                 return self(input_tensors, output_memory_config, num_links, cluster_axis);
             },
