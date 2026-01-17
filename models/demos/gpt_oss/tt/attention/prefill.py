@@ -71,13 +71,21 @@ def prefill_forward(
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
+    tt_q_orig = tt_q
+    tt_k_orig = tt_k
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=False)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=False)
+    tt_q_orig.deallocate(True)
+    tt_k_orig.deallocate(True)
 
     # Fill KV cache
     k_cache, v_cache = kv_cache
+    tt_k_pre_cast = tt_k
+    tt_v_pre_cast = tt_v
     tt_k = ttnn.typecast(tt_k, k_cache.dtype)
     tt_v = ttnn.typecast(tt_v, v_cache.dtype)
+    tt_k_pre_cast.deallocate(True)
+    tt_v_pre_cast.deallocate(True)
 
     if page_table is not None:
         block_size = k_cache.shape[2]
@@ -103,11 +111,17 @@ def prefill_forward(
         compute_kernel_config=program_config.get_compute_kernel_config(),
         attention_sink=weights.sinks,
     )
+    tt_q.deallocate(True)
+    tt_k.deallocate(True)
+    tt_v.deallocate(True)
 
     # Concat heads and apply output projection
+    tt_sdpa_out_pre_concat = tt_sdpa_out
     tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
+    tt_sdpa_out_pre_concat.deallocate(True)
 
     tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+    # Note: apply_output_projection already deallocates its input tensor internally
     # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
     # Tensor parallel allreduce
