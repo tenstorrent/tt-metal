@@ -92,11 +92,15 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
 #endif
 
-    // Skip fused op receiver initialization in minimal version
-    // ReduceScatterOpReceiver matmul_receiver;
-    // if constexpr (fuse_op) {
-    //     matmul_receiver = ReduceScatterOpReceiver(arg_idx);
-    // }
+    // Let's set some particular values for the params used
+    const uint32_t M_blocks_per_core = 4;
+    const uint32_t batch_size = input_tensor_B;
 
-    // Minimal reader does nothing - no data reading, no CB operations
+    for (uint32_t b = 0; b < batch_size; b++) {
+        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            for (uint32_t i = 0; i < ring_size; i++) {
+                const bool do_reduce = i != 0;
+            }
+        }
+    }
 }
