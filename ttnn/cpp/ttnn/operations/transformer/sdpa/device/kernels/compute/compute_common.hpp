@@ -421,6 +421,12 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 #define ADDR_MOD_X ADDR_MOD_7
 #endif
 
+ALWI void INSERT_SFPNOP() {
+#ifdef ARCH_WORMHOLE
+    TTI_SFPNOP;
+#endif
+}
+
 /**
  * Initialization for the run_clamp_loadmacro function.
  */
@@ -614,7 +620,7 @@ void calculate_exponential_polynomial() {
 
         if constexpr (SCALE_EN) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            // TTI_SFPNOP;
+            // INSERT_SFPNOP();
         }
 
         // Multiply by 1/ln(2) and round.
@@ -623,7 +629,7 @@ void calculate_exponential_polynomial() {
         TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
 
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPNOP;
+        INSERT_SFPNOP();
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
@@ -642,40 +648,40 @@ void calculate_exponential_polynomial() {
 #endif
         } else {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            TTI_SFPNOP;
+            INSERT_SFPNOP();
 
             // Calculate polynomial.
             if constexpr (POLY_DEGREE == 1) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 2) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else if constexpr (POLY_DEGREE == 3) {
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             } else {  // degree 4.
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
+                INSERT_SFPNOP();
                 TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
             }
-            TTI_SFPNOP;
+            INSERT_SFPNOP();
         }
 
         // Multiply by 2^k.
         TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
-        TTI_SFPNOP;
+        INSERT_SFPNOP();
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
         TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPNOP;
+        INSERT_SFPNOP();
 
         // Store the result.
         if constexpr (!IS_FP32_DEST_ACC_EN) {
