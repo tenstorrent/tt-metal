@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
@@ -13,42 +14,38 @@
 
 #include <cmath>
 
-namespace ttnn::operations::pool::upsample {
+namespace ttnn::prim {
 
-static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const UpsampleInputs& tensor_args) {
+static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const Tensor& input) {
     // For bilinear mode, input is haloed - use sliding_window_config for original dimensions
     if (args.mode == "bilinear" && args.sliding_window_config.has_value()) {
         const auto& swc = args.sliding_window_config.value();
         return {swc.batch_size, swc.input_hw.first, swc.input_hw.second, swc.channels};
     }
-    const auto& s = tensor_args.input_tensor.logical_shape();
+    const auto& s = input.logical_shape();
     return {s[0], s[1], s[2], s[3]};
 }
 
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const Tensor& input = tensor_args.input_tensor;
-
+    const operation_attributes_t& args, const Tensor& input) {
     if (args.mode == "bilinear") {
-        return program::UpsampleBilinearProgramFactory{};
+        return UpsampleBilinearProgramFactory{};
     }
 
-    UpsamplePath path = select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path =
+        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
 
-    if (path == UpsamplePath::INTEGER_OPTIMIZED) {
+    if (path == operations::pool::upsample::UpsamplePath::INTEGER_OPTIMIZED) {
         if (input.is_sharded()) {
-            return program::UpsampleMultiCoreShardedProgramFactory{};
+            return UpsampleMultiCoreShardedProgramFactory{};
         }
-        return program::UpsampleMultiCoreInterleavedProgramFactory{};
+        return UpsampleMultiCoreInterleavedProgramFactory{};
     }
 
-    return program::UpsampleNearestFloatProgramFactory{};
+    return UpsampleNearestFloatProgramFactory{};
 }
 
-void UpsampleOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
-
+void UpsampleOperation::validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input) {
     // Basic tensor validation
     TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input tensor must have allocated buffer");
@@ -63,7 +60,8 @@ void UpsampleOperation::validate_on_program_cache_miss(
     // Bilinear-specific requirements
     if (args.mode == "bilinear") {
         TT_FATAL(
-            is_integer_scale(args.scale_factor_h) && is_integer_scale(args.scale_factor_w),
+            operations::pool::upsample::is_integer_scale(args.scale_factor_h) &&
+                operations::pool::upsample::is_integer_scale(args.scale_factor_w),
             "bilinear mode requires integer scale factors, got ({}, {})",
             args.scale_factor_h,
             args.scale_factor_w);
@@ -81,22 +79,22 @@ void UpsampleOperation::validate_on_program_cache_miss(
     }
 
     // Path validation with detailed error message
-    UpsamplePath path = select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path =
+        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
     TT_FATAL(
-        path != UpsamplePath::UNSUPPORTED,
+        path != operations::pool::upsample::UpsamplePath::UNSUPPORTED,
         "{}",
-        generate_unsupported_config_message(input, args.scale_factor_h, args.scale_factor_w, args.mode));
+        operations::pool::upsample::generate_unsupported_config_message(
+            input, args.scale_factor_h, args.scale_factor_w, args.mode));
 }
 
-void UpsampleOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+void UpsampleOperation::validate_on_program_cache_hit(const operation_attributes_t& args, const Tensor& input) {
+    validate_on_program_cache_miss(args, input);
 }
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const Tensor& input = tensor_args.input_tensor;
-    const auto input_shape = get_input_shape(args, tensor_args);
+    const operation_attributes_t& args, const Tensor& input) {
+    const auto input_shape = get_input_shape(args, input);
 
     // Compute output dimensions (floor for PyTorch compatibility)
     const uint32_t out_n = input_shape[0];
@@ -118,7 +116,8 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
     // ND sharded → float path (always)
     if (input_mc.is_sharded() && input_mc.created_with_nd_shard_spec()) {
-        return make_spec(compute_nd_output_mem_config(input_mc, args.scale_factor_h, args.scale_factor_w));
+        return make_spec(operations::pool::upsample::compute_nd_output_mem_config(
+            input_mc, args.scale_factor_h, args.scale_factor_w));
     }
 
     // Non-sharded output
@@ -130,24 +129,22 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     TT_FATAL(input_mc.is_sharded(), "Output memory config is sharded but input memory config is not sharded");
 
     // Determine path and compute output mem config accordingly
-    UpsamplePath path = select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path =
+        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
 
-    if (path == UpsamplePath::INTEGER_OPTIMIZED) {
-        return make_spec(compute_integer_output_mem_config(
+    if (path == operations::pool::upsample::UpsamplePath::INTEGER_OPTIMIZED) {
+        return make_spec(operations::pool::upsample::compute_integer_output_mem_config(
             args.output_mem_config, input, args.mode, args.scale_factor_h, args.scale_factor_w, out_n, out_h, out_w));
     }
 
-    return make_spec(compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
+    return make_spec(operations::pool::upsample::compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
 }
 
 UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+    const operation_attributes_t& args, const Tensor& input) {
+    return create_device_tensor(compute_output_specs(args, input), input.device());
 }
 
-}  // namespace ttnn::operations::pool::upsample
-
-namespace ttnn::prim {
 ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     const float scale_factor_h,
@@ -156,15 +153,15 @@ ttnn::Tensor upsample(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
-    using OperationType = ttnn::operations::pool::upsample::UpsampleOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UpsampleOperation>(
+        UpsampleParams{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
             .sliding_window_config = sliding_window_config},
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        input_tensor);
 }
+
 }  // namespace ttnn::prim
