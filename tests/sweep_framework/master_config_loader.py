@@ -62,7 +62,36 @@ class TensorConfig:
 
 
 class MasterConfigLoader:
-    """Loads and converts master JSON configurations to sweep test parameters"""
+    """Loads and converts master JSON configurations to sweep test parameters
+
+    Class Attributes:
+        lead_models_only: When True, filters configurations to only include
+            those from lead models (e.g., deepseek_v3). Set via set_lead_models_filter()
+            before importing sweep modules that use this loader.
+    """
+
+    # Class-level filter setting (replaces environment variable approach)
+    # This is set by sweeps_parameter_generator.py before importing sweep modules
+    _lead_models_only: bool = False
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        """Set the lead models filter.
+
+        Args:
+            enabled: If True, only configurations from lead models will be loaded.
+                    If False, all configurations will be loaded.
+
+        Note:
+            This must be called BEFORE importing sweep modules that use MasterConfigLoader,
+            as the filtering happens at module load time when get_suite_parameters() is called.
+        """
+        cls._lead_models_only = enabled
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        """Get the current lead models filter setting."""
+        return cls._lead_models_only
 
     def _matches_operation(self, operation_name: str, base_name: str) -> bool:
         """Check if operation_name matches any variant of base_name.
@@ -172,7 +201,8 @@ class MasterConfigLoader:
             List of (arguments, source, machine_info) tuples for traceability
         """
         # Check if we should filter for lead models only
-        lead_models_only = os.environ.get("SWEEPS_LEAD_MODELS_ONLY") == "1"
+        # Uses class-level setting instead of environment variable for cleaner control
+        lead_models_only = MasterConfigLoader._lead_models_only
 
         normalized = []
         for config in configs:

@@ -19,6 +19,7 @@ from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -97,13 +98,12 @@ def format_mesh_suffix(mesh_shape):
 
 # Generate vectors from module parameters
 def generate_vectors(module_name, model_traced, suite_name=None):
-    # Set environment variable to control MasterConfigLoader filtering BEFORE import
-    if model_traced == "lead":
-        os.environ["SWEEPS_LEAD_MODELS_ONLY"] = "1"
-    else:
-        os.environ.pop("SWEEPS_LEAD_MODELS_ONLY", None)
+    # Configure MasterConfigLoader filter BEFORE importing sweep modules
+    # This replaces the previous environment variable approach for cleaner control
+    MasterConfigLoader.set_lead_models_filter(model_traced == "lead")
 
-    # Import or reload the module to pick up environment variable
+    # Import or reload the module to pick up the filter setting
+    # Note: Reload is still needed because sweep modules define parameters at import time
     module_path = "sweeps." + module_name
     if module_path in sys.modules:
         # Force reload if module was already imported with different filter setting
