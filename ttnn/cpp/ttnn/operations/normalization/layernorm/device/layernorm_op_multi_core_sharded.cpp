@@ -1419,12 +1419,16 @@ LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactor
     Tensor& tensor_return_value,
     const std::optional<CoreRangeSet>& core_range_override) {
     // Sharded layernorm uses complex multicast logic that assumes specific core layouts.
-    // For now, we don't support core_range_override with sharded layernorm.
     // The tensor's shard_spec already defines the core range to use.
-    TT_FATAL(
-        !core_range_override.has_value(),
-        "Sharded LayerNorm does not support core_range_override. "
-        "The core range is determined by the tensor's shard_spec.");
+    // If core_range_override is provided, verify it matches the tensor's shard_spec.
+    if (core_range_override.has_value()) {
+        const auto& tensor_cores = tensor_args.input.shard_spec().value().grid;
+        TT_FATAL(
+            core_range_override.value() == tensor_cores,
+            "Sharded LayerNorm core_range_override ({}) must match the tensor's shard_spec grid ({})",
+            core_range_override.value(),
+            tensor_cores);
+    }
 
     // Create a temporary cached_program to extract the shared_variables
     // This is less efficient but maintains correctness for the complex sharded logic
