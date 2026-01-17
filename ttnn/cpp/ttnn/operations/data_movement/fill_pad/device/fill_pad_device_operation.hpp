@@ -12,14 +12,14 @@
 
 #include "fill_pad_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::fill_pad {
+namespace ttnn::prim {
 
 struct FillPadDeviceOperation {
     using operation_attributes_t = FillPadParams;
     using tensor_args_t = FillPadInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::FillPadProgramFactory>;
+    using program_factory_t = std::variant<FillPadProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -31,8 +31,6 @@ struct FillPadDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::data_movement::fill_pad
-
-namespace ttnn::prim {
 ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config);
+
 }  // namespace ttnn::prim

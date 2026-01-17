@@ -6,9 +6,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct TilizeWithValPaddingParams {
     ttnn::Shape output_padded_shape{};
     tt::tt_metal::PadValue pad_value;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -19,11 +19,4 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
-    Tensor input_tensor;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding
+}  // namespace ttnn::prim

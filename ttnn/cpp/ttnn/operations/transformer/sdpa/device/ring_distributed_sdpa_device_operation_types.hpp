@@ -10,26 +10,23 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn::operations::transformer::ring_distributed_sdpa {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct RingDistributedSDPAParams {
     uint32_t ring_size = 0;
     std::optional<uint32_t> ring_id;
     std::optional<float> scale;
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<SDPAProgramConfig> program_config;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<int64_t> chunk_start_idx;
 };
 
-struct tensor_args_t {
+struct RingDistributedSDPAInputs {
     ttnn::Tensor q;
     ttnn::Tensor k;
     ttnn::Tensor v;
     std::optional<ttnn::Tensor> page_table;
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
-
-}  // namespace ttnn::operations::transformer::ring_distributed_sdpa
+}  // namespace ttnn::prim

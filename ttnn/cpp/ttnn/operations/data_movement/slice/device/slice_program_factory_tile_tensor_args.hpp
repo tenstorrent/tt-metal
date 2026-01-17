@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::data_movement::slice::program {
+namespace ttnn::prim {
 
 struct SliceTileTensorArgsProgramFactory {
     struct shared_variables_t {
@@ -26,4 +26,4 @@ struct SliceTileTensorArgsProgramFactory {
         cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::slice::program
+}  // namespace ttnn::prim
