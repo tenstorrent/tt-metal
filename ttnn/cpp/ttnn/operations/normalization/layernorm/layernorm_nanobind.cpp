@@ -30,6 +30,9 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
+        .def_ro("legacy_reduction", &LayerNormDefaultProgramConfig::legacy_reduction)
+        .def_ro("legacy_rsqrt", &LayerNormDefaultProgramConfig::legacy_rsqrt)
+        .def_ro("use_welford", &LayerNormDefaultProgramConfig::use_welford)
         .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     nb::class_<LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
@@ -44,6 +47,15 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
+        .def_ro(
+            "compute_with_storage_grid_size", &LayerNormShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
+        .def_ro("subblock_w", &LayerNormShardedMultiCoreProgramConfig::subblock_w)
+        .def_ro("block_h", &LayerNormShardedMultiCoreProgramConfig::block_h)
+        .def_ro("block_w", &LayerNormShardedMultiCoreProgramConfig::block_w)
+        .def_ro("inplace", &LayerNormShardedMultiCoreProgramConfig::inplace)
+        .def_ro("legacy_reduction", &LayerNormShardedMultiCoreProgramConfig::legacy_reduction)
+        .def_ro("legacy_rsqrt", &LayerNormShardedMultiCoreProgramConfig::legacy_rsqrt)
+        .def_ro("use_welford", &LayerNormShardedMultiCoreProgramConfig::use_welford)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
