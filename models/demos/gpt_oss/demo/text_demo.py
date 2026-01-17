@@ -34,11 +34,52 @@ from models.demos.gpt_oss.tt.generator import GPTOSSRowShardedGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+    get_padded_prefill_len,
+    preprocess_inputs_prefill,
+    sample_host,
+)
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
+
+
+def create_long_context_page_table(
+    global_batch_size: int,
+    mesh_rows: int,
+    paged_attention_config: PagedAttentionConfig,
+    long_context_user_per_row: int = 0,
+) -> torch.Tensor:
+    """Create page table where one user per row gets all blocks.
+
+    For long-context scenarios (e.g., 128k tokens), we want a single user per row
+    to have access to the entire page table for that row, while other users
+    (padding for decode batch size) have empty page tables.
+
+    Args:
+        global_batch_size: Total batch size across all rows (e.g., 128)
+        mesh_rows: Number of rows in the mesh (e.g., 4 for 4x8)
+        paged_attention_config: Paged attention configuration with block info
+        long_context_user_per_row: Which user index (0-31) gets full allocation
+
+    Returns:
+        Page table tensor [global_batch_size, blocks_per_row]
+    """
+    users_per_row = global_batch_size // mesh_rows
+    blocks_per_row = paged_attention_config.max_num_blocks
+
+    # Initialize with -1 (invalid) for all users
+    page_table = torch.full((global_batch_size, blocks_per_row), -1, dtype=torch.int32)
+
+    for row in range(mesh_rows):
+        # User index that gets the full page table for this row
+        long_user_idx = row * users_per_row + long_context_user_per_row
+        # Assign all blocks sequentially to this user
+        page_table[long_user_idx, :] = torch.arange(blocks_per_row, dtype=torch.int32)
+
+    return page_table
 
 
 def prepare_gpt_oss_generator_args(
@@ -53,8 +94,16 @@ def prepare_gpt_oss_generator_args(
     mesh_config=None,
     state_dict=None,
     users_row_sharded=False,
+    long_context_mode=False,
 ):
-    """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
+    """Prepare generator args using GPT-OSS create_tt_model (clean version)
+
+    Args:
+        long_context_mode: If True, allocate all page blocks to user 0 of each row
+                          for single-user long-context (e.g., 128k) scenarios.
+                          Also disables throughput experts since single-user prefill
+                          is not compatible with all_to_all dispatch/combine.
+    """
     submesh_devices = create_submeshes(mesh_device, data_parallel)
 
     # Hybrid requires a model per submesh
@@ -73,6 +122,7 @@ def prepare_gpt_oss_generator_args(
 
     for submesh in submesh_devices:
         # Use GPT-OSS create_tt_model directly!
+        use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             max_batch_size=global_batch_size // data_parallel,
@@ -83,7 +133,7 @@ def prepare_gpt_oss_generator_args(
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
-            use_throughput_experts=mesh_device.shape[0] > 1 and global_batch_size > 1,
+            use_throughput_experts=use_throughput,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -91,7 +141,15 @@ def prepare_gpt_oss_generator_args(
 
     # Page table will be created using tt-transformers infrastructure after input preprocessing
     if paged_attention:
-        if users_row_sharded:
+        if long_context_mode and users_row_sharded:
+            # Long-context mode: one user per row gets all blocks
+            page_table = create_long_context_page_table(
+                global_batch_size,
+                mesh_device.shape[0],
+                paged_attention_config,
+                long_context_user_per_row=0,
+            )
+        elif users_row_sharded:
             # If users are sharded on rows of mesh, we need a separate page table for each row
             page_tables = [
                 create_tt_page_table(
@@ -130,7 +188,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -144,6 +202,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
             False,  # users_row_sharded
+            False,  # long_context_mode
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -157,6 +216,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
             False,  # users_row_sharded
+            False,  # long_context_mode
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -170,6 +230,7 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
             False,  # users_row_sharded
+            False,  # long_context_mode
         ),
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -183,6 +244,22 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
             True,  # users_row_sharded
+            False,  # long_context_mode
+        ),
+        # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            1,  # data_parallel
+            128,  # batch_size (32 per row, but only 1 real user per row)
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len (128k tokens)
+            50,  # max_generated_tokens (reduced for long context)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # 2048 blocks for 128k
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace
+            True,  # users_row_sharded
+            True,  # long_context_mode - single user per row gets all page blocks
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -240,6 +317,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_1k",
         "prefill_4k",
         "batch128",
+        "long_context_128k",
         # "prefill_8k",
         # "prefill_16k",
         # "prefill_32k",
@@ -263,6 +341,7 @@ def test_gpt_oss_demo(
     enable_decode_trace,
     enable_prefill_trace,
     users_row_sharded,
+    long_context_mode,
     is_ci_env,
     state_dict,
 ):
@@ -321,6 +400,7 @@ def test_gpt_oss_demo(
         mesh_config=mesh_config,  # Pass our refactored mesh config
         state_dict=state_dict,
         users_row_sharded=users_row_sharded,
+        long_context_mode=long_context_mode,
     )
 
     # Create generator (match tt-transformers pattern)
@@ -332,14 +412,35 @@ def test_gpt_oss_demo(
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
+
+    # For long_context_mode, we only have 1 real user per row
+    # The rest are padding users with empty prompts
+    num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
+    users_per_row = global_batch_size // mesh_device.shape[0]
+
     if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
-        input_prompts = input_prompts * global_batch_size
+        real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
-        input_prompts, _ = load_inputs(input_prompts, global_batch_size, instruct=False)
+        real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
     else:
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
+
+    if long_context_mode:
+        # Expand to full batch: 1 real user + (users_per_row - 1) padding users per row
+        # Padding users get minimal prompts (single token)
+        padding_prompt = "."  # Minimal prompt for padding users
+        input_prompts = []
+        for row in range(mesh_device.shape[0]):
+            input_prompts.append(real_prompts[row])  # User 0 of each row gets real prompt
+            input_prompts.extend([padding_prompt] * (users_per_row - 1))  # Padding users
+        logger.info(
+            f"Long-context mode: {num_real_users} real users with 128k context, {global_batch_size - num_real_users} padding users"
+        )
+    else:
+        input_prompts = real_prompts
+
     profiler.end("loading_inputs")
 
     # Create repeat batches (like tt-transformers)
@@ -389,32 +490,93 @@ def test_gpt_oss_demo(
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-        # Prefill phase (matching tt_transformers)
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            enable_trace=enable_prefill_trace,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+        # Prefill phase
+        if long_context_mode:
+            # Long-context mode: prefill only the real users (user 0 of each row)
+            # Other users are padding and don't need prefill
+            logger.info(f"Long-context prefill: processing {num_real_users} real users...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
 
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            enable_trace=enable_prefill_trace,
-        )
-        prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
-        logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+            prefilled_token = torch.zeros(global_batch_size, dtype=torch.long)
+            real_user_indices = [row * users_per_row for row in range(mesh_device.shape[0])]
+
+            model_id = 0  # data_parallel=1, single model
+
+            for i, user_id in enumerate(real_user_indices):
+                user_prefill_len = prefill_lens[user_id]
+                padded_len = get_padded_prefill_len(user_prefill_len)
+
+                # Pad tokens to required length (multiple of 32 / power of 2)
+                user_tokens_raw = input_tokens_prefill_pt[user_id : user_id + 1, :user_prefill_len]
+                user_tokens = torch.cat(
+                    [user_tokens_raw, torch.zeros(1, padded_len - user_prefill_len, dtype=torch.long)], dim=-1
+                )
+                user_page_table = page_table[user_id : user_id + 1]
+
+                logger.info(
+                    f"Prefilling user {user_id} (row {i}) with {user_prefill_len} tokens (padded to {padded_len})..."
+                )
+
+                # Use single-user prefill
+                logits = generator.prefill_forward_single_user_text(
+                    user_tokens,
+                    page_table=user_page_table,
+                    user_id=user_id,
+                    last_token_idx=user_prefill_len - 1,
+                    kv_cache=tt_kv_cache[model_id],
+                    model_id=model_id,
+                )
+                # Convert ttnn.Tensor to torch.Tensor for argmax
+                # For multi-device tensors, extract from device 0 first
+                if not isinstance(logits, torch.Tensor):
+                    tt_output_tensor = ttnn.get_device_tensors(logits)[0]
+                    logits = ttnn.to_torch(tt_output_tensor)
+                # Logits shape may be [batch_per_row, vocab_size], select user 0 of the row
+                if logits.dim() > 1 and logits.shape[0] > 1:
+                    logits = logits[0]  # Select first user's logits
+                prefilled_token[user_id] = torch.argmax(logits.view(-1)).item()
+
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+
+            # Skip second timing pass for long-context mode - it's too expensive
+            # Just copy compile time as inference time for metrics
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+
+            # For padding users, generate a dummy token (they won't be used meaningfully)
+            for user_id in range(global_batch_size):
+                if user_id not in real_user_indices:
+                    prefilled_token[user_id] = tokenizer.eos_token_id
+
+            logger.info(f"Prefill finished for {num_real_users} real users")
+            logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
+        else:
+            # Standard batch prefill (matching tt_transformers)
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
+
+            logger.info(f"Starting prefill...")
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+            )
+            prefilled_token = torch.argmax(logits, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Prefill finished")
+            logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
@@ -425,6 +587,15 @@ def test_gpt_oss_demo(
         user_done = [False] * global_batch_size
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
         out_tok = prefilled_token
+
+        # Define real_user_indices for long_context_mode (user 0 of each row)
+        real_user_indices = set(row * users_per_row for row in range(mesh_device.shape[0]))
+
+        # In long_context_mode, mark padding users as done immediately
+        if long_context_mode:
+            for user in range(global_batch_size):
+                if user not in real_user_indices:
+                    user_done[user] = True
 
         # Generation loop (matching tt_transformers structure)
         logger.info(f"Starting decode loop...")
@@ -488,6 +659,10 @@ def test_gpt_oss_demo(
         # Final output for this batch (like tt_transformers)
         logger.info("Finished decoding, printing the final outputs...\n")
         for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts_batch)):
+            # In long_context_mode, skip printing padding users
+            if long_context_mode and i not in real_user_indices:
+                continue
+
             text = tokenizer.decode(output)
             prompt_including_assistant_tags = tokenizer.decode(model_args[0].encode_prompt(prompt))
             text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
@@ -496,8 +671,9 @@ def test_gpt_oss_demo(
                 if len(prompt) > 200
                 else prompt
             )
+            user_label = f"USER {i} (row {i // users_per_row})" if long_context_mode else f"USER {i}"
             logger.info(
-                f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                f"\n==REPEAT BATCH {batch_idx}\n=={user_label} - PROMPT\n{short_prompt} \n=={user_label} - OUTPUT\n{text_after_prompt.strip()}\n"
             )
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
@@ -515,12 +691,16 @@ def test_gpt_oss_demo(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Calculate TTFT and t/s/u metrics (like tt-transformers)
-    avg_time_to_first_token = total_inference_prefill_time / global_batch_size  # TTFT per user
+    # For long_context_mode, only count real users for metrics
+    effective_batch_size = num_real_users if long_context_mode else global_batch_size
+    avg_time_to_first_token = total_inference_prefill_time / effective_batch_size  # TTFT per user
     avg_decode_iteration_time = total_inference_decode_time / (num_tokens_generated_decode[0] - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * effective_batch_size
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # t/s/u
-    decode_tok_s = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size  # total t/s
+    decode_tok_s = (
+        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * effective_batch_size
+    )  # total t/s
 
     measurements = {
         # Required measurements
