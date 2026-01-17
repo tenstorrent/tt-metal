@@ -14,7 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
-from framework.constants import LEAD_MODELS
+from framework.constants import LEAD_MODELS, format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
@@ -82,18 +82,6 @@ def group_vectors_by_mesh_shape(vectors):
         grouped[mesh_shape].append(vector)
 
     return grouped
-
-
-def format_mesh_suffix(mesh_shape):
-    """Format mesh shape as filename suffix.
-
-    Args:
-        mesh_shape: tuple of (rows, cols)
-
-    Returns:
-        str: Formatted suffix like '__mesh_2x4' or '__mesh_1x1'
-    """
-    return f"__mesh_{mesh_shape[0]}x{mesh_shape[1]}"
 
 
 # Generate vectors from module parameters

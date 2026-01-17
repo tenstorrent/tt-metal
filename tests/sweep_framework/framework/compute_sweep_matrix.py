@@ -26,15 +26,12 @@ Prints JSON matrix to stdout in format required by GitHub Actions.
 
 import os
 import json
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Regex pattern to match mesh suffix: __mesh_<rows>x<cols> at end of string
-# Examples: __mesh_1x1, __mesh_2x4, __mesh_16x2
-# Pattern ensures mesh shape is at the END of the module name
-MESH_SUFFIX_PATTERN = re.compile(r"__mesh_(\d+x\d+)$")
+# Import mesh utilities from shared constants module
+from constants import get_mesh_shape_string, strip_mesh_suffix
 
 
 def chunk_modules(items, size):
@@ -42,47 +39,10 @@ def chunk_modules(items, size):
     return [",".join(items[i : i + size]) for i in range(0, len(items), size)] if items else []
 
 
+# Alias for backward compatibility and clearer naming in this context
 def get_mesh_shape(module_name):
-    """
-    Extract mesh shape from module name.
-
-    Args:
-        module_name: Module name possibly containing mesh suffix (e.g., 'op__mesh_2x4')
-
-    Returns:
-        Mesh shape string (e.g., '2x4') or None if no valid mesh suffix found.
-
-    Examples:
-        'op__mesh_2x4' -> '2x4'
-        'op__mesh_1x1' -> '1x1'
-        'op' -> None
-        'op__mesh_invalid' -> None (invalid format)
-        'op__mesh_2x4__mesh_1x1' -> '1x1' (takes last valid suffix)
-    """
-    match = MESH_SUFFIX_PATTERN.search(module_name)
-    if match:
-        return match.group(1)
-    return None
-
-
-def strip_mesh_suffix(module_name):
-    """
-    Remove mesh suffix from module name.
-
-    Args:
-        module_name: Module name possibly containing mesh suffix (e.g., 'op__mesh_2x4')
-
-    Returns:
-        Module name with mesh suffix removed.
-
-    Examples:
-        'op__mesh_2x4' -> 'op'
-        'op__mesh_1x1' -> 'op'
-        'op' -> 'op'
-        'op__mesh_invalid' -> 'op__mesh_invalid' (invalid format, unchanged)
-        'op__mesh_2x4__mesh_1x1' -> 'op__mesh_2x4' (removes last valid suffix only)
-    """
-    return MESH_SUFFIX_PATTERN.sub("", module_name)
+    """Extract mesh shape string from module name (wrapper for get_mesh_shape_string)."""
+    return get_mesh_shape_string(module_name)
 
 
 def get_lead_models_mesh_runner_config():
