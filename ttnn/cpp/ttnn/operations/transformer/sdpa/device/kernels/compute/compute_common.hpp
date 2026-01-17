@@ -553,7 +553,7 @@ void calculate_exponential_polynomial_init() {
  *
  * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false). Only
  * supported on Blackhole.
- * @tparam SCALE_EN Apply scaling factor from LREG11 to input values
+ * @tparam SCALE_EN Apply scaling factor from LREG to input values
  * @tparam ITERATIONS Number of 32-element vectors to process per tile
  * @tparam POLY_DEGREE Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
  * @tparam IS_FP32_DEST_ACC_EN Float32 accumulation to dest register enabled.
