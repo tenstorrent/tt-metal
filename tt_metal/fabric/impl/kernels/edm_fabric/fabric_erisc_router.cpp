@@ -3236,7 +3236,7 @@ void kernel_main() {
 #else
     constexpr bool use_posted_writes_for_connection_open = true;
 #endif
-
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // This barrier is here just in case the initialization process of any of the sender/receiver channel
         // implementations require any assumptions about channel contents or anything similar. Without it there
@@ -3248,16 +3248,20 @@ void kernel_main() {
         // Whether or not there truly is a race in a given snapshot/commit hash is not relevant. The intention with this
         // is to avoid all possible footguns as implementations of underlying datastructures potenntially change over
         // time.
+        DPRINT << "Waiting for other local erisc" << ENDL();
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+        DPRINT << "Starting remote handshake. Z Router enabled: " << static_cast<int>(z_router_enabled) << ENDL();
         if constexpr (is_handshake_sender) {
+            DPRINT << "Is handshake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
+            DPRINT << "Is handshake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
@@ -3281,6 +3285,11 @@ void kernel_main() {
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
+                for (volatile uint32_t i = 0; i < 100000000; i++);
+                DPRINT << "Master got " << *reinterpret_cast<volatile uint32_t* const>(edm_local_sync_ptr)
+                       << " Expected" << num_local_edms - 1 << " M: " << routing_table_l1->my_mesh_id
+                       << " D: " << routing_table_l1->my_device_id
+                       << " Z router enabled: " << static_cast<int>(z_router_enabled) << ENDL();
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
@@ -3288,8 +3297,11 @@ void kernel_main() {
                 notify_subordinate_routers(
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {
+                DPRINT << "Notifying master router" << ENDL();
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+                DPRINT << "Master notified" << ENDL();
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms);
+                DPRINT << "Wait for notification complete" << ENDL();
             }
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;

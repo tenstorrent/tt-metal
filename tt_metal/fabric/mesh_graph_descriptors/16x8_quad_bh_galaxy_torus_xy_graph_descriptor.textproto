@@ -8,5 +8,18 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+
 # --- Instantiation ----------------------------------------------------------
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

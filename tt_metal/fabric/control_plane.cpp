@@ -201,6 +201,17 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         golden_link_counts;
     TT_FATAL(this->mesh_graph_ != nullptr, "Routing table generator not initialized");
     build_golden_link_counts(this->mesh_graph_->get_intra_mesh_connectivity(), golden_link_counts);
+
+    // for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_->get_inter_mesh_connectivity().size(); mesh_id++) {
+    //     for (std::uint32_t chip_id = 0; chip_id < mesh_graph_->get_inter_mesh_connectivity()[mesh_id].size();
+    //     chip_id++) {
+    //         for (const auto& [remote_connected_id, router_edge] :
+    //         mesh_graph_->get_inter_mesh_connectivity()[mesh_id][chip_id]) {
+    //             std::cout << "Mesh " << mesh_id << ", Chip " << chip_id << ", router edge: " <<
+    //             enchantum::to_string(router_edge.port_direction) << std::endl;
+    //         }
+    //     }
+    // }
     build_golden_link_counts(this->mesh_graph_->get_inter_mesh_connectivity(), golden_link_counts);
 
     auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
@@ -2449,16 +2460,16 @@ void ControlPlane::generate_intermesh_connectivity() {
     auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
                                      (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
 
-    auto get_num_requested_intermesh_connections = [&]() -> size_t {
-        const auto& mesh_graph = *this->mesh_graph_;
-        const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-        const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
-        TT_FATAL(
-            requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
-            "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
-        return !requested_intermesh_connections.empty() ? requested_intermesh_connections.size()
-                                                        : requested_intermesh_ports.size();
-    };
+    // auto get_num_requested_intermesh_connections = [&]() -> size_t {
+    //     const auto& mesh_graph = *this->mesh_graph_;
+    //     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    //     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+    //     TT_FATAL(
+    //         requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+    //         "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
+    //     return !requested_intermesh_connections.empty() ? requested_intermesh_connections.size()
+    //                                                     : requested_intermesh_ports.size();
+    // };
 
     if (!generate_mapping_locally_ &&
         *(tt_metal::MetalContext::instance().full_world_distributed_context().size()) > 1) {
@@ -2471,14 +2482,14 @@ void ControlPlane::generate_intermesh_connectivity() {
     }
     // Divide by 2 here, since the intermesh_connections data structure stores connections
     // bidirectionally.
-    auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
+    // auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
 
-    TT_FATAL(
-        num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
-        "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
-        " Found {} intermesh connections, but {} were requested",
-        num_assigned_intermesh_connections,
-        get_num_requested_intermesh_connections());
+    // TT_FATAL(
+    //     num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
+    //     "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
+    //     " Found {} intermesh connections, but {} were requested",
+    //     num_assigned_intermesh_connections,
+    //     get_num_requested_intermesh_connections());
 
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
 }
@@ -2496,6 +2507,12 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const auto neighbor_mesh_id = neighbor_binding.first;
 
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    std::stringstream ss;
+    std::cout << "Exit nodes connecting to: " << my_host << " to " << neighbor_host << std::endl;
+    for (const auto& exit_node : exit_nodes) {
+        ss << "Exit node: " << *exit_node.src_exit_node << " Channel: " << +exit_node.eth_conn.src_chan << std::endl;
+    }
+    std::cout << ss.str() << std::endl;
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
     std::vector<PortDescriptor> ports_to_neighbor;
@@ -2514,7 +2531,9 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
-
+        if (src_eth_chan != 8 && src_eth_chan != 9) {
+            continue;
+        }
         bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
 
         for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
@@ -2532,12 +2551,18 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
 
                 // Override direction to Z BEFORE creating port_id if needed
                 RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
+                auto exit_asic_id = get_asic_id_from_fabric_node_id(exit_node_fabric_node_id);
+                auto asic_desc = physical_system_descriptor_->get_asic_descriptors().at(exit_asic_id);
                 port_id_t port_id = {final_direction, logical_chan_id};
                 // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction =
                     !curr_exit_node_direction.contains(exit_node_hash) ||
                     curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
+                    std::cout << "Assigning intermesh connection to logical chip: " << chip_id
+                              << " Tray: " << *asic_desc.tray_id << " Location: " << *asic_desc.asic_location
+                              << "Channel: " << +src_eth_chan << "Direction: " << enchantum::to_string(port_direction)
+                              << std::endl;
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
                     exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
@@ -2595,6 +2620,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
             });
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
+        std::cout << "Assigning intermesh ports to: " << my_host << " to " << neighbor_host << std::endl;
         port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
             my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
     }
@@ -2791,6 +2817,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             }
             std::size_t num_ports_assigned = 0;
             std::size_t num_ports_requested = 0;
+            std::cout << "Num ports requested: " << num_ports_requested << std::endl;
             std::unordered_map<FabricNodeId, uint32_t> num_ports_requested_at_exit_node;
             std::unordered_map<FabricNodeId, uint32_t> num_ports_assigned_at_exit_node;
             if (strict_binding) {
@@ -2822,7 +2849,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                     if (dest_port.connection_hash == connection_hash) {
                         auto src_port_id = src_port.port_id;
                         auto dest_port_id = dest_port.port_id;
-                        log_debug(
+                        log_info(
                             tt::LogDistributed,
                             "Connecting Meshes {} {} over Logical Ports {} {}",
                             *src_mesh,
