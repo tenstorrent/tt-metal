@@ -47,7 +47,7 @@ run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise $PYTEST_CMD output
   export PYTEST_ADDOPTS="--tb=short"

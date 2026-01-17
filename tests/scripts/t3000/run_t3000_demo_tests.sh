@@ -111,7 +111,7 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -418,7 +418,7 @@ run_t3000_gpt_oss_tests() {
   start_time=$(date +%s)
 
   # Install gpt-oss requirements
-  pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
   HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
