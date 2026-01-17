@@ -1,0 +1,8 @@
+﻿ttnn.dequantize
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.dequantize:
+
+.. autooperation:: ttnn.dequantize
