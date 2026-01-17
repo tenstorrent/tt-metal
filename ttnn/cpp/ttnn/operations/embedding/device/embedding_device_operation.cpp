@@ -12,17 +12,17 @@ using namespace tt::tt_metal;
 
 #define RISC_CORES_PER_TENSIX 2
 
-namespace ttnn::operations::embedding {
+namespace ttnn::prim {
 
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
-        return program::EmbeddingsTilizedIndicesProgramFactory{};
+        return EmbeddingsTilizedIndicesProgramFactory{};
     }
     if (operation_attributes.tilized) {
-        return program::EmbeddingsFusedProgramFactory{};
+        return EmbeddingsFusedProgramFactory{};
     }
-    return program::EmbeddingsRMProgramFactory{};
+    return EmbeddingsRMProgramFactory{};
 }
 
 void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
@@ -112,7 +112,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t EmbeddingsDeviceOperation::compute_output_specs(
+TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_arg;
     const auto& weight_tensor = tensor_args.weight_arg;
@@ -131,7 +131,7 @@ spec_return_value_t EmbeddingsDeviceOperation::compute_output_specs(
         TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t EmbeddingsDeviceOperation::create_output_tensors(
+Tensor EmbeddingsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return *tensor_args.optional_output_tensor;
@@ -140,18 +140,15 @@ tensor_return_value_t EmbeddingsDeviceOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_arg.device());
 }
 
-}  // namespace ttnn::operations::embedding
-
-namespace ttnn::prim {
-ttnn::operations::embedding::EmbeddingsDeviceOperation::tensor_return_value_t embedding(
+Tensor embedding(
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,
     bool tilized,
-    ttnn::operations::embedding::EmbeddingsType embeddings_type,
+    EmbeddingsType embeddings_type,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<uint32_t>& pad_token,
     const std::optional<Tensor>& optional_output_tensor) {
-    using OperationType = ttnn::operations::embedding::EmbeddingsDeviceOperation;
+    using OperationType = EmbeddingsDeviceOperation;
     auto memory_config = output_mem_config.value_or(input_tensor_arg.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_mem_config = memory_config,
@@ -167,4 +164,5 @@ ttnn::operations::embedding::EmbeddingsDeviceOperation::tensor_return_value_t em
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
+
 }  // namespace ttnn::prim

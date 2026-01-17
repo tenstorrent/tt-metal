@@ -12,7 +12,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "dram_prefetcher_program_factory.hpp"
 
-namespace ttnn::operations::dram_prefetcher::program {
+namespace ttnn::prim {
 
 using std::vector;
 
@@ -296,4 +296,4 @@ void DramPrefetcherProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
 }
 
-}  // namespace ttnn::operations::dram_prefetcher::program
+}  // namespace ttnn::prim

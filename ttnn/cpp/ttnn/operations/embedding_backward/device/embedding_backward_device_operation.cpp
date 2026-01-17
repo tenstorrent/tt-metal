@@ -11,11 +11,11 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::embedding_backward {
+namespace ttnn::prim {
 
 EmbeddingBackwardDeviceOperation::program_factory_t EmbeddingBackwardDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::EmbeddingBackwardProgramFactory{};
+    return EmbeddingBackwardProgramFactory{};
 }
 
 void EmbeddingBackwardDeviceOperation::validate_on_program_cache_hit(
@@ -99,9 +99,6 @@ EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceO
     return create_device_tensor(output_spec, tensor_args.grad_tensor.device());
 }
 
-}  // namespace ttnn::operations::embedding_backward
-
-namespace ttnn::prim {
 ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,
@@ -109,17 +106,17 @@ ttnn::Tensor embedding_backward(
     const tt::tt_metal::DataType& output_dtype,
     uint32_t num_embeddings,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::embedding_backward::EmbeddingBackwardDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<EmbeddingBackwardDeviceOperation>(
+        EmbeddingBackwardParams{
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .num_embeddings = num_embeddings,
         },
-        OperationType::tensor_args_t{
+        EmbeddingBackwardInputs{
             .index_tensor = index_tensor,
             .grad_tensor = grad_tensor,
             .preallocated_output = preallocated_output,
         });
 }
+
 }  // namespace ttnn::prim

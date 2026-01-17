@@ -28,6 +28,9 @@
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
+using ttnn::operations::conv::conv2d::Conv2dWeightsBiasPrepConfig;
+using ttnn::prim::conv_op_l1_usage;
+
 ResultWithOptions result_to_result_with_options(
     const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
     if (return_output_dim && return_weights_and_bias) {

@@ -11,7 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "layernorm_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormParams {
     LayerNormType norm_type = LayerNormType::LAYERNORM;
@@ -31,4 +31,4 @@ struct LayerNormInputs {
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim
