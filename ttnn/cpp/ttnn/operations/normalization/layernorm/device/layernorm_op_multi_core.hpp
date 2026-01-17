@@ -23,6 +23,7 @@ struct LayerNormMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle compute_kernel_id{};
     uint32_t num_cores = 0;
     CoreCoord grid_size;
+    CoreRangeSet all_cores;  // Actual cores used (needed for override_runtime_args)
 };
 
 struct LayerNormMultiCoreProgramFactory {

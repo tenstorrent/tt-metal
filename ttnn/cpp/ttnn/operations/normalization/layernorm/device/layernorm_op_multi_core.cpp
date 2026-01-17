@@ -620,7 +620,8 @@ LayerNormMultiCoreProgramFactory::shared_variables_t LayerNormMultiCoreProgramFa
         .writer_kernel_id = writer_kernels_id,
         .compute_kernel_id = compute_kernels_id,
         .num_cores = num_cores,
-        .grid_size = grid_size};
+        .grid_size = grid_size,
+        .all_cores = all_cores};
 }
 
 void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
@@ -652,26 +653,31 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     auto* gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
     auto* beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
 
-    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
+    // Iterate through the actual cores used (handles core_range_override case)
+    for (const auto& range : shared_vars.all_cores.ranges()) {
+        for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                CoreCoord core = {x, y};
 
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
-            runtime_args[0] = src_a_dram_buffer->address();
-            if (src_b_dram_buffer != nullptr) {
-                runtime_args[8] = src_b_dram_buffer->address();
-            }
-            if (gamma_dram_buffer != nullptr) {
-                runtime_args[6] = gamma_dram_buffer->address();
-            }
-            if (beta_dram_buffer != nullptr) {
-                runtime_args[7] = beta_dram_buffer->address();
-            }
-        }
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
+                    runtime_args[0] = src_a_dram_buffer->address();
+                    if (src_b_dram_buffer != nullptr) {
+                        runtime_args[8] = src_b_dram_buffer->address();
+                    }
+                    if (gamma_dram_buffer != nullptr) {
+                        runtime_args[6] = gamma_dram_buffer->address();
+                    }
+                    if (beta_dram_buffer != nullptr) {
+                        runtime_args[7] = beta_dram_buffer->address();
+                    }
+                }
 
-        {
-            auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
+                    runtime_args[0] = dst_dram_buffer->address();
+                }
+            }
         }
     }
 }

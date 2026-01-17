@@ -73,13 +73,19 @@ tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    // Hash together the operation type and number of branches
-    // Each branch's unique identity will be determined by its type and attributes
+    // Hash together the operation type, number of branches, and core ranges
+    // Each unique configuration of branches and core ranges should have a distinct hash
     ttsl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
 
     for (const auto& branch : operation_attributes.branches) {
-        // Use the branch's type_info to differentiate between different operation types
+        // Hash the branch's operation type
         combined_hash = ttsl::hash::hash_objects(combined_hash, branch->type_info().hash_code());
+
+        // Hash the core range to ensure different core configurations get different programs
+        for (const auto& range : branch->core_range.ranges()) {
+            combined_hash = ttsl::hash::hash_objects(
+                combined_hash, range.start_coord.x, range.start_coord.y, range.end_coord.x, range.end_coord.y);
+        }
     }
 
     return combined_hash;
