@@ -833,10 +833,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
                 if (batch_size_a > 1 && batch_size_b > 1) {
                     TT_FATAL(
-                        program_config.out_subblock_h % M == 0,
+                        M % program_config.out_subblock_h == 0,
                         "out_subblock_h ({}) needs to divide M ({}) evenly and does not. "
                         "Please update your program config.",
-                        program_config.out_subblock_h % M,
+                        program_config.out_subblock_h,
                         M);
                 }
 
