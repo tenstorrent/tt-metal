@@ -13,6 +13,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "tile_counters.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
@@ -41,6 +42,7 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+volatile tile_counter_u* const tile_counters __attribute__((used)) = (volatile tile_counter_u* const)TILE_COUNTERS_BASE;
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -48,8 +50,6 @@ uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
-
-// CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
@@ -169,6 +169,8 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     // risc_init();
+    // Reset tile counters
+    tile_counters_reset();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
@@ -180,7 +182,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-        // trigger_sync_register_init();
+        trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
@@ -240,7 +242,7 @@ extern "C" uint32_t _start1() {
                 //     { subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
-                uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+                uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
@@ -270,8 +272,8 @@ extern "C" uint32_t _start1() {
                 // }
                 // prev_noc_mode = noc_mode;
 
-                // uint32_t tt_l1_ptr* cb_l1_base =
-                //     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                uint32_t tt_l1_ptr* cb_l1_base =
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -279,8 +281,9 @@ extern "C" uint32_t _start1() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
                     uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
+                    DPRINT << "local mask " << local_cb_mask << ENDL();
                     // TODO: setup DataFlowBuffers
-                    // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+                    setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                     // cb_l1_base =
                     //     (uint32_t tt_l1_ptr*)(kernel_config_base +
                     //     launch_msg_address->kernel_config.remote_cb_offset);
@@ -303,22 +306,21 @@ extern "C" uint32_t _start1() {
 #endif
                     // DM0 is responsible for issuing any noc cmds needed when initializing remote cbs
                     // So have DM0 setup remote cb interfaces even when DM0 is not in use
-                    // if (launch_msg_address->kernel_config.enables) {
-                    //     cb_l1_base =
-                    //         (uint32_t tt_l1_ptr*)(kernel_config_base +
-                    //         launch_msg_address->kernel_config.remote_cb_offset);
-                    //     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    //     experimental::setup_remote_cb_interfaces<true>(
-                    //         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    //     barrier_remote_cb_interface_setup(noc_index, end_cb_index);
-                    // }
+                    if (launch_msg_address->kernel_config.enables) {
+                        cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                                           launch_msg_address->kernel_config.remote_cb_offset);
+                        uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                        // experimental::setup_remote_cb_interfaces<true>(
+                        //     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
+                        // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    }
                     wait_for_go_message();
                 }
                 WAYPOINT("D");
 
                 wait_subordinates();
 
-                // trigger_sync_register_init();
+                trigger_sync_register_init();
 
                 if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {
@@ -386,7 +388,8 @@ extern "C" uint32_t _start1() {
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+        DPRINT << "local mask " << local_cb_mask << ENDL();
+        setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
 
         // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
         // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;

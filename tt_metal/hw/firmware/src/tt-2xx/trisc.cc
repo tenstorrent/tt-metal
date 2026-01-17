@@ -59,11 +59,6 @@ uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to k
 
 uint32_t op_info_offset __attribute__((used)) = 0;
 
-// #define GET_TRISC_RUN_EVAL(x, t) x##t
-// #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-// volatile tt_l1_ptr uint8_t* const trisc_run =
-//     &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->subordinate_sync.neo0_trisc,
-//     COMPILE_FOR_TRISC);
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
 
@@ -103,7 +98,7 @@ extern "C" uint32_t _start1() {
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
     hartid = 8 + 4 * neo_id + trisc_id;  // after 8 DM cores
     volatile tt_l1_ptr uint8_t* const trisc_run =
-        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hartid];  // first entry is for NCRISC
+        &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.map[hartid];
     WAYPOINT("I");
 
     extern uint32_t __ldm_data_start[];
@@ -111,10 +106,16 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     // Initialize GPRs to all 0s
-    // #pragma GCC unroll 0
-    //     for (int i = 0; i < 64; i++) {
-    //         regfile[i] = 0;
-    //     }
+#pragma GCC unroll 0
+    for (int i = 0; i < 64; i++) {
+        regfile[i] = 0;
+    }
+
+    // #31901: initialize PRNG seed to 0 to avoid nondeterministic behavior
+    // volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    // cfg[PRNG_SEED_Seed_Val_ADDR32] = 0;
+    // riscv_wait(600);
+
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
@@ -145,11 +146,11 @@ extern "C" uint32_t _start1() {
         uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if !defined(UCK_CHLKC_MATH)
-        // uint32_t tt_l1_ptr* cb_l1_base =
-        //     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        // uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        // setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0,
-        // local_cb_mask);
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        DPRINT << "local mask " << local_cb_mask << ENDL();
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
 
         // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
         // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;

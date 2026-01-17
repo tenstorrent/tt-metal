@@ -11,24 +11,34 @@
 
 #define TILE_COUNTERS_BASE             0x0080c000
 
+constexpr uint32_t NUM_TILE_COUNTERS = 16;
 constexpr uint32_t NUM_WORDS_TILE_CNT = 8;
+
 typedef struct {
-    std::uint32_t reserved0     : 32;
-    std::uint32_t reset         : 32;
-    std::uint32_t posted        : 32;
-    std::uint32_t acked         : 32;
-    std::uint32_t buf_capacity  : 32;
-    std::uint32_t tiles_posted_raw : 32;
-    std::uint32_t tiles_acked_raw  : 32;
+    std::uint32_t reserved0;
+    std::uint32_t reset;
+    std::uint32_t posted;
+    std::uint32_t acked;
+    std::uint32_t buf_capacity;
+    std::uint32_t tiles_posted_raw;
+    std::uint32_t tiles_acked_raw;
+    std::uint32_t error_status;
 } tile_counter_t;
 
-static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT*sizeof(uint32_t), "tile_counter_t must be 96b!");
+static_assert(
+    sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT * sizeof(uint32_t), "tile_counter_t must be 8 words (32 bytes)!");
 
 typedef union {
     uint32_t words[NUM_WORDS_TILE_CNT];
     tile_counter_t f;
 } tile_counter_u;
 
-tile_counter_u volatile * const tile_counters = (tile_counter_u volatile * const) TILE_COUNTERS_BASE;
+extern volatile tile_counter_u* const tile_counters;
+
+inline void tile_counters_reset() {
+    for (uint32_t i = 0; i < NUM_TILE_COUNTERS; i++) {
+        tile_counters[i].f.reset = 1;
+    }
+}
 
 #endif  // ifndef _TILE_COUNTERS_H_

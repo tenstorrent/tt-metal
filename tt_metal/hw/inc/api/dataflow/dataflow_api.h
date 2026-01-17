@@ -29,7 +29,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
-
+#include "tile_counters.h"
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
 #error "dataflow_api.h is only supported in kernel build. Firmware build should use low-level APIs instead."
@@ -390,10 +390,15 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         invalidate_l1_cache();
-        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        // uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t pages_acked = tile_counters[operand].f.tiles_acked_raw;
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
+        DPRINT << "pages_acked " << pages_acked << ENDL();
+        DPRINT << "pages_received " << pages_received << ENDL();
+        DPRINT << "free_space_pages " << free_space_pages << ENDL();
+        DPRINT << "num_pages " << num_pages << ENDL();
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
 }
@@ -464,7 +469,12 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     WAYPOINT("CWFW");
     do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        // pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        pages_received = tile_counters[operand].f.tiles_posted_raw - pages_acked;
+        DPRINT << "posted raw " << tile_counters[operand].f.tiles_posted_raw << ENDL();
+        DPRINT << "pages_acked " << pages_acked << ENDL();
+        DPRINT << "pages_received " << pages_received << ENDL();
+        DPRINT << "num_pages " << num_pages << ENDL();
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
 }

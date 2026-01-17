@@ -9,6 +9,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "llk_io_unpack.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/dprint.h"
 
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
@@ -18,6 +19,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
 inline void llk_pop_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     // _llk_pop_tiles_(operand, num_tiles);
+    DPRINT << "popping tiles " << num_tiles << ENDL();
     TT_POP_TILES(0x7, num_tiles, operand);
 
     get_local_cb_interface(operand).tiles_acked += num_tiles;
@@ -26,5 +28,9 @@ inline void llk_pop_tiles(const std::int32_t operand, const std::int32_t num_til
 
     if (get_local_cb_interface(operand).fifo_rd_ptr >= get_local_cb_interface(operand).fifo_limit) {
         get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+    get_local_cb_interface(operand).fifo_wr_tile_idx += num_tiles;
+    if (get_local_cb_interface(operand).fifo_wr_tile_idx >= get_local_cb_interface(operand).fifo_num_pages) {
+        get_local_cb_interface(operand).fifo_wr_tile_idx -= get_local_cb_interface(operand).fifo_num_pages;
     }
 }
