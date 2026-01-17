@@ -780,6 +780,8 @@ def run_model_forward_test(
     ccl_manager = CCLManager(mesh_device)
 
     # Create TT model with meta format weights
+    # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
+    use_throughput_experts = is_row_sharded and mesh_device.shape[0] > 1
     tt_model = Model(
         mesh_device=mesh_device,
         hf_config=config,
@@ -792,6 +794,7 @@ def run_model_forward_test(
         create_kv_cache=True,
         max_local_batch_size=local_batch_size,
         users_row_sharded=is_row_sharded,
+        use_throughput_experts=use_throughput_experts,
     )
 
     # Create reference model with HF format weights

@@ -112,14 +112,18 @@ class DecoderLayer:
             is_decode=is_decode,
             user_id=user_id,
         )
+        hidden_states_post_norm.deallocate(True)
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
         hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
+        hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+        residual.deallocate(True)
         return hidden_states

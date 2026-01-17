@@ -72,8 +72,12 @@ def decode_forward(
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
+    tt_q_orig = tt_q
+    tt_k_orig = tt_k
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
+    tt_q_orig.deallocate(True)
+    tt_k_orig.deallocate(True)
 
     # Update KV cache
     k_cache, v_cache = kv_cache
