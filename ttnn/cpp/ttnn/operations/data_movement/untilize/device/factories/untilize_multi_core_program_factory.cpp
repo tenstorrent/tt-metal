@@ -53,7 +53,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     bool input_is_sharded = a.is_sharded();
     bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
     bool output_is_sharded = output.shard_spec().has_value();  // output.is_sharded();
-    std::cout << "output_is_sharded: " << output_is_sharded << std::endl;
     bool output_is_nd_sharded = output.nd_shard_spec().has_value();
     std::cout << "output_is_nd_sharded: " << output_is_nd_sharded << std::endl;
 
@@ -82,7 +81,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         CoreRangeSet grid;
         uint32_t input_shard_height;
         uint32_t input_shard_width;
-        if (a.shard_spec().has_value()) {
+        if (not input_is_nd_sharded) {
             const auto& shard_spec = a.shard_spec().value();
             input_shard_height = shard_spec.shape[0];
             input_shard_width = shard_spec.shape[1];
@@ -114,37 +113,13 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 nd_shard_spec.shard_distribution_strategy);
             num_shards = distribution_spec.num_shards();
             const auto page_mapping = distribution_spec.compute_page_mapping();
-            for (size_t core_idx = 0; core_idx < page_mapping.all_cores.size(); ++core_idx) {
-                const auto& core = page_mapping.all_cores.at(core_idx);
-                const auto& host_pages = page_mapping.core_host_page_indices.at(core_idx);
-                std::cout << "ND shard page_ids on core (" << core.x << ", " << core.y << "): ";
-                bool first = true;
-                for (size_t dev_page_offset = 0; dev_page_offset < host_pages.size(); ++dev_page_offset) {
-                    uint32_t host_page_id = host_pages[dev_page_offset];
-                    if (host_page_id == tt::tt_metal::UncompressedBufferPageMapping::PADDING) {
-                        continue;
-                    }
-                    if (!first) {
-                        std::cout << ", ";
-                    }
-                    std::cout << host_page_id;
-                    first = false;
-                }
-                std::cout << std::endl;
-            }
-            // Get maximum number of shards on any core
-            // size_t max_shards = distribution_spec.max_num_shards_per_core();
             const auto& groups = distribution_spec.core_groups();
             num_compute_cores = grid.num_cores();
             compute_core_range = grid;
             full_compute_core_range = grid;
             cliff_compute_core_range = CoreRangeSet();
-            // full_compute_core_range = groups.cores_in_group_1;
-            // cliff_compute_core_range = groups.cores_in_group_2;
 
-            num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
-            num_tiles_per_input_block =
-                input_shard_width / tile_width;  // distribution_spec.shard_shape_in_pages().volume();
+            num_tiles_per_input_block = input_shard_width / tile_width;
             uint32_t num_blocks_per_shard_plane = input_shard_height / tile_height;
             const auto& shard_shape = nd_shard_spec.shard_shape;
             size_t num_planes_per_shard = 1;
@@ -155,15 +130,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             }
             num_blocks_per_shard = num_planes_per_shard * num_blocks_per_shard_plane;
             num_input_blocks_per_full_core = groups.num_shards_per_core_in_group_1 * num_blocks_per_shard;
-            num_input_blocks_per_cliff_core = 0;  // groups.num_shards_per_core_in_group_2 * num_blocks_per_shard;
-            std::cout << "input ND shard shape (pages): " << distribution_spec.shard_shape_in_pages() << std::endl;
-            std::cout << "input ND shard shape: [" << nd_shard_spec.shard_shape[0] << ", "
-                      << nd_shard_spec.shard_shape[-2] << ", " << nd_shard_spec.shard_shape[-1] << "]" << std::endl;
-            std::cout << "num_input_blocks_per_full_core: " << num_input_blocks_per_full_core << std::endl;
-            std::cout << "num_input_blocks_per_cliff_core: " << num_input_blocks_per_cliff_core << std::endl;
-            std::cout << "num_tiles_per_input_block: " << num_tiles_per_input_block << std::endl;
-            std::cout << "num full cores: " << full_compute_core_range.num_cores() << std::endl;
-            std::cout << "num cliff cores: " << cliff_compute_core_range.num_cores() << std::endl;
+            num_input_blocks_per_cliff_core = 0;
         }
     }
 
@@ -171,8 +138,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t input_cb_num_tiles;
     if (input_is_sharded) {
         // Have compute core untilize the entire shard at once
-        std::cout << "setting num_tiles_per_input_block: " << num_tiles_per_input_block << std::endl;
-        std::cout << "setting num_input_blocks_per_full_core: " << num_input_blocks_per_full_core << std::endl;
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
         if (num_input_blocks_per_full_core == 1) {
@@ -183,7 +148,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             input_cb_num_tiles = num_tiles_per_input_block * 2;
         }
     }
-    std::cout << "input_cb_num_tiles: " << input_cb_num_tiles << std::endl;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -192,7 +156,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_cb_num_tiles,
         input_cb_data_format,
         input_is_sharded ? src0_buffer : nullptr);
-    std::cout << "created input CB" << std::endl;
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -271,8 +234,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         writer_compile_time_args.push_back(num_compute_cores);
         writer_compile_time_args.push_back(num_tiles_per_row);
         writer_compile_time_args.push_back(tile_width);
-        std::cout << "num_shards: " << num_shards << std::endl;
-        std::cout << "num_cores: " << num_compute_cores << std::endl;
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -280,7 +241,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
     if (input_is_nd_sharded) {
-        TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(*src0_buffer)
+            .append_to(
+                writer_compile_time_args);  // For ND sharded input, we need info on the input buffer distribution
     }
 
     // Writer kernel
@@ -377,6 +340,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     }
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     if (input_is_nd_sharded) {
+        // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
+        // in the writer kernel.
         const auto& nd_shard_spec = a.nd_shard_spec().value();
         auto distribution_spec = BufferDistributionSpec::from_shard_spec(
             a.padded_shape(),
@@ -387,26 +352,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             nd_shard_spec.shard_distribution_strategy);
         auto page_mapping = distribution_spec.compute_page_mapping();
         const auto& mapped_cores = page_mapping.all_cores;
-        const uint32_t shard_volume = distribution_spec.shard_shape_in_pages().volume();
-        const auto& shard_shape_pages = distribution_spec.shard_shape_in_pages();
-        const uint32_t shard_width = shard_shape_pages[-1];
-        const uint32_t shard_rows = shard_volume / shard_width;
         uint32_t start_shard_id = 0;
         for (uint32_t i = 0; i < full_cores.size(); ++i) {
-            //     uint32_t height_wise_input_block_start_index =
-            //     (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
-            // // if (height_wise_input_block_start_index == 2) {
-            // //     height_wise_input_block_start_index = 1;  // HARDCODED MUST FIGURE OUT CORRECT LOGIC
-            // // }
-            // uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
-
-            std::cout << "CORE i: " << i << std::endl;
             CoreCoord core = full_cores[i];
-            // uint32_t num_input_blocks_to_process = 0;  // num_input_blocks_per_full_core;
-            // uint32_t num_input_blocks_to_write = 0;
-            // std::vector<uint32_t> height_wise_input_block_start_indices;
-            // std::vector<uint32_t> width_wise_input_block_indices;
-            // std::vector<uint32_t> vector_num_unpadded_cols_per_input_block;
             auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
             uint32_t num_blocks_on_core = 0;
             uint32_t num_tiles_on_core = 0;
@@ -415,190 +363,22 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 const size_t num_shards_on_core = distribution_spec.num_shards_per_core(core_idx);
                 num_blocks_on_core = num_shards_on_core * num_blocks_per_shard;
                 num_tiles_on_core = num_blocks_on_core * num_tiles_per_input_block;
-                const auto& host_pages = page_mapping.core_host_page_indices.at(core_idx);
-                // size_t page_cursor = 0;
-                for (size_t shard = 0; shard < num_shards_on_core; ++shard) {
-                    std::cout << "  Shard " << shard << " on core (" << core.x << ", " << core.y << "): ";
-                    // bool first = true;
-                    // for (uint32_t p = 0; p < shard_volume && page_cursor < host_pages.size(); ++p, ++page_cursor) {
-                    //     uint32_t host_page_id = host_pages[page_cursor];
-                    //     if (host_page_id == tt::tt_metal::UncompressedBufferPageMapping::PADDING) {
-                    //         continue;
-                    //     }
-                    //     if (!first) {
-                    //         std::cout << ", ";
-                    //     }
-                    //     std::cout << host_page_id;
-                    //     first = false;
-                    // }
-                    // std::cout << std::endl;
-
-                    // First page_id in each row of this shard (row-major; last dim is width)
-                    // const size_t shard_start = page_cursor - shard_volume;
-                    std::cout << "    First page_id per row: ";
-                    bool first_row = true;
-                    for (uint32_t row = 0; row < shard_rows; ++row) {
-                        size_t idx = shard * shard_volume + row * shard_width;
-                        if (idx >= host_pages.size()) {
-                            break;
-                        }
-                        uint32_t host_page_id = host_pages[idx];
-                        if (host_page_id == tt::tt_metal::UncompressedBufferPageMapping::PADDING) {
-                            // num_input_blocks_to_process--; // this row (block) is padding due to uneven sharding,
-                            // ignore it
-                            continue;
-                        }
-                        if (!first_row) {
-                            std::cout << ", ";
-                        }
-                        std::cout << "AAAAAAAAA" << host_page_id << std::endl;
-                        // num_input_blocks_to_process++;
-                        // height_wise_input_block_start_indices.push_back(host_page_id / num_tiles_per_row);
-                        // uint32_t tile_index_width = host_page_id % num_tiles_per_row;
-                        // width_wise_input_block_indices.push_back(tile_index_width / num_tiles_per_input_block);
-                        // uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-                        // if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
-                        //     // we have an uneven shard with padding along the width dimension, so ignore those last
-                        //     // padded columns
-                        //     num_unpadded_cols_per_input_block = (num_tiles_per_row - tile_index_width) * tile_width;
-                        // }
-                        // vector_num_unpadded_cols_per_input_block.push_back(num_unpadded_cols_per_input_block);
-                        // std::cout << "height_wise_input_block_start_index: "
-                        //           << height_wise_input_block_start_indices.back() << std::endl;
-                        // std::cout << "width_wise_input_block_indices: " << width_wise_input_block_indices.back()
-                        //           << std::endl;
-                        // std::cout << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block
-                        //           << std::endl;
-                        first_row = false;
-                    }
-                    std::cout << std::endl;
-                }
             }
-            // std::cout << "num_input_blocks_to_process: " << num_input_blocks_to_process << std::endl;
-            // std::cout << "size of height_wise_input_block_start_indices: "
-            //           << height_wise_input_block_start_indices.size() << std::endl;
-            // std::cout << "size of width_wise_input_block_indices: " << width_wise_input_block_indices.size()
-            //           << std::endl;
-            // std::cout << "size of vector_num_unpadded_cols_per_input_block: "
-            //           << vector_num_unpadded_cols_per_input_block.size() << std::endl;
 
-            // uint32_t height_wise_input_block_start_index =
-            //     (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
-            // // if (height_wise_input_block_start_index == 2) {
-            // //     height_wise_input_block_start_index = 1;  // HARDCODED MUST FIGURE OUT CORRECT LOGIC
-            // // }
-            // uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
-
-            // #if 0
-            //             // Handle uneven input sharding width wise (writer run-time arg)
-            //             uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-            //             if (input_is_sharded) {
-            //                 std::cout << "input_is_sharded 1" << std::endl;
-            //                 uint32_t input_shard_width;
-            //                 if (a.shard_spec().has_value()) {
-            //                     input_shard_width = a.shard_spec().value().shape[1];
-            //                 } else {
-            //                     input_shard_width = a.nd_shard_spec().value().shard_shape[-1];
-            //                 }
-            //                 bool is_last_input_shard_in_row = width_wise_input_block_index ==
-            //                 num_input_blocks_across_width - 1; if (is_last_input_shard_in_row) {
-            //                     std::cout << "is_last_input_shard_in_row" << std::endl;
-            //                     std::cout << "BEFORE num_unpadded_cols_per_input_block: " <<
-            //                     num_unpadded_cols_per_input_block
-            //                             << std::endl;
-            //                     num_unpadded_cols_per_input_block =
-            //                         num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) -
-            //                         tensor_width);
-            //                     std::cout << "AFTER num_unpadded_cols_per_input_block: " <<
-            //                     num_unpadded_cols_per_input_block
-            //                             << std::endl;
-            //                 }
-            //             }
-
-            //             // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
-            //             uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
-            //             if (input_is_sharded) {
-            //                 std::cout << "input_is_sharded 2" << std::endl;
-            //                 uint32_t input_shard_height;
-            //                 if (a.shard_spec().has_value()) {
-            //                     input_shard_height = a.shard_spec().value().shape[0];
-            //                 } else {
-            //                     input_shard_height = a.nd_shard_spec().value().shard_shape[-2];
-            //                 }
-            //                 uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
-            //                 uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
-            //                 bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
-            //                 if (is_last_input_shard_in_col) {
-            //                     std::cout << "is_last_input_shard_in_col" << std::endl;
-            //                     std::cout << "BEFORE num_input_blocks_to_process: " << num_input_blocks_to_process <<
-            //                     std::endl; num_input_blocks_to_process =
-            //                         num_input_blocks_per_full_core -
-            //                         (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
-            //                     std::cout << "AFTER num_input_blocks_to_process: " << num_input_blocks_to_process <<
-            //                     std::endl;
-            //                 }
-            //             }
-            // #endif
-            // std::cout << "core " << i << ": num_input_blocks_to_process: FINAL: " << num_input_blocks_to_process
-            //   << std::endl;
             // Reader run-time args
-            // uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
             std::vector<uint32_t> reader_run_time_args = {num_tiles_on_core};
-            // std::cout << "reader_run_time_args num_tiles_to_read: " << num_tiles_to_read << std::endl;
 
             // Writer run-time args
-            // std::vector<uint32_t> width_wise_output_block_start_indices;
-            // std::vector<uint32_t> vector_num_cols_already_processed_in_first_output_block;
-            // for (uint32_t i = 0; i < num_input_blocks_to_process; ++i) {
-            //     uint32_t input_block_global_col_index = width_wise_input_block_indices[i] * num_cols_per_input_block;
-            //     uint32_t width_wise_output_block_start_index = input_block_global_col_index /
-            //     num_cols_per_output_block; uint32_t num_cols_already_processed_in_first_output_block =
-            //         input_block_global_col_index % num_cols_per_output_block;
-            //     width_wise_output_block_start_indices.push_back(width_wise_output_block_start_index);
-            //     vector_num_cols_already_processed_in_first_output_block.push_back(
-            //         num_cols_already_processed_in_first_output_block);
-            // }
-            // std::cout << "size of height_wise_input_block_start_indices: "
-            //           << height_wise_input_block_start_indices.size() << std::endl;
-            // std::cout << "size of vector_num_unpadded_cols_per_input_block: "
-            //           << vector_num_unpadded_cols_per_input_block.size() << std::endl;
-            // std::cout << "size of width_wise_output_block_start_indices: "
-            //           << width_wise_output_block_start_indices.size() << std::endl;
-            // std::cout << "size of vector_num_cols_already_processed_in_first_output_block: "
-            //           << vector_num_cols_already_processed_in_first_output_block.size() << std::endl;
-
             std::vector<uint32_t> writer_run_time_args = {
                 dst_buffer->address(), src0_buffer->address(), start_shard_id};
             start_shard_id++;
 
-            // writer_run_time_args.insert(
-            //     writer_run_time_args.end(),
-            //     height_wise_input_block_start_indices.begin(),
-            //     height_wise_input_block_start_indices.end());
-            // writer_run_time_args.insert(
-            //     writer_run_time_args.end(),
-            //     vector_num_unpadded_cols_per_input_block.begin(),
-            //     vector_num_unpadded_cols_per_input_block.end());
-            // writer_run_time_args.insert(
-            //     writer_run_time_args.end(),
-            //     width_wise_output_block_start_indices.begin(),
-            //     width_wise_output_block_start_indices.end());
-            // writer_run_time_args.insert(
-            //     writer_run_time_args.end(),
-            //     vector_num_cols_already_processed_in_first_output_block.begin(),
-            //     vector_num_cols_already_processed_in_first_output_block.end());
-            // height_wise_input_block_start_indices,
-            // vector_num_unpadded_cols_per_input_block,
-            // width_wise_output_block_start_indices,
-            // vector_num_cols_already_processed_in_first_output_block};
             if (output_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             }
 
             // Compute run-time args
             std::vector<uint32_t> compute_run_time_args = {num_blocks_on_core};
-            std::cout << "compute_run_time_args num_blocks_on_core: " << num_blocks_on_core << std::endl;
-            std::cout << "reader_run_time_args num_tiles_on_core: " << num_tiles_on_core << std::endl;
             // Set run-time arg
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
             tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
@@ -607,57 +387,33 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     } else {
         for (uint32_t i = 0; i < full_cores.size(); ++i) {
-            std::cout << "CORE i: " << i << std::endl;
             CoreCoord core = full_cores[i];
             uint32_t height_wise_input_block_start_index =
                 (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
-            // if (height_wise_input_block_start_index == 2) {
-            //     height_wise_input_block_start_index = 1;  // HARDCODED MUST FIGURE OUT CORRECT LOGIC
-            // }
             uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
 
             // Handle uneven input sharding width wise (writer run-time arg)
             uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
             if (input_is_sharded) {
-                std::cout << "input_is_sharded 1" << std::endl;
-                uint32_t input_shard_width;
-                if (a.shard_spec().has_value()) {
-                    input_shard_width = a.shard_spec().value().shape[1];
-                } else {
-                    input_shard_width = a.nd_shard_spec().value().shard_shape[-1];
-                }
+                uint32_t input_shard_width = a.shard_spec().value().shape[1];
                 bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
                 if (is_last_input_shard_in_row) {
-                    std::cout << "is_last_input_shard_in_row" << std::endl;
-                    std::cout << "BEFORE num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block
-                              << std::endl;
                     num_unpadded_cols_per_input_block =
                         num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
-                    std::cout << "AFTER num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block
-                              << std::endl;
                 }
             }
 
             // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
             uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
             if (input_is_sharded) {
-                std::cout << "input_is_sharded 2" << std::endl;
-                uint32_t input_shard_height;
-                if (a.shard_spec().has_value()) {
-                    input_shard_height = a.shard_spec().value().shape[0];
-                } else {
-                    input_shard_height = a.nd_shard_spec().value().shard_shape[-2];
-                }
+                uint32_t input_shard_height = a.shard_spec().value().shape[0];
                 uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
                 uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
                 bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
                 if (is_last_input_shard_in_col) {
-                    std::cout << "is_last_input_shard_in_col" << std::endl;
-                    std::cout << "BEFORE num_input_blocks_to_process: " << num_input_blocks_to_process << std::endl;
                     num_input_blocks_to_process =
                         num_input_blocks_per_full_core -
                         (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
-                    std::cout << "AFTER num_input_blocks_to_process: " << num_input_blocks_to_process << std::endl;
                 }
             }
 
@@ -678,20 +434,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             }
 
             // Writer run-time args
-            std::cout << "height_wise_input_block_start_index: " << height_wise_input_block_start_index << std::endl;
-            std::cout << "width_wise_input_block_index: " << width_wise_input_block_index << std::endl;
-            std::cout << "num_cols_per_input_block: " << num_cols_per_input_block << std::endl;
-            std::cout << "num_cols_per_output_block: " << num_cols_per_output_block << std::endl;
-            std::cout << "num_input_blocks_to_process: " << num_input_blocks_to_process << std::endl;
-            std::cout << "num_unpadded_cols_per_input_block: " << num_unpadded_cols_per_input_block << std::endl;
             uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
             uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
             uint32_t num_cols_already_processed_in_first_output_block =
                 input_block_global_col_index % num_cols_per_output_block;
-            std::cout << "input_block_global_col_index: " << input_block_global_col_index << std::endl;
-            std::cout << "width_wise_output_block_start_index: " << width_wise_output_block_start_index << std::endl;
-            std::cout << "num_cols_already_processed_in_first_output_block: "
-                      << num_cols_already_processed_in_first_output_block << std::endl;
             std::vector<uint32_t> writer_run_time_args = {
                 dst_buffer->address(),
                 num_input_blocks_to_process,
@@ -772,7 +518,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     cores_with_run_time_args.reserve(full_cores.size() + cliff_cores.size());
     cores_with_run_time_args.insert(cores_with_run_time_args.end(), full_cores.begin(), full_cores.end());
     cores_with_run_time_args.insert(cores_with_run_time_args.end(), cliff_cores.begin(), cliff_cores.end());
-    // TT_FATAL(false, "END HERE");
+
     return cached_program_t{
         std::move(program),
         {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, cores_with_run_time_args}};
