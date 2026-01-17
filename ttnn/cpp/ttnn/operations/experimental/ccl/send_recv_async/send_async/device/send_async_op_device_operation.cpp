@@ -64,7 +64,7 @@ ttnn::experimental::prim::SendAsyncDeviceOperation::tensor_return_value_t send_a
     using OperationType = ttnn::experimental::prim::SendAsyncDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
-    auto tensor_args = input_tensor;
+    const auto& tensor_args = input_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

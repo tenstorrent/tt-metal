@@ -62,7 +62,7 @@ std::vector<Tensor> recv_async(
     using OperationType = ttnn::experimental::prim::RecvAsyncDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
-    auto tensor_args = output_tensor;
+    const auto& tensor_args = output_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

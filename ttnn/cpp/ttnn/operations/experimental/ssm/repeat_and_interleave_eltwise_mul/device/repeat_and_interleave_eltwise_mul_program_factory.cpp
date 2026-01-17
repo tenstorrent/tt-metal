@@ -15,7 +15,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace {
-static constexpr uint32_t ONE_TILE = 1;
+constexpr uint32_t ONE_TILE = 1;
 }  // namespace
 
 RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleaveEltwiseMulProgramFactory::create(

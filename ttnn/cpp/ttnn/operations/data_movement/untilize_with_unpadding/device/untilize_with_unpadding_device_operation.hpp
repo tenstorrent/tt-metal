@@ -30,24 +30,20 @@ struct UntilizeWithUnpaddingDeviceOperation {
         UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory>;
 
     static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& operation_attributes, const Tensor& input);
 
-    static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        const operation_attributes_t& operation_attributes, const Tensor& input, tensor_return_value_t& output_tensor);
 };
 
 Tensor untilize_with_unpadding(

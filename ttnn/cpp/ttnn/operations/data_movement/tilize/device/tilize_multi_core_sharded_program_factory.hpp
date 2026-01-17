@@ -27,6 +27,6 @@ struct TilizeMultiCoreShardedProgramFactory {
         cached_program_t& cached_program,
         const ttnn::prim::TilizeParams& operation_attributes,
         const ttnn::prim::TilizeInputs& tensor_args,
-        const Tensor& tensor_return_value);
+        const Tensor& output_tensor);
 };
 }  // namespace ttnn::prim

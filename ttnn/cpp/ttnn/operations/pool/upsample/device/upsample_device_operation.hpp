@@ -30,14 +30,11 @@ struct UpsampleOperation {
         UpsampleMultiCoreShardedProgramFactory,
         UpsampleNearestFloatProgramFactory>;
 
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static program_factory_t select_program_factory(const operation_attributes_t& args, const Tensor& input);
+    static void validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input);
+    static void validate_on_program_cache_hit(const operation_attributes_t& args, const Tensor& input);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t& args, const Tensor& input);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const Tensor& input);
 };
 
 ttnn::Tensor upsample(
