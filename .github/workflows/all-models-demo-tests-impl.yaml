@@ -66,9 +66,8 @@ jobs:
           sentence_bert_bh_test='{"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}'
           unet_vanilla_test='{"name":"unet-vanilla","test_path":"models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20}'
           segformer_test='{"name":"segformer","test_path":"models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}'
-          llama33_70b_text_test='{"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60}'
-          llama33_70b_galaxy_test='{"name":"llama3.3-70b","test_path":"models/demos/llama3_70b_galaxy/demo/demo_galaxy.py::test_demo","test_args":"","timeout":60}'
-          mamba_2_8b_test='{"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path=models/demos/wormhole/mamba/demo/prompts.json","timeout":30}'
+          llama33_70b_text_test='{"name":"llama3.3-70b","test_path":"tt-metal/models/demos/llama3_70b_galaxy/demo/text_demo.py","test_args":"-k \"performance-batch-32\"","timeout":60}'
+          mamba_2_8b_test='{"name":"mamba-2.8b","test_path":"models/demos/wormhole/mamba/demo/demo.py","test_args":"--input-method=json --input-path='"'"'models/demos/wormhole/mamba/demo/prompts.json'"'"'","timeout":30}'
           flux1_dev_test='{"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60}'
           wan2_2_test='{"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}'
 
@@ -115,28 +114,28 @@ jobs:
               standalone_models=$(jq -nc "[$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$ufld_v2_wh_test,$bert_large_test,$mamba_2_8b_test,$sentence_bert_wh_test,$unet_vanilla_test,$segformer_test,$whisper_test,$falcon7b_wh_test]")
               ;;
             p100)
-              standalone_models=$(jq -nc "[$whisper_test,$resnet50_bh_test,$sentence_bert_bh_test,$ufld_v2_bh_test,$unet_vgg19_bh_test,$vit_bh_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$mobilenet_v2_test,$sentence_bert_bh_test,$ufld_v2_bh_test,$unet_vgg19_bh_test,$vit_bh_test,$segformer_test]")
               ;;
             p150)
-              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$unet_vgg19_bh_test,$ufld_v2_bh_test,$sentence_bert_bh_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$mobilenet_v2_test,$vit_bh_test,$unet_vgg19_bh_test,$ufld_v2_bh_test,$sentence_bert_bh_test,$segformer_test]")
               ;;
             p300)
-              standalone_models=$(jq -nc "[$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$ufld_v2_wh_test,$sentence_bert_wh_test,$unet_vanilla_test,$segformer_test,$whisper_test]")
+              standalone_models=$(jq -nc "[$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$ufld_v2_wh_test,$sentence_bert_wh_test,$segformer_test,$whisper_test]")
               ;;
             WH-LOUDBOX)
               standalone_models=$(jq -nc "[$whisper_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$bert_large_test,$llama33_70b_text_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test,$falcon7b_tg_test,$sentence_bert_wh_test,$ufld_v2_wh_test,$unet_vgg19_wh_test]")
               ;;
             BH-QB2)
-              standalone_models=$(jq -nc "[$whisper_test,$flux1_dev_test,$wan2_2_test,$llama33_70b_text_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$mobilenet_v2_test,$segformer_test,$flux1_dev_test,$wan2_2_test,$llama33_70b_text_test]")
               ;;
             BH-LOUDBOX)
               standalone_models=$(jq -nc "[$bert_large_test,$falcon40b_test,$llama33_70b_text_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test,$whisper_test,$resnet50_bh_test,$sentence_bert_bh_test,$ufld_v2_bh_test,$unet_vgg19_bh_test,$vit_bh_test]")
               ;;
             WH-6U)
-              standalone_models=$(jq -nc "[$whisper_test,$falcon7b_tg_test,$resnet50_ttnn_test,$bert_large_test,$falcon40b_test,$llama33_70b_galaxy_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$falcon7b_tg_test,$resnet50_ttnn_test,$bert_large_test,$falcon40b_test,$llama33_70b_text_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test]")
               ;;
             BH-6U)
-              standalone_models=$(jq -nc "[$bert_large_test,$falcon40b_test,$llama33_70b_galaxy_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test,$whisper_test]")
+              standalone_models=$(jq -nc "[$bert_large_test,$falcon40b_test,$llama33_70b_text_test,$mamba_2_8b_test,$mobilenet_v2_test,$segformer_test,$stable_diffusion_wh_test,$unet_vanilla_test,$whisper_test]")
               ;;
           esac
 
