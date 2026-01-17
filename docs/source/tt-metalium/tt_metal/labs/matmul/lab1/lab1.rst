@@ -38,7 +38,7 @@ This means that elements of each row are stored contiguously in memory, with row
 
 Consider a ``3x4`` matrix ``A``:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg
    :width: 250
    :alt: A 3x4 Matrix A
    :align: center
@@ -46,7 +46,7 @@ Consider a ``3x4`` matrix ``A``:
 
 Using row-major layout, this matrix is stored in memory as:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg
    :width: 750
    :alt: A 3x4 Matrix A in Row-Major Layout
    :align: center
@@ -214,7 +214,7 @@ In this model, the host CPU runs a standard C++ program. In that program, develo
 allocate memory on the device, and dispatch kernels to Tensix cores. Kernel code is also written in C++.
 A high-level view of a Tenstorrent device in the system is shown in Figure 1:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg
    :width: 900
    :alt: High-level View of Tensix Device on PCIe Card
    :align: center
@@ -266,7 +266,7 @@ This **tiled layout** is the main memory layout used by the Tenstorrent architec
 
 Consider an example of a ``9x4`` matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/row_major_layout.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/row_major_layout.png
    :width: 600
    :alt: Row-Major Layout of a 9x4 Matrix
    :align: center
@@ -277,7 +277,7 @@ Numbers in the matrix in Figure 2 indicate memory addresses that the correspondi
 
 In tiled memory layout with tile size ``3x2``, this matrix is stored in memory as shown in Figure 3:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tiled_layout.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_layout.png
    :width: 600
    :alt: Tiled Layout of a 9x4 Matrix
    :align: center
@@ -403,7 +403,7 @@ steps, all of which use uniform interfaces (CBs) to promote code reuse.
 Each circular buffer is assumed to have only one reader kernel and one writer kernel.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/cb_data_flow.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/cb_data_flow.jpg
    :width: 900
    :alt: Kernel Data Flow Through Circular Buffers
    :align: center
@@ -420,7 +420,7 @@ Each kernel interacts with the buffers as follows:
 This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
 pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 5.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tensix_core.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_core.png
    :width: 600
    :alt: Top-Level Diagram of Tensix Core
    :align: center
@@ -1041,7 +1041,7 @@ accumulate products over all those K-tiles.
 
 Consider the concrete example shown in Figure 6.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png
    :width: 1200
    :alt: Tiled Matrix Multiplication Example
    :align: center
