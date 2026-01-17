@@ -22,11 +22,16 @@ FORCE_INLINE void matmul_with_relu_block() {
 
     tile_regs_acquire();
 
-    for (uint32_t k = 0; k < NumTilesK; k++) {
-        matmul_tiles(CbA, CbB, k, k, 0);
+    {
+        DeviceZoneScopedN("matmul_tiles");
+        for (uint32_t k = 0; k < NumTilesK; k++) {
+            matmul_tiles(CbA, CbB, k, k, 0);
+        }
     }
-    relu_tile(0);
-
+    {
+        DeviceZoneScopedN("relu_tile");
+        relu_tile(0);
+    }
     tile_regs_commit();
 
     if constexpr (PopA) {
@@ -64,16 +69,31 @@ FORCE_INLINE void matmul_with_bias_block() {
 
     tile_regs_acquire();
 
-    init_sfpu(CbA, CbOut);  // Hangs if we put this at the beginning of the program
-    mm_init_short(CbA, CbB);
-    for (uint32_t k = 0; k < NumTilesK; k++) {
-        matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
+    {
+        DeviceZoneScopedN("init_sfpu_and_mm_init_short");
+        init_sfpu(CbA, CbOut);  // Hangs if we put this at the beginning of the program
+        mm_init_short(CbA, CbB);
     }
-    copy_tile_init(CbBias);  // Hangs if we put this at the beginning of the program
-    copy_tile(CbBias, 0, BIAS_REG_ID);
 
-    add_binary_tile_init();
-    add_binary_tile(MATMUL_ACC_REG_ID, BIAS_REG_ID, MATMUL_ACC_REG_ID);  // Accumulate the bias into the matmul result
+    {
+        DeviceZoneScopedN("matmul_tiles");
+        for (uint32_t k = 0; k < NumTilesK; k++) {
+            matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
+        }
+    }
+
+    {
+        DeviceZoneScopedN("copy_tile_init");
+        copy_tile_init(CbBias);  // Hangs if we put this at the beginning of the program
+        copy_tile(CbBias, 0, BIAS_REG_ID);
+    }
+
+    {
+        DeviceZoneScopedN("add_binary_tile_init");
+        add_binary_tile_init();
+        add_binary_tile(
+            MATMUL_ACC_REG_ID, BIAS_REG_ID, MATMUL_ACC_REG_ID);  // Accumulate the bias into the matmul result
+    }
 
     tile_regs_commit();
 
@@ -94,59 +114,47 @@ FORCE_INLINE void matmul_with_bias_block() {
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t in0_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t mm1_full_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
     constexpr uint32_t weight1_cb = get_compile_time_arg_val(2);
     constexpr uint32_t out_cb = get_compile_time_arg_val(3);
     constexpr uint32_t intermediate_pregather_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t intermediate_full_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
-    constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(8);
+    constexpr uint32_t mm2_full_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(7);
+    constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(8);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(9);
 
     constexpr uint32_t num_output_tiles = 1;
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
 
-    // Layer 0: uses in0_cb and weight0_cb
-    mm_block_init(in0_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-    relu_tile_init();
-
-    matmul_with_relu_block<in0_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
-    matmul_with_bias_block<
-        intermediate_full_cb,
-        weight1_cb,
-        in0_cb,
-        intermediate_pregather_cb,
-        num_tiles_k,
-        num_output_tiles,
-        0,
-        true,
-        false>();
-
-    // Layers 1 to num_layers-1: use intermediate_full_cb and weight1_cb
-    for (uint32_t layer = 1; layer < num_layers; layer++) {
+    // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
+    // The ping-pong mcast restores MM1_FULL_CB after each layer
+    for (uint32_t layer = 0; layer < num_layers; layer++) {
         mm_block_init(
-            intermediate_full_cb,
-            weight1_cb,
-            intermediate_pregather_cb,
-            false,
-            out_subblock_w,
-            out_subblock_h,
-            in0_block_w);
+            mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
         relu_tile_init();
-        matmul_with_relu_block<intermediate_full_cb, weight1_cb, intermediate_pregather_cb, num_tiles_k, 0, true>();
+
+        // MM1_FULL_CB -> matmul+relu -> INTERMEDIATE_PREGATHER_CB
+        // Don't pop MM1 yet - needed for bias
+        matmul_with_relu_block<mm1_full_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
+
+        // MM2_FULL_CB (with MM1_FULL_CB bias) -> matmul+bias -> INTERMEDIATE_PREGATHER_CB
+        // Pop both MM2 (input) and MM1 (bias/residual) after this
         matmul_with_bias_block<
-            intermediate_full_cb,
+            mm2_full_cb,
             weight1_cb,
-            intermediate_full_cb,
+            mm1_full_cb,
             intermediate_pregather_cb,
             num_tiles_k,
-            num_output_tiles,
+            num_tiles_k,
             0,
             true,
-            false>();
+            true>();
+
+        DPRINT << "COMPUTE DONE LAYER" << ENDL();
     }
 }
 }  // namespace NAMESPACE

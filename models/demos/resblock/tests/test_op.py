@@ -31,9 +31,9 @@ def create_random_tensor(shape, random_tensor_gen):
         (1, 32, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
         (1, 64, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
         (1, 128, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})),
-        (1, 256, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
-        (1, 512, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})),
-        (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})),
+        (1, 256, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})),
+        (1, 512, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})),
+        (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})),
     ],
 )
 @pytest.mark.parametrize(
@@ -57,6 +57,8 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
         pytest.skip("bfloat8_b is only supported for tile height 32")
     if activation_dtype != weight_dtype:
         pytest.skip("activation and weight dtypes must be the same")
+
+    NUM_LAYERS = 1
 
     torch.manual_seed(1234)
 
@@ -146,6 +148,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
         weight0_tensor,
         weight1_tensor,
         ttnn_output,
+        num_layers=NUM_LAYERS,
         fp32_dest_acc_en=True,
     )
 

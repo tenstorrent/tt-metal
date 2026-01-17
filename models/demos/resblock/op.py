@@ -6,20 +6,21 @@ import ttnn
 
 class FusedResblock:
     class MatmulCoreCBIndex:
-        ACTIVATION_CB = 0
+        MM1_FULL_CB = 0
         WEIGHT0_CB = 1
         WEIGHT1_CB = 2
         OUT_CB = 3
         INTERMEDIATE_PREGATHER_CB = 4
-        INTERMEDIATE_FULL_CB = 5
+        MM2_FULL_CB = 5
+        BIAS_CB = 7
 
     class McastCoreCBIndex:
         MCAST_CORE_GATHER_CB = 6
 
-    MCAST_CORE = ttnn.CoreCoord(7, 4)
+    MCAST_CORE = ttnn.CoreCoord(4, 0)
 
     @staticmethod
-    def golden(input_a, weight0, weight1, num_layers=2):
+    def golden(input_a, weight0, weight1, num_layers=1):
         def layer(input):
             x = input @ weight0
             x = torch.nn.functional.relu(x)
@@ -46,6 +47,7 @@ class FusedResblock:
         device: ttnn.Device,
         debug: bool,
         num_layers: int,
+        input_buffer_address: int,
     ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
         logger.debug(f"All mcast cores: {all_mcast_cores}")
         logger.debug(f"Number of mcast cores: {all_mcast_cores.num_cores()}")
@@ -97,7 +99,9 @@ class FusedResblock:
             core_ranges=all_mcast_cores,
             compile_time_args=[
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB,
+                input_buffer_address,  # Base address of input tensor buffer
                 number_of_senders,
                 receiver_semaphore_descriptor.id,
                 sender_semaphore_descriptor.id,
@@ -125,7 +129,7 @@ class FusedResblock:
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
     @staticmethod
-    def op(input_tensor, weight0, weight1, output_tensor, num_layers=8, fp32_dest_acc_en=False, debug=False):
+    def op(input_tensor, weight0, weight1, output_tensor, num_layers=1, fp32_dest_acc_en=False, debug=False):
         logger.info(
             f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
         )
@@ -242,8 +246,8 @@ class FusedResblock:
             out_shard_tiles_n == 1
         ), f"Output shard N dimension must be exactly 1 tile (got {out_shard_tiles_n} tiles). This op only supports single output tile in N dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
 
-        activation_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB, input_tensor
+        mm1_full_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB, input_tensor
         )
         weight0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB, weight0
@@ -274,18 +278,45 @@ class FusedResblock:
             core_ranges=all_matmul_cores,
             format_descriptors=[intermediate_pregather_cb_format],
         )
-        intermediate_full_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
+        bias_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.MatmulCoreCBIndex.BIAS_CB,
             data_format=out_dtype,
             page_size=out_tile_size,
             tile=out_tile_descriptor,
         )
-        intermediate_full_cb_descriptor = ttnn.CBDescriptor(
+        bias_cb_descriptor = ttnn.CBDescriptor(
+            total_size=out_tile_size,
+            core_ranges=all_matmul_cores,
+            format_descriptors=[bias_cb_format],
+        )
+        mm2_full_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
+            data_format=out_dtype,
+            page_size=out_tile_size,
+            tile=out_tile_descriptor,
+        )
+        mm2_full_cb_descriptor = ttnn.CBDescriptor(
             total_size=out_tile_size * num_tiles_k,
             core_ranges=all_matmul_cores.merge(
                 all_mcast_cores
             ),  # Include mcast cores to ensure all cores can get the correct CB address with get_write_ptr
-            format_descriptors=[intermediate_full_cb_format],
+            format_descriptors=[mm2_full_cb_format],
+        )
+
+        logger.debug(
+            f"mm1_full_cb_descriptor: {mm1_full_cb_descriptor.total_size}, page_size: {mm1_full_cb_descriptor.format_descriptors[0].page_size}"
+        )
+        logger.debug(
+            f"mm2_full_cb_descriptor: {mm2_full_cb_descriptor.total_size}, page_size: {mm2_full_cb_descriptor.format_descriptors[0].page_size}"
+        )
+        logger.debug(
+            f"bias_cb_descriptor: {bias_cb_descriptor.total_size}, page_size: {bias_cb_descriptor.format_descriptors[0].page_size}"
+        )
+        logger.debug(
+            f"intermediate_pregather_cb_descriptor: {intermediate_pregather_cb_descriptor.total_size}, page_size: {intermediate_pregather_cb_descriptor.format_descriptors[0].page_size}"
+        )
+        logger.debug(
+            f"out_cb_descriptor: {out_cb_descriptor.total_size}, page_size: {out_cb_descriptor.format_descriptors[0].page_size}"
         )
 
         all_cores = all_matmul_cores.merge(all_mcast_cores)
@@ -305,6 +336,9 @@ class FusedResblock:
             initial_value=0,
         )
 
+        # Get input tensor buffer address for mcast core to use directly instead of get_write_ptr
+        input_buffer_address = input_tensor.buffer_address()
+
         (
             mcast_reader_kernel_descriptor,
             mcast_writer_kernel_descriptor,
@@ -321,6 +355,7 @@ class FusedResblock:
             device,
             debug,
             num_layers,
+            input_buffer_address,
         )
 
         sender_core_range = all_matmul_cores.ranges()[0]
@@ -335,11 +370,13 @@ class FusedResblock:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
             compile_time_args=[
-                FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB,
+                FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
                 FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
+                FusedResblock.MatmulCoreCBIndex.OUT_CB,
                 num_tiles_k,
                 gather_destination_core.x,
                 gather_destination_core.y,
@@ -358,7 +395,11 @@ class FusedResblock:
             kernel_source="models/demos/resblock/kernels/writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
-            compile_time_args=[FusedResblock.MatmulCoreCBIndex.OUT_CB],
+            compile_time_args=[
+                FusedResblock.MatmulCoreCBIndex.OUT_CB,
+                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
+                num_layers,
+            ],
             config=ttnn.WriterConfigDescriptor(),
         )
         compute_kernel_descriptor = ttnn.KernelDescriptor(
@@ -366,12 +407,13 @@ class FusedResblock:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_matmul_cores,
             compile_time_args=[
-                FusedResblock.MatmulCoreCBIndex.ACTIVATION_CB,
+                FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
                 FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
                 FusedResblock.MatmulCoreCBIndex.OUT_CB,
                 FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
+                FusedResblock.MatmulCoreCBIndex.BIAS_CB,
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
@@ -395,12 +437,13 @@ class FusedResblock:
                     mcast_writer_kernel_descriptor,
                 ],
                 cbs=[
-                    activation_cb_descriptor,
+                    mm1_full_cb_descriptor,
                     weight0_cb_descriptor,
                     weight1_cb_descriptor,
                     out_cb_descriptor,
                     intermediate_pregather_cb_descriptor,
-                    intermediate_full_cb_descriptor,
+                    mm2_full_cb_descriptor,
+                    bias_cb_descriptor,
                     mcast_cb_descriptor,
                 ],
                 semaphores=[mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor],

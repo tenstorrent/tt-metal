@@ -13,7 +13,9 @@
 
 template <uint32_t CbOut, uint32_t NumTiles>
 FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr, uint32_t debug_enabled) {
-    DeviceZoneScopedN("wait_for_mcast");
+    DeviceZoneScopedN("mcast_reader_wait_for_mcast");
+    // Reserve space for mcast data before waiting (mcast writes directly to reserved space)
+    cb_reserve_back(CbOut, NumTiles);
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
     cb_push_back(CbOut, NumTiles);
     noc_semaphore_set(mcast_sender_semaphore_addr_ptr, 0);
@@ -28,7 +30,8 @@ template <
     uint32_t MCastReceiverSemaphoreId>
 void gather(uint32_t receiver_data_addr, uint32_t offset) {
     DeviceZoneScopedN("gather");
-    cb_reserve_back(CbOut, NumTiles);
+    // Note: CbOut reserve is done separately before calling gather, as we need to reserve num_tiles_k tiles
+    // (for mcast data from all sender cores), not just NumTiles (which is 1 tile per core)
     cb_wait_front(CbIn, NumTiles);
 
     // Write all tiles from CbIn to CbOut using noc_async_write (will remove once the gather+mcast is implemented)
@@ -45,8 +48,7 @@ void gather(uint32_t receiver_data_addr, uint32_t offset) {
     noc_semaphore_inc<true>(mcast_receiver_semaphore_noc_addr, 1);
     noc_async_posted_writes_flushed();
 
-    // cb_push_back(CbOut, NumTiles); Don't pop because we want to wait for mcast to finish before starting second
-    // matmul
+    // cb_push_back(CbOut, NumTiles); Don't pop yet because mcast needs to happen first
     cb_pop_front(CbIn, NumTiles);
 }
 
@@ -61,34 +63,36 @@ FORCE_INLINE uint32_t compute_sender_tile_offset_bytes(uint32_t tile_size_bytes)
 }
 
 void kernel_main() {
-    constexpr uint32_t in0_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t mm1_full_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
     constexpr uint32_t weight1_cb = get_compile_time_arg_val(2);
     constexpr uint32_t intermediate_pregather_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t intermediate_full_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(5);
+    constexpr uint32_t mm2_full_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(7);
 
-    constexpr uint32_t mcast_receiver_noc_x = get_compile_time_arg_val(6);
-    constexpr uint32_t mcast_receiver_noc_y = get_compile_time_arg_val(7);
-    constexpr uint32_t mcast_receiver_semaphore_id = get_compile_time_arg_val(8);
-    constexpr uint32_t mcast_reciever_cb = get_compile_time_arg_val(9);
+    constexpr uint32_t mcast_receiver_noc_x = get_compile_time_arg_val(8);
+    constexpr uint32_t mcast_receiver_noc_y = get_compile_time_arg_val(9);
+    constexpr uint32_t mcast_receiver_semaphore_id = get_compile_time_arg_val(10);
+    constexpr uint32_t mcast_reciever_cb = get_compile_time_arg_val(11);
 
-    const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    const uint32_t mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
     volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
         (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
-    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(11);
-    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(12);
-    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(13);
-    constexpr uint32_t debug_enabled = get_compile_time_arg_val(14);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(15);
+    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(13);
+    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(14);
+    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(15);
+    constexpr uint32_t debug_enabled = get_compile_time_arg_val(16);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(17);
 
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
 
     constexpr uint32_t num_output_tiles = 1;  // Set to 1 because we only iterate over K tiles at a time
 
-    cb_reserve_back(in0_cb, num_tiles_k);
-    cb_push_back(in0_cb, num_tiles_k);
+    cb_reserve_back(mm1_full_cb, num_tiles_k);
+    cb_push_back(mm1_full_cb, num_tiles_k);
 
     cb_reserve_back(weight0_cb, num_tiles_k);
     cb_push_back(weight0_cb, num_tiles_k);
@@ -102,39 +106,52 @@ void kernel_main() {
             get_tile_size(intermediate_pregather_cb));
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
-        // Gather after first matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+        {
+            DeviceZoneScopedN("layer_gather_and_mcast");
 
-        // Gather after second matmul so that we can mcast full result to all cores
-        gather<
-            intermediate_pregather_cb,
-            intermediate_full_cb,
-            num_output_tiles,
-            mcast_receiver_noc_x,
-            mcast_receiver_noc_y,
-            mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-        // Wait for mcast to complete and then push back to intermediate_full_cb which will start the second matmul
-        wait_for_mcast<intermediate_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+            // Gather after first matmul so that we can mcast full result to all cores
+            gather<
+                intermediate_pregather_cb,
+                mm2_full_cb,
+                num_output_tiles,
+                mcast_receiver_noc_x,
+                mcast_receiver_noc_y,
+                mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
+            // Wait for mcast to complete and then push back to mm2_full_cb which will start the second matmul
+            wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+        }
+        DPRINT << "DONE LAYER GATHER AND MCAST 1" << ENDL();
+        {
+            DeviceZoneScopedN("layer_gather_and_mcast_2");
+            // Gather after second matmul so that we can mcast full result to all cores
+            gather<
+                intermediate_pregather_cb,
+                mm2_full_cb,
+                num_output_tiles,
+                mcast_receiver_noc_x,
+                mcast_receiver_noc_y,
+                mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
+            // Wait for mcast to complete and then push back to mm1_full_cb (ping-pong back)
+            wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr, debug_enabled);
+        }
+        DPRINT << "DONE LAYER GATHER AND MCAST 2" << ENDL();
     }
 
-    // Copy from intermediate_full_cb to out_cb (only after last layer)
+    DPRINT << "DONE LAYERS" << ENDL();
+
     {
-        DeviceZoneScopedN("final_copy");
-        constexpr uint32_t number_of_tiles = 1;
+        DeviceZoneScopedN("copy_output");
+
+        // Calculate offset for this core's data in mm1_full_cb (mcast contains data from all cores)
+        const uint32_t src_addr = get_read_ptr(mm1_full_cb) + gather_destination_tile_offset_bytes;
+        constexpr uint32_t number_of_tiles_to_copy_into_output = 1;
         noc_async_write(
-            get_read_ptr(intermediate_full_cb),
-            get_noc_addr(get_write_ptr(3)),
-            get_tile_size(intermediate_full_cb) * num_tiles_k * number_of_tiles);
+            src_addr,
+            get_noc_addr(get_write_ptr(out_cb)),
+            get_tile_size(mm1_full_cb) * number_of_tiles_to_copy_into_output);
         noc_async_write_barrier();
-        cb_pop_front(intermediate_full_cb, num_tiles_k);
-        cb_push_back(3, num_tiles_k);
+        cb_pop_front(mm1_full_cb, num_tiles_k);
+        cb_push_back(out_cb, num_output_tiles);
     }
+    DPRINT << "DONE COPY OUTPUT" << ENDL();
 }
