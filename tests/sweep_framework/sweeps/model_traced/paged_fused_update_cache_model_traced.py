@@ -167,9 +167,9 @@ def run(
     start_time = start_measuring_time()
 
     try:
-        result = ttnn.experimental.paged_fused_update_cache(
-            *input_tensors, memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG
-        )
+        # paged_fused_update_cache doesn't accept memory_config parameter
+        # It only accepts specific keyword arguments like update_idxs, page_table, etc.
+        result = ttnn.experimental.paged_fused_update_cache(*input_tensors)
         # Handle both single tensor and tuple returns
         if isinstance(result, (list, tuple)):
             output_tensor = ttnn.to_torch(result[0]) if result else None
@@ -178,15 +178,15 @@ def run(
 
         e2e_perf = stop_measuring_time(start_time)
 
-        # Basic shape check
+        # check_with_pcc returns (bool, message) tuple
         if output_tensor is not None:
-            pcc = 1.0 if output_tensor.shape == torch_output.shape else 0.5
+            pcc = check_with_pcc(torch_output, output_tensor, 0.999)
         else:
-            pcc = 0.0
+            pcc = (False, "Output tensor is None")
     except Exception as e:
         # Operation may not be fully implemented yet
         print(f"Operation failed: {e}")
         e2e_perf = stop_measuring_time(start_time)
-        pcc = 0.0
+        pcc = (False, f"Operation failed: {str(e)}")
 
     return [pcc, e2e_perf]

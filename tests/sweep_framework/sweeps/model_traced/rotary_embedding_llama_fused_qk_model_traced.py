@@ -44,6 +44,9 @@ parameters = {
         "input_d_dtype": [ttnn.bfloat16],
         "input_d_layout": [ttnn.TILE_LAYOUT],
         "input_d_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_e_dtype": [ttnn.bfloat16],
+        "input_e_layout": [ttnn.TILE_LAYOUT],
+        "input_e_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
@@ -78,10 +81,12 @@ def run(
 
     # Handle dict input_shape from traced configurations (multi-input)
     if isinstance(input_shape, dict):
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("cos"))
-        shape_c = input_shape.get("input_c", input_shape.get("sin"))
-        shape_d = input_shape.get("input_d", input_shape.get("trans_mat"))
+        shape_a = input_shape.get("input_a", input_shape.get("q_input_tensor"))  # Q tensor
+        shape_b = input_shape.get("input_b", input_shape.get("k_input_tensor"))  # K tensor
+        shape_c = input_shape.get("input_c", input_shape.get("cos_cache"))  # cos cache
+        shape_d = input_shape.get("input_d", input_shape.get("sin_cache"))  # sin cache
+        # Need to get the 5th input - trans_mat
+        shape_e = input_shape.get("input_e", input_shape.get("trans_mat"))
     else:
         # Fallback for sample configurations
         if isinstance(input_shape, (tuple, list)):
@@ -90,10 +95,19 @@ def run(
             shape = input_shape
         # For sample, assume standard shapes
         batch, n_heads, seq_len, head_dim = shape
-        shape_a = shape  # Q/K input
-        shape_b = (1, n_heads, seq_len, head_dim)  # cos
-        shape_c = (1, n_heads, seq_len, head_dim)  # sin
-        shape_d = (1, 1, 32, 32)  # transformation matrix
+        shape_a = shape  # Q input
+        shape_b = shape  # K input
+        shape_c = (1, n_heads, seq_len, head_dim)  # cos cache
+        shape_d = (1, n_heads, seq_len, head_dim)  # sin cache
+        shape_e = (1, 1, head_dim, head_dim)  # transformation matrix
+
+    # Check which inputs are provided
+    has_input_e = kwargs.get("input_e_dtype") is not None or (
+        isinstance(input_shape, dict) and "input_e" in input_shape
+    )
+    input_e_dtype = kwargs.get("input_e_dtype")
+    input_e_layout = kwargs.get("input_e_layout")
+    input_e_memory_config = kwargs.get("input_e_memory_config")
 
     # Generate input tensors
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
@@ -111,6 +125,14 @@ def run(
     torch_input_d = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_d_dtype or input_a_dtype
     )(shape_d)
+
+    # Generate 5th tensor if available
+    if has_input_e or shape_e is not None:
+        torch_input_e = gen_func_with_cast_tt(
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), input_e_dtype or input_a_dtype
+        )(shape_e)
+    else:
+        torch_input_e = None
 
     # Simplified torch reference (actual operation is complex fused kernel)
     # This is a placeholder - actual implementation would need proper RoPE logic
@@ -140,16 +162,34 @@ def run(
     input_tensor_c = ttnn.from_torch(torch_input_c, **from_torch_kwargs_c)
     input_tensor_d = ttnn.from_torch(torch_input_d, **from_torch_kwargs_d)
 
+    # Convert 5th tensor if available
+    if torch_input_e is not None:
+        from_torch_kwargs_e = {"dtype": input_e_dtype or input_a_dtype, "layout": input_e_layout or input_a_layout}
+        if not is_host:
+            from_torch_kwargs_e["device"] = device
+            from_torch_kwargs_e["memory_config"] = input_e_memory_config or input_a_memory_config
+        input_tensor_e = ttnn.from_torch(torch_input_e, **from_torch_kwargs_e)
+    else:
+        input_tensor_e = None
+
     start_time = start_measuring_time()
 
     try:
-        result = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            input_tensor_a,
-            input_tensor_b,
-            input_tensor_c,
-            input_tensor_d,
-            memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # rotary_embedding_llama_fused_qk doesn't accept memory_config parameter
+        # API signature: (q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat)
+        if input_tensor_e is not None:
+            result = ttnn.experimental.rotary_embedding_llama_fused_qk(
+                input_tensor_a,  # q_input_tensor
+                input_tensor_b,  # k_input_tensor
+                input_tensor_c,  # cos_cache
+                input_tensor_d,  # sin_cache
+                input_tensor_e,  # trans_mat
+            )
+        else:
+            # If no trans_mat, operation will likely fail, but handle gracefully
+            pcc = (False, "Missing required trans_mat parameter")
+            e2e_perf = stop_measuring_time(start_time)
+            return [pcc, e2e_perf]
         # Handle both single tensor and tuple returns
         if isinstance(result, (list, tuple)):
             output_tensor = ttnn.to_torch(result[0]) if result else None
@@ -158,15 +198,15 @@ def run(
 
         e2e_perf = stop_measuring_time(start_time)
 
-        # Basic shape check
+        # check_with_pcc returns (bool, message) tuple
         if output_tensor is not None:
-            pcc = 1.0 if output_tensor.shape == torch_output.shape else 0.5
+            pcc = check_with_pcc(torch_output, output_tensor, 0.999)
         else:
-            pcc = 0.0
+            pcc = (False, "Output tensor is None")
     except Exception as e:
         # Operation may not be fully implemented yet
         print(f"Operation failed: {e}")
         e2e_perf = stop_measuring_time(start_time)
-        pcc = 0.0
+        pcc = (False, f"Operation failed: {str(e)}")
 
     return [pcc, e2e_perf]
