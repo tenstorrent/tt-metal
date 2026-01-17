@@ -70,16 +70,15 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(3);
 
     // CB IDs for data sources
-    constexpr uint32_t cb_local_l = get_compile_time_arg_val(4);  // Local L data for R1 send
-    constexpr uint32_t cb_local_s = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_local_m = get_compile_time_arg_val(6);
+    // NOTE: cb_local_l/s/m (indices 4-6) are kept for compatibility but NOT USED!
+    // The writer reads directly from input tensor addresses (passed as runtime args)
+    // to avoid CB contention with the compute kernel which uses CB sync.
+    [[maybe_unused]] constexpr uint32_t cb_local_l = get_compile_time_arg_val(4);  // UNUSED
+    [[maybe_unused]] constexpr uint32_t cb_local_s = get_compile_time_arg_val(5);  // UNUSED
+    [[maybe_unused]] constexpr uint32_t cb_local_m = get_compile_time_arg_val(6);  // UNUSED
     constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(7);  // R1 compute output for R2 send
     constexpr uint32_t cb_r1_result_s = get_compile_time_arg_val(8);
     constexpr uint32_t cb_r1_result_m = get_compile_time_arg_val(9);
-
-    // NOTE: cb_final_l/s/m removed - writer doesn't interact with final output!
-    // Compute writes directly to output tensor via CB aliasing. Writer just
-    // terminates muxes after R2 send; program completion signals host.
 
     // Packet/header CBs
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(10);
@@ -116,25 +115,23 @@ void kernel_main() {
     // ==========================================================================
     size_t arg_idx = 0;
 
-    // R1 destination (forward mux neighbor) - MeshBuffer address on that device
-    // Sender packs [L|S|M] contiguously and sends to this address.
-    // R1 neighbor's CBs are aliased to offsets within their R1 receive buffer.
-    const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);  // R1 MeshBuffer addr
+    // Input tensor source addresses (for R1 send - read directly, no CB sync)
+    // This avoids CB contention with compute kernel which uses CB sync
+    const uint32_t src_addr_l = get_arg_val<uint32_t>(arg_idx++);  // Local L source
+    const uint32_t src_addr_s = get_arg_val<uint32_t>(arg_idx++);  // Local S source
+    const uint32_t src_addr_m = get_arg_val<uint32_t>(arg_idx++);  // Local M source
+
+    // R1 destination - intermediate tensor address on neighbor device
+    const uint32_t r1_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);  // R1 dest addr
     const uint32_t r1_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // R1 semaphore addr
 
-    // R2 destination (backward mux neighbor - DIFFERENT device!) - MeshBuffer address
-    // R2 neighbor's CBs are aliased to offsets within their R2 receive buffer.
-    const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);  // R2 MeshBuffer addr
+    // R2 destination - intermediate tensor address on neighbor device (DIFFERENT from R1!)
+    const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);  // R2 dest addr
     const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // R2 semaphore addr
 
     // Local core coordinates (for NOC address calculation in fused packets)
     const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
-
-    // NOTE: Final output destination args removed!
-    // With CB aliasing, output CBs (cb_final_l/s/m) point directly to output tensor.
-    // Compute writes go straight to the output tensor's L1 address.
-    // No memmove or NOC write needed - true zero-copy output!
 
     // R1 mux runtime args (physical direction determined by program factory)
     const bool r1_is_term_master = get_arg_val<uint32_t>(arg_idx++);
@@ -175,8 +172,11 @@ void kernel_main() {
     // NOTE: Barrier leader config removed - not needed in simplified design.
     // Mux termination provides sufficient synchronization.
 
+    DPRINT << "Writer kernel runtime args parsed." << ENDL();
+
     // Computed values (S and M tiles are single tiles, aligned)
     const uint32_t total_payload_size = payload_size_bytes + 2 * aligned_page_size;
+    DPRINT << "Total payload size: " << total_payload_size << " bytes." << ENDL();
 
     // ==========================================================================
     // PHASE 1: Setup R1 mux, connect, and send R1
@@ -208,25 +208,31 @@ void kernel_main() {
     // Wait for R1 mux ready and connect
     tt::tt_fabric::wait_for_fabric_endpoint_ready(r1_mux_x, r1_mux_y, r1_mux_status_addr, r1_local_status_addr);
     tt::tt_fabric::fabric_client_connect(r1_mux);
+    DPRINT << "Sender R1 mux connected." << ENDL();
 
-    // Wait for local data (with CB aliasing, should be instant for input data)
-    cb_wait_front(cb_local_l, out_tiles);
-    cb_wait_front(cb_local_s, Sq_chunk_t);
-    cb_wait_front(cb_local_m, Sq_chunk_t);
+    // R1 SEND: Pack and send local input data to R1 neighbor
+    //
+    // IMPORTANT: We read directly from input tensor addresses (src_addr_l/s/m)
+    // instead of using CB sync (cb_wait_front/cb_pop_front). This is critical!
+    //
+    // The compute kernel uses CB sync on the same CBs (cb_local_l/s/m).
+    // If we also used CB sync here, we'd have a race condition - both writer
+    // and compute would try to consume the same CB data.
+    //
+    // Since the input CBs are aliased to the input tensor, reading directly
+    // from the tensor addresses gives us the same data without CB contention.
 
-    // Prepare R1 packet buffer
+    DPRINT << "Sender preparing R1 packet..." << ENDL();
     cb_reserve_back(packet_cb_id, 1);
     uint32_t packet_addr = get_write_ptr(packet_cb_id);
 
     // Pack data: [L tiles][S tile aligned][M tile aligned]
-    tt_memmove<true, false, false, 0>(packet_addr, get_read_ptr(cb_local_l), payload_size_bytes);
-    tt_memmove<true, false, false, 0>(packet_addr + payload_size_bytes, get_read_ptr(cb_local_s), aligned_page_size);
+    // Read directly from input tensor shard addresses (no CB sync!)
+    tt_memmove<true, false, false, 0>(packet_addr, src_addr_l, payload_size_bytes);
+    tt_memmove<true, false, false, 0>(packet_addr + payload_size_bytes, src_addr_s, aligned_page_size);
     tt_memmove<true, false, false, 0>(
-        packet_addr + payload_size_bytes + aligned_page_size, get_read_ptr(cb_local_m), aligned_page_size);
-
-    cb_pop_front(cb_local_l, out_tiles);
-    cb_pop_front(cb_local_s, Sq_chunk_t);
-    cb_pop_front(cb_local_m, Sq_chunk_t);
+        packet_addr + payload_size_bytes + aligned_page_size, src_addr_m, aligned_page_size);
+    DPRINT << "Sender R1 packet packed." << ENDL();
 
     // Build fused packet header for R1 - goes to R1 neighbor
     //
@@ -235,7 +241,7 @@ void kernel_main() {
     // remote device. This assumes SYMMETRIC SHARD PLACEMENT: core (x,y) on this device
     // sends to core (x,y) on the neighbor device. This works because:
     //   1. All devices have identical shard grid topology
-    //   2. MeshBuffer allocates the same L1 address on all devices
+    //   2. Intermediate tensor allocates the same L1 address on all devices
     //   3. Each shard core sends to its corresponding core on the neighbor
     //
     // The fabric routes the packet to the correct device; the NOC address specifies
@@ -253,7 +259,7 @@ void kernel_main() {
     r1_mux.send_payload_flush_blocking_from_address((uint32_t)r1_header, packet_header_size_bytes);
 
     cb_push_back(packet_cb_id, 1);  // Release packet buffer for reuse
-
+    DPRINT << "Sender R1 sent." << ENDL();
     // ==========================================================================
     // PHASE 2: While waiting for R1 compute, setup R2 mux (hidden latency!)
     // ==========================================================================
@@ -284,15 +290,17 @@ void kernel_main() {
     // Wait for R2 mux ready (should already be ready by now since compute took time!)
     tt::tt_fabric::wait_for_fabric_endpoint_ready(r2_mux_x, r2_mux_y, r2_mux_status_addr, r2_local_status_addr);
     tt::tt_fabric::fabric_client_connect(r2_mux);
-
+    DPRINT << "Sender R2 mux connected." << ENDL();
     // ==========================================================================
     // PHASE 3: Wait for R1 compute result, then send R2 (R2 mux already connected!)
     // ==========================================================================
 
     // Now wait for R1 compute to complete (R2 mux is already connected!)
+    DPRINT << "Sender waiting for R1 compute result." << ENDL();
     cb_wait_front(cb_r1_result_l, out_tiles);
     cb_wait_front(cb_r1_result_s, Sq_chunk_t);
     cb_wait_front(cb_r1_result_m, Sq_chunk_t);
+    DPRINT << "Sender R1 compute result ready." << ENDL();
 
     // Prepare R2 packet with R1 result
     cb_reserve_back(packet_cb_id, 1);
@@ -304,9 +312,11 @@ void kernel_main() {
     tt_memmove<true, false, false, 0>(
         packet_addr + payload_size_bytes + aligned_page_size, get_read_ptr(cb_r1_result_m), aligned_page_size);
 
-    cb_pop_front(cb_r1_result_l, out_tiles);
-    cb_pop_front(cb_r1_result_s, Sq_chunk_t);
-    cb_pop_front(cb_r1_result_m, Sq_chunk_t);
+    // NOTE: We do NOT pop cb_r1_result_* here!
+    // The compute kernel ALSO needs cb_r1_result_* as input for R2 reduction.
+    // Compute will pop them as part of sdpa_reduce.
+    // This is a shared-read pattern: both writer and compute read from the same CB,
+    // and only compute pops (since it's the "real" consumer for R2 computation).
 
     // Build fused packet for R2 - goes to R2 neighbor
     // This is a DIFFERENT device than R1 neighbor!
@@ -324,6 +334,7 @@ void kernel_main() {
     r2_mux.send_payload_flush_blocking_from_address((uint32_t)r2_header, packet_header_size_bytes);
 
     cb_push_back(packet_cb_id, 1);
+    DPRINT << "Sender R2 packet sent." << ENDL();
 
     // ==========================================================================
     // PHASE 4: Disconnect muxes (can overlap with R2 compute on TRISC)
@@ -332,7 +343,7 @@ void kernel_main() {
     // on TRISC, so this disconnect overhead is hidden.
     tt::tt_fabric::fabric_client_disconnect(r1_mux);
     tt::tt_fabric::fabric_client_disconnect(r2_mux);
-
+    DPRINT << "Sender R1 and R2 muxes disconnected." << ENDL();
     // ==========================================================================
     // PHASE 5: Terminate muxes
     // ==========================================================================
@@ -366,4 +377,6 @@ void kernel_main() {
         noc_semaphore_inc(dest, 1);
         noc_async_atomic_barrier();
     }
+    DPRINT << "Sender R1 and R2 muxes terminated." << ENDL();
+    noc_async_write_barrier();
 }

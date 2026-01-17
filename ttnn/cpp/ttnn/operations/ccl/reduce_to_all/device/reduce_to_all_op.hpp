@@ -58,6 +58,7 @@ struct ReduceToAllOp {
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
             bool is_device_0_2;
+            bool is_simplified = false;  // True for simplified 2-kernel design
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

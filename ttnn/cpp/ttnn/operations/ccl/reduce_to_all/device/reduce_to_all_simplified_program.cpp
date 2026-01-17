@@ -127,6 +127,20 @@ reduce_to_all_simplified_program_factory(
     const auto& output_tensor_s = output_tensors.at(1)[1];
     const auto& output_tensor_m = output_tensors.at(1)[2];
 
+    // Use intermediate tensors as receive buffers.
+    // These are MeshDevice tensors created ONCE at the mesh level, so they have
+    // the SAME L1 address on ALL devices. This is critical for fabric sends!
+    //
+    // For the simplified 2-kernel design:
+    // - R1 receive buffer: Use fw_intermediate_tensor (for R1 neighbor data)
+    // - R2 receive buffer: Use bw_intermediate_tensor (for R2 neighbor data)
+    //
+    // The original design uses these tensors differently across device types,
+    // but the key insight is that fw_intermediate and bw_intermediate have the
+    // same address on all devices, allowing cross-device sends to work.
+    const auto& r1_recv_tensor = output_tensors.at(0)[0];  // fw_intermediate
+    const auto& r2_recv_tensor = output_tensors.at(0)[1];  // bw_intermediate
+
     // =========================================================================
     // Extract shard info and compute grid
     // =========================================================================
@@ -166,38 +180,15 @@ reduce_to_all_simplified_program_factory(
     const uint32_t total_packet_size = payload_size_bytes + 2 * aligned_page_size;  // L + S + M
 
     // =========================================================================
-    // Create MeshBuffers for neighbor receive (R1 and R2)
+    // Use intermediate tensors as receive buffers
     // =========================================================================
-    // These buffers are used to receive data from neighbors via fabric.
-    // Key properties:
-    // 1. ReplicatedBufferConfig ensures SAME L1 address on ALL devices
-    //    (sender can use a fixed destination address)
-    // 2. Size must hold full packet: L payload + S tile + M tile
-    // 3. Separate buffers for R1 and R2 to avoid race conditions
-    //    (R1 neighbor != R2 neighbor, they write concurrently)
-    const uint32_t recv_buffer_size = total_packet_size;
-
-    tt::tt_metal::distributed::ReplicatedBufferConfig r1_mesh_config{.size = recv_buffer_size};
-    tt::tt_metal::distributed::DeviceLocalBufferConfig r1_l1_config{
-        .page_size = recv_buffer_size, .buffer_type = tt::tt_metal::BufferType::L1};
-    auto r1_recv_buffer = tt::tt_metal::distributed::MeshBuffer::create(r1_mesh_config, r1_l1_config, mesh_device);
-
-    tt::tt_metal::distributed::ReplicatedBufferConfig r2_mesh_config{.size = recv_buffer_size};
-    tt::tt_metal::distributed::DeviceLocalBufferConfig r2_l1_config{
-        .page_size = recv_buffer_size, .buffer_type = tt::tt_metal::BufferType::L1};
-    auto r2_recv_buffer = tt::tt_metal::distributed::MeshBuffer::create(r2_mesh_config, r2_l1_config, mesh_device);
-
-    // Validate buffer sizes are sufficient for the packet
-    TT_FATAL(
-        r1_recv_buffer->size() >= recv_buffer_size,
-        "R1 receive buffer too small: {} < {} bytes required",
-        r1_recv_buffer->size(),
-        recv_buffer_size);
-    TT_FATAL(
-        r2_recv_buffer->size() >= recv_buffer_size,
-        "R2 receive buffer too small: {} < {} bytes required",
-        r2_recv_buffer->size(),
-        recv_buffer_size);
+    // The intermediate tensors (r1_recv_tensor, r2_recv_tensor) are MeshDevice tensors
+    // created ONCE at the mesh level via create_output_tensors(). They have the SAME
+    // L1 buffer address on ALL devices, which is critical for fabric sends.
+    //
+    // This replaces the per-device MeshBuffer::create() approach which was broken
+    // because it created different buffer instances (with different addresses) for
+    // each device.
 
     // Scale encoding
     union {
@@ -278,12 +269,12 @@ reduce_to_all_simplified_program_factory(
             .set_globally_allocated_address(*input_tensor_m.buffer());
     CreateCircularBuffer(program, shard_grid, cb_local_m_config);
 
-    // R1 neighbor CBs - ALIASED to R1 MeshBuffer (direct fabric write, zero-copy receive)
+    // R1 neighbor CBs - ALIASED to R1 receive tensor (direct fabric write, zero-copy receive)
     tt::tt_metal::CircularBufferConfig cb_r1_neighbor_l_config =
         tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_r1_neighbor_l, input_dataformat}})
             .set_page_size(cb_r1_neighbor_l, aligned_page_size)
             .set_tile_dims(cb_r1_neighbor_l, stats_tile)
-            .set_globally_allocated_address(*r1_recv_buffer->get_backing_buffer());
+            .set_globally_allocated_address(*r1_recv_tensor.buffer());
     CreateCircularBuffer(program, shard_grid, cb_r1_neighbor_l_config);
 
     // S and M CBs are NOT aliased - reader will memcpy from buffer after packet arrives
@@ -319,12 +310,12 @@ reduce_to_all_simplified_program_factory(
             .set_tile_dims(cb_r1_result_m, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_r1_result_m_config);
 
-    // R2 neighbor CBs - ALIASED to R2 MeshBuffer (direct fabric write, zero-copy receive)
+    // R2 neighbor CBs - ALIASED to R2 receive tensor (direct fabric write, zero-copy receive)
     tt::tt_metal::CircularBufferConfig cb_r2_neighbor_l_config =
         tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_r2_neighbor_l, input_dataformat}})
             .set_page_size(cb_r2_neighbor_l, aligned_page_size)
             .set_tile_dims(cb_r2_neighbor_l, stats_tile)
-            .set_globally_allocated_address(*r2_recv_buffer->get_backing_buffer());
+            .set_globally_allocated_address(*r2_recv_tensor.buffer());
     CreateCircularBuffer(program, shard_grid, cb_r2_neighbor_l_config);
 
     tt::tt_metal::CircularBufferConfig cb_r2_neighbor_s_config =
@@ -414,7 +405,8 @@ reduce_to_all_simplified_program_factory(
     // Setup mux cores and config
     // =========================================================================
     constexpr auto num_links = 2;
-    const uint32_t num_workers_per_direction = num_shard_cores;
+    // Each link has its own mux and termination master, so workers per mux = cores_per_link
+    const uint32_t num_workers_per_direction = num_shard_cores / num_links;
 
     std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};
     if (operation_attributes.input_mux_cores.has_value()) {
@@ -642,21 +634,26 @@ reduce_to_all_simplified_program_factory(
             // Reader runtime args
             // Include buffer addresses so reader can memcpy S and M from packet buffer
             std::vector<uint32_t> reader_rt_args = {
-                r1_recv_sem.address(),      // 0: R1 neighbor semaphore
-                r2_recv_sem.address(),      // 1: R2 neighbor semaphore
-                r1_recv_buffer->address(),  // 2: R1 receive buffer base address
-                r2_recv_buffer->address(),  // 3: R2 receive buffer base address
+                r1_recv_sem.address(),               // 0: R1 neighbor semaphore
+                r2_recv_sem.address(),               // 1: R2 neighbor semaphore
+                r1_recv_tensor.buffer()->address(),  // 2: R1 receive buffer base address
+                r2_recv_tensor.buffer()->address(),  // 3: R2 receive buffer base address
             };
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
             // Writer runtime args
+            // Input tensor addresses for R1 send (writer reads directly, no CB sync)
+            // This avoids CB contention with compute kernel which also reads input via CBs
             std::vector<uint32_t> writer_rt_args = {
-                r1_recv_buffer->address(),  // R1 neighbor destination (MeshBuffer)
-                r1_recv_sem.address(),      // R1 neighbor semaphore
-                r2_recv_buffer->address(),  // R2 neighbor destination (MeshBuffer)
-                r2_recv_sem.address(),      // R2 neighbor semaphore
-                core_noc.x,                 // current_core_x
-                core_noc.y,                 // current_core_y
+                input_tensor_l.buffer()->address(),  // 0: Local L source address
+                input_tensor_s.buffer()->address(),  // 1: Local S source address
+                input_tensor_m.buffer()->address(),  // 2: Local M source address
+                r1_recv_tensor.buffer()->address(),  // 3: R1 neighbor destination
+                r1_recv_sem.address(),               // 4: R1 neighbor semaphore
+                r2_recv_tensor.buffer()->address(),  // 5: R2 neighbor destination
+                r2_recv_sem.address(),               // 6: R2 neighbor semaphore
+                core_noc.x,                          // 7: current_core_x
+                core_noc.y,                          // 8: current_core_y
             };
 
             // Determine which physical mux (FWD or BWD) is used for R1 and R2
@@ -722,7 +719,8 @@ reduce_to_all_simplified_program_factory(
             .writer_kernel1 = writer_kernel,
             .writer_kernel2 = 0,  // Not used in simplified design
             .semaphores = semaphores,
-            .is_device_0_2 = is_even_device}};
+            .is_device_0_2 = is_even_device,
+            .is_simplified = true}};
 }
 
 }  // namespace ttnn::operations::ccl

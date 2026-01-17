@@ -98,10 +98,12 @@ void kernel_main() {
     cb_reserve_back(cb_r1_neighbor_s, Sq_chunk_t);
     cb_reserve_back(cb_r1_neighbor_m, Sq_chunk_t);
 
+    DPRINT << "Reader waiting for R1 neighbor data semaphore." << ENDL();
     // Wait for R1 data arrival
     noc_semaphore_wait(r1_neighbor_sem_ptr, 1);
     noc_semaphore_set(r1_neighbor_sem_ptr, 0);
 
+    DPRINT << "Reader R1 neighbor data semaphore acquired." << ENDL();
     // L is zero-copy (aliased to buffer base), just push
     cb_push_back(cb_r1_neighbor_l, out_tiles);
 
@@ -124,10 +126,12 @@ void kernel_main() {
     cb_reserve_back(cb_r2_neighbor_s, Sq_chunk_t);
     cb_reserve_back(cb_r2_neighbor_m, Sq_chunk_t);
 
+    DPRINT << "Reader waiting for R2 neighbor data semaphore." << ENDL();
     // Wait for R2 data arrival
     noc_semaphore_wait(r2_neighbor_sem_ptr, 1);
     noc_semaphore_set(r2_neighbor_sem_ptr, 0);
 
+    DPRINT << "Reader R2 neighbor data semaphore acquired." << ENDL();
     // L is zero-copy
     cb_push_back(cb_r2_neighbor_l, out_tiles);
 
@@ -140,5 +144,7 @@ void kernel_main() {
     cb_push_back(cb_r2_neighbor_s, Sq_chunk_t);
     cb_push_back(cb_r2_neighbor_m, Sq_chunk_t);
 
+    DPRINT << "Reader finished processing R2 neighbor data." << ENDL();
     // Done! Compute kernel handles R1 reduction, R2 reduction, and final output.
+    DPRINT << "Reader kernel completed." << ENDL();
 }
