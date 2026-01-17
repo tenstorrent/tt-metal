@@ -22,6 +22,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -442,7 +443,7 @@ size_t get_number_of_available_routing_planes(
 
     size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
     size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
-    auto* first_chip = mesh_device.get_device(row_idx, col_idx);
+    auto* first_chip = mesh_device.impl().get_device(row_idx, col_idx);
     ChipId first_chip_id = first_chip->id();
     auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
 
