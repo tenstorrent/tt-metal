@@ -408,6 +408,7 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    logger.info(f"FABRIC CONFIG: {fabric_config}")
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
