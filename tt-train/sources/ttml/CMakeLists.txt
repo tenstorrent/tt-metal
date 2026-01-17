@@ -129,6 +129,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
@@ -569,20 +571,11 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
-install(
-    TARGETS
-        _ttml
-    LIBRARY
-        DESTINATION ttml
-        COMPONENT ttml
-)
-
 # Install Python source files
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/ttml
-    DESTINATION ttml
+    DESTINATION .
     COMPONENT ttml
     FILES_MATCHING
     PATTERN
@@ -591,6 +584,16 @@ install(
     "__pycache__"
         EXCLUDE
 )
+
+install(
+    TARGETS
+        _ttml
+    LIBRARY
+        DESTINATION ttml
+        COMPONENT ttml
+)
+
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
