@@ -42,178 +42,31 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          FULL_MATRIX=$(jq -n -c '[
-            {
-              "name": "t3k_falcon7b_tests",
-              "model": "falcon7b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon7b_tests",
-              "timeout": 90,
-U05RWH3QUPM" # Salar Hosseini
-            },
-            {
-              "name": "t3k_falcon40b_tests",
-              "model": "falcon40b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon40b_tests",
-              "timeout": 50,
-U053W15B6JF" # Djordje Ivanovic
-            },
-            {
-              "name": "t3k_llama3_tests",
-              "model": "llama3",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_tests",
-              "timeout": 60,
-U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k_llama3_vision_tests",
-              "model": "llama3_vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_vision_tests",
-              "timeout": 45,
-U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k_llama3_90b_vision_tests",
-              "model": "llama3_90b_vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_90b_vision_tests",
-              "timeout": 20,
-U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k_llama3_70b_tests",
-              "model": "llama3_70b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_70b_tests",
-              "timeout": 60,
-U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k_resnet50_tests",
-              "model": "resnet50",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_resnet50_tests",
-              "timeout": 50,
-U0837MYG788" # Marko Radosavljevic
-            },
-            {
-              "name": "t3k_sentence_bert_tests",
-              "model": "sentence_bert",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_sentence_bert_tests",
-              "timeout": 75,
-U045U3DEKM4" # Mohamed Bahnas (Aniruddha Tupe)
-            },
-            {
-              "name": "t3k sd35_large tests",
-              "model": "sd35_large",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_sd35large_tests",
-              "timeout": 60,
-U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k flux1-dev tests",
-              "model": "flux1-dev",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_flux1_tests",
-              "timeout": 60,
-U08TED0JM9D" # Samuel Adesoye
-            },
-            {
-              "name": "t3k motif tests",
-              "model": "motif",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_motif_tests",
-              "timeout": 25,
-U08TED0JM9D" # Samuel Adesoye
-            },
-            {
-              "name": "t3k_mistral_tests",
-              "model": "mistral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mistral_tests",
-              "timeout": 90,
-U0896VBAKFC" # Pratikkumar Prajapati
-            },
-            {
-              "name": "t3k_mixtral_tests",
-              "model": "mixtral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mixtral_tests",
-              "timeout": 50,
-U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k_whisper_tests",
-              "model": "whisper",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_whisper_tests",
-              "timeout": 90,
-U088413NP0Q" # Ashai Reddy
-            },
-            {
-              "name": "t3k_qwen3_tests",
-              "model": "qwen3",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen3_tests",
-              "timeout": 60,
-U03HY7MK4BT" # Mark O'\''Connor
-            },
-            {
-              "name": "t3k_qwen25_tests",
-              "model": "qwen25",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen25_tests",
-              "timeout": 90,
-U03HY7MK4BT" # Mark O'\''Connor
-            }, (#GH Isssue 20000)
-            {
-              "name": "t3k_qwen25_vl_tests",
-              "model": "qwen25_vl",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen25_vl_tests",
-              "timeout": 30,
-U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k_gemma3_tests",
-              "model": "gemma3",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gemma3_tests",
-              "timeout": 30,
-U08TJ70UFRT" # Harry Andrews
-            },
-            {
-              "name": "t3k_wan2.2_tests",
-              "model": "wan22",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_wan22_tests",
-              "timeout": 45,
-U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k_mochi_tests",
-              "model": "mochi",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mochi_tests",
-              "timeout": 60,
-U09ELB03XRU" # Stephen Osborne
-            },
-            {
-              "name": "t3k_gpt_oss_tests",
-              "model": "gpt-oss",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gpt_oss_tests",
-              "timeout": 20,
-U08TJ70UFRT" # Harry Andrews
-            }
-          ]')
-
-          # Filter matrix based on model selection
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+      - name: Load test matrix
+        id: load-test-matrix
+        run: |
+          set -e
+          # Install yq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
+          fi
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Filter by model if specified
+          echo "[INFO] Selected model: ${{ inputs.model }}"
           if [ "${{ inputs.model }}" = "all" ]; then
             filtered_output="$json_output"
             echo "[INFO] Loading all tests from YAML"
