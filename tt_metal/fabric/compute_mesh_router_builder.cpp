@@ -289,7 +289,6 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         I_am_ew + I_am_ns + I_am_z == 1,
         "Internal error: In compute_sender_channel_injection_flags_for_vc, exactly one of I_am_ew, I_am_ns, and I_am_z "
         "must be true");
-
     for (size_t ch_idx = 1; ch_idx < num_channels; ++ch_idx) {
         // Map to VC0 equivalent channel for direction lookup
         auto sender_channel_direction = builder::get_sender_channel_direction(direction, ch_idx);
@@ -476,7 +475,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 "M{}-D{}: Router at x={}, y={}, UpstreamEthernetChannel={}, Direction={} :: Connecting VC{} "
                 "receiver_ch={} to "
                 "downstream "
-                "router at x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
+                "router at M{}-D{} x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
                 "AbsoluteChannel={}",
                 local_node_.mesh_id.get(),
                 local_node_.chip_id,
@@ -486,6 +485,8 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 get_eth_direction(),
                 vc,
                 0,
+                downstream_router.local_node_.mesh_id.get(),
+                downstream_router.local_node_.chip_id,
                 downstream_builder->get_noc_x(),
                 downstream_builder->get_noc_y(),
                 downstream_router.location_.eth_chan,
