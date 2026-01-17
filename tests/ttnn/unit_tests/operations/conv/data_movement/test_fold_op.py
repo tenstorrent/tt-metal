@@ -78,7 +78,7 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 
 
 @pytest.mark.parametrize("nhw", [(3, 64, 64)])
-@pytest.mark.parametrize("channels", [320])
+@pytest.mark.parametrize("channels", [268, 320])
 @pytest.mark.parametrize("stride", [(16, 16)])
 @pytest.mark.parametrize("padding", [(0, 0)])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
