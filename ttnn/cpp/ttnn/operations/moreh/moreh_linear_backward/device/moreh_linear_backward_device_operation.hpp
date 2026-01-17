@@ -46,7 +46,7 @@ struct MorehBiasAddBackwardOperation {
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& bias_grad);
+            tensor_return_value_t& tensor_return_value);
     };
 
     struct MultiCoreProgramFactory {
@@ -68,7 +68,7 @@ struct MorehBiasAddBackwardOperation {
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& bias_grad);
+            tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<SingleCoreProgramFactory, MultiCoreProgramFactory>;
@@ -78,17 +78,15 @@ struct MorehBiasAddBackwardOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& output_grad,
-        const std::optional<Tensor>& bias,
-        const std::optional<Tensor>& bias_grad,
-        const std::optional<MemoryConfig>& bias_grad_memory_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_linear_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_bias_add_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_bias_add_backward",
-    ttnn::operations::moreh::moreh_linear_backward::MorehBiasAddBackwardOperation>();
+ttnn::operations::moreh::moreh_linear_backward::MorehBiasAddBackwardOperation::tensor_return_value_t
+moreh_bias_add_backward(
+    const Tensor& output_grad,
+    const std::optional<Tensor>& bias,
+    const std::optional<Tensor>& bias_grad,
+    const std::optional<MemoryConfig>& bias_grad_memory_config,
+    DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim

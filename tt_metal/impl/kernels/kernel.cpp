@@ -112,8 +112,7 @@ Kernel::Kernel(
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
-    common_runtime_args_count_(0),
-    max_runtime_args_per_core_(0),
+
     core_with_max_runtime_args_({0, 0}),
     defines_(defines) {
     this->register_kernel_with_watcher();
@@ -400,7 +399,7 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
-    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
+    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t expected_max_rt_args = 0;
 
@@ -553,7 +552,7 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     jit_build(
         BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
@@ -604,7 +603,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     auto load_type =
@@ -684,7 +683,7 @@ bool DataMovementKernel::configure(
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key())[0];
-    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
     return true;

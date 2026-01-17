@@ -16,19 +16,23 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
-
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::send_async {
+namespace ttnn::experimental::prim {
 
 SendAsyncMeshWorkloadFactory::cached_mesh_workload_t SendAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const SendAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Tensor& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
+    ttnn::MeshCoordinateRangeSet workload_coords =
+    ttnn::send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
+        tensor_coords, operation_attributes.mesh_socket);
+
+    for (const auto& coord : workload_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
@@ -38,14 +42,14 @@ SendAsyncMeshWorkloadFactory::cached_mesh_workload_t SendAsyncMeshWorkloadFactor
 
 ttnn::device_operation::CachedProgram<SendAsyncMeshWorkloadFactory::shared_variables_t>
 SendAsyncMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const SendAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Tensor& tensor_args,
+    std::vector<Tensor>& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args;
     auto* mesh_device = input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.device();
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -255,9 +259,9 @@ SendAsyncMeshWorkloadFactory::create_at(
 
 void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+    const SendAsyncParams& operation_attributes,
+    const Tensor& tensor_args,
+    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -268,7 +272,7 @@ void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
         const auto& writer_kernel_id = shared_vars.writer_kernel_id;
 
         const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& input_tensor = tensor_args.input_tensor;
+        const auto& input_tensor = tensor_args;
 
         for (const auto& sender_core_coord : sender_core_coords) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
@@ -280,4 +284,4 @@ void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::send_async
+}  // namespace ttnn::experimental::prim

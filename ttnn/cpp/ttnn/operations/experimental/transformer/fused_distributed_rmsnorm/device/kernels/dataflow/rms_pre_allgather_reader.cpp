@@ -7,10 +7,10 @@
  */
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);

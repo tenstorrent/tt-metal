@@ -51,7 +51,7 @@ struct CoreGrid {
     std::size_t y;
 
     CoreGrid(std::size_t x, std::size_t y) : x(x), y(y) {}
-    CoreCoord to_CoreCoord() { return CoreCoord(int(x), int(y)); }
+    CoreCoord to_CoreCoord() const { return CoreCoord(int(x), int(y)); }
 };
 
 using Buffer = tt::tt_metal::Buffer;
@@ -60,6 +60,8 @@ inline std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
     os << "ttnn.CoreGrid(x=" << core_grid.x << ", y=" << core_grid.y << ")";
     return os;
 }
+
+std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set);
 
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;

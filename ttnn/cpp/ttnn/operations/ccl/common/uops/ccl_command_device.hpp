@@ -7,7 +7,7 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 #ifdef DEBUG_PRINT_ENABLED
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #endif
 
 #include <cstdint>

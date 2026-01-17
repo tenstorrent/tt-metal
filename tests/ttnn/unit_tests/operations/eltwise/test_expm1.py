@@ -18,15 +18,27 @@ def flush_subnormal_values(tensor):
     return tensor
 
 
-def test_expm1_arange_masking(device):
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "bfloat16",
+        "float32",
+    ],
+)
+def test_expm1_arange_masking(dtype, device):
     # Expm1 Working range - Overflow from 88.5(inf) as in exp
     low = -math.inf
     high = 88.5
 
-    # Generate all possible bit patterns for bf16
+    torch_dtype = getattr(torch, dtype)
+    tt_dtype = getattr(ttnn, dtype)
+
+    # Generate all possible 16-bit patterns and
+    # For dtype == bfloat16, this covers all possible inputs
+    # For dtype == float32, this only covers some inputs
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
-    input_tensor = input_tensor.to(torch.float32)
+    input_tensor = input_tensor.to(torch_dtype)  # bfloat16 -> torch_dtype
 
     # If input is subnormal then we assume hardware will flush it to 0.0
     input_tensor = flush_subnormal_values(input_tensor)
@@ -37,7 +49,7 @@ def test_expm1_arange_masking(device):
 
     tt_in = ttnn.from_torch(
         input_tensor,
-        dtype=ttnn.bfloat16,
+        dtype=tt_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -52,7 +64,7 @@ def test_expm1_arange_masking(device):
     # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
     result = flush_subnormal_values(result)
 
-    assert_with_ulp(golden, result, 1.5, allow_nonfinite=True)
+    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

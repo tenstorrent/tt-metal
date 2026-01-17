@@ -19,6 +19,82 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+
+/**
+ * IntermeshVCMode - Defines intermesh VC requirements
+ */
+ enum class IntermeshVCMode : uint8_t {
+    DISABLED,                      // No intermesh VC (single mesh or no intermesh connectivity)
+    EDGE_ONLY,                     // Intermesh VC on edge nodes only (traffic sinks at mesh boundary)
+    FULL_MESH,                     // Intermesh VC throughout mesh (traffic can traverse nodes within mesh)
+    FULL_MESH_WITH_PASS_THROUGH    // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
+};
+
+/**
+ * IntermeshRouterType - Distinguishes types of intermesh routers
+ *
+ * Different intermesh router types have different channel requirements:
+ * - Z_INTERMESH: Vertical device stacking, requires 4 VC1 sender channels (3 mesh + Z)
+ * - XY_INTERMESH: Horizontal inter-mesh, requires 3 VC1 sender channels (mesh only)
+ */
+enum class IntermeshRouterType : uint8_t {
+    NONE,          // No intermesh connectivity
+    Z_INTERMESH,   // Z routers (vertical device stacking)
+    XY_INTERMESH   // XY intermesh routers (horizontal inter-mesh)
+};
+
+/**
+ * IntermeshVCConfig - System-level intermesh VC configuration
+ *
+ * Determined during FabricContext initialization based on:
+ * - Number of meshes in MeshGraph
+ * - Intermesh connectivity topology
+ * - Whether traffic traverses within meshes or passes through intermediate meshes
+ *
+ * Modes:
+ * - DISABLED: No intermesh connectivity
+ * - EDGE_ONLY: VC1 on edge nodes only, traffic sinks at mesh boundary
+ * - FULL_MESH: VC1 throughout mesh, traffic can traverse nodes within target mesh
+ * - FULL_MESH_WITH_PASS_THROUGH: VC1 with inter-mesh routing (A→B→C)
+ */
+struct IntermeshVCConfig {
+    IntermeshVCMode mode = IntermeshVCMode::DISABLED;
+    IntermeshRouterType router_type = IntermeshRouterType::NONE;  // Type of intermesh router (Z vs XY)
+    bool requires_vc1 = false;                      // True if VC1 needed for intermesh
+    bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
+    bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
+
+    IntermeshVCConfig() = default;
+
+    static IntermeshVCConfig disabled() {
+        return IntermeshVCConfig();
+    }
+
+    static IntermeshVCConfig edge_only() {
+        IntermeshVCConfig config;
+        config.mode = IntermeshVCMode::EDGE_ONLY;
+        config.requires_vc1 = true;
+        return config;
+    }
+
+    static IntermeshVCConfig full_mesh() {
+        IntermeshVCConfig config;
+        config.mode = IntermeshVCMode::FULL_MESH;
+        config.requires_vc1 = true;
+        config.requires_vc1_full_mesh = true;
+        return config;
+    }
+
+    static IntermeshVCConfig full_mesh_with_pass_through() {
+        IntermeshVCConfig config;
+        config.mode = IntermeshVCMode::FULL_MESH_WITH_PASS_THROUGH;
+        config.requires_vc1 = true;
+        config.requires_vc1_full_mesh = true;
+        config.requires_vc1_mesh_pass_through = true;
+        return config;
+    }
+};
+
 /**
  * FabricBuilderContext
  *
@@ -52,6 +128,14 @@ public:
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
+    // ============ Max Channel Counts ============
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_sender_channels_per_vc() const {
+        return max_sender_channels_per_vc_;
+    }
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_receiver_channels_per_vc() const {
+        return max_receiver_channels_per_vc_;
+    }
+
     // ============ Tensix Config ============
     void initialize_tensix_config();
     FabricTensixDatamoverConfig& get_tensix_config() const;
@@ -70,10 +154,25 @@ public:
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    // ============ Intermesh VC Configuration ============
+    const IntermeshVCConfig& get_intermesh_vc_config() const { return intermesh_vc_config_; }
+    bool requires_intermesh_vc() const { return intermesh_vc_config_.requires_vc1; }
+    bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
+    bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
+
 private:
+
+    IntermeshVCConfig compute_intermesh_vc_config() const;
+
     friend class FabricContext;
 
     const FabricContext& fabric_context_;
+
+    IntermeshVCConfig intermesh_vc_config_;
+
+    // Computed max channel counts based on actual router types in this fabric
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
 
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;
@@ -94,6 +193,9 @@ private:
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
+
+    // Helper to compute max channel counts for this fabric instance
+    void compute_max_channel_counts();
 };
 
 }  // namespace tt::tt_fabric

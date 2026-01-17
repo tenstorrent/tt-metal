@@ -14,12 +14,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma3.tt.model_config import determine_device_name, parse_decoder_json
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
 
 # Taken from models/tt_transformers/tests/test_accuracy.py as there is a PR to remove this file
@@ -953,7 +952,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

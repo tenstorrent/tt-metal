@@ -14,13 +14,16 @@
 #include "stream_io_map.h"
 #include "c_tensix_core.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/stack_usage.h"
+#include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "remote_circular_buffer_api.h"
+#include "api/remote_circular_buffer.h"
+#endif
+#ifdef UDM_MODE
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #endif
 
 namespace ckernel {
@@ -63,6 +66,9 @@ uint32_t _start() {
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
     }
+#ifdef UDM_MODE
+    tt::tt_fabric::udm::fabric_local_state_init();
+#endif
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif

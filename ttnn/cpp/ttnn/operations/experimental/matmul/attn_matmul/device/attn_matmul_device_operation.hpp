@@ -15,14 +15,14 @@
 #include "attn_matmul_device_operation_types.hpp"
 #include "attn_matmul_program_factory.hpp"
 
-namespace ttnn::operations::experimental::matmul::attn_matmul {
+namespace ttnn::experimental::prim {
 
 struct AttnMatmulDeviceOperation {
-    using operation_attributes_t = attn_matmul::operation_attributes_t;
-    using tensor_args_t = attn_matmul::tensor_args_t;
-    using spec_return_value_t = attn_matmul::spec_return_value_t;
-    using tensor_return_value_t = attn_matmul::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AttnMatmulProgramFactory>;
+    using operation_attributes_t = AttnMatmulParams;
+    using tensor_args_t = AttnMatmulInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<AttnMatmulProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,23 +35,21 @@ struct AttnMatmulDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const CoreCoord& compute_with_storage_grid_size,
-        std::optional<const DataType> output_dtype,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<const uint32_t> num_tokens,
-        std::optional<const bool> transpose_hw,
-        std::optional<Tensor> optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::matmul::attn_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto attn_matmul = ttnn::register_operation<
-    "ttnn::prim::attn_matmul",
-    ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation>();
+
+Tensor attn_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const CoreCoord& compute_with_storage_grid_size,
+    std::optional<const DataType> output_dtype,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const uint32_t> num_tokens,
+    std::optional<const bool> transpose_hw,
+    std::optional<Tensor> optional_output_tensor);
+
 }  // namespace ttnn::prim

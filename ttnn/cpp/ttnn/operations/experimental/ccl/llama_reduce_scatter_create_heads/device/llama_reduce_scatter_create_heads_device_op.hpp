@@ -71,7 +71,7 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -96,30 +96,30 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& intermediate_packet_buffer,
-        int32_t dim,
-        const GlobalSemaphore& semaphore,
-        tt::tt_metal::SubDeviceId subdevice_id,
-        uint32_t cluster_axis,
-        uint32_t ring_devices,
-        ttnn::ccl::Topology topology,
-        uint32_t num_links,
-        uint32_t num_heads,
-        uint32_t num_kv_heads,
-        uint32_t head_dim,
-        uint32_t slice_size,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
-        bool use_noc1_only = false,
-        bool use_optimal_ccl_for_llama = false);
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto llama_reduce_scatter_create_heads = ttnn::register_operation<
-    "ttnn::prim::llama_reduce_scatter_create_heads",
-    ttnn::operations::experimental::ccl::LlamaReduceScatterCreateHeadsDeviceOperation>();
+
+ttnn::operations::experimental::ccl::LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
+llama_reduce_scatter_create_heads(
+    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& intermediate_packet_buffer,
+    int32_t dim,
+    const GlobalSemaphore& semaphore,
+    tt::tt_metal::SubDeviceId subdevice_id,
+    uint32_t cluster_axis,
+    uint32_t ring_devices,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    uint32_t slice_size,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
+    bool use_noc1_only = false,
+    bool use_optimal_ccl_for_llama = false);
+
 }  // namespace ttnn::prim

@@ -6,8 +6,8 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::blackhole::idle_eth;
 
 #include <cstdint>
@@ -106,11 +106,14 @@ HalCoreInfoType create_idle_eth_mem_map() {
             {"ER1", "ERISC1"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 2};
+
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),

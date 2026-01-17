@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -43,7 +44,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         test_config.page_size_bytes);
 
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -62,8 +63,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     auto output_buffer = CreateBuffer(interleaved_buffer_config);
     uint32_t output_buffer_address = output_buffer->address();
 
-    assert(input_buffer_address != output_buffer_address);
-    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+    TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
+    TT_FATAL(test_config.read_kernel || test_config.write_kernel, "At least one kernel must run");
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -105,7 +106,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
     for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
-        assert(l1_size >= total_size_bytes);
+        TT_FATAL(l1_size >= total_size_bytes, "L1 size {} must be >= total_size_bytes {}", l1_size, total_size_bytes);
         l1_addrs.push_back(l1_addr);
     }
 
@@ -172,14 +173,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     Finish(cq);
 
     vector<uint32_t> packed_output;
-    bool pcc = false;
+    bool is_equal = false;
 
     if (test_config.write_kernel) {
         detail::ReadFromBuffer(output_buffer, packed_output);
-        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-        if (!pcc) {
-            log_error(tt::LogTest, "PCC Check failed");
+        is_equal = (packed_output == packed_golden);
+        if (!is_equal) {
+            log_error(tt::LogTest, "Equality Check failed");
             log_info(tt::LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(tt::LogTest, "Output vector");
@@ -188,19 +188,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     } else {
         for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], total_size_bytes, packed_output);
-            pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-                packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-            if (!pcc) {
-                log_error(tt::LogTest, "PCC Check failed");
+            is_equal = (packed_output == packed_golden);
+            if (!is_equal) {
+                log_error(tt::LogTest, "Equality Check failed");
                 log_info(tt::LogTest, "Golden vector");
                 print_vector<uint32_t>(packed_golden);
                 log_info(tt::LogTest, "Output vector");
                 print_vector<uint32_t>(packed_output);
-                return pcc;
+                return is_equal;
             }
         }
     }
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -292,7 +291,7 @@ void packet_sizes_test(
 /* ========== Full grid directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
@@ -304,7 +303,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal
 /* ========== Full grid packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
@@ -316,7 +315,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
 /* ========== Full grid read kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
@@ -328,7 +327,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedI
 /* ========== Full grid read kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
@@ -340,7 +339,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
 /* ========== Full grid write kernel directed ideal ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
@@ -352,7 +351,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirected
 /* ========== Full grid write kernel packet sizes sweep ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};

@@ -6,7 +6,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc_nonblocking_api.h"
 #include <cstdint>
 

@@ -1,0 +1,124 @@
+## Changelog - Release v0.65.0-dev20251205
+
+## 📦 Uncategorized
+
+- 1D to support 1x32 chip routing
+   - PR: #32575
+- Fix check_noc_status on non-default setups
+   - PR: #33522
+- Increasing timeout for manual hang detection in triage tests, enable logging when test fails
+   - PR: #33670
+- Added a fix to the invalid test in test_strided_all_gather_minimal_matmul_async for t3k
+   - PR: #33717
+- Migrate op to new infra:  nlp_create_qkv_heads_segformer
+   - PR: #33664
+- fix to layout regression
+   - PR: #33665
+- add missing write barrier after noc_semaphore_set
+   - PR: #33710
+- [skip ci] Fix and simplify set-opened-on workflow
+   - PR: #33724
+- [skip ci] Add libc++ to CMakePresets
+   - PR: #33727
+- Add dynamic power throttling to BH
+   - PR: #33627
+- Migrate op to new infra: bcast
+   - PR: #33657
+- Remove checkout from setup-job action to eliminate SHA-pinned rollout hazard
+   - PR: #33691
+- Add additional argument handling in graph serializer
+   - PR: #29563
+- New Model: `TG Qwen3-32b` with `TG Llama3-70b` Optimizations at 65 t/s/u
+   - PR: #31018
+- Migrate op to new infra: prod_nc
+   - PR: #33562
+- Migrate op to new infra: prod_all
+   - PR: #33568
+- Migrate op to new infra: argmax
+   - PR: #33310
+- enhance fetching time from dram to l1 cmddat_q through prefetching
+   - PR: #33537
+- Whisper - decoder and encoder optimization
+   - PR: #33450
+- [skip ci] Adding support for 4x timeshare
+   - PR: #33693
+- Remove silent defaults from DeepSeekV3 demo and tests
+   - PR: #33686
+- optimize bh fabric rx ack credit path
+   - PR: #33524
+- #32626: Remove `Moreh` operations from docs
+   - PR: #33765
+-  Set auto triage to false and revert 8dfb324
+   - PR: #33774
+- Add ClosetBox fabric test configuration
+   - PR: #33596
+- Implement in-memory GSD/FSD validation to avoid disk I/O
+   - PR: #33055
+- Re-enable Triage tests
+   - PR: #33529
+- Autopacketization support for fabric data movement - Part 1
+   - PR: #33081
+- Revert "Implement in-memory GSD/FSD validation to avoid disk I/O (#33055)"
+   - PR: #33792
+- Fix set-opened-on workflow: null handling, token validation, and pagination
+   - PR: #33781
+- Decreasing low threshold for heartbeat per seconds to avoid ND test fail
+   - PR: #33788
+- Run paged llama attention prefill unit test instead of default attention
+   - PR: #33681
+- Add full grid worker forwarding channels for UDM Mux [4/n]
+   - PR: #33364
+- SFPI 7.12.0
+   - PR: #33720
+- [skip ci] Fix GraphQL date type in set-opened-on workflow
+   - PR: #33797
+- Update Falcon7b PCC and expected output jsons after layernorm op changes broke tests
+   - PR: #33786
+- Fixing print tests with ND failures in tt-sim
+   - PR: #33520
+- Enabling tt-triage in APC
+   - PR: #33798
+- Allow the profiler DRAM buffer size to be dynamically allocated depending on a user-specified op count
+   - PR: #33004
+- remove deprecated fabric latency tests
+   - PR: #33762
+- Fixing 1D Mapping Algorithm in Mesh Device for flipped coords
+   - PR: #33499
+- [Reduce APC] Run ccl from cpp-unit-tests on merge gate
+   - PR: #33731
+- Updated CODEOWNERS to include all files in ttnn/cpp/ttnn/deprecated/
+   - PR: #33807
+- [Fabric] fabric unicast scatter multi-chunk
+   - PR: #32395
+- Optimize fused strided all gather and minimal matmul to read local slice from AG input
+   - PR: #33703
+- Improve accuracy of accurate sigmoid_tile
+   - PR: #31266
+- [skip ci] Remove cron jobs from t3k and galaxy demo tests
+   - PR: #33814
+- [Fabric] telemetry to be controled by env var in more detail
+   - PR: #33523
+- [skip ci] Optimize set-opened-on workflow by hardcoding IDs
+   - PR: #33810
+- TT-Fabric Intermesh Traffic VC (VC1) Support [1/n]
+   - PR: #33750
+- [skip ci] Refactor wheel building CI job
+   - PR: #33530
+- Migrate op to new infra: neighbor_pad_async
+   - PR: #33631
+- #33225: cleanup tanh accurate
+   - PR: #33226
+- Convert some compile time arguments to runtime arguments for  dispatch kernels
+   - PR: #33379
+- Lightweight kernel asserts
+   - PR: #33451
+- Enable PinnedMemory on Wormhole
+   - PR: #33583
+- Modified galaxy CI tests to account for torus links
+   - PR: #33822
+- [skip ci] Fix create draft release condition
+   - PR: #33846
+- [skip ci] Update install example sw versions in INSTALLING.md
+   - PR: #33615
+- #28593: [skip ci] Move CCL BH GLX tests to using torus as it's now available on CI and we want SysEng ot run it
+   - PR: #33757

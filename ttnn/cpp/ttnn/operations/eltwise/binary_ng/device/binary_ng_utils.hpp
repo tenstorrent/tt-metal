@@ -116,4 +116,11 @@ struct AllShardVolumes {
 std::optional<AllShardVolumes> get_shard_volumes(
     const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
 
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+
+bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
+
+ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
+
+MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 }  // namespace ttnn::operations::binary_ng

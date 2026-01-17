@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -36,9 +37,8 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
 
     if (batch >= num_virtual_rows) {
         return GroupNormNoMcastProgramFactory{};
-    } else {
-        return GroupNormMcastProgramFactory{};
     }
+    return GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_hit(
@@ -60,6 +60,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
+    TT_FATAL(
+        (a.padded_shape()[1] * a.padded_shape()[2]) % TILE_HEIGHT == 0,
+        "H*W ({}*{}) must be a multiple of the tile size ({})",
+        a.padded_shape()[1],
+        a.padded_shape()[2],
+        TILE_HEIGHT);
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
@@ -204,7 +210,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
+TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -232,7 +238,7 @@ spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
         args.program_config);
 }
 
-tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
+Tensor GroupNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
@@ -251,8 +257,7 @@ tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
         args.program_config);
 }
 
-std::tuple<GroupNormDeviceOperation::operation_attributes_t, GroupNormDeviceOperation::tensor_args_t>
-GroupNormDeviceOperation::invoke(
+Tensor group_norm(
     const Tensor& input,
     float eps,
     uint32_t num_groups,
@@ -265,22 +270,24 @@ GroupNormDeviceOperation::invoke(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
-    return {
-        operation_attributes_t{
-            .eps = eps,
-            .num_groups = num_groups,
-            .output_mem_config = output_mem_config,
-            .program_config = program_config,
-            .compute_kernel_config = compute_kernel_config,
-            .use_welford = use_welford,
-        },
-        tensor_args_t{
-            .input = input,
-            .gamma = std::move(gamma),
-            .beta = std::move(beta),
-            .input_mask = std::move(input_mask),
-            .negative_mask = std::move(negative_mask),
-            .reciprocals = std::move(reciprocals)}};
+    using OperationType = GroupNormDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .eps = eps,
+        .num_groups = num_groups,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .use_welford = use_welford,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input,
+        .gamma = std::move(gamma),
+        .beta = std::move(beta),
+        .input_mask = std::move(input_mask),
+        .negative_mask = std::move(negative_mask),
+        .reciprocals = std::move(reciprocals)};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim

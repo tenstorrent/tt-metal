@@ -22,9 +22,9 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # For basic SDXL demo, L1 small size of 23000 is enough,
 # but for inpainting/img2img, we need larger L1 small due
 # to having an extra VAE encode call, which increases it.
-# For simplicity, increase both to 30500 as there's enough
+# For simplicity, increase both to 30800 as there's enough
 # space left in base variant as well.
-SDXL_L1_SMALL_SIZE = 30500
+SDXL_L1_SMALL_SIZE = 30800
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
@@ -33,6 +33,28 @@ MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
 CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER = 1280
+
+
+def determine_data_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    return list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+
+
+def determine_tensor_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    tensor_parallel = list(ttnn_device.shape)[0] if use_cfg_parallel else 1
+    assert tensor_parallel == 1 or tensor_parallel == 2, f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+    return tensor_parallel
+
+
+def determinate_min_batch_size(ttnn_device, use_cfg_parallel):
+    return determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+
+def prepare_device(mesh_device, use_cfg_parallel):
+    if use_cfg_parallel:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
@@ -51,7 +73,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
             hidden_act=text_encoder_1.config.hidden_act,
         )
 
-        # Note: Factor for SDXL should always be 1; since we don't support TP
+        # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
         parallel_config_1 = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
         )
@@ -76,7 +98,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         hidden_act=text_encoder_2.config.hidden_act,
     )
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
+    # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
     parallel_config_2 = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
@@ -91,7 +113,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = ttnn_device.get_num_devices()  # warmup on all devices; tp/dp config doesn't matter here
     dummy_prompt = ["abc"] * batch_size
     if tt_text_encoder is not None:
         dummy_ids = tokenizer(
@@ -126,6 +148,60 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
     )
     _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
     ttnn.synchronize_device(ttnn_device)
+
+
+def normalize_prompt_for_text_encoder(
+    prompt: Union[str, List[str]],
+    tensor_parallel: int,
+    data_parallel: int,
+) -> List[str]:
+    """
+    Normalizes prompt input to match device requirements for tensor and data parallelism.
+
+    Args:
+        prompt: Single prompt string or list of prompts
+        tensor_parallel: Tensor parallel factor (1 or 2)
+        data_parallel: Data parallel factor (number of data parallel devices)
+
+    Returns:
+        List of prompts with length equal to tensor_parallel * data_parallel
+
+    Prompt distribution strategy:
+    - Single string inputs are converted to single-element lists
+    - Length 1: Broadcast prompt across data_parallel devices, pad with (tensor_parallel-1) empty strings per device
+    - Length data_parallel: Each prompt padded with (tensor_parallel-1) empty strings
+    - Length tensor_parallel * data_parallel: Use as-is
+    - Otherwise: raise ValueError
+
+    The output ordering is: [prompt[0], prompt[1], ..., prompt[data_parallel-1], '', '', ..., '']
+    where empty strings fill the remaining (data_parallel * (tensor_parallel-1)) slots.
+
+    Raises:
+        ValueError: If prompt list length is not 1, data_parallel, or tensor_parallel * data_parallel
+        AssertionError: If tensor_parallel is not 1 or 2
+    """
+    assert tensor_parallel in [1, 2], f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+
+    # Convert string to list
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+
+    num_prompts = len(prompt_list)
+
+    # Handle prompt distribution based on parallelism mode
+    if len(prompt_list) == 1:
+        prompt_list = prompt_list * data_parallel + [""] * data_parallel * (tensor_parallel - 1)
+    elif len(prompt_list) == data_parallel:
+        prompt_list = prompt_list + [""] * data_parallel * (tensor_parallel - 1)
+    elif len(prompt_list) == data_parallel * tensor_parallel:
+        # do nothing, already correct
+        pass
+    else:
+        raise ValueError(
+            f"Prompt list length must be 1, or match data parallel {data_parallel} devices, or equal to total number of devices ({tensor_parallel * data_parallel}), "
+            f"but got {num_prompts} prompts"
+        )
+
+    return prompt_list
 
 
 # encode_prompt function, adapted from sdxl pipeline to work with on device tt text encoders
@@ -192,20 +268,15 @@ def batch_encode_prompt_on_device(
             Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
-    prompt = [prompt] if isinstance(prompt, str) else prompt
 
+    tensor_parallel = determine_tensor_parallel(ttnn_device, use_cfg_parallel)
+    data_parallel = determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+    prompt = normalize_prompt_for_text_encoder(prompt, tensor_parallel, data_parallel)
     prompt_2 = prompt_2 or prompt
-    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+    prompt_2 = normalize_prompt_for_text_encoder(prompt_2, tensor_parallel, data_parallel)
 
-    num_devices = ttnn_device.get_num_devices()
-    num_prompts = len(prompt)
-    if use_cfg_parallel and num_prompts < num_devices:
-        # Pad prompts by appending empty strings to match num_devices
-        prompt = prompt + [""] * (num_devices - len(prompt))
-        if prompt_2 is not None:
-            prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
-
-    assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+    assert len(prompt) == ttnn_device.get_num_devices(), "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -318,10 +389,8 @@ def batch_encode_prompt_on_device(
         negative_prompt_2 = negative_prompt_2 or negative_prompt
 
         # normalize str to list
-        negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-        negative_prompt_2 = (
-            batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
-        )
+        negative_prompt = normalize_prompt_for_text_encoder(negative_prompt, tensor_parallel, data_parallel)
+        negative_prompt_2 = normalize_prompt_for_text_encoder(negative_prompt_2, tensor_parallel, data_parallel)
 
         uncond_tokens: List[str]
         if prompt is not None and type(prompt) is not type(negative_prompt):
@@ -423,7 +492,7 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    slice_to = num_prompts if use_cfg_parallel else None
+    slice_to = data_parallel if use_cfg_parallel else None
     return (
         prompt_embeds[:slice_to],
         negative_prompt_embeds[:slice_to],

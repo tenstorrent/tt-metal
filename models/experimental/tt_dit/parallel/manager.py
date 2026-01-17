@@ -131,7 +131,7 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis):
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -145,7 +145,7 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis)
+        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -156,7 +156,13 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                output_buffer = ttnn.from_torch(
+                    torch.empty(output_buffer_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -243,6 +249,24 @@ class CCLManager:
         """
         Helper function to all-gather a tensor with a persistent output buffer.
         """
+        return self.all_gather(
+            tensor,
+            dim=dim,
+            mesh_axis=mesh_axis,
+            use_hyperparams=use_hyperparams,
+            use_persistent_buffer=True,
+        )
+
+    def all_gather(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dim: int,
+        mesh_axis: int | None,
+        use_hyperparams: bool,
+        use_persistent_buffer: bool = False,
+    ) -> ttnn.Tensor:
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -260,7 +284,12 @@ class CCLManager:
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            persistent_output_buffer=(
+                self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype())
+                if use_persistent_buffer
+                else None
+            ),
+            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
@@ -278,6 +307,17 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
+        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+
+    def reduce_scatter(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dim: int,
+        mesh_axis: int | None,
+        use_persistent_buffer: bool = False,
+    ) -> ttnn.Tensor:
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -292,7 +332,10 @@ class CCLManager:
 
         tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
-            persistent_output_buffers=self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            persistent_output_buffers=(
+                self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis) if use_persistent_buffer else None
+            ),
+            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
             dim=dim,
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,

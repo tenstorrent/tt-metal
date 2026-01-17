@@ -43,6 +43,13 @@ Lightweight kernel asserts provide a mechanism for assertion checks within the k
 .. toctree::
     :maxdepth: 1
 
+    llk_asserts
+
+LLK asserts provide validation checks within the low-level kernel library infrastructure code.
+
+.. toctree::
+    :maxdepth: 1
+
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.
@@ -53,3 +60,7 @@ The Inspector is a tool that provides insights into Metal host runtime.
     triage
 
 The tt-triage is a collection of Python scripts for analyzing and debugging Metal workload.
+
+* `tt-smi <https://github.com/tenstorrent/tt-smi>`_
+
+TT-SMI is a command line utility to interact with all Tenstorrent devices on host.

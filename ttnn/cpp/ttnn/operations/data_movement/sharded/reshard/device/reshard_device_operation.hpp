@@ -14,22 +14,22 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 struct ReshardDeviceOperation {
-    using operation_attributes_t = reshard::operation_attributes_t;
-    using tensor_args_t = reshard::tensor_args_t;
-    using spec_return_value_t = reshard::spec_return_value_t;
-    using tensor_return_value_t = reshard::tensor_return_value_t;
+    using operation_attributes_t = ReshardParams;
+    using tensor_args_t = ReshardInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        reshard::program::ReshardSameWidthFactory</*local_is_output*/ true>,
-        reshard::program::ReshardSameWidthFactory</*local_is_output*/ false>,
-        reshard::program::ReshardSameHeightFactory</*local_is_output*/ true>,
-        reshard::program::ReshardSameHeightFactory</*local_is_output*/ false>,
-        reshard::program::ReshardGenericFactory,
-        reshard::program::NdReshardCopyPagesFactory,
-        reshard::program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
-        reshard::program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
+        ReshardSameWidthFactory</*local_is_output*/ true>,
+        ReshardSameWidthFactory</*local_is_output*/ false>,
+        ReshardSameHeightFactory</*local_is_output*/ true>,
+        ReshardSameHeightFactory</*local_is_output*/ false>,
+        ReshardGenericFactory,
+        NdReshardCopyPagesFactory,
+        NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
+        NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,23 +38,17 @@ struct ReshardDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor) const;
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const tt::tt_metal::MemoryConfig& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement::reshard
+Tensor reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& preallocated_output);
 
-namespace ttnn::prim {
-constexpr auto reshard =
-    ttnn::register_operation<"ttnn::prim::reshard", ttnn::operations::data_movement::reshard::ReshardDeviceOperation>();
 }  // namespace ttnn::prim

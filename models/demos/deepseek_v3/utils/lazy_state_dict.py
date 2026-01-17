@@ -86,6 +86,15 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         self._file_handles[filename] = handle
         return handle
 
+    def clear_cache(self) -> None:
+        """
+        Clear cached tensors while keeping file handles open for reuse.
+        This allows memory to be freed while preserving the performance benefits
+        of keeping mmap'd file handles open across test cases.
+        """
+        if self._cache:
+            self._cache.clear()
+
     def close(self) -> None:
         """
         Close all cached shard handles and clear cached tensors and accounting.

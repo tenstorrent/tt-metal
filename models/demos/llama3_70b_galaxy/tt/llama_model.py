@@ -146,6 +146,7 @@ class TtTransformer(LightweightModule):
             mode="prefill",
             mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
@@ -168,6 +169,7 @@ class TtTransformer(LightweightModule):
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
@@ -493,6 +495,10 @@ class TtTransformer(LightweightModule):
         Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
+            tt_out = tt_out[0]
+
+        if isinstance(tt_out, tuple):
+            # Get logits and skip log-probs
             tt_out = tt_out[0]
 
         tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)

@@ -9,14 +9,16 @@
 #include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
 
+namespace sliding_window = ttnn::operations::sliding_window;
+namespace op_slicing = ttnn::operations::op_slicing;
 using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
@@ -187,7 +189,7 @@ struct Conv2dBlockConfig {
     uint32_t out_subblock_w_ntiles;
 };
 
-struct operation_attributes_t {
+struct Conv2dParams {
     sliding_window::SlidingWindowConfig sliding_window_config{};
     uint32_t output_channels = 0;
     uint32_t groups = 0;
@@ -209,7 +211,7 @@ struct operation_attributes_t {
     std::optional<bool> force_split_reader;
 };
 
-struct hashable_operation_attributes_t {
+struct Conv2dHashableParams {
     sliding_window::SlidingWindowConfig sliding_window_config{};
     uint32_t output_channels = 0;
     bool untilize_out = false;
@@ -228,14 +230,11 @@ struct hashable_operation_attributes_t {
     std::optional<bool> force_split_reader;
 };
 
-struct tensor_args_t {
+struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
 };
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
 
 // Both CB and tensor allocation sizes are per per tensix core and in bytes.
 struct conv_op_l1_usage {
@@ -243,4 +242,4 @@ struct conv_op_l1_usage {
     uint32_t CB_allocation_size;
 };
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

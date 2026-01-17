@@ -3,29 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_device_op.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::copy {
+namespace ttnn::prim {
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.input.is_sharded()) {
-        return program::TypecastShardedProgramFactory{};
-    } else if (args.sub_core_grids.has_value()) {
-        return program::TypecastSubgridProgramFactory{};
-    } else {
-        return program::TypecastProgramFactory{};
+        return TypecastShardedProgramFactory{};
     }
+    if (args.sub_core_grids.has_value()) {
+        return TypecastSubgridProgramFactory{};
+    }
+    return TypecastProgramFactory{};
 }
 
 void TypecastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
 void TypecastDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
@@ -85,8 +87,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t TypecastDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+TensorSpec TypecastDeviceOperation::compute_output_specs(
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
@@ -100,16 +102,15 @@ spec_return_value_t TypecastDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
-tensor_return_value_t TypecastDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
@@ -121,14 +122,16 @@ tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 }
 
 bool TypecastDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-std::tuple<TypecastDeviceOperation::operation_attributes_t, TypecastDeviceOperation::tensor_args_t>
-TypecastDeviceOperation::invoke(
+}  // namespace ttnn::prim
+
+namespace ttnn::prim {
+Tensor typecast(
     const Tensor& input,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
@@ -137,8 +140,8 @@ TypecastDeviceOperation::invoke(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::launch<TypecastDeviceOperation>(
+        TypecastParams{
             .input_dtype = input.dtype(),
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
@@ -147,7 +150,6 @@ TypecastDeviceOperation::invoke(
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
         },
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+        TypecastInputs{.input = input, .preallocated_output = preallocated_output});
 }
-
-}  // namespace ttnn::operations::copy
+}  // namespace ttnn::prim

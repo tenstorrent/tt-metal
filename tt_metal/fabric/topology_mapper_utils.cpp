@@ -181,7 +181,7 @@ TopologyMappingResult map_mesh_to_physical(
                 continue;  // pin for another mesh
             }
 
-            if (log_to_idx.find(fabric_node) == log_to_idx.end()) {
+            if (!log_to_idx.contains(fabric_node)) {
                 result.success = false;
                 result.error_message =
                     fmt::format("Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
@@ -358,44 +358,42 @@ TopologyMappingResult map_mesh_to_physical(
                     used[pj] = false;
                 }
                 return false;
-            } else {
-                // Next must be an unused neighbor of prev_phys
-                size_t remain = n_log - idx_in_path;
-                for (size_t pj : phys_adj_idx[prev_phys]) {
-                    if (used[pj]) {
-                        continue;
-                    }
-                    if (phys_deg[pj] < log_deg[li]) {
-                        continue;
-                    }
-                    // Check mesh rank compatibility
-                    if (node_to_host_rank.at(log_nodes[li]) != asic_to_host_rank.at(phys_nodes[pj])) {
-                        continue;
-                    }
-                    // Check pinning restrictions if any
-                    if (!restricted_phys_indices_for_logical[li].empty()) {
-                        if (std::find(
-                                restricted_phys_indices_for_logical[li].begin(),
-                                restricted_phys_indices_for_logical[li].end(),
-                                pj) == restricted_phys_indices_for_logical[li].end()) {
-                            continue;
-                        }
-                    }
-                    // Reachability pruning
-                    size_t reach = reachable_unused_count(pj);
-                    if (reach < remain) {
-                        continue;
-                    }
-                    used[pj] = true;
-                    mapping[li] = static_cast<int>(pj);
-                    if (place(idx_in_path + 1, pj)) {
-                        return true;
-                    }
-                    mapping[li] = -1;
-                    used[pj] = false;
+            }  // Next must be an unused neighbor of prev_phys
+            size_t remain = n_log - idx_in_path;
+            for (size_t pj : phys_adj_idx[prev_phys]) {
+                if (used[pj]) {
+                    continue;
                 }
-                return false;
+                if (phys_deg[pj] < log_deg[li]) {
+                    continue;
+                }
+                // Check mesh rank compatibility
+                if (node_to_host_rank.at(log_nodes[li]) != asic_to_host_rank.at(phys_nodes[pj])) {
+                    continue;
+                }
+                // Check pinning restrictions if any
+                if (!restricted_phys_indices_for_logical[li].empty()) {
+                    if (std::find(
+                            restricted_phys_indices_for_logical[li].begin(),
+                            restricted_phys_indices_for_logical[li].end(),
+                            pj) == restricted_phys_indices_for_logical[li].end()) {
+                        continue;
+                    }
+                }
+                // Reachability pruning
+                size_t reach = reachable_unused_count(pj);
+                if (reach < remain) {
+                    continue;
+                }
+                used[pj] = true;
+                mapping[li] = static_cast<int>(pj);
+                if (place(idx_in_path + 1, pj)) {
+                    return true;
+                }
+                mapping[li] = -1;
+                used[pj] = false;
             }
+            return false;
         };
 
         bool ok = place(0, n_phys);
@@ -572,7 +570,7 @@ TopologyMappingResult map_mesh_to_physical(
         }
 
         std::uint64_t key = hash_state(pos);
-        if (failed_states.find(key) != failed_states.end()) {
+        if (failed_states.contains(key)) {
             return false;
         }
 
@@ -949,7 +947,7 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
     };
 
     // Iterate over all mesh IDs from the mesh graph
-    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         LogicalAdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
             auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
@@ -996,7 +994,17 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
                         // they cause issues with uniform mesh mapping since topology mapper algorithm does not prefer
                         // taking the full connectivity path vs downgrading through z channels for intramesh
                         // connectivity https://github.com/tenstorrent/tt-metal/issues/31846
-                        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                        // This is required until we can encode a preference for links.
+                        // To support use-cases where a big-mesh must be built over Z Links, a workaround has been added
+                        // to allow cross host intramesh connections to be spawned over cross host Z Links.
+                        // See: https://github.com/tenstorrent/tt-metal/issues/31846#issuecomment-3644965757
+                        bool cross_host_connection =
+                            physical_system_descriptor.is_cross_host_eth_link(asic_id, eth_connection.src_chan);
+                        TT_ASSERT(
+                            cross_host_connection ==
+                                physical_system_descriptor.is_cross_host_eth_link(neighbor, eth_connection.dst_chan),
+                            "Expected both ethernet endpoints to be mapped as cross host connections.");
+                        if (!cross_host_connection && cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
                             (z_channels.contains(eth_connection.src_chan) ||
                              z_channels.contains(eth_connection.dst_chan))) {
                             continue;

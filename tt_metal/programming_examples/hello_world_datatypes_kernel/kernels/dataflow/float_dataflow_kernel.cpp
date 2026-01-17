@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-#include "dataflow_api.h"
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Fetch the data from on-device memory and debug print.

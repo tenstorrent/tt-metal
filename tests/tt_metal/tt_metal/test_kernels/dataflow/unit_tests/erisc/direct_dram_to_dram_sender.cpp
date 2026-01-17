@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     std::uint32_t dram_buffer_src_addr = get_arg_val<uint32_t>(0);

@@ -135,7 +135,7 @@ public:
         this->validate(reflect::member_name<index>(this->attributes));
     }
 
-    void validate(std::string_view name) {
+    void validate(std::string_view name) const {
         if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
             if (this->attributes.enable_fast_runtime_mode) {
                 if (this->attributes.enable_logging) {

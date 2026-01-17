@@ -37,7 +37,7 @@ using namespace tt::test_utils;
 
 void build_and_run_program(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool slow_dispatch,
+    bool /*slow_dispatch*/,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,
@@ -172,7 +172,7 @@ void build_and_run_program(
 
 void build_and_run_program_ethernet(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool slow_dispatch,
+    bool /*slow_dispatch*/,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,

@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
@@ -41,7 +41,7 @@ class RunTimeOptions;
 namespace tt_fabric {
 class ControlPlane;
 class FabricNodeId;
-}
+}  // namespace tt_fabric
 namespace tt_metal {
 class Hal;
 }
@@ -103,6 +103,12 @@ public:
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
+
+    // Returns map of logical chip ID to PCIe device ID
+    const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
+        return this->cluster_desc_->get_chips_with_mmio();
+    }
+
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
@@ -133,14 +139,12 @@ public:
     bool verify_eth_fw_capability() const;
 
     void deassert_risc_reset_at_core(
-        const tt_cxy_pair& physical_chip_coord,
-        const tt::umd::RiscType& soft_resets,
-        bool staggered_start = true) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
+        const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
-    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+    void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
     // Write to core. Accepts physical noc coordinates
     void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
@@ -174,9 +178,9 @@ public:
         write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
     }
 
-    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
-    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     template <typename DType = uint32_t>
     [[nodiscard]] std::vector<DType> read_core(ChipId chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
@@ -184,6 +188,17 @@ public:
         read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
         return read_hex_vec;
     }
+
+    // NOC multicast write wrappers
+    void noc_multicast_write(
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const;
+    void noc_multicast_write(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId chip_id,
+        CoreCoord core_start,
+        CoreCoord core_end,
+        uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -208,9 +223,8 @@ public:
     void read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
     void write_sysmem(
-        const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
-    void read_sysmem(
-        void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
+        const void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
+    void read_sysmem(void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const;
 
     // System memory buffer allocation methods
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
@@ -346,6 +360,8 @@ public:
     // TODO: move to separate system descriptor class
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) const;
+
+    uint32_t get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const;
 
     const std::unordered_set<CoreCoord>& get_eth_cores_with_frequent_retraining(ChipId chip_id) const {
         return this->frequent_retrain_cores_.at(chip_id);

@@ -20,12 +20,12 @@ namespace tt::tt_metal {
 // Used so host knows data in completion queue is just an event ID
 struct ReadEventDescriptor {
     uint32_t event_id;
-    uint32_t global_offset;
+    uint32_t global_offset{0};
 
-    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+    explicit ReadEventDescriptor(uint32_t event) : event_id(event) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
-    uint32_t get_global_event_id() { return global_offset + event_id; }
+    uint32_t get_global_event_id() const { return global_offset + event_id; }
 };
 
 namespace event_dispatch {

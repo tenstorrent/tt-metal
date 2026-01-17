@@ -922,10 +922,10 @@ WARN_LOGFILE           =
 # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING
 # Note: If this tag is empty the current directory is searched.
 
-INPUT                  = tt_metal/hw/inc/compile_time_args.h \
-                         tt_metal/hw/inc/dataflow_api.h \
-                         tt_metal/hw/inc/dataflow_api_addrgen.h \
-                         tt_metal/hw/inc/ethernet/dataflow_api.h \
+INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
+                         tt_metal/hw/inc/api/dataflow/dataflow_api.h \
+                         tt_metal/hw/inc/internal/dataflow/dataflow_api_addrgen.h \
+                         tt_metal/hw/inc/internal/ethernet/dataflow_api.h \
                          tt_metal/api/tt-metalium/host_api.hpp \
                          tt_metal/api/tt-metalium/experimental/profiler.hpp \
                          tt_metal/include/compute_kernel_api/eltwise_unary/comp.h \
@@ -968,6 +968,7 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/threshold.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/selu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/where.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/addcmul.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/log1p.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/comp.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_or.h \

@@ -175,7 +175,9 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
+                    logits = self.model.process_output_prefill(
+                        tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32)
+                    )
                     return logits
                 else:
                     del tt_logits
@@ -195,7 +197,7 @@ class Generator:
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
 
             # deallocate device tensors that are not needed by decode
             # [INFO] logits is a torch tensor

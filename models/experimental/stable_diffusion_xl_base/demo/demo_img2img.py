@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from PIL import Image
@@ -17,6 +16,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -51,7 +52,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -221,12 +222,6 @@ def run_demo_inference(
     return out_images
 
 
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
-
-
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -258,6 +253,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a red dragon in space, cinematic lighting"),),
+)
+@pytest.mark.parametrize(
+    "images_or_path",
+    (("models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
@@ -311,6 +310,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
     prompt,
+    images_or_path,
     negative_prompt,
     num_inference_steps,
     vae_on_device,
@@ -328,15 +328,17 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    image_path = "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"
-    img = Image.open(image_path).convert("RGB")
+    if isinstance(images_or_path, str):
+        images = [Image.open(images_or_path).convert("RGB")]
+    else:
+        images = images_or_path if isinstance(images_or_path, list) else [images_or_path]
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
         prompt,
-        [img],
+        images,
         negative_prompt,
         num_inference_steps,
         vae_on_device,

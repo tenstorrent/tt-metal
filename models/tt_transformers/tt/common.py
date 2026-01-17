@@ -114,6 +114,27 @@ def rope_scaling_model_factory(
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
 
+# Minimal addition for Mistral vision support
+def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
+    position_ids_tt = []
+    for tt_patch in tt_patch_embeds_list:
+        shape = tt_patch.shape
+        height, width = shape[-2], shape[-1]
+        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        ids = h_grid * max_width + v_grid
+
+        tt_ids = ttnn.from_torch(
+            ids,
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        position_ids_tt.append(tt_ids[:, 0])
+    return ttnn.concat(position_ids_tt, dim=0)
+
+
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -149,12 +170,15 @@ def preprocess_inputs_prefill(
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
-        if max_prefill_len >= m_args.max_context_len:
-            max_prefill_len -= max_generated_tokens
-            # all model_args should have the same max_context_len as
-            # it's assumed that all models are the same. break out of the loop once we find the first one
-            # with the max_prefill_len >= max_context_len
-            break
+        assert (
+            max_prefill_len <= m_args.max_context_len
+        ), f"max_prefill_len {max_prefill_len} cannot exceed max_context_len {m_args.max_context_len}"
+
+    # we need to make room for the generated tokens in the total token budget
+    max_prefill_len -= max_generated_tokens
+    assert (
+        max_prefill_len > 0
+    ), f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
@@ -295,6 +319,45 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
         freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
 
     return freqs
+
+
+# Minimal addition for Mistral vision RoPE support
+def apply_scaling_vision(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    return freqs / scale_factor
+
+
+# Minimal addition for Mistral vision RoPE support
+def precompute_mistral_vision_freqs(
+    dim: int, max_patches_per_side: int, theta: float, scale_factor=None, orig_context_len=None
+):
+    # Compute base frequencies
+    base_freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+    if scale_factor is not None:
+        base_freqs = apply_scaling_vision(base_freqs, scale_factor, orig_context_len)
+
+    # Get height and width indices
+    h_idx = torch.arange(max_patches_per_side)
+    w_idx = torch.arange(max_patches_per_side)
+
+    # Compute 2D frequency matrices
+    freqs_h = torch.outer(h_idx, base_freqs[::2])
+    freqs_w = torch.outer(w_idx, base_freqs[1::2])
+
+    # Broadcast + merge
+    inv_freq = torch.cat(
+        [
+            freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
+            freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
+        ],
+        dim=-1,
+    ).reshape(
+        -1, dim // 2
+    )  # Shape: [H*W, dim//2]
+
+    full_freqs = torch.cat([inv_freq, inv_freq], dim=-1)
+    cos = full_freqs.cos()
+    sin = full_freqs.sin()
+    return cos, sin  # Shape: [H*W, dim]
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
@@ -542,42 +605,44 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
 
 def get_padded_prefill_len(seq_len: int) -> int:
     """
-    If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
-    TODO: Generalize for max_mm_seq_len different from 2048
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
     """
+    # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
     if seq_len <= 128:
         return 128
-    pow_2_pad = nearest_pow_2(seq_len)
-    mult_2048_pad = 2048 * math.ceil(seq_len / 2048)
-    min_extended_pad = min(pow_2_pad, mult_2048_pad)
-    return min_extended_pad
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
 
 
-def get_all_padded_prefill_lengths(max_len: int = 8192):
-    # Powers of 2 up to max_length (but max 2048)
-    padded_lengths = [v for v in (1 << n for n in range(7, 12)) if v <= max_len]
+def get_all_padded_prefill_lengths(max_len):
+    lengths = [128]
+    k = 0
+    while (v := (1 << k) * 1024) <= max_len:
+        lengths.append(v)
+        k += 1
+    return lengths
 
-    # Multiples of 2048 up to max_len (skip dup 2048)
-    padded_lengths += [v for v in range(2048, max_len + 1, 2048) if v not in padded_lengths]
 
-    return sorted(list(padded_lengths))
-
-
-def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_seq_len):
-    max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
+def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens):
     to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
     for trace_supported_seq_len in trace_supported_seq_lens:
         if trace_supported_seq_len not in to_warmup_seq_lens:
             to_warmup_seq_lens.append(trace_supported_seq_len)
     to_warmup_seq_lens.sort()
 
-    for seq_len in to_warmup_seq_lens:
-        if seq_len > model_args_max_seq_len:
-            to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
-            break
-
     return to_warmup_seq_lens
+
+
+def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, cap):
+    for seq_len in seq_lens:
+        if seq_len > cap:
+            seq_lens = seq_lens[: seq_lens.index(seq_len)]
+            break
+    return seq_lens
 
 
 def get_block_size(kv_cache):
@@ -807,3 +872,29 @@ def get_decode_mask(args, mesh_device, paged_attention_config=None):
         )
 
     return mask
+
+
+def build_encoder_attention_mask(
+    x: torch.Tensor,
+    ar: torch.Tensor,
+    ntok: int,
+    num_chunks: int,
+    n_heads: int,
+):
+    """
+    Build vision encoder attention mask that omits padding tokens.
+    """
+
+    def get_negative_inf_value(dtype):
+        return torch.finfo(dtype).min
+
+    masks = []
+    for arx in ar:
+        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
+        mask_i[: arx[0] * arx[1], :ntok] = 0
+        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
+        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
+        mask_i = mask_i.unsqueeze(0)
+        masks.append(mask_i)
+    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
+    return masks

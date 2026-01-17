@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dprint.h"
-#include "debug/ring_buffer.h"
+#include "api/debug/dprint.h"
+#include "api/debug/ring_buffer.h"
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() {
     // Read out the tile we want to print using BRISC, put it in c_in0
     constexpr uint32_t cb_id = tt::CBIndex::c_0;

@@ -172,20 +172,17 @@ HostId resolve_path_from_proto(
 
         if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
             return HostId(child_mapping.host_id());
-        } else {
-            throw std::runtime_error("Node " + node_name + " is not a leaf node");
         }
-    } else {
-        // Multi-level path - descend into subgraph
-        const std::string& subgraph_name = path[index];
-        const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
-
-        if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-            return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
-        } else {
-            throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
-        }
+        throw std::runtime_error("Node " + node_name + " is not a leaf node");
     }
+    // Multi-level path - descend into subgraph
+    const std::string& subgraph_name = path[index];
+    const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
+
+    if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+        return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
+    }
+    throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
 }
 
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
@@ -243,11 +240,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             }
 
             resolved->subgraphs[child_name] = build_graph_instance_impl(
-                child_mapping.sub_instance(),
-                cluster_descriptor,
-                deployment_descriptor,
-                child_name,
-                node_templates);
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
         }
     }
 
@@ -335,11 +328,33 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates) {
-    return build_graph_instance_impl(
-        graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
+    return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
 }  // anonymous namespace
+
+// Common initialization logic shared by all constructors
+void CablingGenerator::initialize_cluster(
+    const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor) {
+    // Build cluster with all connections and port validation
+    if (deployment_descriptor.has_value()) {
+        root_instance_ = build_graph_instance(
+            cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor->get(), "", node_templates_);
+    } else {
+        root_instance_ =
+            build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
+    }
+
+    // Validate host_id uniqueness across all nodes
+    validate_host_id_uniqueness();
+
+    // Populate the host_id_to_node_ map
+    populate_host_id_to_node();
+
+    // Generate all logical chip connections
+    generate_logical_chip_connections();
+}
 
 // Constructor with full deployment descriptor
 CablingGenerator::CablingGenerator(
@@ -352,42 +367,24 @@ CablingGenerator::CablingGenerator(
         load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
             deployment_descriptor_path);
 
-    // Build cluster with all connections and port validation
-    root_instance_ =
-        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
+    initialize_cluster(cluster_descriptor, deployment_descriptor);
 
     // Populate deployment hosts
     populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
-// Constructor with just hostnames (no physical location info)
+// Constructor with just hostnames (no physical location info) - wrapper around protobuf constructor
 CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
-    // Load cluster descriptor
-    auto cluster_descriptor =
+    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) :
+    CablingGenerator(
         load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path);
+            cluster_descriptor_path),
+        hostnames) {}
 
-    // Build cluster with all connections and port validation (without deployment descriptor)
-    root_instance_ = build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
+// Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
+CablingGenerator::CablingGenerator(
+    const cabling_generator::proto::ClusterDescriptor& cluster_descriptor, const std::vector<std::string>& hostnames) {
+    initialize_cluster(cluster_descriptor);
 
     // Populate deployment hosts from hostnames
     populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
@@ -408,8 +405,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
-        const auto& deployment_host = deployment_hosts[i];
+    for (const auto& deployment_host : deployment_hosts) {
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -505,8 +501,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::UNKNOWN, "UNKNOWN"}};
 
     const std::unordered_map<tt::ARCH, std::string> speed_str = {
-        //TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the future.
-        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "400G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+        // TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the
+        // future.
+        {tt::ARCH::WORMHOLE_B0, "400G"},
+        {tt::ARCH::BLACKHOLE, "400G"},
+        {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
@@ -540,13 +539,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
-        if (host1_node_type.size() >= suffix.size() &&
-            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host1_node_type.size() >= suffix.size() && host1_node_type.ends_with(suffix)) {
             host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
         }
         std::string host2_node_type = host2.node_type;
-        if (host2_node_type.size() >= suffix.size() &&
-            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host2_node_type.size() >= suffix.size() && host2_node_type.ends_with(suffix)) {
             host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
         }
 
@@ -599,7 +596,7 @@ void CablingGenerator::collect_host_assignments(
         HostId host_id = node.host_id;
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
-        if (host_to_node_path.count(host_id)) {
+        if (host_to_node_path.contains(host_id)) {
             throw std::runtime_error(
                 "Host ID " + std::to_string(*host_id) + " is assigned to multiple nodes: '" +
                 host_to_node_path[host_id] + "' and '" + full_node_path + "'");
@@ -764,12 +761,9 @@ void CablingGenerator::get_all_connections_of_type(
 
 CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
-    if (host1.hall != host2.hall) {
-        return CableLength::UNKNOWN;
-    } else if (host1.aisle != host2.aisle) {
+    if (host1.hall != host2.hall || host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
-
 
     int tray_id_0 = tray_id1;
     int tray_id_1 = tray_id2;
@@ -784,7 +778,6 @@ CableLength calc_cable_length(
         tray_u_est_1 += (((4 - tray_id_1) * 1.25) + 1);
     }
 
-
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
@@ -795,17 +788,20 @@ CableLength calc_cable_length(
 
     if (cable_length <= 500.0) {
         return CableLength::CABLE_0P5;
-    } else if (cable_length <= 1000.0) {
-        return CableLength::CABLE_1;
-    } else if (cable_length <= 2500.0) {
-        return CableLength::CABLE_2P5;
-    } else if (cable_length <= 3000.0) {
-        return CableLength::CABLE_3;
-    } else if (cable_length <= 5000.0) {
-        return CableLength::CABLE_5;
-    } else {
-        return CableLength::UNKNOWN;
     }
+    if (cable_length <= 1000.0) {
+        return CableLength::CABLE_1;
+    }
+    if (cable_length <= 2500.0) {
+        return CableLength::CABLE_2P5;
+    }
+    if (cable_length <= 3000.0) {
+        return CableLength::CABLE_3;
+    }
+    if (cable_length <= 5000.0) {
+        return CableLength::CABLE_5;
+    }
+    return CableLength::UNKNOWN;
 }
 
 // Overload operator<< for readable test output

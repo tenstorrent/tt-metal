@@ -82,7 +82,7 @@ public:
 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
-static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 8;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -146,6 +146,8 @@ private:
     CoreType core_type_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
+    // Number of firmware binaries generated for each processor class
+    std::vector<uint8_t> processor_classes_num_fw_binaries_;
     // indices represents processor class and type positions, values are abbreviated name and full name pairs
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names_;
     std::vector<DeviceAddr> mem_map_bases_;
@@ -161,6 +163,7 @@ public:
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
         std::vector<std::vector<HalJitBuildConfig>> processor_classes,
+        std::vector<uint8_t> processor_classes_num_fw_binaries,
         std::vector<DeviceAddr> mem_map_bases,
         std::vector<uint32_t> mem_map_sizes,
         std::vector<uint32_t> eth_fw_mailbox_msgs,
@@ -172,6 +175,7 @@ public:
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
+        processor_classes_num_fw_binaries_(std::move(processor_classes_num_fw_binaries)),
         processor_classes_names_(std::move(processor_classes_names)),
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
@@ -189,6 +193,7 @@ public:
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
     const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
+    uint32_t get_processor_class_num_fw_binaries(uint32_t processor_class_idx) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
     const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
 };
@@ -253,6 +258,8 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns a string of linker flags to be added to linker command line.
+    virtual std::string linker_flags(const Params& params) const = 0;
     // Returns true if firmware should be linked into the kernel as an object.
     virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
@@ -434,6 +441,7 @@ public:
     uint32_t get_alignment(HalMemType memory_type) const;
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
+    uint32_t get_dma_alignment() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -465,6 +473,9 @@ public:
 
     const std::string& get_processor_class_name(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
+
+    uint32_t get_processor_class_num_fw_binaries(
+        uint32_t programmable_core_type_index, uint32_t processor_class_idx) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
         return relocate_func_(addr, local_init_addr, has_shared_local_mem);
@@ -607,6 +618,14 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
     return this->mem_write_alignments_[index];
 }
 
+inline uint32_t Hal::get_dma_alignment() const {
+    switch (arch_) {
+        case tt::ARCH::WORMHOLE_B0: return 4;
+        // Only Wormhole B0 devices support DMA transfers today.
+        default: return 1;
+    }
+}
+
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
     uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
@@ -657,6 +676,12 @@ inline const std::string& Hal::get_processor_class_name(
     HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
     auto idx = get_programmable_core_type_index(programmable_core_type);
     return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
+}
+
+inline uint32_t Hal::get_processor_class_num_fw_binaries(
+    uint32_t programmable_core_type_index, uint32_t processor_class_idx) const {
+    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
+    return this->core_info_[programmable_core_type_index].get_processor_class_num_fw_binaries(processor_class_idx);
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig

@@ -184,6 +184,8 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
+NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
+
 ## Details
 
 ### Extra compatibility settings for non-Llama models
@@ -314,7 +316,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 
 ### Implementation notes
 
-**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 32k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
 
 Max Prefill Chunk Sizes (text-only):
 |              |      N150     |      N300     |      T3K       |      TG     |

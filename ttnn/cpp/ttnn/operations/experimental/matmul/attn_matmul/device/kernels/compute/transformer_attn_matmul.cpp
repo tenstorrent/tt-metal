@@ -45,7 +45,7 @@ void MAIN {
                         }
                         cb_wait_front(cb_in1, onetile);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
+                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
 
                         cb_pop_front(cb_in1, onetile);
                     }

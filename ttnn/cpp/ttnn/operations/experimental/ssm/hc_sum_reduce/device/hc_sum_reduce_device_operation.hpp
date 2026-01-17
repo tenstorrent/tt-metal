@@ -15,14 +15,14 @@
 
 #include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
+namespace ttnn::experimental::prim {
 
 struct HCSumReduceDeviceOperation {
-    using operation_attributes_t = hc_sum_reduce::operation_attributes_t;
-    using tensor_args_t = hc_sum_reduce::tensor_args_t;
-    using spec_return_value_t = hc_sum_reduce::spec_return_value_t;
-    using tensor_return_value_t = hc_sum_reduce::tensor_return_value_t;
-    using program_factory_t = std::variant<program::HCSumReduceProgramFactory>;
+    using operation_attributes_t = HcSumReduceParams;
+    using tensor_args_t = HcSumReduceInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<HCSumReduceProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,18 +35,16 @@ struct HCSumReduceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> dtype = std::nullopt,
-        std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto hc_sum_reduce = ttnn::register_operation<
-    "ttnn::prim::hc_sum_reduce",
-    ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation>();
+
+Tensor hc_sum_reduce(
+    const Tensor& input,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
+    std::optional<MathFidelity> math_fidelity = std::nullopt);
+
 }  // namespace ttnn::prim

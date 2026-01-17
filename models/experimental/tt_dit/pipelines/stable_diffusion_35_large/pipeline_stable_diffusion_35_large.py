@@ -29,7 +29,7 @@ from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
-from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
+from ...utils import cache
 
 TILE_SIZE = 32
 
@@ -55,7 +55,7 @@ class StableDiffusion3Pipeline:
         num_links: int,
         height: int,
         width: int,
-        model_checkpoint_path: str,
+        checkpoint_name: str,
         use_cache=False,
     ) -> None:
         self._mesh_device = mesh_device
@@ -112,22 +112,18 @@ class StableDiffusion3Pipeline:
         self.vae_submesh_idx = vae_submesh_idx
 
         logger.info("loading models...")
-        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer")
-        self._tokenizer_2 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer_2")
-        self._tokenizer_3 = T5TokenizerFast.from_pretrained(model_checkpoint_path, subfolder="tokenizer_3")
-        self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder"
-        )
-        self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder_2"
-        )
+        self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
+        self._tokenizer_2 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer_2")
+        self._tokenizer_3 = T5TokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer_3")
+        self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(checkpoint_name, subfolder="text_encoder")
+        self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
         if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_checkpoint_path, subfolder="text_encoder_3")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_checkpoint_path, subfolder="scheduler")
-        self._torch_vae = AutoencoderKL.from_pretrained(model_checkpoint_path, subfolder="vae")
+            torch_text_encoder_3 = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_3")
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
 
         torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
-            model_checkpoint_path,
+            checkpoint_name,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
@@ -144,7 +140,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert "stabilityai/stable-diffusion-3.5-large" in str(model_checkpoint_path)
+        assert "stabilityai/stable-diffusion-3.5-large" in str(checkpoint_name)
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -176,25 +172,15 @@ class StableDiffusion3Pipeline:
                 padding_config=padding_config,
             )
 
-            if use_cache:
-                cache_path = get_and_create_cache_path(
-                    model_name="stable-diffusion-3.5-large",
-                    subfolder="transformer",
-                    parallel_config=self.dit_parallel_config,
-                    mesh_shape=tuple(submesh_device.shape),
-                    dtype="bf16",
-                )
-                # create cache if it doesn't exist
-                if not cache_dict_exists(cache_path):
-                    logger.info(
-                        f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                    )
-                    tt_transformer.load_state_dict(torch_transformer.state_dict())
-                    save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
-                else:
-                    logger.info(f"Loading transformer weights from cache: {cache_path}")
-                    tt_transformer.from_cached_state_dict(load_cache_dict(cache_path))
-            else:
+            if not cache.initialize_from_cache(
+                tt_model=tt_transformer,
+                torch_state_dict=torch_transformer.state_dict(),
+                model_name="stable-diffusion-3.5-large",
+                subfolder="transformer",
+                parallel_config=self.dit_parallel_config,
+                mesh_shape=tuple(submesh_device.shape),
+                dtype="bf16",
+            ):
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_state_dict(torch_transformer.state_dict())
 
@@ -358,9 +344,12 @@ class StableDiffusion3Pipeline:
         sp_config=None,
         tp_config=None,
         num_links=None,
-        model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
-        use_cache=False,
+        checkpoint_name=f"stabilityai/stable-diffusion-3.5-large",
+        model_checkpoint_path=None,
     ):
+        if model_checkpoint_path is not None:
+            checkpoint_name = model_checkpoint_path
+            logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
         # defatult config per mesh shape
         default_config = {
             (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
@@ -401,8 +390,7 @@ class StableDiffusion3Pipeline:
             num_links=num_links,
             height=image_h,
             width=image_w,
-            model_checkpoint_path=model_checkpoint_path,
-            use_cache=use_cache,
+            checkpoint_name=checkpoint_name,
         )
 
         pipeline.prepare(
@@ -418,7 +406,16 @@ class StableDiffusion3Pipeline:
 
         return pipeline
 
-    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None):
+    def run_single_prompt(
+        self,
+        prompt,
+        negative_prompt="",
+        num_inference_steps=40,
+        seed=None,
+        traced=True,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
+    ):
         return self.__call__(
             prompt_1=[prompt],
             prompt_2=[prompt],
@@ -428,7 +425,9 @@ class StableDiffusion3Pipeline:
             negative_prompt_3=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
-            traced=True,
+            traced=traced,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(
@@ -444,10 +443,10 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> List[Image.Image]:
-        with timer("total", timer_iteration) if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             batch_size = self._prepared_batch_size
             num_images_per_prompt = self._prepared_num_images_per_prompt
             width = self._prepared_width
@@ -474,7 +473,7 @@ class StableDiffusion3Pipeline:
 
             logger.info("encoding prompts...")
 
-            with timer("encoder", timer_iteration) if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
@@ -489,8 +488,8 @@ class StableDiffusion3Pipeline:
                     max_t5_sequence_length=max_t5_sequence_length,
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     clip_skip=clip_skip,
-                    timer=timer,
-                    timer_iteration=timer_iteration,
+                    profiler=profiler,
+                    profiler_iteration=profiler_iteration,
                 )
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 1D to 2D
@@ -591,9 +590,9 @@ class StableDiffusion3Pipeline:
 
             logger.info("denoising...")
 
-            with timer("denoising", timer_iteration) if timer else nullcontext():
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
-                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                         sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
                         tt_timestep_list = []
@@ -633,7 +632,7 @@ class StableDiffusion3Pipeline:
 
             logger.info("decoding image...")
 
-            with timer("vae", timer_iteration) if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 decoded_output = self._vae_decode(tt_latents_step_list[self.vae_submesh_idx], width, height)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
 
@@ -648,11 +647,11 @@ class StableDiffusion3Pipeline:
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
-        if timer:
-            logger.info(f"prompt encoding duration: {timer.get_duration('encoder', timer_iteration)}")
-            logger.info(f"denoising duration: {timer.get_duration('denoising', timer_iteration)}")
-            logger.info(f"image decoding duration: {timer.get_duration('vae', timer_iteration)}")
-            logger.info(f"total runtime: {timer.get_duration('total', timer_iteration)}")
+        if profiler:
+            logger.info(f"prompt encoding duration: {profiler.get_duration('encoder', profiler_iteration)}")
+            logger.info(f"denoising duration: {profiler.get_duration('denoising', profiler_iteration)}")
+            logger.info(f"image decoding duration: {profiler.get_duration('vae', profiler_iteration)}")
+            logger.info(f"total runtime: {profiler.get_duration('total', profiler_iteration)}")
 
         return output
 
@@ -843,6 +842,10 @@ class StableDiffusion3Pipeline:
         decoded_output = self._vae_decoder(self._vae_input_latents)
         return decoded_output
 
+    def synchronize_devices(self):
+        for submesh_device in self.submesh_devices:
+            ttnn.synchronize_device(submesh_device)
+
     def _encode_prompts(
         self,
         *,
@@ -856,12 +859,12 @@ class StableDiffusion3Pipeline:
         max_t5_sequence_length: int,
         do_classifier_free_guidance: bool,
         clip_skip: int | None = None,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             prompt_embed, pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -885,7 +888,7 @@ class StableDiffusion3Pipeline:
             )
             clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,
@@ -909,7 +912,7 @@ class StableDiffusion3Pipeline:
         if not do_classifier_free_guidance:
             return prompt_embeds, pooled_prompt_embeds
 
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             negative_prompt_embed, negative_pooled_prompt_embed = _get_clip_prompt_embeds(
                 prompt=negative_prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -932,7 +935,7 @@ class StableDiffusion3Pipeline:
             )
             negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
 
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_negative_prompt_embed = _get_t5_prompt_embeds(
                 device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,

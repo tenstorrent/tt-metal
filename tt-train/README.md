@@ -75,6 +75,8 @@ To run it in github please search for `Nightly tt-metal L2 tests`.
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
 
+### GPU baseline
+[This repository](https://github.com/philei-tt/tt-train_nanoGPT-gpu-baseline) can be used to compare speed and accuracy to GPU implementation of nanoGPT and gpt2s
 
 # Profiler
 Use of profiler requires additional setup. Follow instructions [here](./docs/PROFILER.md).
