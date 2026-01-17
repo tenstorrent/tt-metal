@@ -328,23 +328,31 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
  *
  * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
  */
-inline void encode_1d_sparse_multicast(uint16_t hops, uint32_t& buffer) {
+inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
         buffer |= (field_value << bit_pos);
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        DPRINT << "SET_HOP_FIELD" << ENDL();
+        DPRINT << "Hop Index: " << hop_index << ENDL();
+        DPRINT << "Field Value: " << field_value << ENDL();
+        DPRINT << "Bit Pos: " << bit_pos << ENDL();
+        DPRINT << "Buffer: " << buffer << ENDL();
+#endif
     };
 
     buffer = 0;
     uint32_t hop_index = 0;
-    while (hops > 0) {
+    // Treat hop_mask like a shift register, checking LSB each time
+    while (hop_mask > 0) {
         // Case 1: We've arrived at the last hop. Write and stop.
-        if (hops == 1) {
+        if (hop_mask == 1) {
             set_hop_field(hop_index, LowLatencyFields::WRITE_ONLY);
         }
         // Case 2: This hop involves a write operation. Write and forward.
-        else if (hops & 1) {
+        else if (hop_mask & 1) {
             set_hop_field(hop_index, LowLatencyFields::WRITE_AND_FORWARD);
         }
         // Case 3: This hop does not involve a write operation. Forward only.
@@ -352,8 +360,14 @@ inline void encode_1d_sparse_multicast(uint16_t hops, uint32_t& buffer) {
             set_hop_field(hop_index, LowLatencyFields::FORWARD_ONLY);
         }
         hop_index++;
-        hops >>= 1;
+        hop_mask >>= 1;
     }
+    // Unpack using helper
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    DPRINT << "CALCULATE_CHIP_SPARSE_MULTICAST_ROUTING_FIELDS" << ENDL();
+    DPRINT << "Hops: " << hop_mask << ENDL();
+    DPRINT << "Buffer: " << buffer << ENDL();
+#endif
 }
 //=============================================================================
 // 2D Routing Encoders

@@ -637,4 +637,37 @@ inline void send_init_semaphore_to_configured_targets(
     }
 }
 
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    int32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
+    inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
+    AddrGenType addrgen,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint16_t fabric_mcast_hop_mask,
+    uint32_t payload_l1_address,
+    uint32_t noc_payload_page,
+    int32_t size_bytes,
+    const uint32_t alignment,
+    uint32_t offset = 0) {
+    // Set the sparse multicast fabric route in the packet header
+    fabric_set_sparse_multicast_route((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, fabric_mcast_hop_mask);
+
+    // Configure and send the packet
+    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
+        addrgen,
+        fabric_connections[route],
+        packet_header,
+        payload_l1_address,
+        noc_payload_page,
+        size_bytes,
+        alignment,
+        offset);
+}
+
 }  // namespace ttnn::operations::ccl::common
