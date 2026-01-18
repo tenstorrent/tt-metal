@@ -86,6 +86,7 @@ void kernel_main() {
 
         uint64_t dst_noc_addr = get_noc_addr(tile_idx, s0);
         noc_async_write(w_addr, dst_noc_addr, num_bytes_per_tile);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     }
+    noc_async_write_barrier();
 }

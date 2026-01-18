@@ -29,11 +29,12 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_id_input_grad, onetile);
             noc_async_write_tile(offs + wt + tile_offset, input_grad_addrg, input_grad_l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_input_grad, onetile);
         }  // wt loop
         offs += Wt;
 
     }  // num_rows_per_core loop
 
+    noc_async_write_barrier();
 }  // void kernel_main()

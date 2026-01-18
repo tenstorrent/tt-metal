@@ -29,7 +29,7 @@ void kernel_main() {
         const auto tile_idx = start_tile_idx + row_idx;
         cb_wait_front(cb_id_output, 1);
         noc_async_write_tile(tile_idx, s, output_l1_read_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_output, 1);
     }
 }  // void kernel_main()

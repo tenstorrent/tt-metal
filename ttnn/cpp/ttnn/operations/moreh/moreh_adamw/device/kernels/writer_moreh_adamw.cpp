@@ -44,26 +44,26 @@ void kernel_main() {
         cb_wait_front(cb_id_param, onetile);
         uint32_t param_l1_write_addr = get_read_ptr(cb_id_param);
         noc_async_write_tile(i, param_addrg, param_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_param, onetile);
 
         cb_wait_front(cb_id_exp_avg, onetile);
         uint32_t exp_avg_l1_write_addr = get_read_ptr(cb_id_exp_avg);
         noc_async_write_tile(i, exp_avg_addrg, exp_avg_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_exp_avg, onetile);
 
         cb_wait_front(cb_id_exp_avg_sq, onetile);
         uint32_t exp_avg_sq_l1_write_addr = get_read_ptr(cb_id_exp_avg_sq);
         noc_async_write_tile(i, exp_avg_sq_addrg, exp_avg_sq_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_exp_avg_sq, onetile);
 
 #ifdef AMSGRAD
         cb_wait_front(cb_id_max_exp_avg_sq, onetile);
         uint32_t max_exp_avg_sq_l1_write_addr = get_read_ptr(cb_id_max_exp_avg_sq);
         noc_async_write_tile(i, max_exp_avg_sq_addrg, max_exp_avg_sq_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_max_exp_avg_sq, onetile);
 #endif
     }

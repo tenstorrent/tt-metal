@@ -53,7 +53,7 @@ void write_mean_rstd(
                 output_l1_write_addr + src_idx * cb_dtype_bytes,
                 dst_noc_addr + tilized_idx * cb_dtype_bytes,
                 cb_dtype_bytes * FACE_HEIGHT);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
         }
     } else {
         auto output_idx = output_tile_offset + outer_idx;
@@ -79,7 +79,7 @@ void write_mean_rstd(
             output_l1_write_addr + tilized_idx * cb_dtype_bytes,
             dst_noc_addr + tilized_idx * cb_dtype_bytes,
             cb_dtype_bytes);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     }
 
     cb_pop_front(cb_id, onetile);
@@ -163,10 +163,11 @@ void kernel_main() {
                 noc_async_write_tile(offs + inner_idx + r + tile_offset, output_addrg, output_l1_read_addr);
                 output_l1_read_addr += output_tile_bytes;
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_output, block_size);
         }  // num_inner loop
 
         offs += num_inner;
     }  // num_rows_per_core loop
+    noc_async_write_barrier();
 }  // void kernel_main()

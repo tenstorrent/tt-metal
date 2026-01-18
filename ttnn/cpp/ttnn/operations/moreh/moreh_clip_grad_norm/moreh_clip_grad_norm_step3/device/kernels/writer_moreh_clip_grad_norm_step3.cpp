@@ -24,8 +24,9 @@ void kernel_main() {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         cb_wait_front(cb_id_output, onetile);
         noc_async_write_tile(tile_idx, s, output_l1_read_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_output, onetile);
     }
+    noc_async_write_barrier();
 
 }  // void kernel_main()

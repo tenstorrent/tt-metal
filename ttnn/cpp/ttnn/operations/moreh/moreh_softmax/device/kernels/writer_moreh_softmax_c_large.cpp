@@ -32,7 +32,7 @@ void kernel_main() {
             cb_wait_front(cb_out, onetile);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
             noc_async_write_tile(tile_idx, dst_out, l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_out, onetile);
             tile_idx += dim_stride;
         }

@@ -73,6 +73,7 @@ void kernel_main() {
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
         uint64_t dst_noc_addr = get_noc_addr(0, s0, noc_offfset);
         noc_async_write(w_addr, dst_noc_addr, num_bytes_per_tile);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     }
+    noc_async_writes_barrier();
 }

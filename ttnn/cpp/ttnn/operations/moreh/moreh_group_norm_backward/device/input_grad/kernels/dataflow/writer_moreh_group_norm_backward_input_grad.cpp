@@ -31,9 +31,9 @@ void kernel_main() {
             input_grad_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
             cb_wait_front(cb_id_input_grad, onetile);
             noc_async_write_tile(input_grad_tile_idx, input_grad_addrg, input_grad_l1_read_ptr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_input_grad, onetile);
         }  // inner_idx loop
     }  // outer_idx loop
-
+    noc_async_write_barrier();
 }  // void kernel_main()
