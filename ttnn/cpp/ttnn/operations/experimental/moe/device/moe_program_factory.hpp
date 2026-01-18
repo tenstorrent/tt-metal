@@ -10,8 +10,14 @@
 namespace ttnn::operations::experimental::moe::program {
 
 struct MoESharedVariables {
-    // Add shared variables that need to be accessed in override_runtime_arguments
-    // e.g., kernel handles, core coordinates, etc.
+    // CB handles for sharded circular buffers
+    std::map<std::string, tt::tt_metal::CBHandle> cb_handles_sharded;
+
+    // Kernel handles
+    std::vector<tt::tt_metal::KernelHandle> kernel_handles;
+
+    // Cores active
+    std::vector<CoreCoord> worker_cores;
 };
 
 struct MoEProgramFactory {
