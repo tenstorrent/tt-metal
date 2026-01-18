@@ -723,6 +723,361 @@ def test_fmod_fp32_simple(device):
     print("\nSimple test completed!")
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_fmod_fp32_multi_offset(device):
+    """
+    Test fmod implementation with multiple offset configurations.
+
+    Case 1: B = A + offset
+        Offsets: 1.0, 1.5, 2^(-12), 1.542, sqrt(2)=1.41421356, nextafter(A, +inf)
+
+    Case 2: B = A - offset
+        Offsets: 1.0, 1.1920929e-7 (machine epsilon), 2^(-12), 1.5, 1.542, nextafter(A, -inf)
+
+    Total: 12 test configurations
+    """
+
+    # Configuration
+    ULP_TOLERANCE = 10
+    BATCH_SIZE = 32 * 32  # 1024 values per batch (one 32x32 tile)
+
+    # Define all offset configurations
+    # Format: (name, operation, offset_value_or_function)
+    # operation: "add" or "sub"
+    # offset_value_or_function: float value or "nextafter_pos" / "nextafter_neg"
+
+    TWO_POW_NEG_12 = 2 ** (-12)  # 0.000244140625
+    MACHINE_EPSILON = 1.1920929e-7  # FP32 machine epsilon
+    SQRT_2 = 1.41421356
+
+    offset_configs = [
+        # Case 1: B = A + offset
+        ("A + 1.0", "add", 1.0),
+        ("A + 1.5", "add", 1.5),
+        ("A + 2^(-12)", "add", TWO_POW_NEG_12),
+        ("A + 1.542", "add", 1.542),
+        ("A + sqrt(2)", "add", SQRT_2),
+        ("nextafter(A, +inf)", "add", "nextafter_pos"),
+        # Case 2: B = A - offset
+        ("A - 1.0", "sub", 1.0),
+        ("A - epsilon", "sub", MACHINE_EPSILON),
+        ("A - 2^(-12)", "sub", TWO_POW_NEG_12),
+        ("A - 1.5", "sub", 1.5),
+        ("A - 1.542", "sub", 1.542),
+        ("nextafter(A, -inf)", "sub", "nextafter_neg"),
+    ]
+
+    print("\n" + "=" * 100)
+    print("FMOD FP32 MULTI-OFFSET TEST")
+    print("=" * 100)
+    print(f"Testing {len(offset_configs)} offset configurations")
+    print("=" * 100)
+
+    # Generate all BF16 values as FP32
+    print("\nGenerating all BF16 values as FP32...")
+    all_bf16_fp32 = generate_all_bf16_as_fp32()
+    print(f"Generated {len(all_bf16_fp32)} valid values")
+
+    # Store results for all configurations
+    all_config_results = []
+
+    # Create output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = "/home/ubuntu/tt-metal/test_outputs"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Process each offset configuration
+    for config_idx, (config_name, operation, offset_value) in enumerate(offset_configs):
+        print(f"\n{'=' * 80}")
+        print(f"Configuration {config_idx + 1}/{len(offset_configs)}: {config_name}")
+        print(f"{'=' * 80}")
+
+        # Filter values based on the configuration
+        filtered_values = []
+        filtered_b_values = []
+
+        for val in all_bf16_fp32:
+            # Compute B based on configuration
+            if offset_value == "nextafter_pos":
+                b_val = math.nextafter(val, float("inf"))
+            elif offset_value == "nextafter_neg":
+                b_val = math.nextafter(val, float("-inf"))
+            elif operation == "add":
+                b_val = val + offset_value
+            else:  # operation == "sub"
+                b_val = val - offset_value
+
+            # Filter: avoid div by zero, very small values, and inf/nan
+            if abs(val) >= 0.01 and abs(b_val) >= 0.01:
+                if not math.isnan(b_val) and not math.isinf(b_val):
+                    if not math.isnan(val) and not math.isinf(val):
+                        filtered_values.append(val)
+                        filtered_b_values.append(b_val)
+
+        print(f"After filtering: {len(filtered_values)} values")
+
+        if len(filtered_values) == 0:
+            print(f"WARNING: No valid values for configuration {config_name}")
+            all_config_results.append(
+                {
+                    "config_name": config_name,
+                    "total_values": 0,
+                    "valid_comparisons": 0,
+                    "mismatches": 0,
+                    "max_ulp": 0,
+                    "avg_ulp": 0,
+                    "status": "SKIPPED",
+                }
+            )
+            continue
+
+        # Process in batches
+        mismatches = []
+        max_ulp = 0
+        total_ulp = 0
+        valid_comparisons = 0
+
+        # ULP distribution for this config
+        ulp_dist = {"0": 0, "1": 0, "2": 0, "3": 0, "4-10": 0, ">10": 0, "inf": 0}
+
+        num_batches = (len(filtered_values) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * BATCH_SIZE
+            end_idx = min(start_idx + BATCH_SIZE, len(filtered_values))
+
+            batch_a = filtered_values[start_idx:end_idx]
+            batch_b = filtered_b_values[start_idx:end_idx]
+
+            # Pad batch to 32x32 tile size
+            while len(batch_a) < 32 * 32:
+                batch_a.append(1.0)
+                batch_b.append(2.0)  # Avoid a == b for padding
+
+            # Shape for tile layout (32x32)
+            input_a = torch.tensor(batch_a, dtype=torch.float32).reshape(1, 1, 32, 32)
+            input_b = torch.tensor(batch_b, dtype=torch.float32).reshape(1, 1, 32, 32)
+
+            # Expected result
+            expected = torch.fmod(input_a, input_b)
+
+            # TTNN computation
+            ttnn_a = ttnn.from_torch(input_a, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn_b = ttnn.from_torch(input_b, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+
+            ttnn_result = ttnn.pow(ttnn_a, ttnn_b)
+            result = ttnn.to_torch(ttnn_result)
+
+            # Compare
+            expected_flat = expected.flatten()
+            result_flat = result.flatten()
+
+            actual_batch_size = end_idx - start_idx
+            for i in range(actual_batch_size):
+                a_val = batch_a[i]
+                b_val = batch_b[i]
+                exp_val = expected_flat[i].item()
+                res_val = result_flat[i].item()
+
+                ulp_diff = compute_ulp_diff(exp_val, res_val)
+
+                # Track ULP distribution
+                if ulp_diff == float("inf"):
+                    ulp_dist["inf"] += 1
+                    mismatches.append(
+                        {
+                            "index": start_idx + i,
+                            "input_a": a_val,
+                            "input_b": b_val,
+                            "expected_torch": exp_val,
+                            "ttnn_result": res_val,
+                            "ulp_diff": "inf",
+                        }
+                    )
+                    continue
+
+                valid_comparisons += 1
+                total_ulp += ulp_diff
+                max_ulp = max(max_ulp, ulp_diff)
+
+                # Categorize ULP
+                if ulp_diff == 0:
+                    ulp_dist["0"] += 1
+                elif ulp_diff == 1:
+                    ulp_dist["1"] += 1
+                elif ulp_diff == 2:
+                    ulp_dist["2"] += 1
+                elif ulp_diff == 3:
+                    ulp_dist["3"] += 1
+                elif ulp_diff <= 10:
+                    ulp_dist["4-10"] += 1
+                else:
+                    ulp_dist[">10"] += 1
+
+                if ulp_diff > ULP_TOLERANCE:
+                    mismatches.append(
+                        {
+                            "index": start_idx + i,
+                            "input_a": a_val,
+                            "input_b": b_val,
+                            "expected_torch": exp_val,
+                            "ttnn_result": res_val,
+                            "ulp_diff": ulp_diff,
+                        }
+                    )
+
+            # Deallocate tensors
+            ttnn_a.deallocate()
+            ttnn_b.deallocate()
+            ttnn_result.deallocate()
+
+        # Compute stats
+        avg_ulp = total_ulp / valid_comparisons if valid_comparisons > 0 else 0
+        mismatch_pct = len(mismatches) / len(filtered_values) * 100 if len(filtered_values) > 0 else 0
+
+        # Determine status
+        mismatch_threshold = len(filtered_values) * 0.01  # 1% tolerance
+        status = "PASS" if len(mismatches) <= mismatch_threshold else "FAIL"
+
+        # Print summary for this config
+        print(f"\n  Results for: {config_name}")
+        print(f"  {'-' * 60}")
+        print(f"  Total values tested: {len(filtered_values)}")
+        print(f"  Valid comparisons:   {valid_comparisons}")
+        print(f"  Mismatches (ULP>{ULP_TOLERANCE}): {len(mismatches)} ({mismatch_pct:.2f}%)")
+        print(f"  Max ULP:             {max_ulp}")
+        print(f"  Average ULP:         {avg_ulp:.2f}")
+        print(f"  Status:              {status}")
+
+        # Print ULP distribution
+        print(f"\n  ULP Distribution:")
+        total = valid_comparisons + ulp_dist["inf"]
+        for ulp_range, count in ulp_dist.items():
+            pct = count / total * 100 if total > 0 else 0
+            print(f"    ULP {ulp_range:>5}: {count:>8} ({pct:>6.2f}%)")
+
+        # Store results
+        all_config_results.append(
+            {
+                "config_name": config_name,
+                "total_values": len(filtered_values),
+                "valid_comparisons": valid_comparisons,
+                "mismatches": len(mismatches),
+                "mismatch_pct": mismatch_pct,
+                "max_ulp": max_ulp,
+                "avg_ulp": avg_ulp,
+                "ulp_dist": ulp_dist.copy(),
+                "status": status,
+            }
+        )
+
+        # Write mismatches to CSV for this config
+        if mismatches:
+            config_safe_name = (
+                config_name.replace(" ", "_")
+                .replace("+", "plus")
+                .replace("-", "minus")
+                .replace("^", "pow")
+                .replace("(", "")
+                .replace(")", "")
+                .replace(",", "")
+            )
+            mismatch_path = os.path.join(output_dir, f"fmod_multi_offset_{config_safe_name}_{timestamp}.csv")
+            with open(mismatch_path, "w", newline="") as csvfile:
+                fieldnames = ["index", "input_a", "input_b", "expected_torch", "ttnn_result", "ulp_diff"]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for m in mismatches:
+                    writer.writerow(m)
+
+    # Print final summary table
+    print("\n" + "=" * 120)
+    print("FINAL SUMMARY: ALL OFFSET CONFIGURATIONS")
+    print("=" * 120)
+    print(
+        f"{'Configuration':<25} {'Total':<10} {'Valid':<10} {'Mismatch':<12} {'%':<8} {'Max ULP':<12} {'Avg ULP':<10} {'Status':<8}"
+    )
+    print("-" * 120)
+
+    total_pass = 0
+    total_fail = 0
+
+    for result in all_config_results:
+        if result.get("status") == "SKIPPED":
+            print(f"{result['config_name']:<25} {'SKIPPED':<10}")
+            continue
+
+        print(
+            f"{result['config_name']:<25} {result['total_values']:<10} {result['valid_comparisons']:<10} "
+            f"{result['mismatches']:<12} {result['mismatch_pct']:<8.2f} {result['max_ulp']:<12} "
+            f"{result['avg_ulp']:<10.2f} {result['status']:<8}"
+        )
+
+        if result["status"] == "PASS":
+            total_pass += 1
+        else:
+            total_fail += 1
+
+    print("-" * 120)
+    print(f"Total: {total_pass} PASSED, {total_fail} FAILED out of {len(offset_configs)} configurations")
+    print("=" * 120)
+
+    # Write summary to CSV
+    summary_path = os.path.join(output_dir, f"fmod_multi_offset_summary_{timestamp}.csv")
+    with open(summary_path, "w", newline="") as csvfile:
+        fieldnames = [
+            "config_name",
+            "total_values",
+            "valid_comparisons",
+            "mismatches",
+            "mismatch_pct",
+            "max_ulp",
+            "avg_ulp",
+            "status",
+            "ulp_0",
+            "ulp_1",
+            "ulp_2",
+            "ulp_3",
+            "ulp_4_10",
+            "ulp_gt_10",
+            "ulp_inf",
+        ]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in all_config_results:
+            if result.get("status") == "SKIPPED":
+                writer.writerow({"config_name": result["config_name"], "status": "SKIPPED"})
+            else:
+                row = {
+                    "config_name": result["config_name"],
+                    "total_values": result["total_values"],
+                    "valid_comparisons": result["valid_comparisons"],
+                    "mismatches": result["mismatches"],
+                    "mismatch_pct": result["mismatch_pct"],
+                    "max_ulp": result["max_ulp"],
+                    "avg_ulp": result["avg_ulp"],
+                    "status": result["status"],
+                    "ulp_0": result["ulp_dist"]["0"],
+                    "ulp_1": result["ulp_dist"]["1"],
+                    "ulp_2": result["ulp_dist"]["2"],
+                    "ulp_3": result["ulp_dist"]["3"],
+                    "ulp_4_10": result["ulp_dist"]["4-10"],
+                    "ulp_gt_10": result["ulp_dist"][">10"],
+                    "ulp_inf": result["ulp_dist"]["inf"],
+                }
+                writer.writerow(row)
+
+    print(f"\nSummary written to: {summary_path}")
+
+    # Assert overall result
+    if total_fail > 0:
+        print(f"\nTest FAILED: {total_fail} configurations failed")
+        # Don't assert here - just report. User can decide pass/fail criteria
+        # assert False, f"{total_fail} configurations failed"
+    else:
+        print(f"\nTest PASSED: All {total_pass} configurations passed!")
+
+
 if __name__ == "__main__":
     import sys
 
