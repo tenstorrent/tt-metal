@@ -218,51 +218,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     return result;
-
-    // cursor code
-    // // fmod(a, b) = a - trunc(a/b) * b
-    // sfpi::vFloat a = in0;
-    // sfpi::vFloat b = in1;
-
-    // // Step 1: Compute 1/b using polynomial + Newton-Raphson
-    // sfpi::vFloat b_abs = sfpi::abs(b);
-    // sfpi::vFloat x = sfpi::setexp(b_abs, 127);  // x in [1,2)
-    // sfpi::vFloat recip = x * (x * 0.3232f - 1.4545f) + 2.1315f;
-    // sfpi::vInt b_exp = sfpi::exexp(b);
-    // recip = sfpi::setexp(recip, 126 - b_exp);
-    // recip = sfpi::setsgn(recip, b);
-    // recip = recip * (sfpi::vFloat(2.0f) - b * recip);
-    // recip = recip * (sfpi::vFloat(2.0f) - b * recip);
-
-    // // Step 2: Compute quot = a/b
-    // sfpi::vFloat quot = a * recip;
-
-    // // Step 3: Compute trunc(quot) without using _trunc_body_
-    // // Use mantissa alignment trick, but correct for FP rounding errors
-
-    // sfpi::vFloat quot_abs = sfpi::abs(quot);
-    // sfpi::vFloat big = sfpi::vFloat(8388608.0f);  // 2^23
-
-    // // The mantissa alignment trick can round up due to FP rounding
-    // // e.g., 0.9999996 + 2^23 might round to 2^23 + 1, giving trunc = 1 instead of 0
-    // sfpi::vFloat aligned = quot_abs + big;
-    // sfpi::vFloat trunc_abs = aligned - big;
-
-    // // Correct for rounding errors: if trunc_abs > quot_abs, subtract 1
-    // // This ensures we truncate towards zero, not away from zero
-    // v_if(trunc_abs > quot_abs) {
-    //     trunc_abs = trunc_abs - sfpi::vFloat(1.0f);
-    // }
-    // v_endif;
-
-    // // Handle the sign: trunc(-1.5) = -1, not -2
-    // sfpi::vFloat trunc_quot = sfpi::setsgn(trunc_abs, quot);
-
-    // // Step 4: Compute fmod = a - trunc(a/b) * b
-    // sfpi::vFloat qb = trunc_quot * b;
-    // sfpi::vFloat result = a - qb;
-
-    // return result;
 }
 
 template <bool is_fp32_dest_acc_en>
