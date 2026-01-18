@@ -42,17 +42,21 @@ void MAIN {
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     // W0 and W1 reading constants
+    constexpr uint32_t w0_w1_txns_per_block = 2;
     constexpr uint32_t w0_w1_tiles_per_txn = 14;
+    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_blocks_per_elt_tile =
+        2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 16
     const uint32_t w0_w1_txns = (core_id < 8) ? 2 * 80 : 2 * 96;
     // num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_txn;  // (5|6 * 224) / 14 = 80|96
 
     // W2 reading constants
-    // Total tiles of w2 does not divide evenly by w2_tiles_per_txn (14), so we do it in two steps
+    constexpr uint32_t w2_txns_per_block = 2;
     constexpr uint32_t w2_tiles_per_txn = 14;
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    const uint32_t w2_txns = w2_txns_h * num_w2_tiles_w;
-
-    constexpr uint32_t w0_w1_txns_per_elt_tile = 2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn);
+    constexpr uint32_t w2_txns_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;            // 2 * 5 / 2 = 5
+    const uint32_t w2_txns = w2_txns_h * num_w2_tiles_w;                                        // 5 * (18|20) = 90|100
 
     //-------------------------------------------------------------------------
     // Compute
@@ -69,17 +73,19 @@ void MAIN {
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
 
+    uint32_t in0_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
         // Compute in @ W0
         //---------------------------------------------------------------------
         for (uint32_t i = 0; i < num_elt_tiles; ++i) {
-            uint32_t in0_index = 0;
-            tile_regs_acquire();
-            for (uint32_t txn = 0; txn < w0_w1_txns_per_elt_tile; ++txn) {
-                cb_wait_front(cb_r2c_w0, w0_w1_tiles_per_txn);
+            uint32_t in0_index = in0_offset_per_expert;
 
-                for (uint32_t k = 0; k < w0_w1_tiles_per_txn; k += 2) {
+            tile_regs_acquire();
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_elt_tile; ++block_id) {
+                cb_wait_front(cb_r2c_w0, w0_w1_tiles_per_block);
+
+                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 2) {
                     matmul_block(
                         cb_s2c_in,
                         cb_r2c_w0,
@@ -91,7 +97,7 @@ void MAIN {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
-                cb_pop_front(cb_r2c_w0, w0_w1_tiles_per_txn);
+                cb_pop_front(cb_r2c_w0, w0_w1_tiles_per_block);
             }
 
             //---------------------------------------------------------------------
@@ -110,7 +116,7 @@ void MAIN {
         }
 
         //---------------------------------------------------------------------
-        // Compute in @ W2
+        // Compute in @ W2 (in pairs of 2)
         //---------------------------------------------------------------------
         for (uint32_t i = 0; i < (num_mm2_tiles / 2); ++i) {
             // cb_wait_front(cb_r2c_in2, 1);
@@ -119,9 +125,9 @@ void MAIN {
 
             tile_regs_acquire();
 
-            for (uint32_t j = 0; j < (2 * w2_txns_h); ++j) {
-                cb_wait_front(cb_r2c_w2, w2_tiles_per_txn);
-                for (uint32_t k = 0; k < w2_tiles_per_txn; k += 2) {
+            for (uint32_t j = 0; j < w2_txns_per_two_mm2_tile; ++j) {
+                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += 2) {
                     matmul_block(
                         cb_r2c_in2,
                         cb_r2c_w2,
@@ -133,7 +139,7 @@ void MAIN {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
-                cb_pop_front(cb_r2c_w2, w2_tiles_per_txn);
+                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
             tile_regs_commit();
@@ -144,6 +150,12 @@ void MAIN {
             cb_push_back(cb_c2w_mm2, 2);
             tile_regs_release();
         }
+
+        in0_offset_per_expert += num_w0_w1_tiles_h;
     }  // end for (expert_id)
+
+    // Drain the pipeline - the last txn in flight
+    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
 }
 }  // namespace NAMESPACE
