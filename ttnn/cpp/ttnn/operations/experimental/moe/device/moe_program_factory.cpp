@@ -29,7 +29,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::NOC::RISCV_0_default);
     for (size_t idx = 0; idx < dram_adjacent_cores.size(); ++idx) {
         auto core = dram_adjacent_cores[idx];
-        log_warning(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
+        log_info(tt::LogOp, "DRAM {} mapped to core {}", idx, core.str());
     }
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_adjacent_cores);
 
@@ -192,8 +192,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Log the ring order for debugging
     for (uint32_t i = 0; i < num_cores; ++i) {
         uint32_t core_idx = ring_order[i];
-        uint32_t neighbor_idx = neighbor_mapping[core_idx];
-        log_warning(
+        [[maybe_unused]] uint32_t neighbor_idx = neighbor_mapping[core_idx];
+        log_debug(
             tt::LogOp,
             "Ring position {}: core {} ({},{}) -> neighbor core {} ({},{})",
             i,
