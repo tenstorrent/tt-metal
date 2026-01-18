@@ -163,16 +163,27 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  *
  * @note This is called when is_fp32_dest_acc_en == true
  */
-// fmod implementation without using _trunc_body_ to avoid register clobbering
+// fmod implementation with edge case handling for large values
 sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat in0, sfpi::vFloat in1) {
-    // basic code
     // fmod(a, b) = a - trunc(a/b) * b
+    //
+    // Key insight: fmod result must satisfy: |result| < |b|
+    // If this is violated, we need to correct the truncation.
+
+    sfpi::vFloat a = in0;
+    sfpi::vFloat b = in1;
+    sfpi::vFloat b_abs = sfpi::abs(b);
+
+    // FIX 1: Handle a == b case (common for large values where a + offset = a)
+    // When a == b, fmod(a, b) = 0
+    // Use bit comparison: if a and b have same bits, result is 0
+    sfpi::vFloat a_minus_b = a - b;
 
     // Step 1: Compute high-precision reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(in1);
+    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(b);
 
     // Step 2: Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = in0 * recip;
+    sfpi::vFloat div_result = a * recip;
 
     // Step 3: Compute trunc(a/b) using hand-optimised trunc implementation
     sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
@@ -182,7 +193,29 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
 
     // Step 4: Compute fmod = a - trunc(a/b) * b
-    sfpi::vFloat result = in0 - trunc_div * in1;
+    sfpi::vFloat result = a - trunc_div * b;
+
+    // FIX 2: Post-correction - fmod result must satisfy |result| < |b|
+    // If |result| >= |b|, the truncation was wrong by 1
+    sfpi::vFloat result_abs = sfpi::abs(result);
+
+    // If result >= b, we truncated too low, add/subtract b to correct
+    v_if(result_abs >= b_abs) {
+        // Determine correction direction based on sign of result
+        v_if(result >= sfpi::vFloat(0.0f)) {
+            result = result - b_abs;  // result was positive and too big
+        }
+        v_else {
+            result = result + b_abs;  // result was negative and too big (magnitude)
+        }
+        v_endif;
+    }
+    v_endif;
+
+    // FIX 3: If a == b (within FP precision), result should be exactly 0
+    // This handles edge case where a + small_offset = a due to FP precision
+    v_if(a_minus_b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(0.0f); }
+    v_endif;
 
     return result;
 
