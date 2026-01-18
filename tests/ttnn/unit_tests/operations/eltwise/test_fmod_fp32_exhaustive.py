@@ -807,12 +807,12 @@ def test_fmod_fp32_multi_offset(device):
             else:  # operation == "sub"
                 b_val = val - offset_value
 
-            # Filter: avoid div by zero, very small values, and inf/nan
-            if abs(val) >= 0.01 and abs(b_val) >= 0.01:
-                if not math.isnan(b_val) and not math.isinf(b_val):
-                    if not math.isnan(val) and not math.isinf(val):
-                        filtered_values.append(val)
-                        filtered_b_values.append(b_val)
+            # Filter: only avoid div by zero (b=0) and inf/nan
+            # No magnitude filter - test all ~65k BF16 values
+            if b_val != 0.0 and not math.isnan(b_val) and not math.isinf(b_val):
+                if not math.isnan(val) and not math.isinf(val):
+                    filtered_values.append(val)
+                    filtered_b_values.append(b_val)
 
         print(f"After filtering: {len(filtered_values)} values")
 
