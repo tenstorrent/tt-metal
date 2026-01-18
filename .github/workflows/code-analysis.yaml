@@ -225,6 +225,9 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
       - name: 🔧 CMake configure
         run: cmake --preset clang-static-analyzer
 
