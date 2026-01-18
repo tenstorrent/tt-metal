@@ -110,11 +110,7 @@ void kernel_main() {
                 mcast_receiver_noc_x,
                 mcast_receiver_noc_y,
                 mcast_receiver_semaphore_id>(mcast_reciever_base_address, gather_destination_tile_offset_bytes);
-            // Pop the old bias data that was used in the second matmul to free space for mcast
-            // The compute kernel didn't pop it, so we need to pop it here before cb_reserve_back
-            cb_pop_front(mm1_full_cb, num_tiles_k);
             // Wait for mcast to complete and then push back to mm1_full_cb (ping-pong back)
-            // The mcast will write new data to the freed space
             wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
     }

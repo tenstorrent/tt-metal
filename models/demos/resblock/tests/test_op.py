@@ -58,7 +58,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     if activation_dtype != weight_dtype:
         pytest.skip("activation and weight dtypes must be the same")
 
-    NUM_LAYERS = 2
+    NUM_LAYERS = 4
 
     torch.manual_seed(1234)
 
@@ -77,7 +77,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     weight0 = create_random_tensor((K, K), generation_type)
     weight1 = create_random_tensor((K, K), generation_type)
 
-    expected = FusedResblock.golden(torch_a, weight0, weight1)
+    expected = FusedResblock.golden(torch_a, weight0, weight1, num_layers=NUM_LAYERS)
     print("expected:", expected)
 
     # Pad input up to tile height

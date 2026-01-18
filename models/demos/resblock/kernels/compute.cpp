@@ -144,7 +144,7 @@ void MAIN {
         matmul_with_relu_block<mm1_full_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
 
         // MM2_FULL_CB (with MM1_FULL_CB bias) -> matmul+bias -> INTERMEDIATE_PREGATHER_CB
-        // Pop MM2 (input) after this, but don't pop MM1 (bias/residual) because it will be overwritten by mcast
+        // Pop both MM2 (input) and MM1 (bias/residual) after this
         matmul_with_bias_block<
             mm2_full_cb,
             weight1_cb,
@@ -154,7 +154,7 @@ void MAIN {
             num_tiles_k,
             0,
             true,
-            false>(bias_tile_index);
+            true>(bias_tile_index);
     }
 }
 }  // namespace NAMESPACE
