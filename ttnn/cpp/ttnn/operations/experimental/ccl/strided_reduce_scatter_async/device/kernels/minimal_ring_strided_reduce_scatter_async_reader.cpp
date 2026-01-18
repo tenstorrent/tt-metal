@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/debug/dprint.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -95,11 +96,14 @@ void kernel_main() {
     // Let's set some particular values for the params used
     const uint32_t M_blocks_per_core = 4;
     const uint32_t batch_size = input_tensor_B;
+    DPRINT << "The reader kernel running its loop." << ENDL();
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             for (uint32_t i = 0; i < ring_size; i++) {
                 const bool do_reduce = i != 0;
+                DPRINT << "batch_size: " << b << " m_block_iter: " << m_block_iter << " i: " << i
+                       << " do_reduce: " << (uint32_t)do_reduce << ENDL();
             }
         }
     }
