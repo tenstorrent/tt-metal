@@ -38,7 +38,6 @@ void kernel_main() {
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
@@ -106,7 +105,9 @@ void kernel_main() {
     const uint32_t dram_bank_id = core_id;
     const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
 
+    constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_tile_size;
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_tile_size;
+    constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
@@ -131,7 +132,7 @@ void kernel_main() {
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
     const uint32_t slot_addr[NUM_SLOTS] = {
-        w_cb_base_addr, w_cb_base_addr + w0_w1_tiles_per_block, w_cb_base_addr + 2 * w0_w1_tiles_per_block};
+        w_cb_base_addr, w_cb_base_addr + w0_w1_bytes_per_block, w_cb_base_addr + 2 * w0_w1_bytes_per_block};
 
     //-------------------------------------------------------------------------
     // Expert loop

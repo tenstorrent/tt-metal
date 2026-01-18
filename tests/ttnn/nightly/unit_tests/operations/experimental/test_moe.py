@@ -55,18 +55,17 @@ def create_torch_w0(L, E, K, N):
         torch_w0: Tensor of shape (L, E, K, N)
     """
     torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # Use small values that are distinguishable in bfloat4_b range
-    # Expert 0: 1 + k_val (1, 2, 3, ...)
-    # Expert 1: 10 + k_val (10, 11, 12, ...)
+    le_val = 1
     for l in range(L):
         for e in range(E):
-            base_val = 1 + e * 9  # Expert 0: base=1, Expert 1: base=10
             for k_chunk in range(K // 32):
                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-                k_val = k_chunk % 8  # Keep k_val small (0-7) to stay in bf4 range
+                k_val = k_chunk * 0.001
                 for n_chunk in range(N // 32):
                     n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-                    torch_w0[l, e, k_start:k_end, n_start:n_end] = base_val + k_val
+                    n_val = n_chunk
+                    torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+            le_val *= -1
 
     # torch_w0 = torch.randn((L, E, K, N), dtype=torch.bfloat16)
     return torch_w0
@@ -86,20 +85,20 @@ def create_torch_w1(L, E, K, N):
         torch_w1: Tensor of shape (L, E, K, N)
     """
     torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # Use small values that are distinguishable in bfloat4_b range
-    # Expert 0: 1 + k_val (1, 2, 3, ...)
-    # Expert 1: 10 + k_val (10, 11, 12, ...)
+    le_val = -1
     for l in range(L):
         for e in range(E):
-            base_val = 1 + e * 9  # Expert 0: base=1, Expert 1: base=10
             for k_chunk in range(K // 32):
                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-                k_val = k_chunk % 8  # Keep k_val small (0-7) to stay in bf4 range
+                k_val = k_chunk * 0.001
                 for n_chunk in range(N // 32):
                     n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-                    torch_w1[l, e, k_start:k_end, n_start:n_end] = base_val + k_val
-    # w1 = torch.randn((L, E, K, N), dtype=torch.bfloat16)
-    return -torch_w1
+                    n_val = n_chunk
+                    torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+            le_val *= -1
+
+    # torch_w1 = torch.randn((L, E, K, N), dtype=torch.bfloat16)
+    return torch_w1
 
 
 def create_torch_w2(L, E, N, K):
@@ -125,8 +124,8 @@ def create_torch_w2(L, E, N, K):
                 for k_chunk in range(K // 32):
                     k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
                     k_val = k_chunk
-                    torch_w2[l, e, n_start:n_end, k_start:k_end] = le_val + n_val + k_val
-            le_val += 128
+                    torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
+            le_val *= -1
     # torch_w2 = torch.randn((L, E, N, K), dtype=torch.bfloat16)
     return torch_w2
 
