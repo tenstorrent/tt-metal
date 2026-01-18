@@ -107,6 +107,9 @@ target_sources(
         send_recv_async/recv_async/recv_async.cpp
         send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
         send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
+        send_recv_async/socket_forward/socket_forward.cpp
+        send_recv_async/socket_forward/device/socket_forward_device_operation.cpp
+        send_recv_async/socket_forward/device/socket_forward_program_factory.cpp
         neighbor_pad_async/neighbor_pad_async.cpp
         neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
         neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp

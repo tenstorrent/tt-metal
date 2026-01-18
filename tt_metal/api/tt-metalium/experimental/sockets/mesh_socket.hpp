@@ -164,6 +164,7 @@ public:
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
     auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
+    MeshDevice* get_device() const { return config_buffer_->device(); }
 
 private:
     MeshSocket(
