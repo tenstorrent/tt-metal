@@ -136,7 +136,9 @@ class FusedResblock:
                 mcast_sender_noc_coord_y_end,
                 num_layers,
             ],
-            config=ttnn.ReaderConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC (required for persistent mcast)
+            ),
         )
         mcast_writer_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/mcast_writer.cpp",
@@ -148,7 +150,9 @@ class FusedResblock:
                 receiver_semaphore_descriptor.id,
                 sender_semaphore_descriptor.id,
             ],
-            config=ttnn.WriterConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
+            ),
         )
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
