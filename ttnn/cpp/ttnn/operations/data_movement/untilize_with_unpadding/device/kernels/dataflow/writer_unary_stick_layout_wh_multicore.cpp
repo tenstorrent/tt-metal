@@ -41,11 +41,10 @@ void kernel_main() {
 
             noc_async_write(l1_read_addr, dst_noc_addr + start_column_id, write_size);
 
-            noc_async_write_barrier();
-
             l1_read_addr += width_size;
         }
 
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out0, single_block_size * has_rows);
     };
 
