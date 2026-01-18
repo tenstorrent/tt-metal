@@ -58,30 +58,36 @@ class BenchmarkResult:
         )
 
 
-def benchmark_sequential_layernorms(device, inputs, weights, biases, num_trials=10, warmup=3):
+def benchmark_sequential_layernorms(device, inputs, weights, biases, core_ranges, num_trials=10, warmup=3):
     """
     Benchmark: Run N LayerNorm operations sequentially.
-    Each operation is a separate dispatch to the device.
+    Each operation uses the SAME core range it would use in parallel (fair comparison).
     """
     n = len(inputs)
 
-    # Warmup
+    # Warmup - use single-branch parallel to enforce core range
     for _ in range(warmup):
         for i in range(n):
-            _ = ttnn.layer_norm(inputs[i], epsilon=1e-5, weight=weights[i], bias=biases[i])
+            branch = ttnn.parallel.branch(
+                ttnn.layer_norm, inputs[i], cores=core_ranges[i], epsilon=1e-5, weight=weights[i], bias=biases[i]
+            )
+            _ = ttnn.parallel([branch])
         ttnn.synchronize_device(device)
 
-    # Benchmark
+    # Benchmark - each op uses its designated core range (via single-branch parallel)
     times = []
     for trial in range(num_trials):
         start = time.perf_counter_ns()
         for i in range(n):
-            _ = ttnn.layer_norm(inputs[i], epsilon=1e-5, weight=weights[i], bias=biases[i])
+            branch = ttnn.parallel.branch(
+                ttnn.layer_norm, inputs[i], cores=core_ranges[i], epsilon=1e-5, weight=weights[i], bias=biases[i]
+            )
+            _ = ttnn.parallel([branch])
         ttnn.synchronize_device(device)
         end = time.perf_counter_ns()
         times.append(end - start)
 
-    return BenchmarkResult(f"Sequential ({n} ops)", n, sum(times), times)
+    return BenchmarkResult(f"Sequential ({n} ops, same cores)", n, sum(times), times)
 
 
 def benchmark_parallel_layernorms(device, inputs, weights, biases, core_ranges, num_trials=10, warmup=3):
@@ -199,8 +205,8 @@ def test_parallel_benchmark_definitive(device, num_branches):
     single_result = benchmark_single_layernorm(device, inputs[0], weights[0], biases[0], num_trials, warmup)
     print(f"  {single_result}")
 
-    # 2. Sequential execution
-    seq_result = benchmark_sequential_layernorms(device, inputs, weights, biases, num_trials, warmup)
+    # 2. Sequential execution (using same core ranges as parallel for fair comparison)
+    seq_result = benchmark_sequential_layernorms(device, inputs, weights, biases, core_ranges, num_trials, warmup)
     print(f"  {seq_result}")
 
     # 3. Parallel execution
@@ -348,12 +354,15 @@ def test_parallel_dispatch_overhead_analysis(device, num_branches):
         single_times.append(end - start)
     avg_single = sum(single_times) / len(single_times)
 
-    # 3. N sequential ops + sync
+    # 3. N sequential ops + sync (using same core ranges as parallel for fair comparison)
     seq_times = []
     for _ in range(num_trials):
         start = time.perf_counter_ns()
         for i in range(num_branches):
-            _ = ttnn.layer_norm(inputs[i], epsilon=1e-5, weight=weights[i], bias=biases[i])
+            branch = ttnn.parallel.branch(
+                ttnn.layer_norm, inputs[i], cores=core_ranges[i], epsilon=1e-5, weight=weights[i], bias=biases[i]
+            )
+            _ = ttnn.parallel([branch])
         ttnn.synchronize_device(device)
         end = time.perf_counter_ns()
         seq_times.append(end - start)
