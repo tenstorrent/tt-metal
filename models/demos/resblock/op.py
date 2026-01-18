@@ -436,6 +436,57 @@ class FusedResblock:
         return mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor
 
     @staticmethod
+    def partition_cores_by_noc(
+        all_matmul_cores: ttnn.CoreRangeSet,
+        gather_destination_core: ttnn.CoreCoord,
+        device: ttnn.Device,
+        debug: bool = False,
+    ) -> Tuple[ttnn.CoreRangeSet, ttnn.CoreRangeSet, List[ttnn.CoreCoord], List[ttnn.CoreCoord]]:
+        """
+        Partition sender cores into NOC0 and NOC1 groups based on hop distance to gather destination.
+
+        Args:
+            all_matmul_cores: CoreRangeSet containing all matmul sender cores
+            gather_destination_core: Destination core for gather operations
+            device: TTNN device instance
+            debug: Enable debug logging
+
+        Returns:
+            Tuple of (noc0_core_range_set, noc1_core_range_set, noc0_cores, noc1_cores)
+        """
+        # Convert CoreRangeSet to list of cores
+        input_cores_list = ttnn.corerange_to_cores(all_matmul_cores, row_wise=True)
+        noc0_cores = []
+        noc1_cores = []
+
+        # Partition cores based on hop distance
+        for core in input_cores_list:
+            noc0_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_0)
+            noc1_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_1)
+            if noc0_hop <= noc1_hop:
+                noc0_cores.append(core)
+            else:
+                noc1_cores.append(core)
+
+        # Create CoreRangeSets for NOC0 and NOC1 cores
+        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
+        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
+
+        # Validate that all cores are assigned
+        assert (
+            len(noc0_cores) + len(noc1_cores) == all_matmul_cores.num_cores()
+        ), f"Core partition mismatch: noc0={len(noc0_cores)}, noc1={len(noc1_cores)}, total={all_matmul_cores.num_cores()}"
+
+        if debug:
+            logger.debug(f"NOC split: NOC0 cores={len(noc0_cores)}, NOC1 cores={len(noc1_cores)}")
+            if len(noc0_cores) > 0:
+                logger.debug(f"NOC0 cores (first 5): {noc0_cores[:5]}")
+            if len(noc1_cores) > 0:
+                logger.debug(f"NOC1 cores (first 5): {noc1_cores[:5]}")
+
+        return noc0_core_range_set, noc1_core_range_set, noc0_cores, noc1_cores
+
+    @staticmethod
     def generate_runtime_args(all_matmul_cores: ttnn.CoreRangeSet) -> List[Tuple[ttnn.CoreCoord, List[int]]]:
         """Generate runtime args for kernels."""
         sender_core_range = all_matmul_cores.ranges()[0]
@@ -504,33 +555,9 @@ class FusedResblock:
         )
 
         # Partition sender cores by NOC hop distance
-        input_cores_list = ttnn.corerange_to_cores(all_matmul_cores, row_wise=True)
-        noc0_cores = []
-        noc1_cores = []
-
-        for core in input_cores_list:
-            noc0_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_0)
-            noc1_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_1)
-            if noc0_hop <= noc1_hop:
-                noc0_cores.append(core)
-            else:
-                noc1_cores.append(core)
-
-        # Create CoreRangeSets for NOC0 and NOC1 cores
-        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
-        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
-
-        # Validate that all cores are assigned
-        assert (
-            len(noc0_cores) + len(noc1_cores) == all_matmul_cores.num_cores()
-        ), f"Core partition mismatch: noc0={len(noc0_cores)}, noc1={len(noc1_cores)}, total={all_matmul_cores.num_cores()}"
-
-        if debug:
-            logger.debug(f"NOC split: NOC0 cores={len(noc0_cores)}, NOC1 cores={len(noc1_cores)}")
-            if len(noc0_cores) > 0:
-                logger.debug(f"NOC0 cores (first 5): {noc0_cores[:5]}")
-            if len(noc1_cores) > 0:
-                logger.debug(f"NOC1 cores (first 5): {noc1_cores[:5]}")
+        noc0_core_range_set, noc1_core_range_set, noc0_cores, noc1_cores = FusedResblock.partition_cores_by_noc(
+            all_matmul_cores, gather_destination_core, device, debug
+        )
 
         # Create reader kernel descriptors for NOC0 and NOC1
         reader_kernel_descriptors = []
