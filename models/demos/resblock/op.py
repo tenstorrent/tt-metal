@@ -1,3 +1,5 @@
+from typing import List, Tuple
+
 import torch
 from loguru import logger
 
@@ -5,6 +7,18 @@ import ttnn
 
 
 class FusedResblock:
+    # Constants
+    WEIGHT_TILE_HEIGHT = 32
+    WEIGHT_TILE_WIDTH = 32
+    SEMAPHORE_RECEIVER_ID = 0
+    SEMAPHORE_SENDER_ID = 1
+    OUTPUT_TILES_PER_CORE = 1
+    WEIGHT_SHARD_TILES_W = 1
+    OUTPUT_SHARD_TILES_M = 1
+    OUTPUT_SHARD_TILES_N = 1
+    DEFAULT_MATH_FIDELITY = ttnn.MathFidelity.LoFi
+    MIN_TENSOR_RANK = 2
+
     class MatmulCoreCBIndex:
         MM1_FULL_CB = 0
         WEIGHT0_CB = 1
@@ -19,7 +33,7 @@ class FusedResblock:
     MCAST_CORE = ttnn.CoreCoord(7, 7)
 
     @staticmethod
-    def golden(input_a, weights):
+    def golden(input_a: torch.Tensor, weights: List[Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
         """
         Golden reference implementation for fused ResBlock.
 
@@ -32,7 +46,7 @@ class FusedResblock:
             Output tensor of shape [B, K]
         """
 
-        def layer(input, weight0, weight1):
+        def layer(input: torch.Tensor, weight0: torch.Tensor, weight1: torch.Tensor) -> torch.Tensor:
             x = input @ weight0
             x = torch.nn.functional.relu(x)
             x = x @ weight1
@@ -49,7 +63,7 @@ class FusedResblock:
     def create_mcast_kernel(
         all_mcast_cores: ttnn.CoreRangeSet,
         all_sender_cores: ttnn.CoreRangeSet,
-        data_format,
+        data_format: ttnn.DataType,
         page_size: int,
         num_tiles: int,
         tile: ttnn.TileDescriptor,
@@ -59,7 +73,7 @@ class FusedResblock:
         debug: bool,
         num_layers: int,
         input_buffer_address: int,
-    ) -> tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
+    ) -> Tuple[ttnn.KernelDescriptor, ttnn.KernelDescriptor, ttnn.CBDescriptor]:
         logger.debug(f"All mcast cores: {all_mcast_cores}")
         logger.debug(f"Number of mcast cores: {all_mcast_cores.num_cores()}")
         logger.debug(f"All sender cores: {all_sender_cores}")
@@ -82,7 +96,7 @@ class FusedResblock:
             format_descriptors=[mcast_cb_format],
         )
 
-        def get_mcast_sender_noc_coords(all_sender_cores: ttnn.CoreRangeSet):
+        def get_mcast_sender_noc_coords(all_sender_cores: ttnn.CoreRangeSet) -> Tuple[int, int, int, int]:
             all_sender_cores_list = (
                 device.worker_core_from_logical_core(all_sender_cores.ranges()[0].start),
                 device.worker_core_from_logical_core(all_sender_cores.ranges()[0].end),
@@ -139,42 +153,10 @@ class FusedResblock:
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
 
     @staticmethod
-    def op(input_tensor, weight0, weight1, output_tensor, num_layers=1, fp32_dest_acc_en=False, debug=False):
-        """
-        Fused ResBlock operation with per-layer weights.
-
-        Args:
-            input_tensor: Input tensor of shape [M, K], sharded across matmul cores
-            weight0: Stacked weight0 tensor of shape [num_layers * K, K], width-sharded across cores.
-                     Contains weights for all layers stacked along the row dimension.
-            weight1: Stacked weight1 tensor of shape [num_layers * K, K], width-sharded across cores.
-                     Contains weights for all layers stacked along the row dimension.
-            output_tensor: Output tensor of shape [M, K], width-sharded across cores
-            num_layers: Number of ResBlock layers. Must equal weight0.shape[-2] / K (and weight1.shape[-2] / K)
-            fp32_dest_acc_en: Enable FP32 destination accumulation
-            debug: Enable debug logging
-
-        Returns:
-            Output tensor (same as output_tensor parameter)
-        """
-        logger.info(
-            f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}, num_layers={num_layers}"
-        )
-        logger.debug(f"Input tensor sharding: {input_tensor.memory_config().shard_spec}")
-        logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
-        logger.debug(f"Weight1 tensor sharding: {weight1.memory_config().shard_spec}")
-        logger.debug(f"Output tensor sharding: {output_tensor.memory_config().shard_spec}")
-
-        device = input_tensor.device()
-
-        input_shape = input_tensor.shape
-        input_tile = input_tensor.get_tile()
-        weight0_shape = weight0.shape
-        weight0_tile = weight0.get_tile()
-        weight1_shape = weight1.shape
-        weight1_tile = weight1.get_tile()
-
-        # Validate inputs are ttnn.Tensor and on same device
+    def validate_tensor_types(
+        input_tensor: ttnn.Tensor, weight0: ttnn.Tensor, weight1: ttnn.Tensor, output_tensor: ttnn.Tensor
+    ) -> None:
+        """Validate inputs are ttnn.Tensor and on same device."""
         assert isinstance(input_tensor, ttnn.Tensor), f"Input tensor must be ttnn.Tensor, got {type(input_tensor)}"
         assert isinstance(weight0, ttnn.Tensor), f"Weight must be ttnn.Tensor, got {type(weight0)}"
         assert isinstance(weight1, ttnn.Tensor), f"Weight must be ttnn.Tensor, got {type(weight1)}"
@@ -183,21 +165,39 @@ class FusedResblock:
             input_tensor.device() == weight0.device() == weight1.device() == output_tensor.device()
         ), "All tensors must be on the same device"
 
-        # Validate rank and matmul shape compatibility
-        assert len(input_shape) >= 2, f"Input tensor must have rank >= 2, got {len(input_shape)}"
-        assert len(weight0_shape) >= 2, f"Weight0 must have rank >= 2, got {len(weight0_shape)}"
-        assert len(weight1_shape) >= 2, f"Weight1 must have rank >= 2, got {len(weight1_shape)}"
-        assert len(output_tensor.shape) >= 2, f"Output tensor must have rank >= 2, got {len(output_tensor.shape)}"
+    @staticmethod
+    def validate_tensor_ranks(
+        input_shape: Tuple[int, ...],
+        weight0_shape: Tuple[int, ...],
+        weight1_shape: Tuple[int, ...],
+        output_shape: Tuple[int, ...],
+    ) -> None:
+        """Validate rank and matmul shape compatibility."""
+        assert (
+            len(input_shape) >= FusedResblock.MIN_TENSOR_RANK
+        ), f"Input tensor must have rank >= {FusedResblock.MIN_TENSOR_RANK}, got {len(input_shape)}"
+        assert (
+            len(weight0_shape) >= FusedResblock.MIN_TENSOR_RANK
+        ), f"Weight0 must have rank >= {FusedResblock.MIN_TENSOR_RANK}, got {len(weight0_shape)}"
+        assert (
+            len(weight1_shape) >= FusedResblock.MIN_TENSOR_RANK
+        ), f"Weight1 must have rank >= {FusedResblock.MIN_TENSOR_RANK}, got {len(weight1_shape)}"
+        assert (
+            len(output_shape) >= FusedResblock.MIN_TENSOR_RANK
+        ), f"Output tensor must have rank >= {FusedResblock.MIN_TENSOR_RANK}, got {len(output_shape)}"
 
-        # Validate matmul shape compatibility: input [M, K] @ weight0 [L*K, K] -> intermediate [M, K]
-        # Then intermediate [M, K] @ weight1 [L*K, K] -> output [M, K]
-        # Weights are stacked per layer: weight0 and weight1 have shape [L*K, K] where L = num_layers
-        input_m, input_k = input_shape[-2], input_shape[-1]
-        weight0_k_in, weight0_k_out = weight0_shape[-2], weight0_shape[-1]
-        weight1_k_in, weight1_k_out = weight1_shape[-2], weight1_shape[-1]
-        output_m, output_k = output_tensor.shape[-2], output_tensor.shape[-1]
-
-        # Validate stacked weight shapes: weights should be [num_layers * K, K]
+    @staticmethod
+    def validate_weight_shapes(
+        input_k: int,
+        weight0_k_in: int,
+        weight0_k_out: int,
+        weight1_k_in: int,
+        weight1_k_out: int,
+        weight0_shape: Tuple[int, ...],
+        weight1_shape: Tuple[int, ...],
+        num_layers: int,
+    ) -> None:
+        """Validate stacked weight shapes: weights should be [num_layers * K, K]."""
         assert (
             weight0_k_in == num_layers * input_k
         ), f"Weight0 K_in ({weight0_k_in}) must equal num_layers * input K ({num_layers * input_k})"
@@ -210,26 +210,30 @@ class FusedResblock:
             weight0_shape[-2] == weight1_shape[-2]
         ), f"Weight0 and weight1 must have same stacked height: {weight0_shape[-2]} vs {weight1_shape[-2]}"
 
-        # Note: input M may be replicated across cores, so input_m can be larger than output_m
-        # The actual batch dimension should match after accounting for replication
-        assert output_k == input_k, f"Output K dimension ({output_k}) must match input K ({input_k})"
-
-        # Validate tile compatibility and K dimension divisibility
+    @staticmethod
+    def validate_tile_compatibility(
+        input_shape: Tuple[int, ...], input_tile: ttnn.Tile, output_k: int, input_k: int
+    ) -> int:
+        """Validate tile compatibility and K dimension divisibility."""
         assert (
             input_shape[1] % input_tile.tile_shape[1] == 0
         ), f"Input K ({input_shape[1]}) must be divisible by tile width ({input_tile.tile_shape[1]})"
         num_tiles_k = input_shape[1] // input_tile.tile_shape[1]
+        assert output_k == input_k, f"Output K dimension ({output_k}) must match input K ({input_k})"
+        return num_tiles_k
 
-        # Validate dtype compatibility
-        input_dtype = input_tensor.dtype
-        weight0_dtype = weight0.dtype
-        weight1_dtype = weight1.dtype
-        out_dtype = output_tensor.dtype
+    @staticmethod
+    def validate_dtype_compatibility(weight0_dtype: ttnn.DataType, weight1_dtype: ttnn.DataType) -> None:
+        """Validate dtype compatibility."""
         assert (
             weight0_dtype == weight1_dtype
         ), f"Weight0 dtype ({weight0_dtype}) must match weight1 dtype ({weight1_dtype})"
 
-        # Validate sharding expectations
+    @staticmethod
+    def validate_sharding(
+        input_tensor: ttnn.Tensor, weight0: ttnn.Tensor, weight1: ttnn.Tensor, output_tensor: ttnn.Tensor
+    ) -> None:
+        """Validate sharding expectations."""
         assert (
             input_tensor.memory_config().shard_spec is not None
         ), "Input tensor must have shard_spec (must be sharded)"
@@ -239,48 +243,118 @@ class FusedResblock:
             output_tensor.memory_config().shard_spec is not None
         ), "Output tensor must have shard_spec (must be sharded)"
 
-        # Validate matmul cores don't overlap with mcast core
-        all_matmul_cores = weight0.memory_config().shard_spec.grid
+    @staticmethod
+    def validate_core_allocation(all_matmul_cores: ttnn.CoreRangeSet) -> None:
+        """Validate matmul cores don't overlap with mcast core."""
         assert not all_matmul_cores.contains(
             FusedResblock.MCAST_CORE
         ), f"Matmul cores {all_matmul_cores} must not contain mcast core {FusedResblock.MCAST_CORE}"
 
-        # Validate weight tile is 32x32 and weight shard width is 1 tile
-        # This op only supports single output tile in N dimension (we only iterate over K, not multiple output tiles)
-        weight0_shard_shape = weight0.memory_config().shard_spec.shape
-        weight1_shard_shape = weight1.memory_config().shard_spec.shape
-        weight0_shard_tiles_h = weight0_shard_shape[0] // weight0_tile.tile_shape[0]
+    @staticmethod
+    def validate_weight_tiles(
+        weight0_tile: ttnn.Tile,
+        weight1_tile: ttnn.Tile,
+        weight0_shard_shape: Tuple[int, ...],
+        weight1_shard_shape: Tuple[int, ...],
+    ) -> None:
+        """Validate weight tile is 32x32 and weight shard width is 1 tile."""
         weight0_shard_tiles_w = weight0_shard_shape[1] // weight0_tile.tile_shape[1]
-        weight1_shard_tiles_h = weight1_shard_shape[0] // weight1_tile.tile_shape[0]
         weight1_shard_tiles_w = weight1_shard_shape[1] // weight1_tile.tile_shape[1]
 
         assert (
-            weight0_tile.tile_shape[0] == 32 and weight0_tile.tile_shape[1] == 32
-        ), f"Weight0 tile must be exactly 32x32, got {weight0_tile.tile_shape}"
+            weight0_tile.tile_shape[0] == FusedResblock.WEIGHT_TILE_HEIGHT
+            and weight0_tile.tile_shape[1] == FusedResblock.WEIGHT_TILE_WIDTH
+        ), f"Weight0 tile must be exactly {FusedResblock.WEIGHT_TILE_HEIGHT}x{FusedResblock.WEIGHT_TILE_WIDTH}, got {weight0_tile.tile_shape}"
         assert (
-            weight1_tile.tile_shape[0] == 32 and weight1_tile.tile_shape[1] == 32
-        ), f"Weight1 tile must be exactly 32x32, got {weight1_tile.tile_shape}"
+            weight1_tile.tile_shape[0] == FusedResblock.WEIGHT_TILE_HEIGHT
+            and weight1_tile.tile_shape[1] == FusedResblock.WEIGHT_TILE_WIDTH
+        ), f"Weight1 tile must be exactly {FusedResblock.WEIGHT_TILE_HEIGHT}x{FusedResblock.WEIGHT_TILE_WIDTH}, got {weight1_tile.tile_shape}"
         assert (
-            weight0_shard_tiles_w == 1
-        ), f"Weight0 shard width must be exactly 1 tile (got {weight0_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight0_shard_shape} elements, tile: {weight0_tile.tile_shape}"
+            weight0_shard_tiles_w == FusedResblock.WEIGHT_SHARD_TILES_W
+        ), f"Weight0 shard width must be exactly {FusedResblock.WEIGHT_SHARD_TILES_W} tile (got {weight0_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight0_shard_shape} elements, tile: {weight0_tile.tile_shape}"
         assert (
-            weight1_shard_tiles_w == 1
-        ), f"Weight1 shard width must be exactly 1 tile (got {weight1_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight1_shard_shape} elements, tile: {weight1_tile.tile_shape}"
+            weight1_shard_tiles_w == FusedResblock.WEIGHT_SHARD_TILES_W
+        ), f"Weight1 shard width must be exactly {FusedResblock.WEIGHT_SHARD_TILES_W} tile (got {weight1_shard_tiles_w} tiles). This op only iterates over K dimension and does not support multiple output tiles in N dimension. Shard shape: {weight1_shard_shape} elements, tile: {weight1_tile.tile_shape}"
 
-        # Validate that we only support single output tile per core (M=1 tile, N=1 tile per shard) - we only iterate over K
-        # The output is width-sharded, so we check the shard shape, not the global shape
-        out_shape = output_tensor.shape
-        out_tile = output_tensor.get_tile()
-        out_shard_shape = output_tensor.memory_config().shard_spec.shape
+    @staticmethod
+    def validate_output_tiles(out_shard_shape: Tuple[int, ...], out_tile: ttnn.Tile) -> None:
+        """Validate that we only support single output tile per core (M=1 tile, N=1 tile per shard)."""
         out_shard_tiles_m = out_shard_shape[0] // out_tile.tile_shape[0]
         out_shard_tiles_n = out_shard_shape[1] // out_tile.tile_shape[1]
         assert (
-            out_shard_tiles_m == 1
-        ), f"Output shard M dimension must be exactly 1 tile (got {out_shard_tiles_m} tiles). This op only supports single output tile in M dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
+            out_shard_tiles_m == FusedResblock.OUTPUT_SHARD_TILES_M
+        ), f"Output shard M dimension must be exactly {FusedResblock.OUTPUT_SHARD_TILES_M} tile (got {out_shard_tiles_m} tiles). This op only supports single output tile in M dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
         assert (
-            out_shard_tiles_n == 1
-        ), f"Output shard N dimension must be exactly 1 tile (got {out_shard_tiles_n} tiles). This op only supports single output tile in N dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
+            out_shard_tiles_n == FusedResblock.OUTPUT_SHARD_TILES_N
+        ), f"Output shard N dimension must be exactly {FusedResblock.OUTPUT_SHARD_TILES_N} tile (got {out_shard_tiles_n} tiles). This op only supports single output tile in N dimension per core and iterates over K dimension only. Shard shape: {out_shard_shape} elements, tile: {out_tile.tile_shape}"
 
+    @staticmethod
+    def extract_tensor_properties(
+        input_tensor: ttnn.Tensor, weight0: ttnn.Tensor, weight1: ttnn.Tensor, output_tensor: ttnn.Tensor
+    ) -> Tuple[
+        Tuple[int, ...],
+        ttnn.Tile,
+        Tuple[int, ...],
+        ttnn.Tile,
+        Tuple[int, ...],
+        ttnn.Tile,
+        Tuple[int, ...],
+        ttnn.Tile,
+        ttnn.DataType,
+        ttnn.DataType,
+        ttnn.DataType,
+        ttnn.DataType,
+    ]:
+        """Extract shapes, tiles, and dtypes from tensors."""
+        input_shape = input_tensor.shape
+        input_tile = input_tensor.get_tile()
+        weight0_shape = weight0.shape
+        weight0_tile = weight0.get_tile()
+        weight1_shape = weight1.shape
+        weight1_tile = weight1.get_tile()
+        output_shape = output_tensor.shape
+        output_tile = output_tensor.get_tile()
+
+        input_dtype = input_tensor.dtype
+        weight0_dtype = weight0.dtype
+        weight1_dtype = weight1.dtype
+        out_dtype = output_tensor.dtype
+
+        return (
+            input_shape,
+            input_tile,
+            weight0_shape,
+            weight0_tile,
+            weight1_shape,
+            weight1_tile,
+            output_shape,
+            output_tile,
+            input_dtype,
+            weight0_dtype,
+            weight1_dtype,
+            out_dtype,
+        )
+
+    @staticmethod
+    def create_cb_descriptors(
+        input_tensor: ttnn.Tensor,
+        weight0: ttnn.Tensor,
+        weight1: ttnn.Tensor,
+        output_tensor: ttnn.Tensor,
+        all_matmul_cores: ttnn.CoreRangeSet,
+        all_mcast_cores: ttnn.CoreRangeSet,
+        num_tiles_k: int,
+        out_dtype: ttnn.DataType,
+        out_tile: ttnn.Tile,
+    ) -> Tuple[
+        ttnn.CBDescriptor,
+        ttnn.CBDescriptor,
+        ttnn.CBDescriptor,
+        ttnn.CBDescriptor,
+        ttnn.CBDescriptor,
+        ttnn.CBDescriptor,
+    ]:
+        """Create all circular buffer descriptors."""
         mm1_full_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB, input_tensor
         )
@@ -294,13 +368,8 @@ class FusedResblock:
             FusedResblock.MatmulCoreCBIndex.OUT_CB, output_tensor
         )
 
-        out_dtype = output_tensor.dtype
         out_tile_size = out_tile.get_tile_size(out_dtype)
         out_tile_descriptor = ttnn.TileDescriptor(out_tile)
-
-        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
-        gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
-        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
 
         intermediate_pregather_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
@@ -340,26 +409,81 @@ class FusedResblock:
             f"out_cb_descriptor: {out_cb_descriptor.total_size}, page_size: {out_cb_descriptor.format_descriptors[0].page_size}"
         )
 
-        all_cores = all_matmul_cores.merge(all_mcast_cores)
-        assert (
-            all_cores.size() == all_matmul_cores.size() + all_mcast_cores.size()
-        ), "All cores must be the same size as all matmul cores plus one for the mcast core"
-        logger.debug(f"All cores: {all_cores}")
+        return (
+            mm1_full_cb_descriptor,
+            weight0_cb_descriptor,
+            weight1_cb_descriptor,
+            out_cb_descriptor,
+            intermediate_pregather_cb_descriptor,
+            mm2_full_cb_descriptor,
+        )
 
+    @staticmethod
+    def create_semaphore_descriptors(
+        all_cores: ttnn.CoreRangeSet,
+    ) -> Tuple[ttnn.SemaphoreDescriptor, ttnn.SemaphoreDescriptor]:
+        """Create semaphore descriptors."""
         mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=0,
+            id=FusedResblock.SEMAPHORE_RECEIVER_ID,
             core_ranges=all_cores,
             initial_value=0,
         )
         mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=1,
+            id=FusedResblock.SEMAPHORE_SENDER_ID,
             core_ranges=all_cores,
             initial_value=0,
         )
+        return mcast_receiver_semaphore_descriptor, mcast_sender_semaphore_descriptor
 
-        # Get input tensor buffer address for mcast core to use directly instead of get_write_ptr
-        input_buffer_address = input_tensor.buffer_address()
+    @staticmethod
+    def generate_runtime_args(all_matmul_cores: ttnn.CoreRangeSet) -> List[Tuple[ttnn.CoreCoord, List[int]]]:
+        """Generate runtime args for kernels."""
+        sender_core_range = all_matmul_cores.ranges()[0]
+        sender_logical_x_start = sender_core_range.start.x
+        sender_logical_y_start = sender_core_range.start.y
+        sender_logical_x_end = sender_core_range.end.x
+        sender_logical_y_end = sender_core_range.end.y
+        sender_grid_width = sender_logical_x_end - sender_logical_x_start + 1
 
+        return [
+            (
+                ttnn.CoreCoord(core.x, core.y),
+                [(core.y - sender_logical_y_start) * sender_grid_width + (core.x - sender_logical_x_start)],
+            )
+            for core_range in all_matmul_cores.ranges()
+            for core in [
+                ttnn.CoreCoord(x, y)
+                for y in range(core_range.start.y, core_range.end.y + 1)
+                for x in range(core_range.start.x, core_range.end.x + 1)
+            ]
+        ]
+
+    @staticmethod
+    def create_kernel_descriptors(
+        all_matmul_cores: ttnn.CoreRangeSet,
+        all_mcast_cores: ttnn.CoreRangeSet,
+        gather_destination_core: ttnn.CoreCoord,
+        mcast_receiver_semaphore_descriptor: ttnn.SemaphoreDescriptor,
+        mcast_sender_semaphore_descriptor: ttnn.SemaphoreDescriptor,
+        num_tiles_k: int,
+        num_layers: int,
+        fp32_dest_acc_en: bool,
+        out_dtype: ttnn.DataType,
+        out_tile_size: int,
+        out_tile_descriptor: ttnn.TileDescriptor,
+        device: ttnn.Device,
+        debug: bool,
+        input_buffer_address: int,
+        runtime_args: List[Tuple[ttnn.CoreCoord, List[int]]],
+    ) -> Tuple[
+        ttnn.KernelDescriptor,
+        ttnn.KernelDescriptor,
+        ttnn.KernelDescriptor,
+        ttnn.KernelDescriptor,
+        ttnn.KernelDescriptor,
+        ttnn.CBDescriptor,
+    ]:
+        """Create all kernel descriptors (reader, writer, compute, mcast_reader, mcast_writer) and mcast CB descriptor."""
         (
             mcast_reader_kernel_descriptor,
             mcast_writer_kernel_descriptor,
@@ -378,13 +502,6 @@ class FusedResblock:
             num_layers,
             input_buffer_address,
         )
-
-        sender_core_range = all_matmul_cores.ranges()[0]
-        sender_logical_x_start = sender_core_range.start.x
-        sender_logical_y_start = sender_core_range.start.y
-        sender_logical_x_end = sender_core_range.end.x
-        sender_logical_y_end = sender_core_range.end.y
-        sender_grid_width = sender_logical_x_end - sender_logical_x_start + 1
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/reader.cpp",
@@ -405,18 +522,7 @@ class FusedResblock:
                 mcast_sender_semaphore_descriptor.id,
                 num_layers,
             ],
-            runtime_args=[
-                (
-                    ttnn.CoreCoord(core.x, core.y),
-                    [(core.y - sender_logical_y_start) * sender_grid_width + (core.x - sender_logical_x_start)],
-                )
-                for core_range in all_matmul_cores.ranges()
-                for core in [
-                    ttnn.CoreCoord(x, y)
-                    for y in range(core_range.start.y, core_range.end.y + 1)
-                    for x in range(core_range.start.x, core_range.end.x + 1)
-                ]
-            ],
+            runtime_args=runtime_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
         writer_kernel_descriptor = ttnn.KernelDescriptor(
@@ -443,24 +549,165 @@ class FusedResblock:
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
             ],
-            runtime_args=[
-                (
-                    ttnn.CoreCoord(core.x, core.y),
-                    [(core.y - sender_logical_y_start) * sender_grid_width + (core.x - sender_logical_x_start)],
-                )
-                for core_range in all_matmul_cores.ranges()
-                for core in [
-                    ttnn.CoreCoord(x, y)
-                    for y in range(core_range.start.y, core_range.end.y + 1)
-                    for x in range(core_range.start.x, core_range.end.x + 1)
-                ]
-            ],
+            runtime_args=runtime_args,
             config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.LoFi,  # Match C++ op behavior
+                math_fidelity=FusedResblock.DEFAULT_MATH_FIDELITY,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
             ),
+        )
+
+        return (
+            reader_kernel_descriptor,
+            writer_kernel_descriptor,
+            compute_kernel_descriptor,
+            mcast_reader_kernel_descriptor,
+            mcast_writer_kernel_descriptor,
+            mcast_cb_descriptor,
+        )
+
+    @staticmethod
+    def op(
+        input_tensor: ttnn.Tensor,
+        weight0: ttnn.Tensor,
+        weight1: ttnn.Tensor,
+        output_tensor: ttnn.Tensor,
+        num_layers: int = 1,
+        fp32_dest_acc_en: bool = False,
+        debug: bool = False,
+    ) -> ttnn.Tensor:
+        """
+        Fused ResBlock operation with per-layer weights.
+
+        Args:
+            input_tensor: Input tensor of shape [M, K], sharded across matmul cores
+            weight0: Stacked weight0 tensor of shape [num_layers * K, K], width-sharded across cores.
+                     Contains weights for all layers stacked along the row dimension.
+            weight1: Stacked weight1 tensor of shape [num_layers * K, K], width-sharded across cores.
+                     Contains weights for all layers stacked along the row dimension.
+            output_tensor: Output tensor of shape [M, K], width-sharded across cores
+            num_layers: Number of ResBlock layers. Must equal weight0.shape[-2] / K (and weight1.shape[-2] / K)
+            fp32_dest_acc_en: Enable FP32 destination accumulation
+            debug: Enable debug logging
+
+        Returns:
+            Output tensor (same as output_tensor parameter)
+        """
+        logger.info(
+            f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}, num_layers={num_layers}"
+        )
+        logger.debug(f"Input tensor sharding: {input_tensor.memory_config().shard_spec}")
+        logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
+        logger.debug(f"Weight1 tensor sharding: {weight1.memory_config().shard_spec}")
+        logger.debug(f"Output tensor sharding: {output_tensor.memory_config().shard_spec}")
+
+        device = input_tensor.device()
+
+        (
+            input_shape,
+            input_tile,
+            weight0_shape,
+            weight0_tile,
+            weight1_shape,
+            weight1_tile,
+            output_shape,
+            output_tile,
+            input_dtype,
+            weight0_dtype,
+            weight1_dtype,
+            out_dtype,
+        ) = FusedResblock.extract_tensor_properties(input_tensor, weight0, weight1, output_tensor)
+
+        FusedResblock.validate_tensor_types(input_tensor, weight0, weight1, output_tensor)
+        FusedResblock.validate_tensor_ranks(input_shape, weight0_shape, weight1_shape, output_shape)
+
+        input_m, input_k = input_shape[-2], input_shape[-1]
+        weight0_k_in, weight0_k_out = weight0_shape[-2], weight0_shape[-1]
+        weight1_k_in, weight1_k_out = weight1_shape[-2], weight1_shape[-1]
+        output_m, output_k = output_shape[-2], output_shape[-1]
+
+        FusedResblock.validate_weight_shapes(
+            input_k, weight0_k_in, weight0_k_out, weight1_k_in, weight1_k_out, weight0_shape, weight1_shape, num_layers
+        )
+
+        num_tiles_k = FusedResblock.validate_tile_compatibility(input_shape, input_tile, output_k, input_k)
+        FusedResblock.validate_dtype_compatibility(weight0_dtype, weight1_dtype)
+        FusedResblock.validate_sharding(input_tensor, weight0, weight1, output_tensor)
+
+        all_matmul_cores = weight0.memory_config().shard_spec.grid
+        FusedResblock.validate_core_allocation(all_matmul_cores)
+
+        weight0_shard_shape = weight0.memory_config().shard_spec.shape
+        weight1_shard_shape = weight1.memory_config().shard_spec.shape
+        FusedResblock.validate_weight_tiles(weight0_tile, weight1_tile, weight0_shard_shape, weight1_shard_shape)
+
+        out_shard_shape = output_tensor.memory_config().shard_spec.shape
+        FusedResblock.validate_output_tiles(out_shard_shape, output_tile)
+
+        logger.debug(f"Placing mcast core at: {FusedResblock.MCAST_CORE}")
+        gather_destination_core = device.worker_core_from_logical_core(FusedResblock.MCAST_CORE)
+        all_mcast_cores = ttnn.CoreRangeSet({ttnn.CoreRange(FusedResblock.MCAST_CORE, FusedResblock.MCAST_CORE)})
+
+        (
+            mm1_full_cb_descriptor,
+            weight0_cb_descriptor,
+            weight1_cb_descriptor,
+            out_cb_descriptor,
+            intermediate_pregather_cb_descriptor,
+            mm2_full_cb_descriptor,
+        ) = FusedResblock.create_cb_descriptors(
+            input_tensor,
+            weight0,
+            weight1,
+            output_tensor,
+            all_matmul_cores,
+            all_mcast_cores,
+            num_tiles_k,
+            out_dtype,
+            output_tile,
+        )
+
+        all_cores = all_matmul_cores.merge(all_mcast_cores)
+        assert (
+            all_cores.size() == all_matmul_cores.size() + all_mcast_cores.size()
+        ), "All cores must be the same size as all matmul cores plus one for the mcast core"
+        logger.debug(f"All cores: {all_cores}")
+
+        (
+            mcast_receiver_semaphore_descriptor,
+            mcast_sender_semaphore_descriptor,
+        ) = FusedResblock.create_semaphore_descriptors(all_cores)
+
+        runtime_args = FusedResblock.generate_runtime_args(all_matmul_cores)
+
+        input_buffer_address = input_tensor.buffer_address()
+        out_tile_size = output_tile.get_tile_size(out_dtype)
+        out_tile_descriptor = ttnn.TileDescriptor(output_tile)
+
+        (
+            reader_kernel_descriptor,
+            writer_kernel_descriptor,
+            compute_kernel_descriptor,
+            mcast_reader_kernel_descriptor,
+            mcast_writer_kernel_descriptor,
+            mcast_cb_descriptor,
+        ) = FusedResblock.create_kernel_descriptors(
+            all_matmul_cores,
+            all_mcast_cores,
+            gather_destination_core,
+            mcast_receiver_semaphore_descriptor,
+            mcast_sender_semaphore_descriptor,
+            num_tiles_k,
+            num_layers,
+            fp32_dest_acc_en,
+            out_dtype,
+            out_tile_size,
+            out_tile_descriptor,
+            device,
+            debug,
+            input_buffer_address,
+            runtime_args,
         )
 
         return ttnn.generic_op(

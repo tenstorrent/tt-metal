@@ -66,7 +66,6 @@ void kernel_main() {
 
     constexpr uint32_t num_layers = get_compile_time_arg_val(12);
 
-    // Read tile index from runtime args
     const uint32_t tile_index = get_arg_val<uint32_t>(0);
 
     const uint32_t mcast_receiver_base_address = get_write_ptr(mcast_receiver_cb);

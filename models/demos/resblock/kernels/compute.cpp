@@ -15,6 +15,7 @@
 template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTilesK, uint32_t OutputTileId = 0, bool PopA = false>
 FORCE_INLINE void matmul_with_relu_block() {
     DeviceZoneScopedN("matmul_with_relu_block");
+
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     constexpr uint32_t num_output_tiles = 1;
@@ -35,7 +36,7 @@ FORCE_INLINE void matmul_with_relu_block() {
     tile_regs_commit();
 
     if constexpr (PopA) {
-        cb_pop_front(CbA, NumTilesK);  // Don't pop here because we need to use the input again for next stage
+        cb_pop_front(CbA, NumTilesK);
     }
     cb_pop_front(CbB, NumTilesK);  // Pop weight CB to advance to next layer's weights
 
@@ -61,6 +62,7 @@ template <
     bool PopBias = false>
 FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     DeviceZoneScopedN("matmul_with_bias_block");
+
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     cb_wait_front(CbBias, NumTilesBias);
@@ -124,7 +126,6 @@ void MAIN {
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
     constexpr uint32_t num_layers = get_compile_time_arg_val(8);
 
-    // Read tile index from runtime args
     const uint32_t bias_tile_index = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_output_tiles = 1;
