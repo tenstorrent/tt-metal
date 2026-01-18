@@ -28,9 +28,8 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto w0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    constexpr auto w1_args = TensorAccessorArgs<w0_args.next_compile_time_args_offset()>();
-    constexpr auto w2_args = TensorAccessorArgs<w1_args.next_compile_time_args_offset()>();
+    constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
@@ -38,7 +37,7 @@ void kernel_main() {
     const auto core_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w0_addr = get_arg_val<uint32_t>(argidx++);
+    const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
@@ -68,8 +67,7 @@ void kernel_main() {
 
     // Tensor accessors
     const auto in_accessor = TensorAccessor(in_args, in_addr, in_tile_size);
-    const auto w0_accessor = TensorAccessor(w0_args, w0_addr, w0_tile_size);
-    const auto w1_accessor = TensorAccessor(w1_args, w1_addr, w1_tile_size);
+    const auto w0_w1_accessor = TensorAccessor(w0_w1_args, w0_w1_addr, w0_tile_size);
     const auto w2_accessor = TensorAccessor(w2_args, w2_addr, w2_tile_size);
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
 
@@ -122,7 +120,7 @@ void kernel_main() {
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
     // Offsets for expert_id
-    uint32_t w0_w1_expert_offset = w0_w1_layer_offset + w0_addr;
+    uint32_t w0_w1_expert_offset = w0_w1_layer_offset + w0_w1_addr;
     uint32_t w2_expert_offset = w2_layer_offset + w2_addr;
 
     //-------------------------------------------------------------------------
