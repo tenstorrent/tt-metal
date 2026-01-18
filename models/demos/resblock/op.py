@@ -476,7 +476,7 @@ class FusedResblock:
         input_buffer_address: int,
         runtime_args: List[Tuple[ttnn.CoreCoord, List[int]]],
     ) -> Tuple[
-        ttnn.KernelDescriptor,
+        List[ttnn.KernelDescriptor],
         ttnn.KernelDescriptor,
         ttnn.KernelDescriptor,
         ttnn.KernelDescriptor,
@@ -503,28 +503,86 @@ class FusedResblock:
             input_buffer_address,
         )
 
-        reader_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/resblock/kernels/reader.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_matmul_cores,
-            compile_time_args=[
-                FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB,
-                FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
-                FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
-                FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
-                FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
-                FusedResblock.MatmulCoreCBIndex.OUT_CB,
-                num_tiles_k,
-                gather_destination_core.x,
-                gather_destination_core.y,
-                mcast_receiver_semaphore_descriptor.id,
-                FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
-                mcast_sender_semaphore_descriptor.id,
-                num_layers,
-            ],
-            runtime_args=runtime_args,
-            config=ttnn.ReaderConfigDescriptor(),
-        )
+        # Partition sender cores by NOC hop distance
+        input_cores_list = ttnn.corerange_to_cores(all_matmul_cores, row_wise=True)
+        noc0_cores = []
+        noc1_cores = []
+
+        for core in input_cores_list:
+            noc0_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_0)
+            noc1_hop = device.get_worker_noc_hop_distance(core, gather_destination_core, ttnn.NOC.NOC_1)
+            if noc0_hop <= noc1_hop:
+                noc0_cores.append(core)
+            else:
+                noc1_cores.append(core)
+
+        # Create CoreRangeSets for NOC0 and NOC1 cores
+        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
+        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
+
+        # Validate that all cores are assigned
+        assert (
+            len(noc0_cores) + len(noc1_cores) == all_matmul_cores.num_cores()
+        ), f"Core partition mismatch: noc0={len(noc0_cores)}, noc1={len(noc1_cores)}, total={all_matmul_cores.num_cores()}"
+
+        if debug:
+            logger.debug(f"NOC split: NOC0 cores={len(noc0_cores)}, NOC1 cores={len(noc1_cores)}")
+            if len(noc0_cores) > 0:
+                logger.debug(f"NOC0 cores (first 5): {noc0_cores[:5]}")
+            if len(noc1_cores) > 0:
+                logger.debug(f"NOC1 cores (first 5): {noc1_cores[:5]}")
+
+        # Create reader kernel descriptors for NOC0 and NOC1
+        reader_kernel_descriptors = []
+        common_compile_time_args = [
+            FusedResblock.MatmulCoreCBIndex.MM1_FULL_CB,
+            FusedResblock.MatmulCoreCBIndex.WEIGHT0_CB,
+            FusedResblock.MatmulCoreCBIndex.WEIGHT1_CB,
+            FusedResblock.MatmulCoreCBIndex.INTERMEDIATE_PREGATHER_CB,
+            FusedResblock.MatmulCoreCBIndex.MM2_FULL_CB,
+            FusedResblock.MatmulCoreCBIndex.OUT_CB,
+            num_tiles_k,
+            gather_destination_core.x,
+            gather_destination_core.y,
+            mcast_receiver_semaphore_descriptor.id,
+            FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
+            mcast_sender_semaphore_descriptor.id,
+            num_layers,
+        ]
+
+        # Filter runtime_args for each NOC group
+        noc0_runtime_args = [(core, args) for core, args in runtime_args if core in noc0_cores]
+        noc1_runtime_args = [(core, args) for core, args in runtime_args if core in noc1_cores]
+
+        # NOC0 reader kernel
+        if not noc0_core_range_set.empty():
+            noc0_reader_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source="models/demos/resblock/kernels/reader.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=noc0_core_range_set,
+                compile_time_args=common_compile_time_args,
+                runtime_args=noc0_runtime_args,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1,
+                    noc=ttnn.NOC.NOC_0,
+                ),
+            )
+            reader_kernel_descriptors.append(noc0_reader_kernel_descriptor)
+
+        # NOC1 reader kernel
+        if not noc1_core_range_set.empty():
+            noc1_reader_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source="models/demos/resblock/kernels/reader.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=noc1_core_range_set,
+                compile_time_args=common_compile_time_args,
+                runtime_args=noc1_runtime_args,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1,
+                    noc=ttnn.NOC.NOC_1,
+                ),
+            )
+            reader_kernel_descriptors.append(noc1_reader_kernel_descriptor)
         writer_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -559,7 +617,7 @@ class FusedResblock:
         )
 
         return (
-            reader_kernel_descriptor,
+            reader_kernel_descriptors,
             writer_kernel_descriptor,
             compute_kernel_descriptor,
             mcast_reader_kernel_descriptor,
@@ -686,7 +744,7 @@ class FusedResblock:
         out_tile_descriptor = ttnn.TileDescriptor(output_tile)
 
         (
-            reader_kernel_descriptor,
+            reader_kernel_descriptors,
             writer_kernel_descriptor,
             compute_kernel_descriptor,
             mcast_reader_kernel_descriptor,
@@ -714,7 +772,7 @@ class FusedResblock:
             [input_tensor, weight0, weight1, output_tensor],
             ttnn.ProgramDescriptor(
                 kernels=[
-                    reader_kernel_descriptor,
+                    *reader_kernel_descriptors,
                     writer_kernel_descriptor,
                     compute_kernel_descriptor,
                     mcast_reader_kernel_descriptor,
