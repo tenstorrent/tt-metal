@@ -109,11 +109,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
 
     // Create compile args for the program
     const auto tensors = std::vector<const Tensor*>{
-        &tensor_args.input_tensor,
-        &tensor_args.w0_tensor,
-        &tensor_args.w1_tensor,
-        &tensor_args.w2_tensor,
-        &tensor_args.output_tensor};
+        &tensor_args.input_tensor, &tensor_args.w0_w1_tensor, &tensor_args.w2_tensor, &tensor_args.output_tensor};
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
@@ -248,8 +244,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         runtime_args[0] = core_id++;
         runtime_args[1] = vchannel;
         // Set neighbor physical coordinates
-        runtime_args[7] = static_cast<uint32_t>(neighbor_physical.x);
-        runtime_args[8] = static_cast<uint32_t>(neighbor_physical.y);
+        runtime_args[6] = static_cast<uint32_t>(neighbor_physical.x);
+        runtime_args[7] = static_cast<uint32_t>(neighbor_physical.y);
         // runtime_args[9] is already set to ring_semaphore_id
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
@@ -280,13 +276,12 @@ void MoEProgramFactory::override_runtime_arguments(
         program, shared_variables.cb_handles_sharded["cb_c2w_out"], *tensor_args.output_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
-    // Runtime args layout: [3] = w0_tensor address, [4] = w1_tensor address, [5] = w2_tensor address
+    // Runtime args layout: [3] = w0_w1_tensor address, [5] = w2_tensor address
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[3] = tensor_args.w0_tensor.buffer()->address();
-            runtime_args[4] = tensor_args.w1_tensor.buffer()->address();
-            runtime_args[5] = tensor_args.w2_tensor.buffer()->address();
+            runtime_args[3] = tensor_args.w0_w1_tensor.buffer()->address();
+            runtime_args[4] = tensor_args.w2_tensor.buffer()->address();
         }
     }
 }
