@@ -38,7 +38,7 @@ For development installation with C++ components, see [Development Installation]
 
 ## **Overview**
 
-TT-Train provides a complete training framework with automatic differentiation, optimized operations, and distributed training support—all designed specifically for Tenstorrent's tile-based scaleout architecture.
+TTML provides a complete training framework with automatic differentiation, optimized operations, and distributed training support—all designed specifically for Tenstorrent's tile-based scaleout architecture.
 
 ## **TTML vs PyTorch**
 
@@ -76,6 +76,7 @@ TTML aims for a **very similar API and developer experience** to PyTorch:
 * `AdamW` \- AdamW with weight decay
 * `MorehAdamW` \- Moreh-optimized AdamW
 * `SGD` \- Stochastic Gradient Descent
+* *Remote*  \- Used for multihost training
 
 ### Schedulers
 
@@ -132,8 +133,6 @@ See the [NanoGPT training example](https://wandb.ai/tenstorrent-ml/tt_train_nano
 
 
 ## **Getting Started**
-
-TTML provides a complete training framework with automatic differentiation, optimized operations, and distributed training support. The framework is designed specifically for Tenstorrent's tile-based scaleout architecture.
 
 **Core Concepts:**
 
@@ -286,7 +285,7 @@ cmake --build build --target llama_inference
 
 To run the regression example: `python3 tt-train/sources/examples/linear_regression/linear_regression.py`
 
-A minimal example to understand the TT-Train programming model:
+A minimal example to understand the TTML programming model:
 
 ```py
 import numpy as np
@@ -344,11 +343,11 @@ for epoch in range(epochs):
         if len(batch_idx) < batch_size:
             continue
 
-        # Reshape to [B, 1, 1, features] - TT-Train's expected format
+        # Reshape to [B, 1, 1, features] - TTML's expected format
         x_batch = X_train[batch_idx].reshape(batch_size, 1, 1, n_features)
         y_batch = y_train[batch_idx].reshape(batch_size, 1, 1, n_outputs)
 
-        # Convert to TT-Train tensors
+        # Convert to TTML tensors
         tt_x = ttml.autograd.Tensor.from_numpy(x_batch)
         tt_y = ttml.autograd.Tensor.from_numpy(y_batch)
 
@@ -358,7 +357,7 @@ for epoch in range(epochs):
         loss = ttml.ops.loss.mse_loss(pred, tt_y, ttml.ops.ReduceType.MEAN)
 
         # Backward pass
-        loss.backward(False) # retain graph = False
+        loss.backward(False)  # retain graph = False
 
         # Get loss value AFTER backward
         loss_val = float(loss.get_value().item())
@@ -402,6 +401,7 @@ export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 cd tt-train
 ./build/sources/examples/nano_gpt/nano_gpt -c ./configs/training_configs/training_shakespeare_nanogpt.yaml
 ```
+
 A complete language model training example:
 
 ```py
@@ -582,7 +582,7 @@ ctx.close_device()
 ## **Build your own model**
 
 ### Implementing a Module
-You can implement your own model as a Module consisting of submodules (either self-written or provided by ttml) and Parameters, similar to PyTorch.
+You can implement your own model as a Module consisting of submodules (either self-written or provided by TTML) and Parameters, similar to PyTorch.
 
 You need to implement initialization of Modules/Parameters and a forward pass. TTML's autograd engine will automatically implement the backward pass.
 
@@ -725,7 +725,7 @@ autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
 ### Implementing a new operation
 
 #### Python operation
-Unfortunately, there is no way to implement operations in Python yet, but this feature is coming soon.
+Unfortunately, there is currently no way to implement operations in Python, but this feature is coming soon.
 
 #### C++ operation
 TTML operations are responsible for:
@@ -752,8 +752,8 @@ autograd::TensorPtr mul(
     // Compute output value
     out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
 
-    // 2. Gradient callback lambda captures activations that are required for backward pass.
-    // Make sure that you're not capturing anything not needed, since this might increase memory usage
+    // 2. Gradient callback lambda captures activations that are required for the backward pass.
+    // Make sure that you're not capturing anything not needed, since this might increase memory usage.
     autograd::GradFunction grad = [a, b, out]() {
         // 3. Backward implementation
         // d(a*b)/da = b, d(a*b)/db = a
@@ -835,26 +835,27 @@ Scale out refers to distributed training across **multiple hosts** (each host ca
 - **Multi-host**: Scale across multiple machines with unified mesh topology
 
 **Architecture:**
-- **Scale-up** (same host): Single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
+- **Scale-up** (same host): A single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
 - **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
-- **Unified API**: Same mesh configuration works for both single-host and multi-host scenarios
+- **Unified API**: The same mesh configuration works for both single-host and multi-host scenarios
 
 
-**2/3-tier architecture**
-Currently we employ 2 or 3 tier architecture training when performing multi host training.
+**2/3-tier Architecture**
 
-Basically all hosts are split into 2 or 3 roles - Worker / AggregatorOptimizer (2-tier) or Worker / Aggregator / Optimizer (3-tier).
+Currently, we employ a 2- or 3-tier architecture when performing multi-host training.
 
-In 3-tier Aggregator gathers and reduces gradients from every worker. Then it sends gathered gradients to Optimizer, which performs optimizer step, and sends new weights to Aggregator, which broadcasts them back to workers. In 2-tier Aggregator and Optimizer are merged into a single node.
+All hosts are split into 2 or 3 roles: Worker / AggregatorOptimizer (2-tier) or Worker / Aggregator / Optimizer (3-tier).
 
-For more details and how to run, see [this doc](/tt-train/sources/examples/python/multihost/hierarchical_parallel/README.md)
+In the 3-tier architecture, the Aggregator gathers and reduces gradients from every worker. Then it sends the gathered gradients to the Optimizer, which performs the optimizer step and sends new weights back to the Aggregator, which broadcasts them back to workers. In the 2-tier architecture, the Aggregator and Optimizer are merged into a single node.
+
+For more details and instructions on how to run, see [this doc](/tt-train/sources/examples/python/multihost/hierarchical_parallel/README.md)
 
 **Tensor Parallel Example (FSDP-style):**
 
 Tensor Parallel in TTML implements FSDP (Fully Sharded Data Parallel) semantics:
 - **Parameter sharding**: Model weights are sharded across devices using `shard_tensor_to_mesh_mapper`
-- **Gather on demand**: Parameters are gathered when needed during forward pass (via `all_gather`)
-- **Reduce gradients**: Gradients are reduced across devices during backward pass (via `reduce_scatter`)
+- **Gather on demand**: Parameters are gathered when needed during the forward pass (via `all_gather`)
+- **Reduce gradients**: Gradients are reduced across devices during the backward pass (via `reduce_scatter`)
 
 ```python
 # 32-device TP (e.g., Galaxy)
@@ -868,7 +869,7 @@ transformer_config:
   vocab_size: 32000  # Will be padded to 32768
 ```
 
-**Key difference from DDP:**
+**Key Differences from DDP:**
 - **DDP**: Full model replication → higher memory usage, only gradients synchronized
 - **TP (FSDP)**: Parameter sharding → lower memory usage per device, parameters gathered/reduced as needed
 
@@ -894,7 +895,7 @@ multihost_config:
 - **Dual device**: `[1, 2]` (N300, P300) - 1 process, 2 devices
 - **LoudBox**: `[1, 8]` (8 devices) - 1 process, 8 devices
 - **Galaxy**: `[1, 32]` (32 devices) - 1 process, 32 devices
-- **Multi-host**: Multiple processes (1 per host), each managing its device mesh
+- **Multi-host**: Multiple processes (1 per host), each managing its own device mesh
 
 **Process Model Comparison:**
 | Scenario | PyTorch | TTML |
@@ -1051,9 +1052,9 @@ tt-train/
 
 ### **Autograd System**
 
-**1\. AutoContext** (`autograd/auto_context.hpp`)
+**1. AutoContext** (`autograd/auto_context.hpp`)
 
-The global singleton managing TT-Train's runtime state:
+The global singleton managing TTML's runtime state:
 
 ```cpp
 class AutoContext {
@@ -1084,7 +1085,7 @@ public:
 inline AutoContext& ctx() { return AutoContext::get_instance(); }
 ```
 
-**2\. Graph** (`autograd/graph.hpp`)
+**2. Graph** (`autograd/graph.hpp`)
 
 Stores backward functions and dependencies:
 
@@ -1115,7 +1116,7 @@ public:
 };
 ```
 
-**3\. Tensor** (`autograd/tensor.hpp`)
+**3. Tensor** (`autograd/tensor.hpp`)
 
 The core tensor abstraction with autograd support:
 
