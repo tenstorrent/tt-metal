@@ -19,8 +19,20 @@ class FusedResblock:
     MCAST_CORE = ttnn.CoreCoord(7, 7)
 
     @staticmethod
-    def golden(input_a, weight0, weight1, num_layers=1):
-        def layer(input):
+    def golden(input_a, weights):
+        """
+        Golden reference implementation for fused ResBlock.
+
+        Args:
+            input_a: Input tensor of shape [B, K]
+            weights: List of (weight0, weight1) tuples, one per layer.
+                     Each weight0 and weight1 should be shape [K, K]
+
+        Returns:
+            Output tensor of shape [B, K]
+        """
+
+        def layer(input, weight0, weight1):
             x = input @ weight0
             x = torch.nn.functional.relu(x)
             x = x @ weight1
@@ -28,8 +40,8 @@ class FusedResblock:
             return x
 
         x = input_a
-        for _ in range(num_layers):
-            x = layer(x)
+        for weight0, weight1 in weights:
+            x = layer(x, weight0, weight1)
 
         return x
 
@@ -128,8 +140,25 @@ class FusedResblock:
 
     @staticmethod
     def op(input_tensor, weight0, weight1, output_tensor, num_layers=1, fp32_dest_acc_en=False, debug=False):
+        """
+        Fused ResBlock operation with per-layer weights.
+
+        Args:
+            input_tensor: Input tensor of shape [M, K], sharded across matmul cores
+            weight0: Stacked weight0 tensor of shape [num_layers * K, K], width-sharded across cores.
+                     Contains weights for all layers stacked along the row dimension.
+            weight1: Stacked weight1 tensor of shape [num_layers * K, K], width-sharded across cores.
+                     Contains weights for all layers stacked along the row dimension.
+            output_tensor: Output tensor of shape [M, K], width-sharded across cores
+            num_layers: Number of ResBlock layers. Must equal weight0.shape[-2] / K (and weight1.shape[-2] / K)
+            fp32_dest_acc_en: Enable FP32 destination accumulation
+            debug: Enable debug logging
+
+        Returns:
+            Output tensor (same as output_tensor parameter)
+        """
         logger.info(
-            f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}"
+            f"Running ResBlock operation with shape {input_tensor.shape} x {weight0.shape} x {weight1.shape} -> {output_tensor.shape}, num_layers={num_layers}"
         )
         logger.debug(f"Input tensor sharding: {input_tensor.memory_config().shard_spec}")
         logger.debug(f"Weight0 tensor sharding: {weight0.memory_config().shard_spec}")
@@ -160,18 +189,26 @@ class FusedResblock:
         assert len(weight1_shape) >= 2, f"Weight1 must have rank >= 2, got {len(weight1_shape)}"
         assert len(output_tensor.shape) >= 2, f"Output tensor must have rank >= 2, got {len(output_tensor.shape)}"
 
-        # Validate matmul shape compatibility: input [M, K] @ weight0 [K, K] -> intermediate [M, K]
-        # Then intermediate [M, K] @ weight1 [K, K] -> output [M, K]
+        # Validate matmul shape compatibility: input [M, K] @ weight0 [L*K, K] -> intermediate [M, K]
+        # Then intermediate [M, K] @ weight1 [L*K, K] -> output [M, K]
+        # Weights are stacked per layer: weight0 and weight1 have shape [L*K, K] where L = num_layers
         input_m, input_k = input_shape[-2], input_shape[-1]
         weight0_k_in, weight0_k_out = weight0_shape[-2], weight0_shape[-1]
         weight1_k_in, weight1_k_out = weight1_shape[-2], weight1_shape[-1]
         output_m, output_k = output_tensor.shape[-2], output_tensor.shape[-1]
 
-        assert input_k == weight0_k_in, f"Input K dimension ({input_k}) must match weight0 K_in ({weight0_k_in})"
+        # Validate stacked weight shapes: weights should be [num_layers * K, K]
         assert (
-            weight0_k_out == weight1_k_in
-        ), f"Weight0 K_out ({weight0_k_out}) must match weight1 K_in ({weight1_k_in})"
+            weight0_k_in == num_layers * input_k
+        ), f"Weight0 K_in ({weight0_k_in}) must equal num_layers * input K ({num_layers * input_k})"
+        assert (
+            weight1_k_in == num_layers * input_k
+        ), f"Weight1 K_in ({weight1_k_in}) must equal num_layers * input K ({num_layers * input_k})"
+        assert weight0_k_out == input_k, f"Weight0 K_out ({weight0_k_out}) must match input K ({input_k})"
         assert weight1_k_out == input_k, f"Weight1 K_out ({weight1_k_out}) must match input K ({input_k})"
+        assert (
+            weight0_shape[-2] == weight1_shape[-2]
+        ), f"Weight0 and weight1 must have same stacked height: {weight0_shape[-2]} vs {weight1_shape[-2]}"
 
         # Note: input M may be replicated across cores, so input_m can be larger than output_m
         # The actual batch dimension should match after accounting for replication

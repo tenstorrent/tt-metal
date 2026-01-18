@@ -76,11 +76,14 @@ void kernel_main() {
     cb_reserve_back(mm1_full_cb, num_tiles_k);
     cb_push_back(mm1_full_cb, num_tiles_k);
 
-    cb_reserve_back(weight0_cb, num_tiles_k);
-    cb_push_back(weight0_cb, num_tiles_k);
+    // Push full stacked weights for all layers: num_tiles_k * num_layers
+    // Each layer will pop num_tiles_k tiles as it processes
+    constexpr uint32_t total_weight_tiles = num_tiles_k * num_layers;
+    cb_reserve_back(weight0_cb, total_weight_tiles);
+    cb_push_back(weight0_cb, total_weight_tiles);
 
-    cb_reserve_back(weight1_cb, num_tiles_k);
-    cb_push_back(weight1_cb, num_tiles_k);
+    cb_reserve_back(weight1_cb, total_weight_tiles);
+    cb_push_back(weight1_cb, total_weight_tiles);
 
     // Compute gather destination tile offset bytes from runtime tile index
     const uint32_t gather_destination_tile_offset_bytes = tile_index * get_tile_size(intermediate_pregather_cb);

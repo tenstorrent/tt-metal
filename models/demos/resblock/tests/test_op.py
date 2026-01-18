@@ -10,10 +10,6 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.resblock.op import FusedResblock
 
-"""
-Test fused ResBlock operation with inputs [B, K] @ [K, K] -> [B, K]
-"""
-
 
 def create_random_tensor(shape, random_tensor_gen):
     if random_tensor_gen == "uniform":
@@ -27,7 +23,7 @@ def create_random_tensor(shape, random_tensor_gen):
 
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 2, 4],
+    [1, 2, 4, 8],
 )
 @pytest.mark.parametrize(
     "B, K, core_grid",
@@ -69,11 +65,23 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     logger.info(f"Testing fused ResBlock with shape [{B}, {K}] x [{K}, {K}] on {number_of_matmul_cores} cores")
 
     torch_a = create_random_tensor((B, K), generation_type)
-    weight0 = create_random_tensor((K, K), generation_type)
-    weight1 = create_random_tensor((K, K), generation_type)
 
-    expected = FusedResblock.golden(torch_a, weight0, weight1, num_layers=num_layers)
+    # Create per-layer weights
+    weights = [
+        (
+            create_random_tensor((K, K), generation_type),
+            create_random_tensor((K, K), generation_type),
+        )
+        for _ in range(num_layers)
+    ]
+
+    # Compute golden reference with per-layer weights
+    expected = FusedResblock.golden(torch_a, weights)
     print("expected:", expected)
+
+    # Stack weights along row dimension for TTNN: [num_layers * K, K]
+    stacked_weight0 = torch.cat([w0 for w0, _ in weights], dim=0)
+    stacked_weight1 = torch.cat([w1 for _, w1 in weights], dim=0)
 
     # Pad input up to tile height
     torch_a = torch.nn.functional.pad(torch_a, (0, 0, 0, a_tile.tile_shape[0] - torch_a.shape[0]))
@@ -100,6 +108,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
 
     def create_weight_tensor(weight, tile, core_grid):
         # Weights are width-sharded across all cores
+        # Stacked weights have shape [num_layers * K, K]
         weight_shard_shape = (weight.shape[0], weight.shape[1] // number_of_matmul_cores)
         weight_shard_spec = ttnn.ShardSpec(
             core_grid,
@@ -118,8 +127,9 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
             tile=tile,
         )
 
-    weight0_tensor = create_weight_tensor(weight0, weight_tile, core_grid)
-    weight1_tensor = create_weight_tensor(weight1, weight_tile, core_grid)
+    # Convert stacked weights to TTNN tensors
+    weight0_tensor = create_weight_tensor(stacked_weight0, weight_tile, core_grid)
+    weight1_tensor = create_weight_tensor(stacked_weight1, weight_tile, core_grid)
 
     output_shard_shape = (max(B, out_tile.tile_shape[0]), K // number_of_matmul_cores)
     output_shard_spec = ttnn.ShardSpec(
@@ -154,7 +164,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.995)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.9925)
     logger.info(pcc_message)
 
     assert passing, pcc_message

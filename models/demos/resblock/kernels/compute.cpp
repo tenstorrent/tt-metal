@@ -37,7 +37,7 @@ FORCE_INLINE void matmul_with_relu_block() {
     if constexpr (PopA) {
         cb_pop_front(CbA, NumTilesK);  // Don't pop here because we need to use the input again for next stage
     }
-    // cb_pop_front(CbB, NumTilesK);
+    cb_pop_front(CbB, NumTilesK);  // Pop weight CB to advance to next layer's weights
 
     tile_regs_wait();
     pack_tile(0, CbOut, OutputTileId);  // Pack at offset OutputTileId
@@ -103,7 +103,7 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     if constexpr (PopBias) {
         cb_pop_front(CbBias, NumTilesBias);
     }
-    // cb_pop_front(CbB, NumTilesK); // Never pop CbB because it's used for the next layer
+    cb_pop_front(CbB, NumTilesK);  // Pop weight CB to advance to next layer's weights
 
     tile_regs_wait();
     pack_tile(MATMUL_ACC_REG_ID, CbOut, OutputTileId);  // Pack at offset OutputTileId
