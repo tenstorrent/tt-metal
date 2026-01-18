@@ -231,4 +231,103 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
         in_cb_id, in_cb_id, dst_tile_index, true)));
 }
 
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ * 
+ * L1 → DEST: Block-level element-wise addition.
+ * For-loop wrapper around add_tiles(). Use add_tiles_init() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ *
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | Ht             | Block height in tiles (compile-time)                     | uint32_t | 1 to 16                                        | True     |
+ * | Wt             | Block width in tiles (compile-time)                      | uint32_t | 1 to 16                                        | True     |
+ * | icb0           | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | itile0_start   | Starting tile index for A in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | itile1_start   | Starting tile index for B in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst_start     | Starting tile index in DST REG for the result            | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <uint32_t Ht, uint32_t Wt>
+ALWI void add_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+    
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            add_tiles(icb0, icb1, itile0_start + tile_offset, itile1_start + tile_offset, idst_start + tile_offset);
+        }
+    }
+}
+
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ * 
+ * L1 → DEST: Block-level element-wise subtraction.
+ * For-loop wrapper around sub_tiles(). Use sub_tiles_init() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ *
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | Ht             | Block height in tiles (compile-time)                     | uint32_t | 1 to 16                                        | True     |
+ * | Wt             | Block width in tiles (compile-time)                      | uint32_t | 1 to 16                                        | True     |
+ * | icb0           | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | itile0_start   | Starting tile index for A in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | itile1_start   | Starting tile index for B in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst_start     | Starting tile index in DST REG for the result            | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <uint32_t Ht, uint32_t Wt>
+ALWI void sub_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+    
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            sub_tiles(icb0, icb1, itile0_start + tile_offset, itile1_start + tile_offset, idst_start + tile_offset);
+        }
+    }
+}
+
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ * 
+ * L1 → DEST: Block-level element-wise multiplication.
+ * For-loop wrapper around mul_tiles(). Use mul_tiles_init() before calling.
+ * Result stays in DEST for SFPU fusion or further operations.
+ * Conforms to Compute API Contract for *_block variants.
+ *
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | Ht             | Block height in tiles (compile-time)                     | uint32_t | 1 to 16                                        | True     |
+ * | Wt             | Block width in tiles (compile-time)                      | uint32_t | 1 to 16                                        | True     |
+ * | icb0           | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | itile0_start   | Starting tile index for A in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | itile1_start   | Starting tile index for B in CB                          | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst_start     | Starting tile index in DST REG for the result            | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <uint32_t Ht, uint32_t Wt>
+ALWI void mul_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+    
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            mul_tiles(icb0, icb1, itile0_start + tile_offset, itile1_start + tile_offset, idst_start + tile_offset);
+        }
+    }
+}
+
 }  // namespace ckernel

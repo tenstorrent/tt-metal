@@ -226,4 +226,38 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
 // clang-format on
 ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
 
+// clang-format off
+/**
+ * WORK IN PROGRESS - Use with caution
+ * 
+ * DEST → L1: Packs a block of tiles from DEST registers to L1 circular buffer.
+ * For-loop wrapper around pack_tile(). Companion to *_block functions.
+ * Conforms to Compute API Contract for pack_*_block variants.
+ *
+ * Before calling this function:
+ * 1. cb_reserve_back must be called to reserve space in the output CB
+ * 2. Data must be present in DEST registers (from *_block operations)
+ * 3. DEST register buffer must be in acquired state via acquire_dst
+ *
+ * | Param Type | Name       | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|------------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Template   | Ht         | Block height in tiles (compile-time)              | uint32_t | 1 to 16                                              | True     |
+ * | Template   | Wt         | Block width in tiles (compile-time)               | uint32_t | 1 to 16                                              | True     |
+ * | Function   | idst_start | Starting index in the DEST register               | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | ocb        | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ */
+// clang-format on
+template <uint32_t Ht, uint32_t Wt>
+ALWI void pack_block(uint32_t idst_start, uint32_t ocb) {
+    static_assert(
+        Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
+    
+    for (uint32_t h = 0; h < Ht; h++) {
+        for (uint32_t w = 0; w < Wt; w++) {
+            uint32_t tile_offset = h * Wt + w;
+            pack_tile(idst_start + tile_offset, ocb);
+        }
+    }
+}
+
 }  // namespace ckernel
