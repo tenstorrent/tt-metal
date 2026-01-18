@@ -67,4 +67,5 @@ void kernel_main() {
         cb_int_cb_m,
         onetile,
         input_num_tiles);
+    noc_async_write_barrier();
 }

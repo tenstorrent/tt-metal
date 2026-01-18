@@ -57,4 +57,5 @@ void kernel_main() {
 
         output_stick_noc_addr += padded_stick_bytes;
     }
+    noc_async_write_barrier();
 }

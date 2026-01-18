@@ -44,4 +44,5 @@ void kernel_main() {
         }
         i_nc += HtWt;
     }
+    noc_async_write_barrier();
 }

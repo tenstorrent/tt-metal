@@ -65,4 +65,5 @@ void kernel_main() {
         pad_tiles(num_padded_Zt);
     }
     pad_tiles(num_padded_Wt);
+    noc_async_write_barrier();
 }

@@ -72,4 +72,5 @@ void kernel_main() {
             z_stride_cum += z_stride;
         }
     }
+    noc_async_write_barrier();
 }

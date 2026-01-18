@@ -70,4 +70,5 @@ void kernel_main() {
             current_index_tile_id += total_number_of_cores;
         }  // core_loop_count loop
     }  // h loop
+    noc_async_write_barrier();
 }

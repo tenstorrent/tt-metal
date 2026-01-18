@@ -22,4 +22,5 @@ void kernel_main() {
         noc_async_writes_flushed();
         cb_pop_front(dst_cb_id, 1);
     }
+    noc_async_write_barrier();
 }

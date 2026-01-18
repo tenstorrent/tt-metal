@@ -50,4 +50,5 @@ void kernel_main() {
         cb_pop_front(cb_id_in0, 1);
         dst_index++;
     }
+    noc_async_write_barrier();
 }

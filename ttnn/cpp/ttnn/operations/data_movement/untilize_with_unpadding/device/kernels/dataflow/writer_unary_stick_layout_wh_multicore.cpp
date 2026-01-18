@@ -70,4 +70,5 @@ void kernel_main() {
         }
         size_2d += total_num_rows;
     }
+    noc_async_write_barrier();
 }

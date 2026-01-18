@@ -54,5 +54,6 @@ void kernel_main() {
         noc_async_writes_flushed();
         cb_pop_front(cb_id_out, onetile);
     }
+    noc_async_write_barrier();
 #endif
 }

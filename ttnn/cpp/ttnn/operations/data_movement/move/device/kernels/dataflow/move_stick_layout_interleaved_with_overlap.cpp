@@ -89,4 +89,5 @@ void kernel_main() {
     }
     noc_async_writes_flushed();
     cb_pop_front(cb_id, num_pages);
+    noc_async_write_barrier();
 }

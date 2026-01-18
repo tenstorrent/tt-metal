@@ -85,4 +85,5 @@ void kernel_main() {
             pop_blocks(n_pads);
         }
     }
+    noc_async_write_barrier();
 }

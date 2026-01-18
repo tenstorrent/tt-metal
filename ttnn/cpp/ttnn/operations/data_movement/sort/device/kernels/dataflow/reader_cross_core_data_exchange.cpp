@@ -147,5 +147,6 @@ void kernel_main() {
         }  // Wt loop
 
     }  // h loop
+    noc_async_write_barrier();
     cb_push_back(physical_core_lookup_table_cb_index, one_tile);
 }

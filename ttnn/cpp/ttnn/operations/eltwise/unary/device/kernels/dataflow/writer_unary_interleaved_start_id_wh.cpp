@@ -43,4 +43,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_write_barrier();
 }

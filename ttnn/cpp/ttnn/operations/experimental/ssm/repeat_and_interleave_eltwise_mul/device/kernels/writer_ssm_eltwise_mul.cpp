@@ -29,4 +29,5 @@ void kernel_main() {
             cb_pop_front(cb_id_out, onetile);
         }
     }
+    noc_async_write_barrier();
 }

@@ -98,4 +98,5 @@ void kernel_main() {
         pop_blocks(padded_Z_diff_blocks);
     }
     pop_blocks(padded_W_diff_blocks);
+    noc_async_write_barrier();
 }

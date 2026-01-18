@@ -76,4 +76,5 @@ void kernel_main() {
             cb_pop_front(output_tensor_cb_index, one_tile);
         }  // Wt_index loop
     }  // core_loop_count loop
+    noc_async_write_barrier();
 }

@@ -80,4 +80,5 @@ void kernel_main() {
         advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
         output_page_offset++;
     }
+    noc_async_write_barrier();
 }

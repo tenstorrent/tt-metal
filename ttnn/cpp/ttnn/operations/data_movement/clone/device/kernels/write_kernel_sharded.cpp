@@ -23,4 +23,5 @@ void kernel_main() {
         cb_pop_front(dst_cb_id, 1);
         local_l1_write_addr += tile_size;
     }
+    noc_async_write_barrier();
 }

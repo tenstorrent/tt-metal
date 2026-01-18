@@ -34,4 +34,5 @@ void kernel_main() {
         noc_async_writes_flushed();
         cb_pop_front(input_shard_cb, num_pages_per_tensor);
     }
+    noc_async_write_barrier();
 }
