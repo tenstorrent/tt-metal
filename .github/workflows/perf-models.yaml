@@ -28,9 +28,23 @@ on:
           - vovnet
           - ufld_v2
           - efficientnetb0
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
 
 jobs:
   build-artifact:
@@ -40,7 +54,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   models-perf:
     needs: build-artifact

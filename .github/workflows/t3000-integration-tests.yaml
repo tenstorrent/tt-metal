@@ -31,6 +31,14 @@ on:
           - mistral
           - wan2.2
           - mochi
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
@@ -42,7 +50,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   t3000-integration-tests:
     needs: build-artifact

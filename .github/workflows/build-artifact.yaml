@@ -25,14 +25,6 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      distro:
-        required: false
-        type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
       architecture:
         required: false
         type: string
@@ -73,6 +65,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      platform:
+        required: false
+        type: string
+        default: ""
+        description: "Platform string (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04'). If provided, overrides distro/version/toolchain."
       fetch-depth:
         required: false
         type: number
@@ -220,8 +217,6 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          distro: ${{ inputs.distro }}
-          version: ${{ inputs.version }}
           enable-lto: ${{ inputs.enable-lto }}
 
   # Only build docker images if pre-built tags are not provided
@@ -231,9 +226,9 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      # Use parsed platform values for workflow_dispatch, otherwise use direct inputs
-      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
+      # Use parsed platform values
+      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:

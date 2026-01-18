@@ -11,7 +11,21 @@ on:
         description: "Enable Tracy ops recording for all tests (generates operations report)"
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 5,14,23 * * *"
 
@@ -23,7 +37,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:

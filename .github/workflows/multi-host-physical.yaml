@@ -17,6 +17,14 @@ on:
         required: false
         default: false
         type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
     - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
@@ -35,7 +43,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       build-wheel: true
 

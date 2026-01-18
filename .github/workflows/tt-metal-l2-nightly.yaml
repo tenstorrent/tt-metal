@@ -70,6 +70,14 @@ on:
         required: false
         type: number
         default: 150
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 
 jobs:
   build-artifact:
@@ -81,7 +89,7 @@ jobs:
       build-wheel: true
       tracy: true
       skip-tt-train: false
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   generate-arch-matrix:
     runs-on: ubuntu-latest

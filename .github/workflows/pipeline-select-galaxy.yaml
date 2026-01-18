@@ -111,6 +111,14 @@ on:
           - wan2-2
           - mochi
         default: 'disabled'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -190,7 +198,7 @@ jobs:
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       build-umd-tests: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]

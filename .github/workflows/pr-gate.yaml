@@ -32,6 +32,14 @@ on:
           - ASan
           - TSan
           - ASanCoverage
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   pull_request:
     types:
       - opened
@@ -75,7 +83,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
@@ -151,7 +159,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       # Cannot do a Sanitizer build as that's not compatible with the downstream test.
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact

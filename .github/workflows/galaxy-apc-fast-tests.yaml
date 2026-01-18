@@ -1,7 +1,16 @@
 name: "(Galaxy) Fast tests"
 
 on:
-  workflow_dispatch:  # Manual trigger only used to test galaxy apc fast tests
+  workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 
 jobs:
   build-artifact:
@@ -10,7 +19,8 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: true
       build-wheel: true
   galaxy-apc-fast-tests:
     needs: build-artifact

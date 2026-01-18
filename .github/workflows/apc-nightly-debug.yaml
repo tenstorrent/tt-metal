@@ -27,17 +27,9 @@ jobs:
     strategy:
       matrix:
         platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
-        include:
-          - platform: "Ubuntu 22.04"
-            distro: ubuntu
-            version: "22.04"
-          - platform: "Ubuntu 24.04"
-            distro: ubuntu
-            version: "24.04"
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
-      distro: ${{ matrix.distro }}
-      version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
       enable-lto: ${{ inputs.enable-lto != false }}

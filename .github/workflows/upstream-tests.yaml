@@ -7,6 +7,14 @@ on:
         default: "passing-only"
         type: string
         description: "Control image publishing: 'passing-only' (default), 'all', or JSON array of hw_topology values like [\"wh-6u\", \"bh\"]"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: '0 12 * * *'
 
@@ -31,7 +39,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       build-wheel: true
       build-umd-tests: true

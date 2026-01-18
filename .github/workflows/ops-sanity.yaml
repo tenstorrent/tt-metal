@@ -14,6 +14,15 @@ name: "[testing] Ops Sanity pipeline"
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   workflow_call:
     inputs:
       build-artifact-name:
@@ -25,6 +34,11 @@ on:
       docker-image:
         required: true
         type: string
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
 
 jobs:
   load-test-matrix:
@@ -82,7 +96,8 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: true
       build-wheel: true
 
   tests:

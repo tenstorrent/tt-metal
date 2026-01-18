@@ -133,6 +133,14 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 
 run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
@@ -183,7 +191,7 @@ jobs:
     secrets: inherit
     needs: determine-tests
     with:
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type }}
       enable-lto: ${{ inputs.enable-lto }}
       build-wheel: true

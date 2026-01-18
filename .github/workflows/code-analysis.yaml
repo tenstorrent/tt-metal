@@ -5,14 +5,11 @@ on:
     - cron: "0 2 * * 1,3,5" # Static analysis: 2 AM UTC on Mon/Wed/Fri
   workflow_call:
     inputs:
-      distro:
+      platform:
         required: false
         type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "24.04"
+        default: "Ubuntu 24.04"
+        description: "Platform to analyze (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
       architecture:
         required: false
         type: string
@@ -69,8 +66,6 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
-          distro: ${{ inputs.distro }}
-          version: ${{ inputs.version }}
           default-version: '24.04'  # code-analysis defaults to 24.04
 
   determine-scan-type:
@@ -101,8 +96,8 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || inputs.version || '24.04' }}
+      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || '24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:

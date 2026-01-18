@@ -2,6 +2,15 @@ name: "(T3K) T3000 e2e tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
 
@@ -12,7 +21,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       build-wheel: true
   t3000-e2e-tests:

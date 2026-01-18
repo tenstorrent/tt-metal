@@ -97,8 +97,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
-      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
+      platform: ${{ inputs.platform }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
       enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}

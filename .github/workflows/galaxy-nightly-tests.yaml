@@ -11,6 +11,14 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 0 * * *" # Runs every day at 12am UTC
 
@@ -21,7 +29,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       build-wheel: true
   galaxy-nightly-tests:

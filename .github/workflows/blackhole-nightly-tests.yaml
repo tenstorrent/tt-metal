@@ -65,7 +65,21 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
@@ -78,7 +92,7 @@ jobs:
     with:
       build-wheel: true
       tracy: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   bh-nightly:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}

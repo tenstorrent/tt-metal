@@ -610,6 +610,14 @@ on:
           - WARNING
           - CRITICAL
         default: "INFO"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
 
   schedule:
     - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
@@ -659,7 +667,8 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: true
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}

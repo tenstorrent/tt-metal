@@ -12,6 +12,14 @@ on:
           - unit
           - module
         default: 'all'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
@@ -23,7 +31,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   Galaxy-DeepSeek-tests:
     needs: build-artifact

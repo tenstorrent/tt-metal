@@ -12,9 +12,23 @@ on:
         description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
         default: "all"
         type: string
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
 
 run-name: "(Single-card) Device perf regressions"
 jobs:
@@ -26,7 +40,7 @@ jobs:
     with:
       tracy: true
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   device-perf:
     needs: build-artifact-profiler

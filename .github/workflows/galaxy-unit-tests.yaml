@@ -17,6 +17,14 @@ on:
           - prefetcher
           - distributed-ops
           - gpt-oss
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 8 * * *"  # Every day at 8:00 UTC
 
@@ -29,7 +37,7 @@ jobs:
     with:
       build-wheel: true
       build-umd-tests: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   galaxy-unit-tests:
     needs: build-artifact

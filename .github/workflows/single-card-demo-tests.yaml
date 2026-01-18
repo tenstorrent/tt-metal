@@ -15,6 +15,14 @@ on:
         description: "Enable Tracy ops recording for all tests (generates operations report)"
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 13,18 * * 0,1,2,3,4,5,6" # frequency of functional models
     - cron: "0 5 * * 1,3,6" # frequency of perf models
@@ -28,7 +36,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-demo-tests:

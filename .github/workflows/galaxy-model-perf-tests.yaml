@@ -21,6 +21,14 @@ on:
           - wan2-2
           - mochi
           - qwenimage
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
@@ -33,7 +41,7 @@ jobs:
     with:
       tracy: true
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
       toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:

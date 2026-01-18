@@ -40,6 +40,14 @@ on:
         default: true
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   workflow_call:
     inputs:
       run_t3k_profiler:
@@ -77,6 +85,11 @@ on:
         required: false
         type: boolean
         default: true
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
 
 jobs:
   build-artifact-profiler:
@@ -109,7 +122,7 @@ jobs:
         }}
       tracy: true
       build-wheel: true
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ (github.event_name == 'workflow_call' && inputs.enable-lto) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lto == 'true' || github.event.inputs.enable-lto == true)) || (github.event_name == 'schedule' && true) }}
 
   t3k-profiler-tests:

@@ -8,12 +8,25 @@ on:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
   schedule:
     - cron: "0 4 * * *"  # Every day at 4:00 UTC
 
@@ -25,7 +38,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      platform: "Ubuntu 22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: true
   single-card-demo-tests:
     needs: build-artifact

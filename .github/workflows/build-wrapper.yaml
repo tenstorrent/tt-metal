@@ -77,9 +77,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      distro: ${{ needs.parse-platform.outputs.distro }}
-      version: ${{ needs.parse-platform.outputs.version }}
-      toolchain: ${{ needs.parse-platform.outputs.toolchain }}
+      platform: ${{ inputs.platform }}
       build-type: "Release"
       enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
       publish-artifact: false
@@ -99,27 +97,26 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Debug"
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
             build-type: "Release"
-          - version: "22.04"
+          - platform: "Ubuntu 22.04"
             image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
-          - version: "24.04"
+          - platform: "Ubuntu 24.04"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
-          - version: "24.04"
+          - platform: "Ubuntu 24.04"
             image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
-      distro: ${{ matrix.config.distro || 'ubuntu' }}
-      version: ${{ matrix.config.version }}
+      platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
       # Enable LTO for Release builds
