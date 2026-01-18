@@ -57,22 +57,55 @@ if model_traced_params:
 def invalidate_vector(test_vector) -> tuple:
     """
     Validate that batch dimensions are compatible.
-    The operation requires: input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[0]
+
+    If page_table is provided (paged_cache mode):
+        - Validation: page_table.padded_shape()[0] == input_tensor.padded_shape()[1]
+
+    If page_table is NOT provided (!paged_cache mode):
+        - If share_cache=True: cache_tensor.padded_shape()[0] == 1
+        - If share_cache=False: input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[0]
     """
     input_shape = test_vector.get("input_shape")
+    page_table = test_vector.get("page_table")
+    share_cache = test_vector.get("share_cache")
 
     if isinstance(input_shape, dict):
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("cache"))
+        shape_a = input_shape.get("input_a")  # cache_tensor1
+        shape_b = input_shape.get("input_b")  # input_tensor1
 
-        # Validate batch dimension compatibility
-        # input_tensor shape: [1, batch, seq_len, head_dim]
-        # cache_tensor shape: [batch, cache_len, n_heads, head_dim]
-        if shape_a and shape_b and isinstance(shape_a, (list, tuple)) and isinstance(shape_b, (list, tuple)):
-            if len(shape_a) >= 2 and len(shape_b) >= 1:
-                input_batch = shape_a[1]  # Second dimension of input
-                cache_batch = shape_b[0]  # First dimension of cache
+        if not (shape_a and shape_b):
+            return False, None
 
+        if not (isinstance(shape_a, (list, tuple)) and isinstance(shape_b, (list, tuple))):
+            return False, None
+
+        if len(shape_a) < 1 or len(shape_b) < 2:
+            return False, None
+
+        cache_batch = shape_a[0]  # First dimension of cache
+        input_batch = shape_b[1]  # Second dimension of input
+
+        # Check if page_table is provided
+        has_page_table = page_table is not None and isinstance(page_table, dict) and page_table.get("shape")
+
+        if has_page_table:
+            # Paged cache mode: validate page_table[0] == input[1]
+            page_table_shape = page_table.get("shape")
+            if isinstance(page_table_shape, (list, tuple)) and len(page_table_shape) > 0:
+                page_table_batch = page_table_shape[0]
+                if input_batch != page_table_batch:
+                    return (
+                        True,
+                        f"Paged cache batch mismatch: input[1]={input_batch} != page_table[0]={page_table_batch}",
+                    )
+        else:
+            # Non-paged cache mode
+            if share_cache:
+                # share_cache=True: cache must have batch=1
+                if cache_batch != 1:
+                    return True, f"Share cache requires cache[0]=1, got cache[0]={cache_batch}"
+            else:
+                # share_cache=False: input[1] must equal cache[0]
                 if input_batch != cache_batch:
                     return True, f"Batch mismatch: input[1]={input_batch} != cache[0]={cache_batch}"
 
@@ -94,7 +127,14 @@ def run(
     input_d_layout=None,
     input_d_memory_config=None,
     output_memory_config=None,
+    update_idxs=[],
+    update_idxs_tensor=None,
+    page_table=None,
+    share_cache=None,
+    batch_offset=0,
     storage_type="StorageType::DEVICE",
+    traced_source=None,
+    traced_machine_info=None,
     *,
     device,
     **kwargs,
@@ -189,12 +229,77 @@ def run(
         input_tensor_d = ttnn.from_torch(torch_input_d, **from_torch_kwargs_d)
         input_tensors.append(input_tensor_d)
 
+    # Ensure we have exactly 4 tensors for the positional arguments
+    if len(input_tensors) != 4:
+        raise ValueError(f"paged_fused_update_cache requires exactly 4 tensor inputs, got {len(input_tensors)}")
+
+    # Handle additional tensor parameters: update_idxs_tensor and page_table
+    update_idxs_tensor_ttnn = None
+    if update_idxs_tensor is not None and isinstance(update_idxs_tensor, dict):
+        # update_idxs_tensor is a dict with shape, dtype, layout, memory_config
+        shape_e = update_idxs_tensor.get("shape")
+        dtype_e = update_idxs_tensor.get("dtype")
+        layout_e = update_idxs_tensor.get("layout")
+        memory_config_e = update_idxs_tensor.get("memory_config")
+
+        if shape_e:
+            torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=0, high=32, dtype=torch.float32), dtype_e)(
+                shape_e
+            )
+            from_torch_kwargs_e = {"dtype": dtype_e, "layout": layout_e}
+            if not is_host:
+                from_torch_kwargs_e["device"] = device
+                from_torch_kwargs_e["memory_config"] = memory_config_e
+            update_idxs_tensor_ttnn = ttnn.from_torch(torch_input_e, **from_torch_kwargs_e)
+
+    page_table_ttnn = None
+    if page_table is not None and isinstance(page_table, dict):
+        # page_table is a dict with shape, dtype, layout, memory_config
+        shape_f = page_table.get("shape")
+        dtype_f = page_table.get("dtype")
+        layout_f = page_table.get("layout")
+        memory_config_f = page_table.get("memory_config")
+
+        if shape_f:
+            torch_input_f = gen_func_with_cast_tt(
+                partial(torch_random, low=0, high=1024, dtype=torch.float32), dtype_f
+            )(shape_f)
+            from_torch_kwargs_f = {"dtype": dtype_f, "layout": layout_f}
+            if not is_host:
+                from_torch_kwargs_f["device"] = device
+                from_torch_kwargs_f["memory_config"] = memory_config_f
+            page_table_ttnn = ttnn.from_torch(torch_input_f, **from_torch_kwargs_f)
+
     start_time = start_measuring_time()
 
     try:
-        # paged_fused_update_cache doesn't accept memory_config parameter
-        # It only accepts specific keyword arguments like update_idxs, page_table, etc.
-        result = ttnn.experimental.paged_fused_update_cache(*input_tensors)
+        # Build kwargs for paged_fused_update_cache
+        op_kwargs = {}
+
+        # update_idxs: vector<uint32_t>
+        if update_idxs is not None and isinstance(update_idxs, list) and len(update_idxs) > 0:
+            op_kwargs["update_idxs"] = update_idxs
+        else:
+            op_kwargs["update_idxs"] = []  # Empty vector
+
+        # update_idxs_tensor: optional Tensor
+        if update_idxs_tensor_ttnn is not None:
+            op_kwargs["update_idxs_tensor"] = update_idxs_tensor_ttnn
+
+        # share_cache: optional<bool>
+        if share_cache is not None:
+            op_kwargs["share_cache"] = share_cache
+
+        # page_table: optional Tensor
+        if page_table_ttnn is not None:
+            op_kwargs["page_table"] = page_table_ttnn
+
+        # batch_offset: uint32_t
+        if batch_offset is not None:
+            op_kwargs["batch_offset"] = int(batch_offset)
+
+        # Call the operation with all parameters
+        result = ttnn.experimental.paged_fused_update_cache(*input_tensors, **op_kwargs)
         # Handle both single tensor and tuple returns
         if isinstance(result, (list, tuple)):
             output_tensor = ttnn.to_torch(result[0]) if result else None
