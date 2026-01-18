@@ -389,8 +389,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
         tt_output = ttnn.experimental.moe(
             tt_input,
-            w0_tensor=tt_w0_w1,
-            w1_tensor=tt_w0_w1,
+            w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
             output_tensor=tt_output,
             num_experts=E,
