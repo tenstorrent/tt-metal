@@ -297,9 +297,6 @@ def test_layernorm_parallel_interleaved(device, batch_size, h, w, num_branches):
         assert_with_pcc(torch_outputs[i], output, 0.999)
 
 
-@pytest.mark.xfail(
-    reason="Interleaved LayerNorm with core_range_override on non-(0,0) grids produces incorrect results"
-)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("block_h", [2])  # Height of each core block
 @pytest.mark.parametrize("block_w", [2])  # Width of each core block
@@ -316,10 +313,6 @@ def test_layernorm_full_grid(device, batch_size, block_h, block_w, num_blocks_h,
     - bias (beta)
 
     This demonstrates 16 parallel LayerNorm operations running concurrently.
-
-    NOTE: Currently xfail because interleaved LayerNorm with core_range_override
-    on non-(0,0) starting core grids produces incorrect results. The kernel
-    assumes cores start at (0,0) for work distribution.
     """
     torch.manual_seed(42)
 
@@ -412,106 +405,137 @@ def test_layernorm_full_grid(device, batch_size, block_h, block_w, num_blocks_h,
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("tiles_per_core_h", [2])  # Tiles per core in height
+@pytest.mark.parametrize("block_h", [2])  # Height of each core block
+@pytest.mark.parametrize("block_w", [2])  # Width of each core block
+@pytest.mark.parametrize("num_blocks_h", [4])  # Number of blocks in height (4*2=8 cores)
+@pytest.mark.parametrize("num_blocks_w", [4])  # Number of blocks in width (4*2=8 cores)
+@pytest.mark.parametrize("tiles_per_core_h", [1])  # Tiles per core in height
 @pytest.mark.parametrize("tiles_per_core_w", [2])  # Tiles per core in width
-@pytest.mark.parametrize("grid_h", [2])  # Grid height for sharded tensor
-@pytest.mark.parametrize("grid_w", [2])  # Grid width for sharded tensor
-def test_layernorm_full_grid_sharded(device, batch_size, tiles_per_core_h, tiles_per_core_w, grid_h, grid_w):
+def test_layernorm_full_grid_sharded(
+    device, batch_size, block_h, block_w, num_blocks_h, num_blocks_w, tiles_per_core_h, tiles_per_core_w
+):
     """
-    Test sharded LayerNorm using ttnn::parallel.
+    Test sharded LayerNorm across the full 8x8 grid using ttnn::parallel.
 
-    This test creates a single sharded LayerNorm branch on a grid_h x grid_w core grid
-    starting at (0,0). The tensor is BLOCK_SHARDED across the cores.
+    This test divides the 8x8 compute grid into 4x4 blocks of 2x2 cores each.
+    Each 2x2 block is a parallel branch running sharded LayerNorm with:
+    - Sharded input tensor (BLOCK_SHARDED on the 2x2 core block)
+    - Sharded residual tensor (same shard spec as input)
+    - Weight (gamma) - interleaved
+    - Bias (beta) - interleaved
 
-    Uses:
-    - Sharded input tensor
-    - Sharded residual tensor
-    - Weight (gamma)
-    - Bias (beta)
-
-    Note: Sharded layernorm currently only works with core grids starting at (0,0)
-    due to validation constraints in layernorm_device_operation.cpp.
+    This demonstrates 16 parallel sharded LayerNorm operations running concurrently.
     """
     torch.manual_seed(42)
 
-    # Calculate tensor dimensions based on sharding
-    # Total tensor size = (tiles_per_core_h * grid_h) x (tiles_per_core_w * grid_w) tiles
-    h = tiles_per_core_h * grid_h * 32  # Total height in elements
-    w = tiles_per_core_w * grid_w * 32  # Total width in elements
+    num_branches = num_blocks_h * num_blocks_w  # 16 branches
+
+    # Per-branch tensor dimensions (sharded across 2x2 = 4 cores)
+    h = tiles_per_core_h * block_h * 32  # 1 * 2 * 32 = 64 elements per branch
+    w = tiles_per_core_w * block_w * 32  # 2 * 2 * 32 = 128 elements per branch
 
     # Per-core shard dimensions
-    shard_h = tiles_per_core_h * 32
-    shard_w = tiles_per_core_w * 32
+    shard_h = tiles_per_core_h * 32  # 32
+    shard_w = tiles_per_core_w * 32  # 64
 
-    # Create torch tensors
-    torch_input = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_residual = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
-    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+    # Create input data for each branch
+    torch_inputs = []
+    torch_residuals = []
+    torch_weights = []
+    torch_biases = []
+    torch_outputs = []
 
-    # Compute reference output
-    torch_output = torch_layer_norm(torch_input, torch_weight, torch_bias, torch_residual)
+    for _ in range(num_branches):
+        torch_input = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+        torch_residual = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
+        torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+        torch_bias = torch.rand((w,), dtype=torch.bfloat16)
 
-    # Core range starting at (0,0) - required for sharded layernorm validation
-    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))])
+        # Compute reference output
+        torch_output = torch_layer_norm(torch_input, torch_weight, torch_bias, torch_residual)
 
-    # Create sharded memory config
-    shard_spec = ttnn.ShardSpec(core_range_set, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-        shard_spec=shard_spec,
-    )
+        torch_inputs.append(torch_input)
+        torch_residuals.append(torch_residual)
+        torch_weights.append(torch_weight)
+        torch_biases.append(torch_bias)
+        torch_outputs.append(torch_output)
 
-    # Move tensors to device with sharded memory config
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem_config,
-    )
-    residual_tensor = ttnn.from_torch(
-        torch_residual,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem_config,
-    )
-    weight_tensor = ttnn.from_torch(
-        torch_weight,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    bias_tensor = ttnn.from_torch(
-        torch_bias,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    # Create branches for each 2x2 block
+    branches = []
 
-    # Create sharded layernorm program config
-    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid_w, grid_h),
-        subblock_w=tiles_per_core_w,
-        block_h=tiles_per_core_h,
-        block_w=tiles_per_core_w,
-        inplace=False,
-    )
+    for block_row in range(num_blocks_h):
+        for block_col in range(num_blocks_w):
+            branch_idx = block_row * num_blocks_w + block_col
 
-    # Create branch using sharded layer_norm
-    branch = ttnn.parallel.branch(
-        ttnn.layer_norm,
-        input_tensor,
-        cores=core_range_set,
-        epsilon=1e-5,
-        weight=weight_tensor,
-        bias=bias_tensor,
-        residual_input_tensor=residual_tensor,
-        memory_config=mem_config,
-        program_config=program_config,
-    )
+            # Calculate the core range for this 2x2 block
+            start_x = block_col * block_w
+            start_y = block_row * block_h
+            end_x = start_x + block_w - 1
+            end_y = start_y + block_h - 1
 
-    # Execute via parallel (single branch)
-    results = ttnn.parallel([branch])
+            core_range_set = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y))]
+            )
 
-    # Verify output against torch reference
-    output = ttnn.to_torch(ttnn.from_device(results[0][0]))
-    assert_with_pcc(torch_output, output, 0.999)
+            # Create sharded memory config for this block
+            shard_spec = ttnn.ShardSpec(core_range_set, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+            mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=shard_spec,
+            )
+
+            # Move tensors to device with sharded memory config
+            input_tensor = ttnn.from_torch(
+                torch_inputs[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem_config,
+            )
+            residual_tensor = ttnn.from_torch(
+                torch_residuals[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem_config,
+            )
+            weight_tensor = ttnn.from_torch(
+                torch_weights[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            bias_tensor = ttnn.from_torch(
+                torch_biases[branch_idx],
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+            # Create sharded layernorm program config
+            program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(block_w, block_h),
+                subblock_w=tiles_per_core_w,
+                block_h=tiles_per_core_h,
+                block_w=tiles_per_core_w,
+                inplace=False,
+            )
+
+            # Create branch for this block using sharded layer_norm
+            branch = ttnn.parallel.branch(
+                ttnn.layer_norm,
+                input_tensor,
+                cores=core_range_set,
+                epsilon=1e-5,
+                weight=weight_tensor,
+                bias=bias_tensor,
+                residual_input_tensor=residual_tensor,
+                memory_config=mem_config,
+                program_config=program_config,
+            )
+            branches.append(branch)
+
+    # Execute all branches in parallel
+    results = ttnn.parallel(branches)
+
+    # Verify each branch output against torch reference
+    for i in range(num_branches):
+        output = ttnn.to_torch(ttnn.from_device(results[i][0]))
+        assert_with_pcc(torch_outputs[i], output, 0.999)
