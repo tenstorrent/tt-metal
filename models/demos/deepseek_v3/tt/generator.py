@@ -429,8 +429,10 @@ class DeepseekGenerator:
         self.sampling.reset_seed(sampling.seed)
         return sampling
 
-    def _sample_tokens_device(self, logits: ttnn.Tensor, tt_out_tok: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        tt_out = self.sampling.sample(logits, enable_trace=False, tt_out_tok=tt_out_tok)
+    def _sample_tokens_device(
+        self, logits: ttnn.Tensor, tt_out_tok: ttnn.Tensor | None = None, enable_trace: bool = False
+    ) -> ttnn.Tensor:
+        tt_out = self.sampling.sample(logits, enable_trace=enable_trace, tt_out_tok=tt_out_tok)
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
             if tt_log_probs is not None:
@@ -751,13 +753,16 @@ class DeepseekGenerator:
                 logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                 profiler.start(f"decode_time_{gen_idx}")
                 if self.enable_trace:
-                    tt_next_tokens = self.decode_forward(
+                    logits = self.decode_forward(
                         next_tokens,
                         positions,
                         self.batch_size_per_row,
                         profiler,
                         gen_idx,
                         enable_trace=True,
+                    )
+                    tt_next_tokens = self._sample_tokens_device(
+                        logits, tt_out_tok=self._trace_tokens, enable_trace=True
                     )
                 else:
                     logits = self.decode_forward_tt(
@@ -1048,10 +1053,7 @@ class DeepseekGenerator:
         )
         self._trace_logits = logits
         self._increment_decode_positions_device()
-        sampled = self.sampling.sample(logits, enable_trace=False, tt_out_tok=self._trace_tokens)
-        if isinstance(sampled, tuple):
-            sampled = sampled[0]
-        self._trace_output = sampled
+        self._trace_output = logits
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
@@ -1072,7 +1074,7 @@ class DeepseekGenerator:
             # Capture trace and return trace output
             if self._trace_id is None:
                 self._capture_decode_trace(tokens, positions, batch_size_per_row)
-                # First call: return the captured run's output
+                # First call: return the captured run's output (logits)
                 assert self._trace_output is not None
                 return self._trace_output
 
