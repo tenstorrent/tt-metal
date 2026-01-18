@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "hang_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn::prim {

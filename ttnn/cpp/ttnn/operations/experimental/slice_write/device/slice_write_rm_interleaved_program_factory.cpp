@@ -17,7 +17,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -184,9 +184,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 }  // namespace
 
 SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -322,9 +320,9 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
 void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& operation_attributes,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;
     uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
@@ -365,4 +363,4 @@ void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

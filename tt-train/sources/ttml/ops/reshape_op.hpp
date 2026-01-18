@@ -1,11 +1,15 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
-#include <core/ttnn_all_includes.hpp>
+#include <span>
 
 #include "autograd/tensor.hpp"
 
 namespace ttml::ops {
 
-autograd::TensorPtr reshape_op(const autograd::TensorPtr& tensor, const ttnn::Shape& new_shape);
+autograd::TensorPtr reshape(const autograd::TensorPtr& tensor, std::span<uint32_t> shape);
 
-}
+}  // namespace ttml::ops

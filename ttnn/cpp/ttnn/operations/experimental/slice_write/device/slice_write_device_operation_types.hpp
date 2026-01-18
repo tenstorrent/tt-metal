@@ -9,26 +9,22 @@
 #include <utility>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct SliceWriteParams {
     const ttnn::Shape slice_start;
     const ttnn::Shape slice_end;
     const ttnn::Shape step;
 };
 
-struct tensor_args_t {
+struct SliceWriteInputs {
     Tensor input;
     Tensor output;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 using ReaderKernelArgs = std::vector<uint32_t>;
 using WriterKernelArgs = std::vector<uint32_t>;
 using KernelRuntimeArgs = std::pair<ReaderKernelArgs, WriterKernelArgs>;
 using SliceWriteRuntimeArgs = std::vector<KernelRuntimeArgs>;
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::experimental::prim

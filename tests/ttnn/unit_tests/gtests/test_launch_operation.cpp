@@ -9,7 +9,6 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
-#include "ttnn/old_infra_device_operation.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -106,58 +105,7 @@ struct NewInfraWorkloadFactory {
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
-// Old infrastructure device operation that uses the "create_program" method
-struct OldInfraDeviceOpWithCreateProgram {
-    void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& /*input_tensors*/) const {
-        return {};
-    }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& /*input_tensors*/) const { return {}; }
-
-    auto create_program(const std::vector<Tensor>& /*input_tensors*/, std::vector<Tensor>& /*output_tensors*/) const {
-        return tt::tt_metal::operation::ProgramWithCallbacks();
-    }
-};
-
-// Old infrastructure device operation that uses the "create_program_at" method
-struct OldInfraDeviceOpWithCreateMeshWorkload {
-    void validate(const std::vector<Tensor>& input_tensors) const {}
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& /*input_tensors*/) const {
-        return {};
-    }
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& /*input_tensors*/) const { return {}; }
-
-    auto create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& /*mesh_coordinate_range_set*/,
-        const std::vector<Tensor>& /*input_tensors*/,
-        std::vector<Tensor>& /*output_tensors*/) const {
-        return tt::tt_metal::operation::MeshWorkloadWithCallbacks();
-    }
-};
-
-TEST(LaunchOperationTest, OldInfraSelectsMeshWorkloadFactory) {
-    auto old_infra_attributes_create_program =
-        tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreateProgram{});
-    auto old_infra_attributes_create_mesh_workload =
-        tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreateMeshWorkload{});
-
-    using OldInfraDeviceOperation = tt::tt_metal::operation::OldInfraDeviceOperation<Tensors>;
-
-    EXPECT_TRUE(std::holds_alternative<OldInfraDeviceOperation::ProgramFactory>(
-        OldInfraDeviceOperation::select_program_factory(old_infra_attributes_create_program, {})));
-
-    EXPECT_TRUE(std::holds_alternative<OldInfraDeviceOperation::MeshWorkloadFactory>(
-        OldInfraDeviceOperation::select_program_factory(old_infra_attributes_create_mesh_workload, {})));
-}
-
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
-    auto old_infra_attrs = tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreateProgram{});
-
-    EXPECT_EQ(
-        device_operation::MeshDeviceOperationAdapter<
-            tt::tt_metal::operation::OldInfraDeviceOperation<Tensors>>::get_type_name(old_infra_attrs),
-        "OldInfraDeviceOpWithCreateProgram");
-
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
         device_operation::MeshDeviceOperationAdapter<ExampleDeviceOperation>::get_type_name(

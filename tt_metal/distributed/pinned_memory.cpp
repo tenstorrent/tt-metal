@@ -21,6 +21,8 @@
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <distributed/mesh_device_impl.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -248,7 +250,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
-            auto* physical_device = event.device()->get_device(coord);
+            auto* physical_device = event.device()->impl().get_device(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
                 break;
@@ -325,7 +327,7 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     devices.reserve(coordinates.size());
     for (const auto& coord : coordinates) {
         if (view.contains(coord)) {
-            if (auto* device = view.get_device(coord)) {
+            if (auto* device = view.impl().get_device(coord)) {
                 devices.push_back(device);
             }
         }
@@ -360,4 +362,41 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     return params;
 }
 
+class HostBufferPinnedMemoryHelper {
+public:
+    static void SetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        host_buffer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static std::shared_ptr<PinnedMemory> GetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+};
+
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    HostBufferPinnedMemoryHelper::SetPinnedMemory(host_buffer, std::move(pinned_memory));
+}
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
+}
+
+class ShardDataTransferHelper {
+public:
+    static void SetPinnedMemory(
+        distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+        shard_data_transfer.pinned_memory_ = std::move(pinned_memory);
+    }
+    static const std::shared_ptr<PinnedMemory>& GetPinnedMemory(
+        const distributed::ShardDataTransfer& shard_data_transfer) {
+        return shard_data_transfer.pinned_memory_;
+    }
+};
+
+void ShardDataTransferSetPinnedMemory(
+    distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    ShardDataTransferHelper::SetPinnedMemory(shard_data_transfer, std::move(pinned_memory));
+}
+
+const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(
+    const distributed::ShardDataTransfer& shard_data_transfer) {
+    return ShardDataTransferHelper::GetPinnedMemory(shard_data_transfer);
+}
 }  // namespace tt::tt_metal::experimental

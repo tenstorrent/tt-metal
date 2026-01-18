@@ -22,6 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_fabric::test {
 
@@ -105,7 +106,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto view = mesh->get_view();
     auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
         for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
-            if (view.get_device(c)->id() == phys) {
+            if (view.impl().get_device(c)->id() == phys) {
                 return c;
             }
         }
@@ -143,7 +144,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     for (uint32_t r = 0; r < M; ++r) {
         for (uint32_t c = 0; c < N; ++c) {
             Dist::MeshCoordinate mc{(int)r, (int)c};
-            auto* dev = view.get_device(mc);
+            auto* dev = view.impl().get_device(mc);
             if (!dev) {
                 continue;
             }
@@ -231,7 +232,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
     for (const auto& mc : dst_coords) {
-        auto* dev_i = view.get_device(mc);
+        auto* dev_i = view.impl().get_device(mc);
         auto xy_i = dev_i->worker_core_from_logical_core(p.receiver_core);
         if (xy_i != rx_xy) {
             ADD_FAILURE() << "Receiver worker XY mismatch across chips";
@@ -317,7 +318,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // === Per-direction fabric connections (W,E,N,S) ===
     auto coord_to_fabric_id = [&](Dist::MeshCoordinate mc) -> tt::tt_fabric::FabricNodeId {
-        auto* dev = view.get_device(mc);
+        auto* dev = view.impl().get_device(mc);
         TT_FATAL(dev != nullptr, "No device at mesh coord ({}, {})", (int)mc[0], (int)mc[1]);
         ChipId phys = dev->id();
         return cp.get_fabric_node_id_from_physical_chip_id(phys);

@@ -1,5 +1,6 @@
 #include "qwen3_attention.hpp"
 
+#include <array>
 #include <core/ttnn_all_includes.hpp>
 
 #include "dropout_module.hpp"
@@ -59,14 +60,18 @@ ttml::autograd::TensorPtr Qwen3Attention::operator()(
     auto B = q_shape[0];
     auto S = q_shape[2];
 
-    auto q_reshaped = ops::reshape_op(q, ttnn::Shape({B, 1, S * m_num_heads, m_head_dim}));
-    auto k_reshaped = ops::reshape_op(k, ttnn::Shape({B, 1, S * m_num_groups, m_head_dim}));
+    std::array<uint32_t, 4> q_reshaped_shape = {B, 1, S * m_num_heads, m_head_dim};
+    std::array<uint32_t, 4> k_reshaped_shape = {B, 1, S * m_num_groups, m_head_dim};
+    auto q_reshaped = ops::reshape(q, q_reshaped_shape);
+    auto k_reshaped = ops::reshape(k, k_reshaped_shape);
 
     auto q_normed = (*m_q_norm)(q_reshaped);
     auto k_normed = (*m_k_norm)(k_reshaped);
 
-    q = ops::reshape_op(q_normed, q_shape);
-    k = ops::reshape_op(k_normed, k_shape);
+    std::array<uint32_t, 4> q_shape_arr = {q_shape[0], q_shape[1], q_shape[2], q_shape[3]};
+    std::array<uint32_t, 4> k_shape_arr = {k_shape[0], k_shape[1], k_shape[2], k_shape[3]};
+    q = ops::reshape(q_normed, q_shape_arr);
+    k = ops::reshape(k_normed, k_shape_arr);
 
     auto kv = ops::concat(std::vector<autograd::TensorPtr>{k, v}, 3);
 

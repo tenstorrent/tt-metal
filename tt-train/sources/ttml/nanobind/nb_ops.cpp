@@ -8,6 +8,8 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <span>
+
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
@@ -51,6 +53,8 @@ void py_module_types(nb::module_& m) {
 
     m.def_submodule("matmul");
     m.def_submodule("multi_head_utils");
+    m.def_submodule("attention");
+    m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("unary");
@@ -121,7 +125,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_embedding = static_cast<nb::module_>(m.attr("embedding"));
-        py_embedding.def("embedding_op", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
+        py_embedding.def("embedding", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
     }
 
     {
@@ -137,7 +141,17 @@ void py_module(nb::module_& m) {
 
     {
         auto py_linear = static_cast<nb::module_>(m.attr("linear"));
-        py_linear.def("linear_op", &ttml::ops::linear_op, nb::arg("tensor"), nb::arg("weight"), nb::arg("bias"));
+        // Overload with optional bias (None support)
+        py_linear.def(
+            "linear",
+            [](const autograd::TensorPtr& tensor,
+               const autograd::TensorPtr& weight,
+               std::optional<const autograd::TensorPtr> bias) -> autograd::TensorPtr {
+                return ttml::ops::linear_op(tensor, weight, bias.value_or(nullptr));
+            },
+            nb::arg("tensor"),
+            nb::arg("weight"),
+            nb::arg("bias") = nb::none());
         py_linear.def(
             "ttnn_linear_backward",
             &ttml::ops::ttnn_linear_backward,
@@ -208,6 +222,41 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_attention = static_cast<nb::module_>(m.attr("attention"));
+        // Overload 1: mask as ttml.autograd.Tensor (or None)
+        py_attention.def(
+            "scaled_dot_product_attention",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
+        // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
+        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        py_attention.def(
+            "scaled_dot_product_attention",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+                std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
+                if (mask.has_value()) {
+                    mask_ptr = autograd::create_tensor(mask.value(), false);
+                }
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
+    }
+
+    {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
         py_rope.def(
@@ -257,6 +306,20 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_reshape = static_cast<nb::module_>(m.attr("reshape"));
+        // Wrapper to convert Python list to std::span
+        py_reshape.def(
+            "reshape",
+            [](const autograd::TensorPtr& tensor, const std::vector<int32_t>& shape) -> autograd::TensorPtr {
+                // Convert int32_t vector to uint32_t span
+                std::vector<uint32_t> shape_uint32(shape.begin(), shape.end());
+                return ttml::ops::reshape(tensor, std::span<uint32_t>(shape_uint32));
+            },
+            nb::arg("tensor"),
+            nb::arg("shape"));
+    }
+
+    {
         auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
         py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
         py_rmsnorm.def(
@@ -292,14 +355,6 @@ void py_module(nb::module_& m) {
     }
 
     m.def("concat", &ttml::ops::concat, nb::arg("tensors"), nb::arg("dim"));
-
-    m.def(
-        "reshape",
-        [](const autograd::TensorPtr& tensor, const std::vector<uint32_t>& shape) {
-            return ttml::ops::reshape_op(tensor, ttnn::Shape(shape));
-        },
-        nb::arg("tensor"),
-        nb::arg("shape"));
 }
 
 }  // namespace ttml::nanobind::ops
