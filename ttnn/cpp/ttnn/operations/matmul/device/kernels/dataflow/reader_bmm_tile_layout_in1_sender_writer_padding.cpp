@@ -530,7 +530,7 @@ void kernel_main() {
                                 out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                             }
 
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(cb_id_out0, out_subblock_tile_count);
                             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                         }
@@ -574,5 +574,5 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

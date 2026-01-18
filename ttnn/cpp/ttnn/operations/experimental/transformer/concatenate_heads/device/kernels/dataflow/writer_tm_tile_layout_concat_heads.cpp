@@ -36,6 +36,6 @@ void kernel_main() {
         out_num_tiles_read += in0_w_tiles;
     }
 
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     cb_pop_front(cb_id_out0, out_num_tiles_read);
 }

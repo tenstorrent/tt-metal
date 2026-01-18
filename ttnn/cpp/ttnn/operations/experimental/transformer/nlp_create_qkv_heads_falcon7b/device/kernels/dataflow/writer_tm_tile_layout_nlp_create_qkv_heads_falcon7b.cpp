@@ -93,7 +93,7 @@ void kernel_main() {
 
         kv_out_tensor_tile_id += kv_num_tiles;
 
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out0, out_num_tiles_read);
     }
 }

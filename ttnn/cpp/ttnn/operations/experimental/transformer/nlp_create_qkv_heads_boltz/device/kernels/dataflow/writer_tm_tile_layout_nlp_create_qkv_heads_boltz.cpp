@@ -57,7 +57,7 @@ void kernel_main() {
                 l1_read_addr = get_read_ptr(cb_id_qv);
                 noc_async_write_tile(q_out_tensor_current_tile_id, sq, l1_read_addr);
 
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(cb_id_qv, out_num_tiles_read);
 
                 q_out_tensor_current_tile_id++;
@@ -80,7 +80,7 @@ void kernel_main() {
                 l1_read_addr = get_read_ptr(cb_id_k);
                 noc_async_write_tile(k_out_tensor_current_tile_id, sk, l1_read_addr);
 
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(cb_id_k, out_num_tiles_read);
 
 #ifndef TRANSPOSE_K_HEADS
@@ -103,7 +103,7 @@ void kernel_main() {
                 l1_read_addr = get_read_ptr(cb_id_qv);
                 noc_async_write_tile(v_out_tensor_current_tile_id, sv, l1_read_addr);
 
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(cb_id_qv, out_num_tiles_read);
 
                 v_out_tensor_current_tile_id++;

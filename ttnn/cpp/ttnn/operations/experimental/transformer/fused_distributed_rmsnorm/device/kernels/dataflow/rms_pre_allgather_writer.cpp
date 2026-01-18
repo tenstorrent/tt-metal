@@ -35,5 +35,5 @@ void kernel_main() {
         noc_async_writes_flushed();
         cb_pop_front(output_cb, output_tiles_per_row);
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

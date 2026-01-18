@@ -13,7 +13,7 @@
 template <bool is_output_cb, bool is_wr_ptr>
 void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
     noc_async_read_barrier();
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     for (uint8_t i = 0; i < 32; ++i) {
         DPRINT << TileSlice(
                       cb_id,

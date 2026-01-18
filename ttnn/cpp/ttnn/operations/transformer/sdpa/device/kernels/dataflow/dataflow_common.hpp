@@ -794,7 +794,7 @@ void write_block(
             read_ptr += inner_ptr_stride;
         }
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     cb_pop_front(cb_id, num_tiles);
 }
 

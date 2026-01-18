@@ -155,10 +155,11 @@ void kernel_main() {
                             }
                         }
                     }
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_out, out_chunk_tiles);
                 }
             }
         }
     }
+    noc_async_write_barrier();
 }
