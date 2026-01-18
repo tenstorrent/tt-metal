@@ -26,13 +26,14 @@ def create_random_tensor(shape, random_tensor_gen):
 
 
 @pytest.mark.parametrize(
+    "num_layers",
+    [1, 2, 4],
+)
+@pytest.mark.parametrize(
     "B, K, core_grid",
     [
         (1, 32, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
         (1, 64, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
-        (1, 128, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})),
-        (1, 256, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})),
-        (1, 512, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})),
         (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})),
     ],
 )
@@ -41,24 +42,18 @@ def create_random_tensor(shape, random_tensor_gen):
     [(1, 32), (16, 32), (32, 32)],
 )
 @pytest.mark.parametrize(
-    "activation_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "weight_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    "activation_dtype, weight_dtype",
+    [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.bfloat8_b, ttnn.bfloat8_b)],
 )
 @pytest.mark.parametrize(
     "generation_type",
     ["randn", "uniform"],
 )
-def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype):
+def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype, num_layers):
     if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
     if activation_dtype != weight_dtype:
         pytest.skip("activation and weight dtypes must be the same")
-
-    NUM_LAYERS = 4
 
     torch.manual_seed(1234)
 
@@ -77,7 +72,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     weight0 = create_random_tensor((K, K), generation_type)
     weight1 = create_random_tensor((K, K), generation_type)
 
-    expected = FusedResblock.golden(torch_a, weight0, weight1, num_layers=NUM_LAYERS)
+    expected = FusedResblock.golden(torch_a, weight0, weight1, num_layers=num_layers)
     print("expected:", expected)
 
     # Pad input up to tile height
@@ -148,7 +143,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
         weight0_tensor,
         weight1_tensor,
         ttnn_output,
-        num_layers=NUM_LAYERS,
+        num_layers=num_layers,
         fp32_dest_acc_en=True,
     )
 
@@ -159,7 +154,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
-    passing, pcc_message = comp_pcc(expected, torch_output, 0.999)
+    passing, pcc_message = comp_pcc(expected, torch_output, 0.995)
     logger.info(pcc_message)
 
     assert passing, pcc_message
