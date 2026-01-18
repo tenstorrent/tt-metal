@@ -46,7 +46,7 @@ void kernel_main() {
             // If L1 aligned, write directly from the circular buffer
             noc_async_write(l1_addr, dst_noc_addr, stick_nbytes * patch_size);
         }
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_in0, 1);
         dst_index++;
     }

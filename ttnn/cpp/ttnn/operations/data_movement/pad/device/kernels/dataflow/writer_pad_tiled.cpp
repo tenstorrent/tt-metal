@@ -70,12 +70,12 @@ void kernel_main() {
             cb_wait_front(input_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(input_cb_id);
             noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
             cb_pop_front(input_cb_id, 1);
         } else {
             noc_async_write(l1_write_addr, dst_noc_addr, page_size);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
         }
         advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
         output_page_offset++;
