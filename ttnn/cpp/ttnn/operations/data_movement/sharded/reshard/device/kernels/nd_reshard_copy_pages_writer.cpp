@@ -27,7 +27,7 @@ void kernel_main() {
     for (const auto& page : pages) {
         cb_wait_front(cb_id, one_tile);
         noc_async_write(cb_addr, page.noc_addr(), page_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id, one_tile);
     }
 }
