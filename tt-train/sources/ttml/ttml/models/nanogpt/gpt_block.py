@@ -19,6 +19,51 @@ from .gpt_mlp import GPTMLP
 from .multi_head_attention import MultiHeadAttention
 
 
+class LayerNorm(AbstractModuleBase):
+    """Layer normalization module with gamma and beta parameters."""
+
+    def __init__(self, embedding_dim: int, bias: bool = True) -> None:
+        """Initialize layer norm.
+
+        Args:
+            embedding_dim: Dimension of embeddings
+            bias: Whether to use bias (beta) parameter
+        """
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+
+        # Layer norm requires gamma (scale) and beta (shift) parameters
+        ln_shape = (1, 1, 1, embedding_dim)
+        gamma_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
+        gamma_tensor = ttml.autograd.Tensor.from_numpy(
+            gamma_np, layout=ttnn.Layout.TILE
+        )
+        self.gamma = Parameter(gamma_tensor)
+
+        if bias:
+            beta_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
+            beta_tensor = ttml.autograd.Tensor.from_numpy(
+                beta_np, layout=ttnn.Layout.TILE
+            )
+            self.beta = Parameter(beta_tensor)
+        else:
+            self.beta = None
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Forward pass of layer norm.
+
+        Args:
+            x: Input tensor
+
+        Returns:
+            Normalized output tensor
+        """
+        return ttml.ops.layernorm.layernorm(
+            x, self.gamma.tensor, self.beta.tensor if self.beta else None
+        )
+
+
 class GPTBlock(AbstractModuleBase):
     """GPT transformer block with attention and MLP."""
 
@@ -43,38 +88,8 @@ class GPTBlock(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # Layer norms
-        # Layer norm requires gamma and beta parameters (use ml_dtypes.bfloat16)
-        # Layer norm parameters must be in TILE layout
-        ln_shape = (1, 1, 1, embedding_dim)
-        gamma1_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma1_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma1_np, layout=ttnn.Layout.TILE
-        )
-        self.ln1_gamma = Parameter(gamma1_tensor)
-
-        if bias:
-            beta1_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta1_tensor = ttml.autograd.Tensor.from_numpy(
-                beta1_np, layout=ttnn.Layout.TILE
-            )
-            self.ln1_beta = Parameter(beta1_tensor)
-        else:
-            self.ln1_beta = None
-
-        gamma2_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma2_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma2_np, layout=ttnn.Layout.TILE
-        )
-        self.ln2_gamma = Parameter(gamma2_tensor)
-
-        if bias:
-            beta2_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta2_tensor = ttml.autograd.Tensor.from_numpy(
-                beta2_np, layout=ttnn.Layout.TILE
-            )
-            self.ln2_beta = Parameter(beta2_tensor)
-        else:
-            self.ln2_beta = None
+        self.ln1 = LayerNorm(embedding_dim, bias)
+        self.ln2 = LayerNorm(embedding_dim, bias)
 
         # Attention and MLP
         self.attention = MultiHeadAttention(embedding_dim, num_heads, dropout)
@@ -100,20 +115,14 @@ class GPTBlock(AbstractModuleBase):
         # Pre-norm attention with residual (matching C++)
         # residual = input; x = (*ln1)(input); x = (*attention)(x, mask); x = ops::add(x, residual)
         residual = x
-        # Use fused layernorm (not composite) for better performance
-        x = ttml.ops.layernorm.layernorm(
-            x, self.ln1_gamma.tensor, self.ln1_beta.tensor if self.ln1_beta else None
-        )
+        x = self.ln1(x)
         x = self.attention(x, mask)
         x = ttml.ops.binary.add(x, residual)
 
         # Pre-norm MLP with residual (matching C++)
         # residual = x; x = (*ln2)(x); x = (*mlp)(x); x = ops::add(x, residual)
         residual = x
-        # Use fused layernorm (not composite) for better performance
-        x = ttml.ops.layernorm.layernorm(
-            x, self.ln2_gamma.tensor, self.ln2_beta.tensor if self.ln2_beta else None
-        )
+        x = self.ln2(x)
         x = self.mlp(x)
         x = ttml.ops.binary.add(x, residual)
 
