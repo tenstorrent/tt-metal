@@ -74,5 +74,5 @@ void kernel_main() {
         cb_pop_front(untilized_input_cb_id, Wt);
     }
     // Delay syncing the writes to maximize perf.
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

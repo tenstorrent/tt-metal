@@ -37,7 +37,7 @@ void kernel_main() {
 
         noc_semaphore_set_multicast_loopback_src(
             reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks, false);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     };
 
     const auto& global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)
@@ -50,7 +50,7 @@ void kernel_main() {
             stats_tiles * num_tiles_per_worker_bytes,
             num_blocks,
             false);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     };
 
     cb_wait_front(cb_stats_reduced, stats_tiles * block_h);

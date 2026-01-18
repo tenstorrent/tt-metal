@@ -490,5 +490,5 @@ void kernel_main() {
         cb_pop_front(cb_out_indices, 1);
         cb_pop_front(cb_out_weights, 1);
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

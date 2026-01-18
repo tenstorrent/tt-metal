@@ -55,5 +55,5 @@ inline void write_resharded_data(
         }
         worker_core_read_offset += write_size;
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

@@ -38,7 +38,7 @@ void kernel_main() {
             // The data is already laid out correctly in the CB pages
             noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
 
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
 
             // Pop the ntiles_c pages we just consumed
             cb_pop_front(cb_id_out0, ntiles_c);

@@ -38,7 +38,7 @@ void kernel_main() {
 
                 noc_async_write_tile(tile_id, s, l1_read_addr);
 
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
 
                 cb_pop_front(cb_id_out0, onetile);
 

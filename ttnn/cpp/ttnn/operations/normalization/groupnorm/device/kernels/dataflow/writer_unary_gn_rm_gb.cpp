@@ -244,7 +244,7 @@ void kernel_main() {
                     // l1_read_addr += (single_tile_size_bytes * (block_w-block_w_curr));
                 }
                 out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 cb_pop_front(cb_out, out_block_hw_normal);
             }
 

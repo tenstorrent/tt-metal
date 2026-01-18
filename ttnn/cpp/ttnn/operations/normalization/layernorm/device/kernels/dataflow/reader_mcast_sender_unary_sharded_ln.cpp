@@ -256,7 +256,7 @@ void kernel_main() {
                     reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
 
                 l1_read_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
             }
         }
     };

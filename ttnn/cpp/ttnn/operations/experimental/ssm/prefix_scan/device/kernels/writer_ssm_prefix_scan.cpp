@@ -25,5 +25,5 @@ void kernel_main() {
     uint32_t src_addr = get_read_ptr(cb_h_acc);
     uint64_t dst_addr = get_noc_addr(get_write_ptr(cb_h_out));
     noc_async_write(src_addr, dst_addr, hidden_state_len_bytes);
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }
