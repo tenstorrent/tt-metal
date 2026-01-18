@@ -126,8 +126,12 @@ def pytest_configure(config):
 
     with_coverage = config.getoption("--coverage", default=False)
     detailed_artefacts = config.getoption("--detailed-artefacts", default=False)
+    no_debug_symbols = config.getoption("--no-debug-symbols", default=False)
     TestConfig.setup_build(
-        Path(os.environ["LLK_HOME"]), with_coverage, detailed_artefacts
+        Path(os.environ["LLK_HOME"]),
+        with_coverage,
+        detailed_artefacts,
+        no_debug_symbols,
     )
 
     # Create directories from all processes - lock in create_directories handles race
@@ -326,6 +330,13 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Skip C++ code generation for fused tests and use existing files",
+    )
+
+    parser.addoption(
+        "--no-debug-symbols",
+        action="store_true",
+        default=False,
+        help="Compile without debug symbols (-g flag) to save disk space",
     )
 
 

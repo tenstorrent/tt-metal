@@ -1,0 +1,135 @@
+name: 📊 Collect Test Durations
+
+on:
+  schedule:
+    # Run every Sunday at 2AM UTC to collect fresh duration data
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+
+  collect-wormhole-durations:
+    name: "🌀 Collect Wormhole test durations (all tests)"
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    needs: build-images
+    timeout-minutes: 360
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-images.outputs.docker-image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install SFPI
+        shell: bash
+        run: |
+          cd tests
+          CHIP_ARCH=wormhole ./setup_testing_env.sh
+          cd ..
+
+      - name: Compile all tests and collect durations
+        shell: bash
+        run: |
+          export CHIP_ARCH=wormhole
+          cd tests/python_tests/
+
+          echo "Compiling all tests (regular, perf, nightly) to collect durations"
+          pytest --compile-producer -n 40 \
+                -m "not quasar" \
+                --store-durations \
+                --no-debug-symbols \
+                --override-ini="addopts=-v --tb=short" --timeout=60 \
+                --junitxml=pytest-duration-wormhole-all.xml .
+
+      - name: Upload duration data
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-durations-wormhole
+          path: tests/python_tests/.test_durations
+          retention-days: 90
+          include-hidden-files: true
+
+  collect-blackhole-durations:
+    name: "🕳️ Collect Blackhole test durations (all tests)"
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    needs: build-images
+    timeout-minutes: 360
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-images.outputs.docker-image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install SFPI
+        shell: bash
+        run: |
+          cd tests
+          CHIP_ARCH=blackhole ./setup_testing_env.sh
+          cd ..
+
+      - name: Compile all tests and collect durations
+        shell: bash
+        run: |
+          export CHIP_ARCH=blackhole
+          cd tests/python_tests/
+
+          echo "Compiling all tests (regular, perf, nightly) to collect durations"
+          pytest --compile-producer -n 40 \
+                -m "not quasar" \
+                --store-durations \
+                --no-debug-symbols \
+                --override-ini="addopts=-v --tb=short" --timeout=60 \
+                --junitxml=pytest-duration-blackhole-all.xml .
+
+      - name: Upload duration data
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-durations-blackhole
+          path: tests/python_tests/.test_durations
+          retention-days: 90
+          include-hidden-files: true
+
+  summary:
+    name: "📊 Collection Summary"
+    if: always()
+    needs:
+      - collect-wormhole-durations
+      - collect-blackhole-durations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check collection results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  report-status:
+    name: "🔔 Report status"
+    runs-on: ubuntu-latest
+    if: always()
+    needs: summary
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "Test Duration Collection"
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
+          status: ${{ needs.summary.result }}

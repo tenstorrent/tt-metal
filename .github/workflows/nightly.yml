@@ -35,6 +35,7 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
+      use_durations: true
 
   nightly-test-blackhole:
     name: "🕳️ Nightly Tests (Blackhole)"
@@ -49,6 +50,7 @@ jobs:
       random_order: false
       timeout_minutes: 360
       coverage: true
+      use_durations: true
 
   nightly-summary:
     name: "📊 Nightly Summary"

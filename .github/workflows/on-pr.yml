@@ -154,6 +154,7 @@ jobs:
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 4
       pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: true
 
   setup-and-test-blackhole:
     name: "🕳️ Perform checks (Blackhole)"
@@ -168,6 +169,7 @@ jobs:
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 4
       pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: true
 
   build-quasar:
     name: "🌟 Build Quasar tests"
@@ -201,6 +203,7 @@ jobs:
       test_splits: 8
       pytest_markers: "perf"
       timeout_minutes: 240
+      use_durations: true
 
   check-all-green:
     name: "✅ Check all green"

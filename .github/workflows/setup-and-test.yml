@@ -35,6 +35,11 @@ on:
         required: false
         default: false
         type: boolean
+      use_durations:
+        description: "Use previously collected test durations for balanced splitting"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   checks: write
@@ -76,6 +81,22 @@ jobs:
           ./setup_testing_env.sh
           cd ..
 
+      # Step 2.5: Download test duration data for balanced splitting
+      # Downloads the latest available artifact from main branch only
+      - name: Download test duration data
+        if: ${{ inputs.use_durations }}
+        uses: dawidd6/action-download-artifact@v12
+        continue-on-error: true
+        with:
+          workflow: collect-test-durations.yml
+          workflow_conclusion: success
+          branch: main
+          name: test-durations-${{ contains(inputs.runs_on, 'n150') && 'wormhole' || 'blackhole' }}
+          path: tests/python_tests/
+          if_no_artifact_found: warn
+          search_artifacts: true
+          check_artifacts: true
+
       # Step 3: Run the tests
       - name: Run tests
         shell: bash
@@ -100,11 +121,19 @@ jobs:
             COVERAGE_FLAG="--coverage"
           fi
 
+          DURATIONS_FLAG=""
+          if [[ "${{ inputs.use_durations }}" == "true" ]] && [[ -f ".test_durations" ]]; then
+            DURATIONS_FLAG="--durations-path=.test_durations"
+            echo "Using duration-based test splitting from .test_durations"
+          else
+            echo "Duration file not found or not enabled, using default splitting"
+          fi
+
           echo "Compiling artefacts"
           pytest $COVERAGE_FLAG --compile-producer -n 10 \
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
-                --splits $SPLITS --group ${{ matrix.test_group }} \
+                --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
 
@@ -112,7 +141,7 @@ jobs:
           pytest $COVERAGE_FLAG --compile-consumer \
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
-                --splits $SPLITS --group ${{ matrix.test_group }} \
+                --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml .
 
