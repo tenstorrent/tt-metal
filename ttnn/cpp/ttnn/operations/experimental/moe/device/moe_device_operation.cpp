@@ -34,8 +34,7 @@ MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tens
 
 std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tensor_args_t> MoEDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const Tensor& w0_tensor,
-    const Tensor& w1_tensor,
+    const Tensor& w0_w1_tensor,
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
@@ -44,8 +43,7 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
         operation_attributes_t{.num_experts = num_experts, .layer_id = layer_id},
         tensor_args_t{
             .input_tensor = input_tensor,
-            .w0_tensor = w0_tensor,
-            .w1_tensor = w1_tensor,
+            .w0_w1_tensor = w0_w1_tensor,
             .w2_tensor = w2_tensor,
             .output_tensor = output_tensor}};
 }

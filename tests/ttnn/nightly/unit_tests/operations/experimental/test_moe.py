@@ -361,14 +361,25 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
     # Collect accuracy metrics for all layers and experts
     all_accuracy_metrics = []
 
-    tt_output = ttnn.experimental.moe(
-        tt_input,
-        w0_tensor=tt_weight0,
-        w1_tensor=tt_weight1,
-        w2_tensor=tt_weight2,
-        output_tensor=tt_output,
-    )
-    tt_output = ttnn.to_torch(tt_output)
+    for layer_id in range(L):
+        if check_accuracy:
+            tt_input = ttnn.from_torch(
+                torch_input[layer_id],
+                dtype=in0_dtype,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=input_sharded_mem_config,
+            )
+
+        tt_output = ttnn.experimental.moe(
+            tt_input,
+            w0_w1_tensor=tt_w0_w1,
+            w2_tensor=tt_w2,
+            output_tensor=tt_output,
+            num_experts=E,
+            layer_id=layer_id,
+        )
+        tt_to_torch_output = ttnn.to_torch(tt_output)
 
     # if check_accuracy:
     #     with torch.no_grad():
