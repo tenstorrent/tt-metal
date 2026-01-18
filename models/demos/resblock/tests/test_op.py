@@ -58,7 +58,7 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
     if activation_dtype != weight_dtype:
         pytest.skip("activation and weight dtypes must be the same")
 
-    NUM_LAYERS = 1
+    NUM_LAYERS = 2
 
     torch.manual_seed(1234)
 
