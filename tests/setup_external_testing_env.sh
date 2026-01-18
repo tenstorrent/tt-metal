@@ -5,11 +5,7 @@
 
 # --- Configuration ---
 VENV_DIR=".venv"
-
-# Source centralized version configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../.github/scripts/versions.sh
-source "${SCRIPT_DIR}/../.github/scripts/versions.sh"
 
 # --- Functions ---
 
@@ -20,13 +16,6 @@ usage() {
     echo "  --clean      Remove existing setup (virtual environment, temporary files)."
     echo "  --help       Display this help message."
     exit 1
-}
-
-# Cleanup function for temporary files
-cleanup() {
-    if [[ -n "${TEMP_DIR:-}" && -d "$TEMP_DIR" ]]; then
-        rm -rf "$TEMP_DIR"
-    fi
 }
 
 # Check for required system commands
@@ -50,9 +39,6 @@ check_python_version() {
 }
 
 # --- Main Script ---
-
-# Set up trap for cleanup on exit
-trap cleanup EXIT
 
 # Parse arguments
 REUSE=false
@@ -104,19 +90,11 @@ if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then
     # Upgrade pip
     echo "Upgrading pip..."
     pip install --upgrade pip
+    pip install uv
 
-    # Download wheels to a temporary directory
-    TEMP_DIR=$(mktemp -d)
-
-    echo "Downloading tt-exalens from ${EXALENS_URL}"
-    wget -O "$TEMP_DIR/$EXALENS_WHEEL" "$EXALENS_URL"
-
-    echo "Downloading tt-smi from ${TT_SMI_URL}"
-    wget -O "$TEMP_DIR/$TT_SMI_WHEEL" "$TT_SMI_URL"
-
-    # Install all Python dependencies in one command for better resolution
+    # Install all Python dependencies
     echo "Installing Python dependencies..."
-    pip install -r requirements.txt "$TEMP_DIR/$TT_SMI_WHEEL" "$TEMP_DIR/$EXALENS_WHEEL"
+    uv pip install -q --system --index-strategy unsafe-best-match --no-cache-dir -r requirements.txt
 
     # Download and extract SFPI release
     ./setup_testing_env.sh

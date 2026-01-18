@@ -6,4 +6,5 @@
 set -e
 
 pip install -q --upgrade pip
-pip install -q --no-cache-dir -r /tmp/requirements_tests.txt
+pip install -q --no-cache-dir uv
+uv pip install -q --system --index-strategy unsafe-best-match --no-cache-dir -r /tmp/requirements_tests.txt

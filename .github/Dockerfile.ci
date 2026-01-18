@@ -7,11 +7,7 @@ ENV GITHUB_ACTIONS="true" \
 
 # Copy only necessary files
 COPY tests/requirements.txt /tmp/requirements_tests.txt
-COPY .github/scripts/install-tests-dependencies.sh \
-     .github/scripts/install-exalens.sh \
-     .github/scripts/install-smi.sh \
-     .github/scripts/versions.sh \
-     /tmp/scripts/
+COPY .github/scripts/install-tests-dependencies.sh /tmp/scripts/
 
 # Install all dependencies in a single layer and clean up
 RUN set -e \
@@ -19,10 +15,6 @@ RUN set -e \
     && chmod +x /tmp/scripts/*.sh \
     # Install pytest dependencies
     && /tmp/scripts/install-tests-dependencies.sh \
-    # Install tt-exalens
-    && /tmp/scripts/install-exalens.sh \
-    # Install tt-smi
-    && /tmp/scripts/install-smi.sh \
     # Clean up temporary files and caches
     && rm -rf /tmp/* \
     && rm -rf /root/.cache/pip \
