@@ -36,6 +36,9 @@ from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
+# Memory tracking utilities
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
 _autograd_ctx = None
 
 
@@ -281,11 +284,14 @@ def train_step(
     use_clip_grad_norm: bool,
     clip_grad_norm_max_norm: float,
     batch_size=None,
+    memory_snapshot_fn=None,
 ) -> tuple:
     """Single training step matching C++ implementation with proper gradient accumulation.
 
     Args:
         batch_size: Optional cached batch size (if None, will extract from input_tokens)
+        memory_snapshot_fn: Optional callback function to take memory snapshots.
+                           Should accept a name string as argument.
 
     Returns:
         Tuple of (loss_float, step_time_ms, should_step)
@@ -309,8 +315,16 @@ def train_step(
 
     loss_float = get_loss_value(loss)
 
+    # Memory snapshot after forward pass (matching C++: memory_snapshot("FORWARD_PASS"))
+    if memory_snapshot_fn:
+        memory_snapshot_fn("FORWARD_PASS")
+
     # Backward pass
     loss.backward(False)
+
+    # Memory snapshot after backward pass (matching C++: memory_snapshot("BACKWARD_PASS"))
+    if memory_snapshot_fn:
+        memory_snapshot_fn("BACKWARD_PASS")
 
     # Reset computation graph after backward (matching C++: ttml::autograd::ctx().reset_graph())
     get_autograd_ctx().reset_graph()
@@ -926,6 +940,11 @@ def main():
         action="store_true",
         help="Start fresh training, ignoring any existing checkpoints",
     )
+    parser.add_argument(
+        "--track_memory",
+        action="store_true",
+        help="Enable memory usage tracking (prints memory stats after first iteration)",
+    )
 
     args = parser.parse_args()
 
@@ -1038,6 +1057,13 @@ def main():
     instance = get_autograd_ctx()
     instance.open_device()
     instance.get_device()
+
+    # Start memory tracking if enabled
+    # Pass RunMode.NO_DISPATCH to measure memory usage of models that don't fit in device memory
+    memory_guard = None
+    if args.track_memory:
+        print("\nMemory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
 
     instance.set_seed(training_config.seed)
     np.random.seed(training_config.seed)
@@ -1183,6 +1209,10 @@ def main():
             )
             print(f"   - Total parameters: {total_params:,}")
 
+        # Memory snapshot after model creation
+        if args.track_memory:
+            MemoryUsageTracker.snapshot("MODEL_CREATION")
+
     # Check if we're in inference mode
     if args.prompt:
         # Inference mode: skip optimizer setup
@@ -1231,6 +1261,10 @@ def main():
                 print(
                     "   - Note: Kahan summation requested but not available in Python API"
                 )
+
+        # Memory snapshot after optimizer creation
+        if args.track_memory:
+            MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
         print("\n4. Setting up learning rate scheduler...")
         scheduler_fn = None
@@ -1296,6 +1330,15 @@ def main():
         max_steps = training_config.max_steps
         dataset_len = len(dataset)
 
+        # Flag to track if first iteration is complete (for memory tracking)
+        is_everything_compiled = False
+
+        # Helper for memory snapshots (only takes snapshots during first iteration)
+        def memory_snapshot(name: str):
+            nonlocal is_everything_compiled
+            if args.track_memory and not is_everything_compiled:
+                MemoryUsageTracker.snapshot(name)
+
         for epoch in range(training_config.num_epochs):
             np.random.shuffle(dataset)
 
@@ -1321,6 +1364,7 @@ def main():
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
                     batch_size=batch_size,
+                    memory_snapshot_fn=memory_snapshot if args.track_memory else None,
                 )
 
                 if should_step:
@@ -1345,6 +1389,15 @@ def main():
                         )
 
                     gradient_accumulator.reset()
+
+                    # Print memory usage after first iteration (matching C++)
+                    if args.track_memory and not is_everything_compiled:
+                        is_everything_compiled = True
+                        MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+                        MemoryUsageTracker.print_memory_usage()
+                        MemoryUsageTracker.clear()
+                        if memory_guard:
+                            memory_guard.release()
 
                     if global_step >= max_steps:
                         break

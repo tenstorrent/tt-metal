@@ -5,11 +5,16 @@
 #include "nb_core.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
+#include <iomanip>
+#include <sstream>
 #include <ttnn/distributed/distributed_tensor.hpp>
+
 #include "nanobind/nb_export_enum.hpp"
 #include "serialization/serializable.hpp"
 
@@ -25,6 +30,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "utils/memory_utils.hpp"
 
 namespace ttml::nanobind::core {
 
@@ -39,6 +45,37 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
     // Expose multihost DistributedContext under core.distributed as a non-owning type (not exposed by ttnn)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
+
+    // Utils submodule for memory tracking
+    m.def_submodule("utils");
+    auto py_utils = static_cast<nb::module_>(m.attr("utils"));
+
+    // Bind DRAMUsage struct
+    nb::class_<ttml::utils::DRAMUsage>(py_utils, "DRAMUsage")
+        .def_ro("peak", &ttml::utils::DRAMUsage::peak, "Peak memory usage in bytes")
+        .def_ro("total_allocations", &ttml::utils::DRAMUsage::total_allocations, "Total memory allocated in bytes")
+        .def_ro(
+            "total_deallocations", &ttml::utils::DRAMUsage::total_deallocations, "Total memory deallocated in bytes")
+        .def(
+            "__repr__",
+            [](const ttml::utils::DRAMUsage& usage) {
+                std::stringstream ss;
+                ss << "DRAMUsage(peak=" << usage.peak << ", total_allocations=" << usage.total_allocations
+                   << ", total_deallocations=" << usage.total_deallocations << ")";
+                return ss.str();
+            })
+        .def("__str__", [](const ttml::utils::DRAMUsage& usage) {
+            constexpr double MB = 1024.0 * 1024.0;
+            std::stringstream ss;
+            ss << "DRAM Usage:\n"
+               << "  Peak:          " << std::fixed << std::setprecision(2) << usage.peak / MB << " MB\n"
+               << "  Allocations:   " << usage.total_allocations / MB << " MB\n"
+               << "  Deallocations: " << usage.total_deallocations / MB << " MB";
+            return ss.str();
+        });
+
+    // Note: L1UsagePerCore (alias for ttnn::graph::PeakMemoryUsagePerCore) is already
+    // registered by ttnn. Use ttnn.graph.PeakMemoryUsagePerCore in Python.
 }
 
 void py_module(nb::module_& m) {
@@ -170,6 +207,231 @@ void py_module(nb::module_& m) {
             nb::arg("rank"),
             nb::arg("use_grad") = false,
             nb::rv_policy::reference);
+    }
+
+    // MemoryUsageTracker bindings under core.utils
+    {
+        auto py_utils = static_cast<nb::module_>(m.attr("utils"));
+
+        // Create a MemoryUsageTracker submodule
+        py_utils.def_submodule("MemoryUsageTracker", "Memory usage tracking utilities");
+        auto py_tracker = static_cast<nb::module_>(py_utils.attr("MemoryUsageTracker"));
+
+        // Note: RunMode enum is already registered by ttnn as ttnn.graph.RunMode
+        // Users should use ttnn.graph.RunMode.NORMAL or ttnn.graph.RunMode.NO_DISPATCH
+
+        // Internal holder for the non-movable ScopeGuard - allocated on heap
+        struct ScopeGuardHolder {
+            ttnn::ScopeGuard guard;
+
+            explicit ScopeGuardHolder(tt::tt_metal::IGraphProcessor::RunMode mode) :
+                guard(ttml::utils::MemoryUsageTracker::begin_capture(mode)) {
+            }
+
+            void release() {
+                guard.release();
+            }
+        };
+
+        // MemoryUsageGuard - Python-friendly wrapper using shared_ptr to heap-allocated holder
+        struct MemoryUsageGuard {
+            std::shared_ptr<ScopeGuardHolder> holder;
+
+            explicit MemoryUsageGuard(tt::tt_metal::IGraphProcessor::RunMode mode) :
+                holder(std::make_shared<ScopeGuardHolder>(mode)) {
+            }
+
+            MemoryUsageGuard() = default;
+
+            void release() {
+                if (holder) {
+                    holder->release();
+                }
+            }
+        };
+
+        nb::class_<MemoryUsageGuard>(py_tracker, "MemoryUsageGuard")
+            .def(
+                nb::init<tt::tt_metal::IGraphProcessor::RunMode>(),
+                nb::arg("mode") = tt::tt_metal::IGraphProcessor::RunMode::NORMAL)
+            .def("release", &MemoryUsageGuard::release, "Release the guard without calling cleanup (end_capture/clear)")
+            .def("__enter__", [](MemoryUsageGuard& self) -> MemoryUsageGuard& { return self; })
+            .def("__exit__", [](MemoryUsageGuard& self, nb::object, nb::object, nb::object) {
+                // On context exit, release the guard to prevent automatic cleanup
+                // User is expected to call end_capture/print_memory_usage/clear manually
+                self.release();
+                return false;
+            });
+
+        py_tracker.def(
+            "begin_capture",
+            [](tt::tt_metal::IGraphProcessor::RunMode mode) { return MemoryUsageGuard(mode); },
+            nb::arg("mode") = tt::tt_metal::IGraphProcessor::RunMode::NORMAL,
+            R"doc(
+            Begin capturing memory usage.
+
+            Args:
+                mode: Run mode for the graph processor (NORMAL or NO_DISPATCH).
+                      Use NO_DISPATCH to measure memory usage of models that don't fit in device memory.
+
+            Returns:
+                A MemoryUsageGuard object. The guard will automatically call end_capture()
+                and clear() when destroyed, unless release() is called first.
+
+            Example:
+                # Manual control (recommended for matching C++ behavior)
+                guard = MemoryUsageTracker.begin_capture()
+                # ... operations ...
+                MemoryUsageTracker.snapshot("CHECKPOINT")
+                # ... more operations ...
+                MemoryUsageTracker.end_capture("FINAL")
+                MemoryUsageTracker.print_memory_usage()
+                MemoryUsageTracker.clear()
+                guard.release()  # Prevent double cleanup
+
+            Warning:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "end_capture",
+            &ttml::utils::MemoryUsageTracker::end_capture,
+            nb::arg("name") = ttml::utils::MemoryUsageTracker::kDefaultTraceName,
+            R"doc(
+            End capturing memory usage and store the trace with the given name.
+
+            Args:
+                name: The name to store the trace under (default: "END_TRACE")
+
+            Note:
+                If capture is not active, this function prints a warning.
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "snapshot",
+            &ttml::utils::MemoryUsageTracker::snapshot,
+            nb::arg("name"),
+            R"doc(
+            Create a checkpoint: save current trace with given name and start a new capture.
+
+            This function:
+            1. Ends the current capture and saves the trace with the given name
+            2. Starts a new capture session
+
+            Args:
+                name: The name for this checkpoint
+
+            Raises:
+                RuntimeError: If capture is not active
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "get_dram_usage",
+            &ttml::utils::MemoryUsageTracker::get_dram_usage,
+            nb::arg("name") = ttml::utils::MemoryUsageTracker::kDefaultTraceName,
+            R"doc(
+            Get DRAM usage of captured trace by name.
+
+            Args:
+                name: The name of the trace (default: "END_TRACE")
+
+            Returns:
+                DRAMUsage object with peak, total_allocations, and total_deallocations fields
+
+            Raises:
+                RuntimeError: If the named trace doesn't exist
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "get_dram_usage_all",
+            &ttml::utils::MemoryUsageTracker::get_dram_usage_all,
+            R"doc(
+            Get DRAM usage of all captured traces.
+
+            Returns:
+                List of tuples (trace_name, DRAMUsage) in capture order
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "get_l1_usage",
+            &ttml::utils::MemoryUsageTracker::get_l1_usage,
+            nb::arg("name") = ttml::utils::MemoryUsageTracker::kDefaultTraceName,
+            R"doc(
+            Get L1 usage of captured trace by name.
+
+            Args:
+                name: The name of the trace (default: "END_TRACE")
+
+            Returns:
+                L1UsagePerCore object with peak_cb, peak_l1, and peak_total fields
+
+            Raises:
+                RuntimeError: If the named trace doesn't exist
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "get_l1_usage_all",
+            &ttml::utils::MemoryUsageTracker::get_l1_usage_all,
+            R"doc(
+            Get L1 usage of all captured traces.
+
+            Returns:
+                List of tuples (trace_name, L1UsagePerCore) in capture order
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "get_trace_names",
+            &ttml::utils::MemoryUsageTracker::get_trace_names,
+            R"doc(
+            Get all trace names in order they were captured.
+
+            Returns:
+                List of trace names
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "print_memory_usage",
+            &ttml::utils::MemoryUsageTracker::print_memory_usage,
+            R"doc(
+            Print memory usage summary for all captured traces.
+
+            Prints detailed information including:
+            - Per-segment DRAM usage (peak, allocations, deallocations)
+            - Cumulative DRAM usage (peak, current)
+            - L1 usage per core (CB, buffer, total)
+
+            Note:
+                Not thread safe.
+            )doc");
+
+        py_tracker.def(
+            "clear",
+            &ttml::utils::MemoryUsageTracker::clear,
+            R"doc(
+            Clear all stored traces.
+
+            Note:
+                Not thread safe.
+            )doc");
     }
 }
 
