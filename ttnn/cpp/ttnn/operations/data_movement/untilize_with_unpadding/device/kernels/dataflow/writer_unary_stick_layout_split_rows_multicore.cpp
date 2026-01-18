@@ -43,9 +43,9 @@ void kernel_main() {
             // Write out tmp buffer
             noc_async_write(l1_read_addr, dst_noc_addr, unpadded_X_size);
 
-            noc_async_write_barrier();
             l1_read_addr += padded_X_size;
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out0, num_tiles_per_row * has_rows);
     };
 
