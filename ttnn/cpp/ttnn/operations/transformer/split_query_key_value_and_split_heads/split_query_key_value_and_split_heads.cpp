@@ -78,7 +78,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t sequence_size = input_shape[1];
     const uint32_t sequence_size_padded = padded_input_shape[1];
 
-    if (num_kv_heads.has_value() && !input_tensor_kv.has_value()) {
+    // Falcon7B has a specific configuration: 71 Q heads, 1 KV head, head_dim=64
+    // Total hidden dim: 71*64 + 1*64 + 1*64 = 4672
+    // Only use the Falcon7B-specific backend when the input matches this exact configuration.
+    // Other GQA configurations (num_kv_heads != num_heads) should use the generic nlp_create_qkv_heads.
+    constexpr uint32_t FALCON7B_HIDDEN_DIM = 4672;
+    if (num_kv_heads.has_value() && !input_tensor_kv.has_value() && padded_input_shape[2] == FALCON7B_HIDDEN_DIM) {
         TT_FATAL(
             !transpose_key,
             "Invalid configuration: Transpose is set to true, but this is not supported when separate num_kv_heads is "
@@ -154,8 +159,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         hidden_dim_padded = padded_input_shape[2];
     }
 
-    uint32_t head_size = hidden_dim / num_heads;
-    uint32_t padded_head_size = hidden_dim_padded / num_heads;
+    // For separate Q and KV tensors: hidden_dim is Q's dimension, so head_size = hidden_dim / num_heads
+    // For fused QKV tensor: hidden_dim contains Q+K+V, so head_size = hidden_dim / (num_heads + 2*num_kv_heads)
+    uint32_t head_size_divisor =
+        input_tensor_kv.has_value() ? num_heads : (num_heads + 2 * num_kv_heads.value_or(num_heads));
+    uint32_t head_size = hidden_dim / head_size_divisor;
+    uint32_t padded_head_size = hidden_dim_padded / head_size_divisor;
     TT_FATAL(
         head_size % tt::constants::TILE_WIDTH == 0,
         "Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions "
