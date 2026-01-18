@@ -785,6 +785,8 @@ Scale up refers to optimizing training on a single device or multiple devices on
 - Using gradient accumulation to simulate larger batches
 - Enabling memory-efficient training (gradient checkpointing)
 - Optimizing tensor layouts and operations
+- **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
+- **Distributed Data Parallel (DDP)**: Replicate model, shard data across devices
 
 **Key Architecture Benefit:**
 TTML uses a **unified mesh API** where a single process manages all devices on a host. Unlike PyTorch (which spawns 1 process per device), TTML spawns **1 process per host**, simplifying multi-device coordination and reducing overhead.
@@ -808,24 +810,6 @@ transformer_config:
   runner_type: "memory_efficient"  # Gradient checkpointing
 ```
 
-**Memory Optimization Tips:**
-- Use `memory_efficient` runner type to reduce activation memory
-- Reduce batch size and increase gradient accumulation
-- Monitor memory usage with `MemoryUsageTracker` (see [Profiling](#profiling))
-
-## **Scale Out**
-
-Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
-- **Distributed Data Parallel (DDP)**: Replicate model, shard data across devices
-- **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
-- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
-- **Multi-host**: Scale across multiple machines with unified mesh topology
-
-**Architecture:**
-- **Scale-up** (same host): Single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
-- **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
-- **Unified API**: Same mesh configuration works for both single-host and multi-host scenarios
-
 **Data Parallel Example:**
 
 ```python
@@ -838,6 +822,32 @@ device_config:
 training_config:
   batch_size: 16  # Will be split across 4 devices (4 per device)
 ```
+
+**Memory Optimization Tips:**
+- Use `memory_efficient` runner type to reduce activation memory
+- Reduce batch size and increase gradient accumulation
+- Monitor memory usage with `MemoryUsageTracker` (see [Profiling](#profiling))
+
+## **Scale Out**
+
+Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
+- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
+- **Multi-host**: Scale across multiple machines with unified mesh topology
+
+**Architecture:**
+- **Scale-up** (same host): Single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
+- **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
+- **Unified API**: Same mesh configuration works for both single-host and multi-host scenarios
+
+
+**2/3-tier architecture**
+Currently we employ 2 or 3 tier architecture training when performing multi host training.
+
+Basically all hosts are split into 2 or 3 roles - Worker / AggregatorOptimizer (2-tier) or Worker / Aggregator / Optimizer (3-tier).
+
+In 3-tier Aggregator gathers and reduces gradients from every worker. Then it sends gathered gradients to Optimizer, which performs optimizer step, and sends new weights to Aggregator, which broadcasts them back to workers. In 2-tier Aggregator and Optimizer are merged into a single node.
+
+For more details and how to run, see [this doc](/tt-train/sources/examples/python/multihost/hierarchical_parallel/README.md)
 
 **Tensor Parallel Example (FSDP-style):**
 
