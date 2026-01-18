@@ -97,6 +97,17 @@ void kernel_main() {
     const uint32_t M_blocks_per_core = 4;
     const uint32_t batch_size = input_tensor_B;
     DPRINT << "The reader kernel running its loop." << ENDL();
+    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+    DPRINT << "slice_Wt: " << slice_Wt << ENDL();
+    DPRINT << "slice_Ht: " << slice_Ht << ENDL();
+    DPRINT << "slice_C: " << slice_C << ENDL();
+    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
+    DPRINT << "direction: " << (uint32_t)direction << ENDL();
+    DPRINT << " chunks_per_sync: " << chunks_per_sync << ENDL();
+    DPRINT << " start_tiles_read: " << start_tiles_read << ENDL();
+    DPRINT << " start_tiles_to_read: " << start_tiles_to_read << ENDL();
+    DPRINT << " start_pages_read_in_row: " << start_pages_read_in_row << ENDL();
+    DPRINT << " start_row_offset: " << start_row_offset << ENDL();
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
