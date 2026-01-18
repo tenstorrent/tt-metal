@@ -520,3 +520,66 @@ class PatchTSMixerModelForForecasting(nn.Module):
         # 4) head: (B, C, N_p, D) -> (B, H, C)
         preds = self.head(x)
         return preds
+
+
+class PatchTSMixerLinearHead(nn.Module):
+    """
+    Linear head for Classification and Regression.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        num_channels: int,
+        num_patches: int,
+        num_targets: int,
+        head_agregation: str = None,  # None, "use_last", "max_pool", "avg_pool"
+        output_range: tuple = None,
+        head_dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.head_aggregation = head_agregation
+        self.output_range = output_range
+
+        # Calculate input features based on aggregation
+        if head_agregation is None:
+            mul_factor = num_patches
+        else:
+            mul_factor = 1
+
+        in_features = d_model * num_channels * mul_factor
+
+        self.projection = nn.Linear(in_features, num_targets)
+        self.dropout = nn.Dropout(head_dropout)
+
+        if head_agregation is None:
+            self.flatten = nn.Flatten(start_dim=-3)
+        else:
+            self.flatten = nn.Flatten(start_dim=-2)
+
+    def forward(self, hidden_features):
+        # hidden_features: (B, C, Np, D)
+
+        # Transpose: (B, C, Np, D) -> (B, C, D, Np)
+        x = hidden_features.transpose(-1, -2)
+
+        # Apply aggregation over patch dimension
+        if self.head_aggregation == "use_last":
+            x = x[..., -1]  # (B, C, D)
+        elif self.head_aggregation == "max_pool":
+            x = x.max(dim=-1).values  # (B, C, D)
+        elif self.head_aggregation == "avg_pool":
+            x = x.mean(dim=-1)  # (B, C, D)
+        # else: keep all patches (B, C, D, Np)
+
+        # Flatten
+        x = self.flatten(x)  # (B, features)
+        x = self.dropout(x)
+        x = self.projection(x)  # (B, num_targets)
+
+        # Optional output range scaling
+        if self.output_range is not None:
+            min_val, max_val = self.output_range
+            x = torch.sigmoid(x) * (max_val - min_val) + min_val
+
+        return x
