@@ -151,6 +151,10 @@ void kernel_main() {
 #endif
     }  // B loop
 
+#ifndef OUT_SHARDED
+    noc_async_write_barrier();
+#endif
+
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, out_num_tiles);
 #endif

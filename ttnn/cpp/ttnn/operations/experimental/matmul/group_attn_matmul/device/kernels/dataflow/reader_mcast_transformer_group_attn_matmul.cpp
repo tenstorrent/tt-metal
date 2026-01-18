@@ -313,4 +313,5 @@ void kernel_main() {
         in1_batch += in1_CKtNt_mul_32;  // different depending on transpose_hw
 #endif
     }  // B loop
+    noc_async_write_barrier();
 }

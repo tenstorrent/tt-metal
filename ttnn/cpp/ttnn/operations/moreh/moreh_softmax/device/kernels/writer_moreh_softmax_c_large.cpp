@@ -38,4 +38,5 @@ void kernel_main() {
         }
         curr_tile += 1;
     }
+    noc_async_write_barrier();
 }

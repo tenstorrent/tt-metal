@@ -34,4 +34,5 @@ void kernel_main() {
             cb_pop_front(cb_id_output, 1);
         }
     }
+    noc_async_write_barrier();
 }  // void kernel_main()

@@ -114,4 +114,5 @@ void kernel_main() {
             cb_pop_front(cb_id_in, Wt);
         }
     }
+    noc_async_write_barrier();
 }

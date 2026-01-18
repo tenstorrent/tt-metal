@@ -66,4 +66,5 @@ void kernel_main() {
         cb_pop_front(cb_id_max_exp_avg_sq, onetile);
 #endif
     }
+    noc_async_write_barrier();
 }
