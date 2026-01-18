@@ -20,8 +20,7 @@ void bind_moe(nb::module_& mod) {
 
         Args:
             input_tensor: Input tensor (sharded)
-            w0_tensor: Weight tensor for first matmul
-            w1_tensor: Weight tensor for second matmul
+            w0_w1_tensor: Interleaved tensors for first and second matmul
             w2_tensor: Weight tensor for third matmul
             output_tensor: Output tensor (sharded)
             num_experts: Number of experts per layer
@@ -30,8 +29,7 @@ void bind_moe(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("w0_tensor"),
-            nb::arg("w1_tensor"),
+            nb::arg("w0_w1_tensor"),
             nb::arg("w2_tensor"),
             nb::arg("output_tensor"),
             nb::arg("num_experts"),
