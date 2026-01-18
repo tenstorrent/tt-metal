@@ -148,113 +148,88 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // The algorithm works in two steps:
-    // 1) Compute log2(base)
-    // 2) Compute base**pow = 2**(pow * log2(base))
+/**
+ * @brief Computes fmod(a, b) = a - trunc(a/b) * b for FP32 inputs
+ *
+ * This function implements the floating-point modulo operation using:
+ * 1. High-precision reciprocal (1/b)
+ * 2. Division a/b via multiplication by reciprocal
+ * 3. Truncation towards zero using hand-optimised _trunc_body_()
+ * 4. fmod = a - trunc(a/b) * b
+ *
+ * @param in0 The dividend (a)
+ * @param in1 The divisor (b)
+ * @return sfpi::vFloat Result of fmod(a, b)
+ *
+ * @note This is called when is_fp32_dest_acc_en == true
+ */
+// fmod implementation without using _trunc_body_ to avoid register clobbering
+sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat in0, sfpi::vFloat in1) {
+    // basic code
+    // fmod(a, b) = a - trunc(a/b) * b
 
-    // Step 1: Compute log2(base)
-    // Normalize base to calculation range
-    sfpi::vFloat abs_base = sfpi::abs(base);        // set base as positive
-    sfpi::vFloat x = sfpi::setexp(abs_base, 127);   // set exp to exp bias (put base in range of 1-2)
+    // Step 1: Compute high-precision reciprocal 1/b
+    sfpi::vFloat recip = ckernel::sfpu::_sfpu_reciprocal_<2>(in1);
 
-    // 5th degree polynomial approx - REMEZ algorithm over [1,2]
-    sfpi::vFloat series_result =
-        x * (x * (x * (x * (x * 0.03101577f - 0.28807408f) + 1.1286426f) - 2.45830873f) + 3.5271965f) - 1.94046315f;
+    // Step 2: Compute a/b = a * (1/b)
+    sfpi::vFloat div_result = in0 * recip;
 
-    // Convert exponent to float
-    sfpi::vInt exp = sfpi::exexp(base);
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
-    v_endif;
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
+    // Step 3: Compute trunc(a/b) using hand-optimised trunc implementation
+    sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
+    _trunc_body_();
+    sfpi::vFloat trunc_div = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
 
-    // De-normalize to original range
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
-    sfpi::vFloat log2_result = exp_f32 + series_result * vConst1Ln2;  // exp correction: ln(1+x) + exp*ln(2)
+    // Step 4: Compute fmod = a - trunc(a/b) * b
+    sfpi::vFloat result = in0 - trunc_div * in1;
 
-    // Step 2: Compute base**pow = 2**(pow * log2(base))
-    // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
-    // However, intermediary values can overflow, which leads to output increasing again instead of
-    // staying at 0.
-    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
-    sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
-    v_endif;
+    return result;
 
-    // The paper relies on the following formula (c.f. Sections 1 and 5):
-    // z = (bias + x * log2(a)) * N_m; where:
-    // N_m = 2**23
-    // bias = 0x3f800000
+    // cursor code
+    // // fmod(a, b) = a - trunc(a/b) * b
+    // sfpi::vFloat a = in0;
+    // sfpi::vFloat b = in1;
 
-    // In this case, we transform the formula to:
-    // z = (bias) * N_m + (x * log2(a)) * N_m
-    // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = addexp(z_f32, 23)
+    // // Step 1: Compute 1/b using polynomial + Newton-Raphson
+    // sfpi::vFloat b_abs = sfpi::abs(b);
+    // sfpi::vFloat x = sfpi::setexp(b_abs, 127);  // x in [1,2)
+    // sfpi::vFloat recip = x * (x * 0.3232f - 1.4545f) + 2.1315f;
+    // sfpi::vInt b_exp = sfpi::exexp(b);
+    // recip = sfpi::setexp(recip, 126 - b_exp);
+    // recip = sfpi::setsgn(recip, b);
+    // recip = recip * (sfpi::vFloat(2.0f) - b * recip);
+    // recip = recip * (sfpi::vFloat(2.0f) - b * recip);
 
-    // Notes:
-    // - N_m being a power of 2 ensures equivalent results
-    // - addexp(z_f32, 23) is used because it translates to a single-cycle SFPDIVP2
-    //   instruction with immediate operand (i.e. no extra register used).
-    //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
+    // // Step 2: Compute quot = a/b
+    // sfpi::vFloat quot = a * recip;
 
-    z_f32 = sfpi::addexp(z_f32, 23);  // equal to multiplying by 2**23
-    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
+    // // Step 3: Compute trunc(quot) without using _trunc_body_
+    // // Use mantissa alignment trick, but correct for FP rounding errors
 
-    sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
+    // sfpi::vFloat quot_abs = sfpi::abs(quot);
+    // sfpi::vFloat big = sfpi::vFloat(8388608.0f);  // 2^23
 
-    // 61f
-    // Normalize mantissa field into a fractional value in [0,1)
-    sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
+    // // The mantissa alignment trick can round up due to FP rounding
+    // // e.g., 0.9999996 + 2^23 might round to 2^23 + 1, giving trunc = 1 instead of 0
+    // sfpi::vFloat aligned = quot_abs + big;
+    // sfpi::vFloat trunc_abs = aligned - big;
 
-    // Evaluate degree-6 polynomial coefficients using Horner’s rule
-    // Note: Unlike exp_21f, in exp_61f all polynomial coefficients are floating-point values.
-    // In exp_21f, the paper mixes integer and float constants to perform bit-level manipulation of the exponent and
-    // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
-    // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
-    // purely mathematical without integer-based operations.
-    sfpi::vFloat poly =
-        ((((((0.0002170391f * frac) + 0.001243946f) * frac + 0.0096788315f) * frac + 0.055483369f) * frac +
-          0.24022982f) *
-             frac +
-         0.69314699f) *
-            frac +
-        1.0000000018f;
+    // // Correct for rounding errors: if trunc_abs > quot_abs, subtract 1
+    // // This ensures we truncate towards zero, not away from zero
+    // v_if(trunc_abs > quot_abs) {
+    //     trunc_abs = trunc_abs - sfpi::vFloat(1.0f);
+    // }
+    // v_endif;
 
-    // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+    // // Handle the sign: trunc(-1.5) = -1, not -2
+    // sfpi::vFloat trunc_quot = sfpi::setsgn(trunc_abs, quot);
 
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
+    // // Step 4: Compute fmod = a - trunc(a/b) * b
+    // sfpi::vFloat qb = trunc_quot * b;
+    // sfpi::vFloat result = a - qb;
 
-    // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-    // Check valid base range
-    sfpi::vInt pow_int =
-        sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
-
-    // Division by 0 when base is 0 and pow is negative => set to NaN
-    v_if((abs_base == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-    }
-    v_endif;
-
-    v_if(base < 0.0f) {  // negative base
-        // If pow is odd integer then result is negative
-        // If power is even, then result is positive
-        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::setsgn(y, pow_int << 31);
-
-        // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
-        }
-        v_endif;
-    }
-    v_endif;
-
-    return y;
+    // return result;
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -289,9 +264,10 @@ inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_i
 
 template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
-    sfpi::vConstFloatPrgm0 = 1.442695f;
-    sfpi::vConstFloatPrgm1 = -127.0f;
-    sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
+    // sfpi::vConstFloatPrgm0 = 1.442695f;
+    // sfpi::vConstFloatPrgm1 = -127.0f;
+    // sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
+    _init_sfpu_reciprocal_<false>();
 }
 
 }  // namespace sfpu
