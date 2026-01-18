@@ -51,6 +51,7 @@ jobs:
         tracy: false
         fetch-depth: 0
         skip-tt-train: false
+        enable-lto: true
 
   single-card-demo-tests:
     needs: build-artifact

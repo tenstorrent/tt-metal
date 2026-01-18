@@ -21,7 +21,8 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
       build-wheel: true
   galaxy-multi-user-isolation-tests:
     needs: build-artifact

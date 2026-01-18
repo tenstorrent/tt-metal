@@ -13,7 +13,8 @@ jobs:
     with:
       build-wheel: true
       tracy: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   blackhole-multi-card-unit-tests:
     needs: build-artifact-profiler
     secrets: inherit

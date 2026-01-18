@@ -1,7 +1,5 @@
 name: "(Blackhole) Blackhole nightly tests"
 
-
-
 on:
   workflow_dispatch:
     inputs:
@@ -80,7 +78,8 @@ jobs:
     with:
       build-wheel: true
       tracy: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   bh-nightly:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact

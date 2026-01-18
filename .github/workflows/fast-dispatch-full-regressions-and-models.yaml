@@ -23,7 +23,8 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
       tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:
     needs: build-artifact

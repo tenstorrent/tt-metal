@@ -13,8 +13,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: "22.04"
+      platform: "Ubuntu 22.04"
       build-wheel: true
+      enable-lto: true
   fd-nightly:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml

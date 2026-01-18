@@ -81,7 +81,8 @@ jobs:
       build-wheel: true
       tracy: true
       skip-tt-train: false
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:

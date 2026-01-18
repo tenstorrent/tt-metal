@@ -42,7 +42,8 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   t3000-integration-tests:
     needs: build-artifact
     secrets: inherit

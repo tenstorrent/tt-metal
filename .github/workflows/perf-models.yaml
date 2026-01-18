@@ -40,7 +40,8 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   models-perf:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

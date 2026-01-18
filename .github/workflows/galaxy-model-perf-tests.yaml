@@ -33,7 +33,8 @@ jobs:
     with:
       tracy: true
       build-wheel: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
       toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:
     needs: build-artifact-profiler

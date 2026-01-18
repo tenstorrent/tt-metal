@@ -29,7 +29,8 @@ jobs:
     with:
       build-wheel: true
       build-umd-tests: true
-      version: 22.04
+      platform: "Ubuntu 22.04"
+      enable-lto: true
   galaxy-unit-tests:
     needs: build-artifact
     secrets: inherit

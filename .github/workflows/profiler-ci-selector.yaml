@@ -36,6 +36,10 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lto:
+        default: true
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       run_t3k_profiler:
@@ -68,6 +72,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lto:
+        description: "Enable Link Time Optimization (LTO)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build-artifact-profiler:
@@ -101,6 +110,7 @@ jobs:
       tracy: true
       build-wheel: true
       version: "22.04"
+      enable-lto: ${{ (github.event_name == 'workflow_call' && inputs.enable-lto) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lto == 'true' || github.event.inputs.enable-lto == true)) || (github.event_name == 'schedule' && true) }}
 
   t3k-profiler-tests:
     if: >-

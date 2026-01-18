@@ -30,10 +30,22 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
       enable-watcher:
         description: 'Enable watcher in BH Post commit'
         default: false
         type: boolean
+      enable-lto:
+        default: true
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -115,8 +127,9 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: "22.04"
+      platform: "Ubuntu 22.04"
       build-umd-tests: true
+      enable-lto: ${{ inputs.enable-lto != false }}
   run-profiler-regression:
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml

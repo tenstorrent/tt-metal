@@ -21,6 +21,11 @@ on:
           - ASan
           - TSan
         default: Release
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
       extra-tag:
         required: true
         type: string
@@ -91,6 +96,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
+      enable-lto: ${{ inputs.enable-lto }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
       version: "22.04"
