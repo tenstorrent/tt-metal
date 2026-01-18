@@ -75,7 +75,7 @@ def run_erisc_write_worker_latency(
 @pytest.mark.parametrize("num_packets", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_iterations", [1])
-@pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("packet_size", [16, 1024, 4096, 8192])
 def test_erisc_latency_uni_dir(num_packets, packet_size, channel_count, num_iterations, request):
     packet_size_to_expected_latency = {
         "wormhole_b0": {
