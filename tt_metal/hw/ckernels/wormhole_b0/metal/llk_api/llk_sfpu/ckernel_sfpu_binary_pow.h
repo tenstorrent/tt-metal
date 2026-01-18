@@ -217,6 +217,26 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat in0, sfpi::vFloat 
     v_if(a_minus_b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(0.0f); }
     v_endif;
 
+    // FIX 4: Sign correction - fmod result must have same sign as 'a' (or be zero)
+    // If a > 0 and result < 0, the truncation was 1 too high, need to add b
+    // If a < 0 and result > 0, the truncation was 1 too low, need to subtract b
+    // This fixes cases where a/b ≈ 0.9999999 but rounds to 1 due to reciprocal error
+    v_if(a >= sfpi::vFloat(0.0f)) {
+        // a is positive, result should be >= 0
+        v_if(result < sfpi::vFloat(0.0f)) {
+            result = result + b_abs;  // Correct: we over-truncated
+        }
+        v_endif;
+    }
+    v_else {
+        // a is negative, result should be <= 0
+        v_if(result > sfpi::vFloat(0.0f)) {
+            result = result - b_abs;  // Correct: we under-truncated
+        }
+        v_endif;
+    }
+    v_endif;
+
     return result;
 }
 
