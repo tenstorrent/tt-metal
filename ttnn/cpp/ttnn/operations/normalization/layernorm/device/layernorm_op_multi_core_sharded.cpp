@@ -1108,12 +1108,14 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
             height_index = 0;
             width_index = i;
         } else {
+            // Normalize to relative coordinates (relative to start_core)
+            // This is necessary when the grid doesn't start at (0,0)
             if (row_wise) {
-                height_index = core.y;
-                width_index = core.x;
+                height_index = core.y - start_core.y;
+                width_index = core.x - start_core.x;
             } else {
-                height_index = core.x;
-                width_index = core.y;
+                height_index = core.x - start_core.x;
+                width_index = core.y - start_core.y;
             }
         }
 
