@@ -398,7 +398,7 @@ To run the nanogpt Python training example: `python3 tt-train/sources/examples/n
 
 To run the nanogpt C++ training example:
 ```bash
-export TT_METAL_RUNTIME_ROOT=/home/pasha/projects/tt-metal
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 cd tt-train
 ./build/sources/examples/nano_gpt/nano_gpt -c ./configs/training_configs/training_shakespeare_nanogpt.yaml
 ```
