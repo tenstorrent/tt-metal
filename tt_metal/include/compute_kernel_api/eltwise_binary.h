@@ -234,7 +234,7 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level element-wise addition.
  * For-loop wrapper around add_tiles(). Use add_tiles_init() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -255,7 +255,7 @@ template <uint32_t Ht, uint32_t Wt>
 ALWI void add_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
     static_assert(
         Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
-    
+
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
             uint32_t tile_offset = h * Wt + w;
@@ -267,7 +267,7 @@ ALWI void add_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level element-wise subtraction.
  * For-loop wrapper around sub_tiles(). Use sub_tiles_init() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -288,7 +288,7 @@ template <uint32_t Ht, uint32_t Wt>
 ALWI void sub_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
     static_assert(
         Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
-    
+
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
             uint32_t tile_offset = h * Wt + w;
@@ -300,7 +300,7 @@ ALWI void sub_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level element-wise multiplication.
  * For-loop wrapper around mul_tiles(). Use mul_tiles_init() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -321,7 +321,7 @@ template <uint32_t Ht, uint32_t Wt>
 ALWI void mul_block(uint32_t icb0, uint32_t icb1, uint32_t itile0_start, uint32_t itile1_start, uint32_t idst_start) {
     static_assert(
         Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
-    
+
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
             uint32_t tile_offset = h * Wt + w;

@@ -229,7 +229,7 @@ ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * DEST → L1: Packs a block of tiles from DEST registers to L1 circular buffer.
  * For-loop wrapper around pack_tile(). Companion to *_block functions.
  * Conforms to Compute API Contract for pack_*_block variants.
@@ -251,7 +251,7 @@ template <uint32_t Ht, uint32_t Wt>
 ALWI void pack_block(uint32_t idst_start, uint32_t ocb) {
     static_assert(
         Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
-    
+
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
             uint32_t tile_offset = h * Wt + w;

@@ -422,7 +422,7 @@ ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level broadcast addition.
  * For-loop wrapper around add_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -467,7 +467,7 @@ ALWI void add_tiles_bcast_block(
 
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level broadcast subtraction.
  * For-loop wrapper around sub_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -500,7 +500,7 @@ ALWI void sub_tiles_bcast_block(
 
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level broadcast multiplication.
  * For-loop wrapper around mul_tiles_bcast<tBcastDim>(). Use init_bcast() before calling.
  * Result stays in DEST for SFPU fusion or further operations.

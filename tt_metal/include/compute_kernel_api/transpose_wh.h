@@ -113,7 +113,7 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level 32x32 transpose operation.
  * For-loop wrapper around transpose_wh_tile(). Use transpose_wh_init() before calling.
  * Result stays in DEST for SFPU fusion or further operations.

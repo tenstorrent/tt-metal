@@ -116,7 +116,7 @@ ALWI void reduce_block_max_row_uninit() {
 // clang-format off
 /**
  * WORK IN PROGRESS - Use with caution
- * 
+ *
  * L1 → DEST: Block-level reduce operation.
  * For-loop wrapper around reduce_tile(). Use reduce_init() before calling.
  * Result stays in DEST for SFPU fusion or further operations.
@@ -142,15 +142,12 @@ ALWI void reduce_block(
     uint32_t icb, uint32_t icb_scaler, uint32_t itile_start, uint32_t itile_scaler, uint32_t idst_start) {
     static_assert(
         Ht * Wt <= 16, "Block size Ht * Wt exceeds DEST capacity (max 16 tiles)");
-    
+
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
             uint32_t tile_offset = h * Wt + w;
             reduce_tile<reduce_type, reduce_dim>(
-                icb, icb_scaler, 
-                itile_start + tile_offset, 
-                itile_scaler, 
-                idst_start + tile_offset);
+                icb, icb_scaler, itile_start + tile_offset, itile_scaler, idst_start + tile_offset);
         }
     }
 }
