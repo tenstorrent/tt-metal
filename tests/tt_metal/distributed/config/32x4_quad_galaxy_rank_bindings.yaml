@@ -7,50 +7,8 @@ rank_bindings:
       # TT_METAL_DPRINT_CHIPS: "all"
 
   - rank: 1
-    mesh_id: 0
-    mesh_host_rank: 1
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 2
-    mesh_id: 0
-    mesh_host_rank: 2
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 3
-    mesh_id: 0
-    mesh_host_rank: 3
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 4
     mesh_id: 1
     mesh_host_rank: 0
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 5
-    mesh_id: 1
-    mesh_host_rank: 1
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 6
-    mesh_id: 1
-    mesh_host_rank: 2
-    # env_overrides:
-      # TT_METAL_DPRINT_ETH_CORES: "all"
-      # TT_METAL_DPRINT_CHIPS: "all"
-
-  - rank: 7
-    mesh_id: 1
-    mesh_host_rank: 3
     # env_overrides:
       # TT_METAL_DPRINT_ETH_CORES: "all"
       # TT_METAL_DPRINT_CHIPS: "all"
