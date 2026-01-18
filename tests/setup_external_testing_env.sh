@@ -94,7 +94,7 @@ if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then
 
     # Install all Python dependencies
     echo "Installing Python dependencies..."
-    uv pip install -q --system --index-strategy unsafe-best-match --no-cache-dir -r requirements.txt
+    uv pip install -q --index-strategy unsafe-best-match --no-cache-dir -r requirements.txt
 
     # Download and extract SFPI release
     ./setup_testing_env.sh
