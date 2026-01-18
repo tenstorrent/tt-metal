@@ -144,7 +144,7 @@ FORCE_INLINE void write_to_output(
     const uint32_t l1_read_address = get_read_ptr(cb);
 
     noc_async_write(l1_read_address, destination_noc_address + offset_bytes, chunk_size_bytes);
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 
     cb_pop_front(cb, ONE_PAGE);
 }

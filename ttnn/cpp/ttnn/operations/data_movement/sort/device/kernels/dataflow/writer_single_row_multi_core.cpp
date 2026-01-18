@@ -73,7 +73,7 @@ void kernel_main() {
                                 get_read_ptr(index_tensor_output_cb_index);
                             noc_async_write_tile(
                                 h * Wt + left_tile_id, index_tensor_addr_gen, l1_write_addr_index_output_tensor_cb_i);
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(index_tensor_output_cb_index, one_tile);
 
                             cb_wait_front(index_tensor_output_cb_index, one_tile);
@@ -81,7 +81,7 @@ void kernel_main() {
                                 get_read_ptr(index_tensor_output_cb_index);
                             noc_async_write_tile(
                                 h * Wt + right_tile_id, index_tensor_addr_gen, l1_write_addr_index_output_tensor_cb_j);
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(index_tensor_output_cb_index, one_tile);
 
                             // Save output data
@@ -90,7 +90,7 @@ void kernel_main() {
                                 get_read_ptr(input_tensor_output_cb_index);
                             noc_async_write_tile(
                                 h * Wt + left_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_i);
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(input_tensor_output_cb_index, one_tile);
 
                             cb_wait_front(input_tensor_output_cb_index, one_tile);
@@ -98,7 +98,7 @@ void kernel_main() {
                                 get_read_ptr(input_tensor_output_cb_index);
                             noc_async_write_tile(
                                 h * Wt + right_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_j);
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(input_tensor_output_cb_index, one_tile);
 
                             // Signalize readiness to the coordinator
