@@ -158,7 +158,7 @@ python scripts/analyze_memory.py --logs <logfile> [options]
 ```
 
 **Required:**
-- `--logs`: Log file containing memory usage summaries (memory tool logs from training). Note: you can concatenate multiple logs, it would analyze them separately, and add all of them on the histogram
+- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/nano_gpt/train_nanogpt.py)). Note: you can concatenate multiple trainig logs in one file, it would analyze them separately, and add all of them on the histogram
 
 **Optional:**
 - `--device_memory`: Device memory in bytes (default: 12GB)

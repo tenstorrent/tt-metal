@@ -816,7 +816,7 @@ transformer_config:
 ## **Scale Out**
 
 Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
-- **Data Parallel (DDP)**: Replicate model, shard data across devices
+- **Distributed Data Parallel (DDP)**: Replicate model, shard data across devices
 - **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
 - **Pipeline Parallel (PP)**: Shard layers sequentially across devices
 - **Multi-host**: Scale across multiple machines with unified mesh topology
@@ -931,7 +931,8 @@ See [PROFILER.md](./PROFILER.md) for detailed profiling guide.
 Track memory usage across training phases:
 
 ```python
-from ttml.utils.memory_utils import MemoryUsageTracker
+# Access via ttml.core.utils
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # Begin tracking
 guard = MemoryUsageTracker.begin_capture()
@@ -941,7 +942,7 @@ MemoryUsageTracker.snapshot("MODEL_CREATION")
 MemoryUsageTracker.snapshot("FORWARD_PASS")
 MemoryUsageTracker.snapshot("BACKWARD_PASS")
 
-# Print results
+# Print results and cleanup
 MemoryUsageTracker.end_capture("ITERATION_COMPLETE")
 MemoryUsageTracker.print_memory_usage()
 ```
