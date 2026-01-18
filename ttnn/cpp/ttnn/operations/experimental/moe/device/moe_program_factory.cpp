@@ -43,7 +43,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
         ----------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     |    14*2  |      16128      |
+        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     |    14*6  |      48384      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  |    224*2 |      917504     |
         | cb_c2c_mm0     | CBIndex::c_2  | Float16_b  |    5|6   |      3456       |
         | cb_c2c_mm1     | CBIndex::c_3  | Float16_b  |    5|6   |      3456       |
@@ -56,13 +56,13 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 2},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 3 * 2},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 5},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 5},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 5},
         {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 72}};  // Can get 6 from other cores
 
-    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles8, cb_handles4, cb_handles_all;
+    [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles8, cb_handles4, cb_handles_sharded;
 
     // Create CBs
     for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs0) {
@@ -76,7 +76,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs1 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 2},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 3 * 2},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 6},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 6},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 6},
@@ -104,7 +104,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile)
                                    .set_globally_allocated_address(*p_buffer);
-        cb_handles_all[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
     }
 
     // Create compile args for the program
@@ -257,7 +257,12 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
     }
 
-    return cached_program_t{std::move(program), MoESharedVariables{}};
+    return cached_program_t{
+        std::move(program),
+        MoESharedVariables{
+            .cb_handles_sharded = cb_handles_sharded,
+            .kernel_handles = {dm0_kernel_handle, dm1_kernel_handle, compute_kernel_handle},
+            .worker_cores = dram_adjacent_cores}};
 }
 
 void MoEProgramFactory::override_runtime_arguments(
@@ -265,7 +270,25 @@ void MoEProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // TODO: Implement runtime argument override logic here
+    auto& program = cached_program.program;
+    auto& shared_variables = cached_program.shared_variables;
+
+    // Update sharded circular buffer addresses
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, shared_variables.cb_handles_sharded["cb_c2w_out"], *tensor_args.output_tensor.buffer());
+
+    // Update runtime args for all kernels with new tensor addresses
+    // Runtime args layout: [3] = w0_tensor address, [4] = w1_tensor address, [5] = w2_tensor address
+    for (const auto& core : shared_variables.worker_cores) {
+        for (const auto& kernel_handle : shared_variables.kernel_handles) {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
+            runtime_args[3] = tensor_args.w0_tensor.buffer()->address();
+            runtime_args[4] = tensor_args.w1_tensor.buffer()->address();
+            runtime_args[5] = tensor_args.w2_tensor.buffer()->address();
+        }
+    }
 }
 
 }  // namespace ttnn::operations::experimental::moe::program

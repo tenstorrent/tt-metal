@@ -42,20 +42,6 @@ void kernel_main() {
     constexpr auto cb_r2c_w1 = tt::CBIndex::c_0;
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
 
-    // Ring synchronization setup
-    constexpr uint32_t NUM_CORES = 12;  // Total cores in the ring
-    const uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
-    volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-    const uint64_t neighbor_semaphore_noc_addr = get_noc_addr(neighbor_physical_x, neighbor_physical_y, semaphore_addr);
-
-    // Ring data transfer setup
-    constexpr uint32_t TILES_PER_CORE = 6;  // Always send 6 tiles, even if only 5 have valid data
-    constexpr uint32_t in2_tile_size = get_tile_size(cb_r2c_in2);
-    constexpr uint32_t tiles_transfer_size = TILES_PER_CORE * in2_tile_size;
-    const uint32_t local_cb_in2_addr = get_write_ptr(cb_r2c_in2);  // Local CB base address
-    const uint64_t neighbor_cb_in2_base_addr =
-        get_noc_addr(neighbor_physical_x, neighbor_physical_y, local_cb_in2_addr);
-
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_tile_size = get_tile_size(cb_r2c_w0);
@@ -80,6 +66,20 @@ void kernel_main() {
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
+
+    // Ring synchronization setup
+    constexpr uint32_t NUM_CORES = 12;  // Total cores in the ring
+    const uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
+    volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+    const uint64_t neighbor_semaphore_noc_addr = get_noc_addr(neighbor_physical_x, neighbor_physical_y, semaphore_addr);
+
+    // Ring data transfer setup
+    constexpr uint32_t TILES_PER_CORE = 6;  // Always send 6 tiles, even if only 5 have valid data
+    constexpr uint32_t in2_tile_size = get_tile_size(cb_r2c_in2);
+    constexpr uint32_t tiles_transfer_size = TILES_PER_CORE * in2_tile_size;
+    const uint32_t local_cb_in2_addr = get_write_ptr(cb_r2c_in2);  // Local CB base address
+    const uint64_t neighbor_cb_in2_base_addr =
+        get_noc_addr(neighbor_physical_x, neighbor_physical_y, local_cb_in2_addr);
 
     // All cores must do the same number of ring sync iterations to avoid deadlock
     // Cores 0-7 have 9 iterations of real work, cores 8-11 have 10
