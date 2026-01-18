@@ -46,16 +46,6 @@ void gather(uint32_t receiver_data_addr, uint32_t offset) {
     cb_pop_front(CbIn, NumTiles);
 }
 
-template <uint32_t SenderLogicalXStart, uint32_t SenderLogicalYStart, uint32_t SenderGridWidth>
-FORCE_INLINE uint32_t compute_sender_tile_offset_bytes(uint32_t tile_size_bytes) {
-    DeviceZoneScopedN("compute_sender_tile_offset_bytes");
-    const uint32_t sender_logical_x = get_absolute_logical_x();
-    const uint32_t sender_logical_y = get_absolute_logical_y();
-    const uint32_t sender_tile_index =
-        (sender_logical_y - SenderLogicalYStart) * SenderGridWidth + (sender_logical_x - SenderLogicalXStart);
-    return sender_tile_index * tile_size_bytes;
-}
-
 void kernel_main() {
     constexpr uint32_t mm1_full_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
@@ -74,10 +64,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
         (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
-    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(12);
-    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(13);
-    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(14);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(15);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(12);
+
+    // Read tile index from runtime args
+    const uint32_t tile_index = get_arg_val<uint32_t>(0);
 
     const uint32_t mcast_reciever_base_address = get_write_ptr(mcast_reciever_cb);
 
@@ -92,10 +82,8 @@ void kernel_main() {
     cb_reserve_back(weight1_cb, num_tiles_k);
     cb_push_back(weight1_cb, num_tiles_k);
 
-    // Compute gather destination tile offset bytes once for reuse
-    const uint32_t gather_destination_tile_offset_bytes =
-        compute_sender_tile_offset_bytes<sender_logical_x_start, sender_logical_y_start, sender_grid_width>(
-            get_tile_size(intermediate_pregather_cb));
+    // Compute gather destination tile offset bytes from runtime tile index
+    const uint32_t gather_destination_tile_offset_bytes = tile_index * get_tile_size(intermediate_pregather_cb);
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         {

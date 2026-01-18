@@ -49,19 +49,6 @@ FORCE_INLINE void matmul_with_relu_block() {
 constexpr uint32_t MATMUL_ACC_REG_ID = 0;
 constexpr uint32_t BIAS_REG_ID = 1;
 
-/**
- * Compute this core's tile index in the gathered buffer.
- *
- * Calculates the tile index based on this core's position in the sender grid.
- * Used to determine which tile from the bias CB (MM1_FULL_CB) this core should use.
- */
-template <uint32_t SenderLogicalXStart, uint32_t SenderLogicalYStart, uint32_t SenderGridWidth>
-FORCE_INLINE uint32_t compute_sender_tile_index() {
-    const uint32_t sender_logical_x = get_absolute_logical_x();
-    const uint32_t sender_logical_y = get_absolute_logical_y();
-    return (sender_logical_y - SenderLogicalYStart) * SenderGridWidth + (sender_logical_x - SenderLogicalXStart);
-}
-
 template <
     uint32_t CbA,
     uint32_t CbB,
@@ -136,18 +123,14 @@ void MAIN {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
     constexpr uint32_t num_layers = get_compile_time_arg_val(8);
-    constexpr uint32_t sender_logical_x_start = get_compile_time_arg_val(9);
-    constexpr uint32_t sender_logical_y_start = get_compile_time_arg_val(10);
-    constexpr uint32_t sender_grid_width = get_compile_time_arg_val(11);
+
+    // Read tile index from runtime args
+    const uint32_t bias_tile_index = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_output_tiles = 1;
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
-
-    // Compute this core's tile index in the gathered bias buffer
-    const uint32_t bias_tile_index =
-        compute_sender_tile_index<sender_logical_x_start, sender_logical_y_start, sender_grid_width>();
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer

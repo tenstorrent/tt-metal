@@ -366,10 +366,19 @@ class FusedResblock:
                 mcast_receiver_semaphore_descriptor.id,
                 FusedResblock.McastCoreCBIndex.MCAST_CORE_GATHER_CB,
                 mcast_sender_semaphore_descriptor.id,
-                sender_logical_x_start,
-                sender_logical_y_start,
-                sender_grid_width,
                 num_layers,
+            ],
+            runtime_args=[
+                (
+                    ttnn.CoreCoord(core.x, core.y),
+                    [(core.y - sender_logical_y_start) * sender_grid_width + (core.x - sender_logical_x_start)],
+                )
+                for core_range in all_matmul_cores.ranges()
+                for core in [
+                    ttnn.CoreCoord(x, y)
+                    for y in range(core_range.start.y, core_range.end.y + 1)
+                    for x in range(core_range.start.x, core_range.end.x + 1)
+                ]
             ],
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -396,9 +405,18 @@ class FusedResblock:
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
-                sender_logical_x_start,
-                sender_logical_y_start,
-                sender_grid_width,
+            ],
+            runtime_args=[
+                (
+                    ttnn.CoreCoord(core.x, core.y),
+                    [(core.y - sender_logical_y_start) * sender_grid_width + (core.x - sender_logical_x_start)],
+                )
+                for core_range in all_matmul_cores.ranges()
+                for core in [
+                    ttnn.CoreCoord(x, y)
+                    for y in range(core_range.start.y, core_range.end.y + 1)
+                    for x in range(core_range.start.x, core_range.end.x + 1)
+                ]
             ],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,  # Match C++ op behavior
