@@ -29,7 +29,7 @@ struct LayerNormShardedSharedVariables {
     tt::tt_metal::CBHandle cb_add_out{};
     tt::tt_metal::CBHandle cb_output{};
     std::vector<tt::tt_metal::CoreCoord> cores;
-    CoreRangeSet all_cores;  // Actual cores used (needed for parallel composition)
+    CoreRangeSet all_cores_set;  // Actual cores used (needed for parallel composition)
 };
 struct LayerNormShardedProgramFactory {
     using shared_variables_t = LayerNormShardedSharedVariables;
@@ -52,6 +52,15 @@ struct LayerNormShardedProgramFactory {
         Tensor& tensor_return_value,
         const std::optional<CoreRangeSet>& core_range_override = std::nullopt);
 
+private:
+    // Implementation that adds all kernels/CBs to the program
+    static shared_variables_t add_to_impl(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+public:
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormParams& operation_attributes,

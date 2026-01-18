@@ -100,7 +100,21 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 }  // namespace
 
 LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory::create(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    // Create a new program and delegate to add_to()
+    Program program = Program();
+    shared_variables_t shared_vars =
+        add_to(program, operation_attributes, tensor_args, tensor_return_value, std::nullopt);
+    return cached_program_t{std::move(program), std::move(shared_vars)};
+}
+
+LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactory::add_to_impl(
+    tt::tt_metal::Program& program,
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -300,7 +314,6 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 
@@ -1397,21 +1410,19 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     // Get the actual core range from shard spec for parallel composition
     CoreRangeSet all_cores_set = a.shard_spec().value().grid;
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .writer_kernel_ids = writer_kernel_ids,
-            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
-            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
-            .num_none_all_to_all_workers = num_none_all_to_all_workers,
-            .is_pre_all_gather = is_pre_all_gather,
-            .cb_in0 = cb_in0,
-            .cb_in1 = cb_in1,
-            .cb_stats = cb_stats,
-            .cb_add_out = cb_add_out,
-            .cb_output = cb_output,
-            .cores = cores,
-            .all_cores = all_cores_set}};
+    return shared_variables_t{
+        .writer_kernel_ids = writer_kernel_ids,
+        .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
+        .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
+        .num_none_all_to_all_workers = num_none_all_to_all_workers,
+        .is_pre_all_gather = is_pre_all_gather,
+        .cb_in0 = cb_in0,
+        .cb_in1 = cb_in1,
+        .cb_stats = cb_stats,
+        .cb_add_out = cb_add_out,
+        .cb_output = cb_output,
+        .cores = cores,
+        .all_cores_set = all_cores_set};
 }
 
 LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactory::add_to(
@@ -1432,15 +1443,8 @@ LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactor
             tensor_cores);
     }
 
-    // Create a temporary cached_program to extract the shared_variables
-    // This is less efficient but maintains correctness for the complex sharded logic
-    auto cached = create(operation_attributes, tensor_args, tensor_return_value);
-
-    // Move the program contents into the provided program
-    // Note: This is a workaround since we can't easily refactor 1400+ lines
-    program = std::move(cached.program);
-
-    return cached.shared_variables;
+    // Delegate to the implementation that adds all resources to the provided program
+    return add_to_impl(program, operation_attributes, tensor_args, tensor_return_value);
 }
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
