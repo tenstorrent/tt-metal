@@ -10,6 +10,91 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
+from tracy import signpost
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
+
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+def run_with_trace(
+    mesh_device,
+    input_tensor_mesh,
+    intermediate_tensor,
+    cluster_axis,
+    num_links,
+    num_iter=20,
+    num_warmup_iter=15,
+    subdevice_id=None,
+):
+    """Run the all-reduce operation with trace capture for performance testing."""
+    profiler = BenchmarkProfiler()
+
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
+        input_tensor_mesh,
+        cluster_axis=cluster_axis,
+        intermediate_tensor=intermediate_tensor,
+        num_links=num_links,
+        topology=ttnn.Topology.Linear,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture warmup trace
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_warmup_iter):
+        tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
+            input_tensor_mesh,
+            cluster_axis=cluster_axis,
+            intermediate_tensor=intermediate_tensor,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture main trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
+            input_tensor_mesh,
+            cluster_axis=cluster_axis,
+            intermediate_tensor=intermediate_tensor,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace...")
+    profiler.start("deepseek-all-reduce-warmup")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("deepseek-all-reduce-warmup")
+
+    # Execute main trace with signposts for profiling
+    logger.info("Starting Trace perf test...")
+    signpost("start")
+    profiler.start("deepseek-all-reduce-trace")
+
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+
+    profiler.end("deepseek-all-reduce-trace")
+    signpost("stop")
+
+    return tt_out_tensor
+
 
 def run_deepseek_minimal_all_reduce_impl(
     mesh_device,
@@ -131,20 +216,32 @@ def run_deepseek_minimal_all_reduce_impl(
         intermediate_tensor_list.append(intermediate_tensor)
 
     tt_out_tensor_list = []
-    for i in range(num_iters):
-        logger.info(f"Running iteration {i}")
-        tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
-            input_tensor_mesh_list[i],
-            cluster_axis=cluster_axis,
-            intermediate_tensor=intermediate_tensor_list[i],
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
+    if trace_mode:
+        tt_out_tensor = run_with_trace(
+            mesh_device,
+            input_tensor_mesh_list[0],
+            intermediate_tensor_list[0],
+            cluster_axis,
+            num_links,
+            num_iter=num_iters,
+            subdevice_id=worker_sub_device_id,
         )
         tt_out_tensor_list.append(tt_out_tensor)
+    else:
+        for i in range(num_iters):
+            logger.info(f"Running iteration {i}")
+            tt_out_tensor = ttnn.experimental.deepseek_minimal_all_reduce(
+                input_tensor_mesh_list[i],
+                cluster_axis=cluster_axis,
+                intermediate_tensor=intermediate_tensor_list[i],
+                num_links=num_links,
+                topology=ttnn.Topology.Linear,
+            )
+            tt_out_tensor_list.append(tt_out_tensor)
 
-    logger.info("Waiting for op to complete")
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-    logger.info("Op completed")
+        logger.info("Waiting for op to complete")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info("Op completed")
 
     # Compare tensors
     for iter_idx in range(len(tt_out_tensor_list)):
@@ -185,8 +282,8 @@ def run_deepseek_minimal_all_reduce_impl(
         (
             2,
             2,
-            [1, 2048],
-            (1, 2048),
+            [1, 7168],
+            (1, 7168),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),  # single core
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
@@ -204,7 +301,7 @@ def run_deepseek_minimal_all_reduce_impl(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(15232)},
     ],
     indirect=["device_params"],
     ids=["fabric_1d"],
@@ -239,6 +336,81 @@ def test_deepseek_minimal_all_reduce(
         layout,
         function_level_defaults,
         num_iters=num_iters,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        input_shard_grid=input_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        cluster_axis=cluster_axis,
+    )
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "num_devices, num_links, output_shape, input_shard_shape, input_shard_grid, tensor_mem_layout",
+    [
+        (
+            2,
+            2,
+            [1, 7168],
+            (1, 7168),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),  # single core
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 217872,
+        },
+    ],
+    indirect=["device_params"],
+    ids=["fabric_1d_trace"],
+)
+def test_deepseek_minimal_all_reduce_trace(
+    bh_2d_mesh_device,
+    num_devices,
+    output_shape,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    tensor_mem_layout,
+    cluster_axis,
+):
+    """Trace-enabled version of the all-reduce test for performance testing."""
+    # Validate we have the right mesh configuration
+    print("bh_2d_mesh_device.shape:", bh_2d_mesh_device.shape)
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+
+    # Create a 2x1 submesh
+    mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(num_devices, 1))
+
+    run_deepseek_minimal_all_reduce_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        num_iters=num_iters,
+        trace_mode=True,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
         input_shard_grid=input_shard_grid,

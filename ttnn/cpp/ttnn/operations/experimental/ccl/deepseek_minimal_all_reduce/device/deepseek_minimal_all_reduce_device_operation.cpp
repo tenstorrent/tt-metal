@@ -61,11 +61,11 @@ void DeepseekMinimalAllReduceDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be in tile size (1,32). Got tile size: ({}, {})",
         tile_height,
         tile_width);
-    // input shape should be (1, 2048)
+    // input shape should be (1, 7168)
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] % 32 == 0,
-        "Input tensor shape must be (1, 2048). Got shape: ({}, {})",
+        input_shape[0] == 1 && input_shape[1] == 7168,
+        "Input tensor shape must be (1, 7168). Got shape: ({}, {})",
         input_shape[0],
         input_shape[1]);
 }

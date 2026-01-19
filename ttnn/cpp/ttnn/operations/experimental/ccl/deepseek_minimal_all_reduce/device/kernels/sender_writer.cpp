@@ -34,11 +34,11 @@ void kernel_main() {
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint8_t dst_num_hops = 1;
+    constexpr uint32_t num_connections = 1;
 
     size_t arg_idx = 0;
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "compile time args:\n";
     DPRINT << " packet_header_cb_id: " << (uint32_t)packet_header_cb_id << "\n";

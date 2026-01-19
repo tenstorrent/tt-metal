@@ -187,8 +187,9 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     tt::tt_metal::CircularBufferConfig compute_cb_in1_config =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in1, df}})
             .set_page_size(compute_cb_in1, input_page_size_bytes)
-            .set_tile_dims(compute_cb_in1, tiny_tile);
-    CreateCircularBuffer(program, worker_core_range, compute_cb_in1_config);
+            .set_tile_dims(compute_cb_in1, tiny_tile)
+            .set_globally_allocated_address(*intermediate_tensor.buffer());
+    auto compute_cb_in1_handle = CreateCircularBuffer(program, {receiver_core}, compute_cb_in1_config);
 
     constexpr auto compute_cb_in2 = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig compute_cb_in2_config =
@@ -246,7 +247,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         input_tensor_num_pages,  // num_tiles
         input_page_size_bytes,   // tensor0_page_size
         core_noc_x,
-        core_noc_y};
+        core_noc_y,
+    };
 
     std::vector<uint32_t> sender_writer_compile_args = {
         packet_header_cb_id,
@@ -350,8 +352,6 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const auto neighbor_coord = is_first_chip ? forward_coord.value() : backward_coord.value();
     const auto neighbor_fabric_node_id = mesh_device->get_fabric_node_id(neighbor_coord);
 
-    constexpr uint32_t num_connections = 1;  // Each worker has one fabric connection
-
     std::vector<uint32_t> sender_reader_rt_args = {
         input_tensor.buffer()->address(),  // tensor_address0
     };
@@ -361,7 +361,6 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     std::vector<uint32_t> sender_writer_rt_args = {
         intermediate_tensor.buffer()->address(),
         sender_semaphore.address(),
-        num_connections,
     };
     append_routing_plane_connection_manager_rt_args(
         self_fabric_node_id,
@@ -377,9 +376,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     // Receiver reader reads local data + receives remote data via fabric
     std::vector<uint32_t> receiver_reader_rt_args = {
         input_tensor.buffer()->address(),
-        intermediate_tensor.buffer()->address(),
         receiver_semaphore.address(),
-        num_connections,
     };
     append_routing_plane_connection_manager_rt_args(
         self_fabric_node_id,
@@ -404,6 +401,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .worker_receiver_reader_kernel_id = worker_receiver_reader_kernel_id,
         .worker_receiver_writer_kernel_id = worker_receiver_writer_kernel_id,
+        .compute_cb_in1_handle = compute_cb_in1_handle,
         .semaphore1 = semaphore1,
         .semaphore2 = semaphore2,
         .ring_index = ring_index,
@@ -434,6 +432,10 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
         const auto& sender_semaphore = is_first_chip ? shared_vars.semaphore1 : shared_vars.semaphore2;
         const auto& receiver_semaphore = is_first_chip ? shared_vars.semaphore2 : shared_vars.semaphore1;
 
+        // Update the CB address to point to the new intermediate tensor
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_vars.compute_cb_in1_handle, *intermediate.buffer());
+
         for (const auto& core : shared_vars.sender_worker_cores) {
             // Sender reader
             auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id)[core.x][core.y];
@@ -449,8 +451,7 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
             // Receiver reader
             auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_receiver_reader_kernel_id)[core.x][core.y];
             reader_args[0] = input.buffer()->address();
-            reader_args[1] = intermediate.buffer()->address();
-            reader_args[2] = receiver_semaphore.address();
+            reader_args[1] = receiver_semaphore.address();
 
             // Receiver writer
             auto& writer_args = GetRuntimeArgs(program, shared_vars.worker_receiver_writer_kernel_id)[core.x][core.y];
