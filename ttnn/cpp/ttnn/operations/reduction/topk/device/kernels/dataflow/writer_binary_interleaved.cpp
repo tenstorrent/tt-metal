@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,8 @@ void kernel_main() {
             noc_async_write_tile(j * Kt + i, interleaved_accessor0, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(values_cb_index, onetile);
-        }
+        }  // i loop
+
         // TopK indices
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(output_ind_cb_index, onetile);
@@ -48,6 +49,6 @@ void kernel_main() {
             noc_async_write_tile(j * Kt + i, interleaved_accessor1, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(output_ind_cb_index, onetile);
-        }
-    }
+        }  // i loop
+    }  // core_loop loop
 }
