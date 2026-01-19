@@ -239,13 +239,19 @@ jobs:
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
 
+      - name: Install CodeChecker
+        run: |
+          # Pre-install CodeChecker in the container's venv using uv.
+          uv pip install codechecker
+
       - name: 🔬 Analyze with CodeChecker
-        uses: whisperity/codechecker-analysis-action@v1.0.4
+        uses: blozano-tt/codechecker-analysis-action@add-version-skip-support
         id: codechecker
         with:
           logfile: /work/.build/clang-static-analyzer/compile_commands.json
           llvm-version: ignore # Already installed in our Docker container
           config: /work/.codechecker.json
+          version: ignore # Already installed in our Docker container
 
       - name: Upload CodeChecker reports
         uses: actions/upload-artifact@v4
