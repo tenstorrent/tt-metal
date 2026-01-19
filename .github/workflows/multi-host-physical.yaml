@@ -87,6 +87,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            # Deactivate container's pre-activated venv
+            deactivate 2>/dev/null || true
+            # Copy relocatable venv from container to shared workspace for multi-host access
+            if [ -d "./python_env" ]; then
+              echo "WARNING: ./python_env already exists, skipping copy"
+            else
+              cp -a /opt/venv ./python_env
+            fi
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -138,6 +146,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            # Deactivate container's pre-activated venv
+            deactivate 2>/dev/null || true
+            # Copy relocatable venv from container to shared workspace for multi-host access
+            if [ -d "./python_env" ]; then
+              echo "WARNING: ./python_env already exists, skipping copy"
+            else
+              cp -a /opt/venv ./python_env
+            fi
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -189,4 +205,12 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            # Deactivate container's pre-activated venv
+            deactivate 2>/dev/null || true
+            # Copy relocatable venv from container to shared workspace for multi-host access
+            if [ -d "./python_env" ]; then
+              echo "WARNING: ./python_env already exists, skipping copy"
+            else
+              cp -a /opt/venv ./python_env
+            fi
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh
