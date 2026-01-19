@@ -280,7 +280,11 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             t);
     }
     // For x < -9, saturate to 0
-    // True saturation threshold is x = -13.375, but values are tiny (< 6e-18)
+    // True saturation threshold is x = -13.375, but polynomial coverage is impractical:
+    // - Function values span 8 orders of magnitude (1e-18 to 1e-26)
+    // - Polynomial coefficients would be < 1e-18, causing numerical instability
+    // - Tested FL3 polynomial: produced Max ULP = 15448 (worse than saturation)
+    // Saturation to 0 is acceptable because values are < 9e-18 (irrelevant for ML)
     v_endif;
 
     return result;
