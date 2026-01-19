@@ -37,7 +37,7 @@ protected:
     static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
     static const uint32_t SEM_VAL = 1;
 
-    uint32_t max_num_cbs_;  // Runtime arch-specific value
+    uint32_t max_num_cbs_{0};  // Runtime arch-specific value
     static const uint32_t MIN_NUM_CBS = 0;
     static const uint32_t MIN_CB_PAGE_SIZE = 16;
     static const uint32_t MAX_CB_PAGE_SIZE = 64;
@@ -192,7 +192,7 @@ protected:
         return {unique_rt_args, common_rt_args};
     }
 
-    KernelProperties get_default_kernel_properties() {
+    KernelProperties get_default_kernel_properties() const {
         KernelProperties props;
         props.max_num_cbs = max_num_cbs_;
         return props;

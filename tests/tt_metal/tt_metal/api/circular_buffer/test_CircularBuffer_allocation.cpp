@@ -93,7 +93,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
 
         std::map<uint8_t, uint32_t> expected_addresses;
         auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
-        for (uint8_t cb_id = 0; cb_id < max_cbs_; cb_id++) {
+        for (uint32_t cb_id = 0; cb_id < max_cbs_; cb_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}})
                                                .set_page_size(cb_id, cb_config.page_size);
             CreateCircularBuffer(program_, core, config1);

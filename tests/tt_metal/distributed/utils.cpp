@@ -165,7 +165,6 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t /*seed*/,
     const std::unordered_set<CoreCoord>& active_eth_cores) {
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
     uint32_t max_eth_cores = 3;
 
     uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
@@ -183,6 +182,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
     std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
     uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    // Reduce page size on Blackhole to fit 64 CBs in L1
+    uint32_t page_size = (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) ? 1024 : 512;
 
     for (uint32_t i = 0; i < num_programs; i++) {
         Program& program = *programs.emplace_back(std::make_shared<Program>());

@@ -36,6 +36,7 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        init_max_cbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
