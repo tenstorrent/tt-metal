@@ -20,6 +20,7 @@ struct ExecuteDeepseekReduceScatter {
         const ttnn::MemoryConfig& output_memory_config,
         int32_t dim,
         uint32_t num_links = 1,
+        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 

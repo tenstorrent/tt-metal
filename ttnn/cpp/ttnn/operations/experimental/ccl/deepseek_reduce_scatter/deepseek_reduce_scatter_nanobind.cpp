@@ -32,14 +32,16 @@ void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& opera
                const ttnn::MemoryConfig& output_memory_config,
                int32_t dim,
                uint32_t num_links,
+               std::optional<tt::tt_fabric::Topology> topology,
                std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
-                return self(input_tensors, output_memory_config, dim, num_links, cluster_axis);
+                return self(input_tensors, output_memory_config, dim, num_links, topology, cluster_axis);
             },
             nb::arg("input_tensors"),
             nb::arg("output_memory_config"),
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
+            nb::arg("topology").noconvert() = nb::none(),
             nb::arg("cluster_axis") = nb::none()});
 }
 

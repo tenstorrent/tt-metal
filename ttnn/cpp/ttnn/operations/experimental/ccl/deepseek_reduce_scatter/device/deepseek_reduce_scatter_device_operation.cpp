@@ -37,7 +37,7 @@ void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
     // hardcoded constants
     const uint32_t required_ring_size = 8;
     const uint32_t num_directions_per_link = 2;
-    const ttnn::ccl::Topology required_topology = tt::tt_fabric::Topology::Ring;
+
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
@@ -117,14 +117,6 @@ void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
         num_devices == required_ring_size,
         "deepseek_reduce_scatter is hardcoded for 8 devices, but has {}",
         num_devices);
-
-    // topology
-    ttnn::ccl::Topology usable_topology =
-        ttnn::ccl::get_usable_topology(input_tensors.at(0), required_topology, cluster_axis);
-    TT_FATAL(
-        usable_topology == required_topology,
-        "deepseek_reduce_scatter is hardcoded for tt::tt_fabric::Topology::Ring, but has usable_topology {}",
-        usable_topology);
 
     // dim
     TT_FATAL(

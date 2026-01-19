@@ -2,75 +2,113 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import math
-from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_reduce_scatter_impl
+from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_deepseek_reduce_scatter_impl
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("cluster_axis", [0], ids=["cluster_axis_0"])
+@pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
 @pytest.mark.parametrize(
-    "num_links, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters",
+    "rs_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
     [
         (
-            1,
             [1, 1, 32, 2048],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            5,
+            1,
         ),  # one_link
         (
-            2,
             [1, 1, 32, 4096],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            5,
+            2,
         ),  # two_links
         (
-            3,
             [1, 1, 32, 6144],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            5,
+            3,
         ),  # three_links
         (
-            3,
             [1, 1, 32, 5120],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            5,
+            3,
         ),  # three_links_partial (forward core on last link not used)
         (
-            4,
             [1, 1, 32, 8192],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            5,
+            4,
         ),  # four_links
         (
-            4,
             [1, 1, 32, 7168],
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 128]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            ),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            5,
+            4,
         ),  # four_links_partial_deepseek (forward core on last link not used) (shape used in deepseek)
     ],
     ids=[
@@ -83,15 +121,6 @@ from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_reduce_scat
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_rs",
-    [
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-        )
-    ],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
@@ -99,43 +128,37 @@ from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_reduce_scat
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
-def test_reduce_scatter_async(
+@pytest.mark.parametrize("enable_trace, num_iters", [(True, 5)])
+def test_deepseek_reduce_scatter_async(
     mesh_device,
-    cluster_axis,
-    num_links,
-    rs_input_shape,
-    dim,
+    dtype,
     layout,
-    rs_input_dtype,
+    rs_input_shape,
+    sum_input_memory_config,
+    rs_input_memory_config,
+    rs_output_memory_config,
+    rs_dim,
+    rs_num_links,
+    rs_topology,
     enable_trace,
     num_iters,
-    mem_config_input,
-    mem_config_rs,
-    rs_topology,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((8, 1)))
     cluster_axis = 0
 
-    shard_shape = [1, 1, 32, 128]
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
-    nd_shard_spec = ttnn.NdShardSpec(
-        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
-    )
-    mem_config_input = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
-
-    run_reduce_scatter_impl(
-        submesh_device,
-        submesh_device.get_num_devices(),
-        rs_input_shape,
-        dim,
-        num_links,
-        rs_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_rs,
+    run_deepseek_reduce_scatter_impl(
+        mesh_device=submesh_device,
+        num_devices=submesh_device.get_num_devices(),
+        dtype=dtype,
+        layout=layout,
+        rs_input_shape=rs_input_shape,
+        sum_input_memory_config=sum_input_memory_config,
+        rs_input_memory_config=rs_input_memory_config,
+        rs_output_memory_config=rs_output_memory_config,
+        rs_dim=rs_dim,
+        rs_num_links=rs_num_links,
         rs_topology=rs_topology,
+        rs_cluster_axis=cluster_axis,
         enable_trace=enable_trace,
-        cluster_axis=cluster_axis,
         num_iters=num_iters,
-        ones_tensor=False,
     )
