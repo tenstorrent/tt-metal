@@ -290,7 +290,7 @@ bool reader_datacopy_writer(
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
-    const uint32_t output_cb_index = 16;
+    const uint32_t output_cb_index = 15;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////

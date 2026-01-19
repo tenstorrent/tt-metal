@@ -395,10 +395,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
-        DPRINT << "pages_acked " << pages_acked << ENDL();
-        DPRINT << "pages_received " << pages_received << ENDL();
-        DPRINT << "free_space_pages " << free_space_pages << ENDL();
-        DPRINT << "num_pages " << num_pages << ENDL();
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
 }
@@ -471,10 +467,6 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     do {
         // pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
         pages_received = tile_counters[operand].f.tiles_posted_raw - pages_acked;
-        DPRINT << "posted raw " << tile_counters[operand].f.tiles_posted_raw << ENDL();
-        DPRINT << "pages_acked " << pages_acked << ENDL();
-        DPRINT << "pages_received " << pages_received << ENDL();
-        DPRINT << "num_pages " << num_pages << ENDL();
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
 }
