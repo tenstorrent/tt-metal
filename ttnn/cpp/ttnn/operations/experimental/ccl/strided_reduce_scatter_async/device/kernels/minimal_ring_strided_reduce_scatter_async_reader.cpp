@@ -92,6 +92,7 @@ void kernel_main() {
     arg_idx += intermediate_rt_increment;
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
     DPRINT << "compile time args:" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
@@ -148,11 +149,12 @@ void kernel_main() {
                     }
                     DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                     const uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
-                    const uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                    uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
                     DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
                     DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                        // TODO: wait on the semaphore here!
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = 1;
                         uint32_t direction_offset = direction ? 0 : 1;
@@ -161,17 +163,37 @@ void kernel_main() {
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         DPRINT << "direction_offset: " << direction_offset << ENDL();
 
-                        cb_reserve_back(cb_in0, tile_granularity);
+                        // cb_reserve_back(cb_in0, tile_granularity);
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                             uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset;
                             DPRINT << "input_tile_id: " << input_tile_id << ENDL();
                             uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                            // noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
                             DPRINT << "--------------------------------" << ENDL();
                         }
+
+                        if (do_reduce) {
+                            // TODO: read the next intermediate slice out of the intermediate buffer, and put it in
+                            // intermediate CB cb_reserve_back(cb_intermediate_id, tile_granularity);
+                            uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                            for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                                uint32_t intermediate_tile_id =
+                                    intermediate_tile_id_start + input_row_offset + direction_offset;
+                                DPRINT << "intermediate_tile_id: " << intermediate_tile_id << ENDL();
+                                uint64_t intermediate_noc_read_addr =
+                                    get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
+                                // noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                                intermediate_l1_write_addr += page_size;
+                            }
+                            // noc_async_read_barrier();
+                            // cb_push_back(cb_intermediate_id, tile_granularity);
+                        }
                     }
+
+                    // noc_async_read_barrier();
+                    // cb_push_back(cb_in0, tile_granularity);
 
                     // Next slice idx
                     if (direction) {
