@@ -30,7 +30,7 @@ class FusedResblock:
     class McastCoreCBIndex:
         MCAST_CORE_GATHER_CB = 6
 
-    MCAST_CORE = ttnn.CoreCoord(7, 7)
+    MCAST_CORE = ttnn.CoreCoord(8, 7)
 
     @staticmethod
     def golden(input_a: torch.Tensor, weights: List[Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
@@ -614,15 +614,42 @@ class FusedResblock:
                 ),
             )
             reader_kernel_descriptors.append(noc1_reader_kernel_descriptor)
-        writer_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/resblock/kernels/writer.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=all_matmul_cores,
-            compile_time_args=[
-                FusedResblock.MatmulCoreCBIndex.OUT_CB,
-            ],
-            config=ttnn.WriterConfigDescriptor(),
-        )
+
+        # Create writer kernel descriptors for NOC0 and NOC1
+        writer_kernel_descriptors = []
+
+        # NOC0 writer kernel (opposite NOC and processor from noc0_reader)
+        if not noc0_core_range_set.empty():
+            noc0_writer_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source="models/demos/resblock/kernels/writer.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=noc0_core_range_set,
+                compile_time_args=[
+                    FusedResblock.MatmulCoreCBIndex.OUT_CB,
+                ],
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0,
+                    noc=ttnn.NOC.NOC_1,
+                ),
+            )
+            writer_kernel_descriptors.append(noc0_writer_kernel_descriptor)
+
+        # NOC1 writer kernel (opposite NOC and processor from noc1_reader)
+        if not noc1_core_range_set.empty():
+            noc1_writer_kernel_descriptor = ttnn.KernelDescriptor(
+                kernel_source="models/demos/resblock/kernels/writer.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=noc1_core_range_set,
+                compile_time_args=[
+                    FusedResblock.MatmulCoreCBIndex.OUT_CB,
+                ],
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0,
+                    noc=ttnn.NOC.NOC_0,
+                ),
+            )
+            writer_kernel_descriptors.append(noc1_writer_kernel_descriptor)
+
         compute_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/resblock/kernels/compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -649,7 +676,7 @@ class FusedResblock:
 
         return (
             reader_kernel_descriptors,
-            writer_kernel_descriptor,
+            writer_kernel_descriptors,
             compute_kernel_descriptor,
             mcast_reader_kernel_descriptor,
             mcast_writer_kernel_descriptor,
@@ -776,7 +803,7 @@ class FusedResblock:
 
         (
             reader_kernel_descriptors,
-            writer_kernel_descriptor,
+            writer_kernel_descriptors,
             compute_kernel_descriptor,
             mcast_reader_kernel_descriptor,
             mcast_writer_kernel_descriptor,
@@ -804,7 +831,7 @@ class FusedResblock:
             ttnn.ProgramDescriptor(
                 kernels=[
                     *reader_kernel_descriptors,
-                    writer_kernel_descriptor,
+                    *writer_kernel_descriptors,
                     compute_kernel_descriptor,
                     mcast_reader_kernel_descriptor,
                     mcast_writer_kernel_descriptor,

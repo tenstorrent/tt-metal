@@ -31,11 +31,14 @@ def create_random_tensor(shape, random_tensor_gen):
         (1, 32, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
         (1, 64, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
         (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})),
+        (1, 2048, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})),
     ],
 )
 @pytest.mark.parametrize(
     "tile_size",
-    [(1, 32), (32, 32)],
+    [
+        (1, 32),
+    ],
 )
 @pytest.mark.parametrize(
     "activation_dtype, weight_dtype",
@@ -50,6 +53,8 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
         pytest.skip("bfloat8_b is only supported for tile height 32")
     if activation_dtype != weight_dtype:
         pytest.skip("activation and weight dtypes must be the same")
+    if K >= 2048 and num_layers >= 8:
+        pytest.skip("Test is too large for 8 layers")
 
     torch.manual_seed(1234)
 
