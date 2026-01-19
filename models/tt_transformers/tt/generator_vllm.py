@@ -623,6 +623,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         kv_cache,
         prompt_lens,
         cross_page_table: torch.Tensor,
+        **kwargs,
     ):
         """
         Prefill forward pass with vision + text support.
@@ -634,6 +635,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
             kv_cache: KV cache storage
             prompt_lens: Length of each prompt in the batch
             cross_page_table: Cross-attention page table for vision tokens
+            **kwargs: Additional arguments (e.g., enable_trace, empty_slots, etc.)
 
         Returns:
             Model outputs (logits)
@@ -687,6 +689,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
             page_table=page_table,
             kv_cache=kv_cache,
             cross_page_table=cross_page_table,
+            **kwargs,
         )
 
     def decode_forward(self, *args, **kwargs):
