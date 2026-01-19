@@ -43,6 +43,7 @@ struct PolarState {
 PolarState polar_state;
 }
 
+
 template <size_t Size>
 inline void open_direction_connections(
     const std::array<bool, Size>& directions,
@@ -637,37 +638,102 @@ inline void send_init_semaphore_to_configured_targets(
     }
 }
 
+// Generate a mask of destinations relative to the source chip
+// Assumes that all destinations are along the same axis as the source chip
 template <
     uint32_t LinearizedSrcMeshCoord,
     tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
+    uint32_t MaxNumDestinations>
+inline uint16_t generate_fabric_mcast_hop_mask(
+    uint32_t linearized_dest_mesh_coords[MaxNumDestinations],
+    uint32_t NumDestinations) {
+    uint16_t fabric_mcast_hop_mask = 0;
+    for (uint32_t i = 0; i < NumDestinations; i++) {
+        // Calculate the number of hops between source chip and destination
+        // Although manhattan_distance returns the number of row + col hops, since this is a 1D topology this will only ever return hops in 1 dimension
+        uint32_t num_hops =
+            manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i]);
+        // Set the corresponding bit in the fabric multicast hop mask
+        fabric_mcast_hop_mask |= (1 << num_hops);
+    }
+    return fabric_mcast_hop_mask;
+}
+
+template <
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType>
-    inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
+inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
+    // Fabric parameters
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t fabric_mcast_hop_mask,
+    eth_chan_directions fabric_direction, // eth_chan_directions index
+    // NoC Parameters
     uint32_t payload_l1_address,
     uint32_t noc_payload_page,
     int32_t size_bytes,
     const uint32_t alignment,
     uint32_t offset = 0) {
+
+    // Separate the list of destinations by direction relative to the source chip
     // Set the sparse multicast fabric route in the packet header
     fabric_set_sparse_multicast_route((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, fabric_mcast_hop_mask);
 
     // Configure and send the packet
-    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
-        fabric_connections[route],
+        fabric_connections[fabric_direction],
         packet_header,
         payload_l1_address,
         noc_payload_page,
         size_bytes,
         alignment,
         offset);
+}
+
+// Assumes all destinations are along the same axis as the source chip
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    uint32_t FabricMaxNumDestinations,
+    int32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
+inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
+    // Fabric parameters
+    AddrGenType addrgen,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t linearized_dest_mesh_coords[FabricMaxNumDestinations],
+    uint32_t NumDestinations,
+    // NoC Parameters
+    uint32_t payload_l1_address,
+    uint32_t noc_payload_page,
+    int32_t size_bytes,
+    const uint32_t alignment,
+    uint32_t offset = 0) {
+
+    // Generate the fabric multicast hop mask
+    uint16_t fabric_mcast_hop_mask = generate_fabric_mcast_hop_mask<Topology, MeshRows, MeshCols, FabricMaxNumDestinations>(
+        linearized_dest_mesh_coords, NumDestinations);
+
+    // Determine the fabric direction based on the first destination coordinate
+    eth_chan_directions routing_direction = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[0]);
+
+    // Send the packet
+    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
+        addrgen,
+        fabric_connections,
+        packet_header,
+        fabric_mcast_hop_mask,
+        routing_direction,
+        payload_l1_address,
+        noc_payload_page,
+        size_bytes, alignment, offset);
 }
 
 }  // namespace ttnn::operations::ccl::common
