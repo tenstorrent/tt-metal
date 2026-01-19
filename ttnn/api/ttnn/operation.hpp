@@ -6,6 +6,7 @@
 
 #include <experimental/type_traits>
 #include <ttnn/tensor/tensor.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>

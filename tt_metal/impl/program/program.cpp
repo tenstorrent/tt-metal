@@ -1071,6 +1071,11 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
+    // Mock devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     auto extract_dst_noc_unicast_info =
         [&device](
             const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
@@ -1438,10 +1443,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    kernel->register_kernel_elf_paths_with_watcher(*device);
+                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                        tt::TargetDevice::Mock) {
+                        kernel->register_kernel_elf_paths_with_watcher(*device);
+                    }
+
+                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
+                                   tt::TargetDevice::Mock;
 
                     if (detail::HashLookup::inst().add(kernel_hash)) {
-                        GenerateBinaries(device, build_options, kernel);
+                        if (!is_mock) {
+                            GenerateBinaries(device, build_options, kernel);
+                        } else {
+                            // Create empty stub binaries for mock devices
+                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                        }
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
                     detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
@@ -1453,12 +1470,18 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
     sync_build_steps(events);
 
-    for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
-            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+    // Mock devices don't have binaries to read
+    bool is_mock =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    if (!is_mock) {
+        for (const auto& kernels : kernels_) {
+            for (const auto& pair : kernels) {
+                const auto& kernel = pair.second;
+                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+            }
         }
+        sync_build_steps(events);
     }
-    sync_build_steps(events);
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
