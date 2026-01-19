@@ -37,6 +37,10 @@ constexpr auto cb_max_exp_avg_sq_idx = tt::CBIndex::c_26;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
+// AdamW update:
+//   m_t = β₁ * m_{t-1} + (1 - β₁) * g          (momentum)
+//   v_t = β₂ * v_{t-1} + (1 - β₂) * g²         (variance)
+//   θ_t = θ_{t-1} - step_size * m_t / (√v̂_t + ε)
 void MAIN {
     // multiple kernels use this, can be moved to compute_utils.hpp
     constexpr uint32_t fp32_one = 0x3F800000U;  // hexadecimal encoding of 1.0f in uint32_t
@@ -74,7 +78,6 @@ void MAIN {
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
         copy_tile_init(cb_grad_idx);
         binop_with_scalar_tile_init();
-        // add_binary_tile_init();
         // beta_1 * m_{t-1} + (1 - beta_1) * g
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
@@ -122,6 +125,7 @@ void MAIN {
         cb_pop_front(cb_v_t, block_size);
 
 #if AMSGRAD
+        // AMSGrad: use max of past squared gradients
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
         copy_tile_init(cb_max_exp_avg_sq_in_idx);
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
@@ -146,7 +150,7 @@ void MAIN {
 #endif
         sqrt_tile_init();  // sets extra constants
         // binop_with_scalar_tile_init();
-        // sqrt(v_t) * inv_sqrt_bc2 + epsilon)
+        // sqrt(v_hat_t) + epsilon = sqrt(v_t) * inv_sqrt_bc2 + epsilon)
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_idx);
             mul_unary_tile(block_idx, inv_sqrt_bc2);
@@ -168,15 +172,13 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
+        binop_with_scalar_tile_init();
         if (decay_factor != fp32_one) {
-            binop_with_scalar_tile_init();
-            // theta_t = decay_factory * theta_{t - 1} = (1 - weight_decay * learning_rate) * theta{t - 1}
+            // theta_t = decay_factory * theta_{t - 1} = (1 - weight_decay * learning_rate) * theta_{t - 1}
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_unary_tile(block_size + block_idx, decay_factor);
             }
         }
-        binop_with_scalar_tile_init();
-        sub_binary_tile_init();
         // theta_t = theta_t - step_size * update, where step_size = learning_rate / bias_correction1
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_idx, step_size);
