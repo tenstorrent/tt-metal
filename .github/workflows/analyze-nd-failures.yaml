@@ -21,6 +21,10 @@ on:
         required: false
         default: 'January 1, 2026'
         type: string
+      end_date:
+        description: "End date (cutoff) for fetching Slack messages (format: 'January 31, 2026'). Messages after this date are ignored. Leave empty for no cutoff."
+        required: false
+        default: ""
 
 jobs:
   analyze-nd-failures:
@@ -47,3 +51,4 @@ jobs:
           update_mode: ${{ inputs.update_mode || 'update' }}
           run_maintenance: ${{ inputs.run_maintenance || 'false' }}
           start_date: ${{ inputs.start_date || 'January 1, 2026' }}
+          end_date: ${{ inputs.end_date || '' }}
