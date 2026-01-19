@@ -212,7 +212,7 @@ volatile tt_l1_ptr uint32_t* dispatch_profiler_control_buffer =
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    DeviceZoneScopedN("KERNEL-TOT");
+    DeviceZoneScopedN("GO");
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -364,7 +364,7 @@ void kernel_main() {
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         {
-            DeviceZoneScopedN("TEST");
+            DeviceZoneScopedN("GET_CMD");
             cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
         }
 
