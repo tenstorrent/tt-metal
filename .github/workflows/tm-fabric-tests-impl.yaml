@@ -292,10 +292,10 @@ jobs:
             cmd: |
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
-            timeout: 30
+            timeout: 15
           - name: ttnn UDM unit tests
             cmd: ./build/test/ttnn/unit_tests_ttnn_udm
-            timeout: 30
+            timeout: 10
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
             timeout: 15
