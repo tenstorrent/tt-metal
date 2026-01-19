@@ -547,7 +547,7 @@ void calculate_exponential_polynomial() {
             TTI_SFPENCC(0, 0, 0, 0);
 
             // Calculate exp(x - k*ln2).
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
 #else
             ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
