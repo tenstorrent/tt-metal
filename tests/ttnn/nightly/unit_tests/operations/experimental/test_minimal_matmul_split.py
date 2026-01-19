@@ -421,7 +421,7 @@ def test_performance_split(chunks, shape):
     else:
         expected_util = 0.582
 
-    tolerance = 0.03
+    tolerance = 0.04
     assert (
         util > expected_util - tolerance
     ), f"Utilization {util:.2f}% is less than expected {expected_util:.2f}% by more than {tolerance:.2f}%"

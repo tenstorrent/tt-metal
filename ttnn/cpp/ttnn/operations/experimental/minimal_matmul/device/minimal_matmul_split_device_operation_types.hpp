@@ -13,11 +13,11 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental::prim {
 
-struct split_operation_attributes_t {
+struct MinimalMatmulSplitParams {
     std::optional<MinimalMatmulConfig> config;
-    std::optional<unary::UnaryWithParam> fused_activation;
+    std::optional<operations::unary::UnaryWithParam> fused_activation;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -25,13 +25,10 @@ struct split_operation_attributes_t {
     int32_t dim;
 };
 
-struct split_tensor_args_t {
+struct MinimalMatmulSplitInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
 };
 
-using split_spec_return_value_t = std::vector<TensorSpec>;
-using split_tensor_return_value_t = std::vector<Tensor>;
-
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental::prim

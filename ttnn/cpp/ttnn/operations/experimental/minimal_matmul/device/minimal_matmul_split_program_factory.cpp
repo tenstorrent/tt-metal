@@ -5,12 +5,12 @@
 #include "minimal_matmul_split_program_factory.hpp"
 #include "minimal_matmul_program_factory.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul::program {
+namespace ttnn::experimental::prim {
 
 MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFactory::create(
-    const split_operation_attributes_t& operation_attributes,
-    const split_tensor_args_t& tensor_args,
-    split_tensor_return_value_t& tensor_return_value) {
+    const MinimalMatmulSplitParams& operation_attributes,
+    const MinimalMatmulSplitInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
 
@@ -32,9 +32,9 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
 
 void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split_operation_attributes_t& /*operation_attributes*/,
-    const split_tensor_args_t& tensor_args,
-    split_tensor_return_value_t& tensor_return_value) {
+    const MinimalMatmulSplitParams& /*operation_attributes*/,
+    const MinimalMatmulSplitInputs& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
     auto in1_addr = tensor_args.weight_tensor.buffer()->address();
     auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
@@ -49,4 +49,4 @@ void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
     override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::program
+}  // namespace ttnn::experimental::prim

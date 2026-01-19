@@ -13,15 +13,15 @@
 #include "minimal_matmul_split_program_factory.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::experimental::prim {
 
 struct MinimalMatmulSplitDeviceOperation {
-    using operation_attributes_t = ttnn::operations::experimental::minimal_matmul::split_operation_attributes_t;
-    using tensor_args_t = ttnn::operations::experimental::minimal_matmul::split_tensor_args_t;
-    using spec_return_value_t = ttnn::operations::experimental::minimal_matmul::split_spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::experimental::minimal_matmul::split_tensor_return_value_t;
+    using operation_attributes_t = MinimalMatmulSplitParams;
+    using tensor_args_t = MinimalMatmulSplitInputs;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<program::MinimalMatmulSplitProgramFactory>;
+    using program_factory_t = std::variant<MinimalMatmulSplitProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -41,28 +41,28 @@ struct MinimalMatmulSplitDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const Tensor& weight_tensor,
-        const int32_t chunks,
-        const int32_t dim,
+        int32_t chunks,
+        int32_t dim,
         const std::optional<Tensor>& bias_tensor,
-        std::optional<unary::UnaryWithParam> fused_activation,
+        std::optional<operations::unary::UnaryWithParam> fused_activation,
         const std::optional<const MinimalMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> dtype,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-operations::experimental::minimal_matmul::MinimalMatmulSplitDeviceOperation::tensor_return_value_t minimal_matmul_split(
+ttnn::experimental::prim::MinimalMatmulSplitDeviceOperation::tensor_return_value_t minimal_matmul_split(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    const int32_t chunks,
-    const int32_t dim,
+    int32_t chunks,
+    int32_t dim,
     const std::optional<Tensor>& bias_tensor,
     std::optional<operations::unary::UnaryWithParam> fused_activation,
-    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config);
