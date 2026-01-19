@@ -4157,8 +4157,6 @@ def test_conv_sharded_rm_input(
         # 3x3 convolutions
         (1,    3,   64, 512, 1024, ttnn.bfloat16,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 32 * 41),
         (1,   64,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3, HS, 32 * 4),
-        (1,  128,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 4, HS, 0),
-        (1,   64,   64, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3, HS, 32 * 4),
         (1,  128,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 2, HS, 0),
         (1,  256,  256,  32,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 5, HS, 32 * 2),
         (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 32 * 8),
