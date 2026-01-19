@@ -90,6 +90,13 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
+    if (mesh_device->get_view().get_devices().empty()) {
+        auto mesh_buffer =
+            std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
+        mesh_buffer->initialize_device_buffers();
+        return mesh_buffer;
+    }
+
     std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.

@@ -58,6 +58,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
+#include "dummy_mesh_command_queue.hpp"
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -630,6 +631,11 @@ tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate&
 MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
     TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
     const auto& command_queue = mesh_command_queues_[id];
     TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
@@ -1152,8 +1158,15 @@ bool MeshDeviceImpl::initialize_impl(
 
     // If the mesh device has no local devices, do not attempt to initialize it.
     if (view_->get_devices().empty()) {
+        active_distributed_context_ = distributed_context_->split(
+            distributed::multihost::Color(1), distributed::multihost::Key(*distributed_context_->rank()));
+        mesh_command_queues_.push_back(
+            std::make_unique<DummyMeshCommandQueue>(pimpl_wrapper, 0, std::bind(&MeshDeviceImpl::lock_api, this)));
         return false;
     }
+
+    active_distributed_context_ = distributed_context_->split(
+        distributed::multihost::Color(0), distributed::multihost::Key(*distributed_context_->rank()));
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
@@ -1181,12 +1194,13 @@ bool MeshDeviceImpl::initialize_impl(
                 dispatch_thread_pool_,
                 reader_thread_pool_,
                 cq_shared_state,
-                std::bind(&MeshDeviceImpl::lock_api, this)));
+                std::bind(&MeshDeviceImpl::lock_api, this),
+                active_distributed_context_));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(
-                std::make_unique<SDMeshCommandQueue>(pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this)));
+            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
+                pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
         }
     }
     Inspector::mesh_device_initialized(this);

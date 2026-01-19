@@ -157,6 +157,8 @@ private:
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    // Active distributed context used by mesh command queues (split from distributed_context_).
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
     friend class ::tt::tt_metal::experimental::DispatchContext;
 
