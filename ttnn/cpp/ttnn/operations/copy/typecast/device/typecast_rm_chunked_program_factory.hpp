@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,14 @@
 
 namespace ttnn::prim {
 
-struct TypecastShardedProgramFactory {
+struct TypecastRowMajorChunkedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_src0{};
-        tt::tt_metal::CBHandle out_cb{};
+        tt::tt_metal::KernelHandle typecast_reader_kernel_id{};
+        tt::tt_metal::KernelHandle typecast_writer_kernel_id{};
+        uint32_t num_cores{};
+        uint32_t chunks_per_row{};
+        uint32_t input_chunk_size_bytes{};
+        uint32_t output_chunk_size_bytes{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

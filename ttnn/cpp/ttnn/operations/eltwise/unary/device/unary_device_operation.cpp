@@ -161,14 +161,27 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& input_shape = input_tensor.padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
-        args.sub_core_grids,
-        input_shape.volume());
+    operation::Hash hash;
+
+    if (input_tensor.layout() == Layout::TILE) {
+        hash = operation::hash_operation<UnaryDeviceOperation>(
+            args,
+            args.sub_core_grids,
+            program_factory.index(),
+            input_tensor.dtype(),
+            input_tensor.memory_config(),
+            input_shape.volume(),
+            input_tensor.layout());
+    } else {
+        hash = operation::hash_operation<UnaryDeviceOperation>(
+            args,
+            args.sub_core_grids,
+            program_factory.index(),
+            input_tensor.dtype(),
+            input_tensor.memory_config(),
+            input_shape,
+            input_tensor.layout());
+    }
 
     return hash;
 }
