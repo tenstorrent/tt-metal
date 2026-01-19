@@ -94,13 +94,16 @@ void kernel_main() {
 #endif
 
     // Let's set some particular values for the params used
-    const uint32_t M_blocks_per_core = 4;
+    const uint32_t M_blocks_per_core = 1;
+    const uint32_t chunk_counts_per_width = 1;
+    const uint32_t mm_N_blocks_per_slice = 1;
     const uint32_t batch_size = input_tensor_B;
+    const uint32_t chunks_per_mm_N_block = 1;
     DPRINT << "The reader kernel running its loop." << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "slice_Wt: " << slice_Wt << ENDL();
     DPRINT << "slice_Ht: " << slice_Ht << ENDL();
-    DPRINT << "slice_C: " << slice_C << ENDL();
+    DPRINT << "slice_C (must be 1): " << slice_C << ENDL();
     DPRINT << "tile_granularity: " << tile_granularity << ENDL();
     DPRINT << "direction: " << (uint32_t)direction << ENDL();
     DPRINT << " chunks_per_sync: " << chunks_per_sync << ENDL();
@@ -111,10 +114,16 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-            for (uint32_t i = 0; i < ring_size; i++) {
-                const bool do_reduce = i != 0;
-                DPRINT << "batch_size: " << b << " m_block_iter: " << m_block_iter << " i: " << i
-                       << " do_reduce: " << (uint32_t)do_reduce << ENDL();
+            for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                for (uint32_t i = 0; i < ring_size; i++) {
+                    for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                        const bool do_reduce = i != 0;
+                        DPRINT << "batch_size: " << b << " m_block_iter: " << m_block_iter << " i: " << i
+                               << " do_reduce: " << (uint32_t)do_reduce << ENDL();
+                        DPRINT << "chunk_idx: " << chunk_idx << " chunk_piece_idx: " << chunk_piece_idx << ENDL();
+                        DPRINT << "--------------------------------" << ENDL();
+                    }
+                }
             }
         }
     }
