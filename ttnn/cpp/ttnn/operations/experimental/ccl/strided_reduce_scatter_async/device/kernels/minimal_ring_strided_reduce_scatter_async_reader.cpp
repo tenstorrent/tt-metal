@@ -132,6 +132,9 @@ void kernel_main() {
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                 for (uint32_t i = 0; i < ring_size; i++) {
+                    DPRINT << "Next ring element: " << i << " " << ENDL();
+                    DPRINT << "direction: " << (uint32_t)direction << ENDL();
+                    DPRINT << "slice_idx: " << slice_idx << ENDL();
                     const bool do_reduce = i != 0;
                     uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
@@ -142,21 +145,16 @@ void kernel_main() {
                         actual_slice_idx =
                             slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
                     }
+                    DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                     const uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
                     const uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                    DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
+                    DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
 
-                    DPRINT << "Next ring element: " << i << " " << ENDL();
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        // DPRINT << "batch_size: " << b << " batch_offset:" << batch_offset << " "
-                        //        << " m_block_iter: " << m_block_iter << " i: " << i
-                        //        << " do_reduce: " << (uint32_t)do_reduce << ENDL();
-
-                        DPRINT << "chunk_idx: " << chunk_idx << " chunk_piece_idx: " << chunk_piece_idx << ENDL();
-                        DPRINT << "--------------------------------" << ENDL();
-
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = 1;
-                        uint32_t direction_offset = direction ? 0 : input_tensor_Wt;
+                        uint32_t direction_offset = direction ? 0 : 1;
                         uint32_t input_row_offset = start_row_offset;
                         DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
@@ -166,10 +164,11 @@ void kernel_main() {
                         // uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                             uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset;
-                            DPRINT << "input_tile_id: " << input_tile_id_start << ENDL();
+                            DPRINT << "input_tile_id: " << input_tile_id << ENDL();
                             // uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                             // noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             // l1_write_addr += page_size;
+                            DPRINT << "--------------------------------" << ENDL();
                         }
                         // tiles_read += tiles_to_read_in_current_direction;
                     }
