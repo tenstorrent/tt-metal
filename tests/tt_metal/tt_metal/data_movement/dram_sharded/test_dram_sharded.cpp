@@ -31,6 +31,7 @@ struct DramShardedConfig {
     CoreRangeSet cores;
     bool use_trid = false;
     uint32_t num_of_trids = 0;
+    bool use_2_0 = false;
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
@@ -74,8 +75,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     uint32_t input_buffer_address = mesh_buffer->address();
 
     // Input
-    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
+    vector<uint32_t> packed_input = generate_packed_constant_vector<uint32_t, bfloat16>(
+        -100.0f, total_size_bytes / sizeof(bfloat16));
 
     // Golden output
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
@@ -92,6 +93,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     string kernel_path = "tests/tt_metal/tt_metal/data_movement/dram_sharded/kernels/dram_sharded_read";
     if (test_config.use_trid) {
         kernel_path += "_trid";
+        reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
+    }
+    if (test_config.use_2_0) {
+        kernel_path += "_2_0";
         reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
     }
     kernel_path += ".cpp";
@@ -264,6 +269,68 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
         .cores = core_range_set,
         .use_trid = true,
         .num_of_trids = 16};
+
+    // Run
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
+    auto mesh_device = get_mesh_device();
+
+    // Parameters
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t num_banks = mesh_device->num_dram_channels();
+    uint32_t max_num_pages = 32;
+    uint32_t max_transactions = 256;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 2) {
+            // Test config
+            unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+                .test_id = 88,
+                .num_of_transactions = num_of_transactions,
+                .num_banks = num_banks,
+                .pages_per_bank = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = l1_data_format,
+                .cores = core_range_set,
+                .use_2_0 = true};
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal_2_0) {
+    auto mesh_device = get_mesh_device();
+
+    // Parameters
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t num_of_transactions = 1;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    // Test config
+    unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+        .test_id = 89,
+        .num_of_transactions = num_of_transactions,
+        .num_banks = mesh_device->num_dram_channels(),
+        .pages_per_bank = 28,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = l1_data_format,
+        .cores = core_range_set,
+        .use_trid = true,
+        .num_of_trids = 1,
+        .use_2_0 = true};
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));
