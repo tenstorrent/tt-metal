@@ -104,6 +104,7 @@ KERNEL_ENTRY {
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
         Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
 
     // RMSNorm writer args (BRISC is no-op)
