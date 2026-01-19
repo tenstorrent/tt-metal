@@ -222,7 +222,8 @@ def test_upsample_various(
         (1, 128, 64, 128, 2, 2),
     ),
 )
-def test_panoptic_upsample(device, batch_size, num_channels, height, width, scale_h, scale_w):
+@pytest.mark.parametrize("run_twice", [True])
+def test_panoptic_upsample(device, batch_size, num_channels, height, width, scale_h, scale_w, run_twice):
     input_shape_nchw = [batch_size, num_channels, height, width]
     scale_factor = (scale_h, scale_w)
     mode_pytorch = "nearest"  # we only did nearest in panoptic due to pcc dropping very little and bilinear not being able to fit in memory as of now
@@ -251,6 +252,15 @@ def test_panoptic_upsample(device, batch_size, num_channels, height, width, scal
         scale_factor=scale_factor,
         mode=mode_ttnn,
     )
+
+    if run_twice:
+        ttnn.deallocate(ttnn_output_nhwc, True)
+        ttnn_output_nhwc = ttnn.upsample(
+            ttnn_input_nhwc,
+            scale_factor=scale_factor,
+            mode=mode_ttnn,
+        )
+
     ttnn_output_nhwc = ttnn.to_memory_config(ttnn_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
 
     ttnn.deallocate(ttnn_input_nhwc)
