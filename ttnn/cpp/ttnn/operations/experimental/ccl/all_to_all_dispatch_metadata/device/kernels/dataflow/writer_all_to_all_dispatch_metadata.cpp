@@ -102,6 +102,95 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     }
 }
 
+// Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
+// Handles payloads larger than max packet size by splitting into multiple packets
+template <
+    uint32_t FabricMaxPacketSzBytes,
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis>
+FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    uint32_t src_addr,
+    uint64_t noc_addr,
+    int32_t size_bytes,
+    uint32_t alignment) {
+    using ttnn::operations::ccl::common::ReplicateGroup;
+
+    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
+    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
+    // dispatch_devices=MeshCols
+    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    // Split the ring: positive direction gets half, negative direction gets the other half
+    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
+    constexpr uint32_t positive_range = dispatch_devices / 2;
+    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+
+    constexpr uint32_t positive_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+
+    // Track the original total size for the local write at the end
+    const uint32_t total_size = static_cast<uint32_t>(size_bytes);
+    const uint64_t original_noc_addr = noc_addr;
+    const uint32_t original_src_addr = src_addr;
+
+    // Send multicast packets, splitting payload if larger than max packet size
+    bool negative_polarity = true;
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, static_cast<uint32_t>(size_bytes));
+        // DPRINT << "curr_packet_size: " << curr_packet_size << ENDL();
+
+        const auto noc_command_header = tt::tt_fabric::NocUnicastCommandHeader{noc_addr};
+
+        // Send multicast in positive direction (start_distance=1, range=positive_range)
+        // IMPORTANT: Use separate packet headers for each direction to avoid race condition
+        // where the second call overwrites the header while first's DMA is still in flight
+        if constexpr (positive_range > 0) {
+            tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+                &fabric_connections[positive_direction],
+                packet_header_pos,
+                src_addr,
+                curr_packet_size,
+                noc_command_header,
+                static_cast<uint8_t>(1),
+                negative_polarity ? static_cast<uint8_t>(positive_range) : static_cast<uint8_t>(negative_range));
+        }
+
+        // Send multicast in negative direction (start_distance=1, range=negative_range)
+        if constexpr (negative_range > 0) {
+            tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+                &fabric_connections[negative_direction],
+                packet_header_neg,
+                src_addr,
+                curr_packet_size,
+                noc_command_header,
+                static_cast<uint8_t>(1),
+                negative_polarity ? static_cast<uint8_t>(negative_range) : static_cast<uint8_t>(positive_range));
+        }
+
+        negative_polarity = !negative_polarity;
+        // Update addresses and remaining size for next iteration
+        src_addr += curr_packet_size;
+        noc_addr += curr_packet_size;
+        size_bytes -= curr_packet_size;
+
+        // Wait for header DMAs to complete before modifying headers in next iteration
+        // The fabric API uses non-blocking header sends, so we need to ensure the
+        // header memory is no longer being read before we overwrite it
+        noc_async_writes_flushed();
+    }
+
+    // Also write to local device (use original addresses and total size)
+    noc_async_write(original_src_addr, original_noc_addr, total_size);
+    noc_async_writes_flushed();
+}
+
 // Fabric multicast metadata write helper - handles scatter writes in both directions along a 1D ring
 // Similar to fabric_multicast_bidirectional_atomic_inc_ring_1d but for scatter writes
 template <
@@ -109,7 +198,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis>
-FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d(
+FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -284,11 +373,13 @@ void kernel_main() {
     const auto output_scores_addr_gen = TensorAccessor(scores_out_args, scores_out_tensor_address, scores_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
-    auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    auto* metadata_packet_header =
+    auto* unicast_packet_header_pos = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+    auto* unicast_packet_header_neg =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-    auto* scores_packet_header =
+    auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
+    auto* scores_packet_header =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 3 * sizeof(PACKET_HEADER_TYPE));
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
     uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
@@ -321,47 +412,59 @@ void kernel_main() {
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+        detail::fabric_multicast_bidirectional_write_ring_1d_async<
+            fabric_max_packet_size,
+            linearized_mesh_coord,
+            mesh_rows,
+            mesh_cols,
+            axis>(
+            fabric_connections,
+            unicast_packet_header_pos,
+            unicast_packet_header_neg,
+            input_token_read_addr,
+            output_token_write_addr,
+            (int32_t)input_page_size,
+            alignment);
+        // for (uint32_t k = 0; k < selected_experts_k; k++) {
+        //     // get the expert that is chosen for the current token
+        //     uint16_t expert_chosen = token_indices[k];
+        //     uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
+        //     uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
 
-        for (uint32_t k = 0; k < selected_experts_k; k++) {
-            // get the expert that is chosen for the current token
-            uint16_t expert_chosen = token_indices[k];
-            uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
-            uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+        //     // find the devices that the expert lives on and dispatch the input tokens to them
+        //     // if there is no tensor parallelism, then the token will only be sent to one device
+        //     for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
+        //         if (devices_for_expert[d] == 1 &&
+        //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
+        //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
+        //             if (d == linearized_mesh_coord) {
+        //                 // if the expert lives on the current device, we dispatch the input token to it
+        //                 detail::dispatch_input_local_device_flushed(
+        //                     input_token_read_addr, output_token_write_addr, output_page_size);
+        //                 needs_barrier = true;
+        //             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+        //                 // if the expert lives on a remote device, we dispatch the input token to it
+        //                 // if axis is specified then we only send to the devices that are along the axis
+        //                 // if axis is not specified then we send to all devices
 
-            // find the devices that the expert lives on and dispatch the input tokens to them
-            // if there is no tensor parallelism, then the token will only be sent to one device
-            for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-                if (devices_for_expert[d] == 1 &&
-                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
-                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
-                    if (d == linearized_mesh_coord) {
-                        // if the expert lives on the current device, we dispatch the input token to it
-                        detail::dispatch_input_local_device_flushed(
-                            input_token_read_addr, output_token_write_addr, output_page_size);
-                        needs_barrier = true;
-                    } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-                        // if the expert lives on a remote device, we dispatch the input token to it
-                        // if axis is specified then we only send to the devices that are along the axis
-                        // if axis is not specified then we send to all devices
-
-                        fabric_send_chip_unicast_noc_unicast_1d<
-                            linearized_mesh_coord,
-                            topology,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size>(
-                            output_addr_gen,
-                            fabric_connections,
-                            unicast_packet_header,
-                            d,
-                            input_token_read_addr,
-                            global_token,
-                            (int)output_page_size,
-                            alignment);
-                    }
-                }
-            }
-        }
+        //                 fabric_send_chip_unicast_noc_unicast_1d<
+        //                     linearized_mesh_coord,
+        //                     topology,
+        //                     mesh_rows,
+        //                     mesh_cols,
+        //                     fabric_max_packet_size>(
+        //                     output_addr_gen,
+        //                     fabric_connections,
+        //                     unicast_packet_header,
+        //                     d,
+        //                     input_token_read_addr,
+        //                     global_token,
+        //                     (int)output_page_size,
+        //                     alignment);
+        //             }
+        //         }
+        //     }
+        // }
         cb_pop_front(indices_tensor_cb_id, 1);
         cb_pop_front(scores_tensor_cb_id, 1);
         cb_pop_front(input_tensor_cb_id, 1);
@@ -399,61 +502,20 @@ void kernel_main() {
 
     cb_wait_front(metadata_buffer_id, tokens_per_device);
     uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
-    detail::fabric_multicast_bidirectional_scatter_write_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
-        fabric_connections,
-        metadata_packet_header,
-        base_metadata_addr,
-        {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
-        {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
+    detail::
+        fabric_multicast_bidirectional_scatter_write_ring_1d_async<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
+            fabric_connections,
+            metadata_packet_header,
+            base_metadata_addr,
+            {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
+            {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
     cb_pop_front(metadata_buffer_id, tokens_per_device);
     // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including antipodal
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
         fabric_connections, metadata_packet_header, global_noc_semaphore_address);
 
-    // for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-    //     if (d == linearized_mesh_coord) {
-    //         // dispatch the metadata to the local device
-    //         detail::dispatch_input_local_device_flushed(
-    //             base_indices_addr, noc_core_offset_md_write_addr, metadata_size_per_core);
-    //         detail::dispatch_input_local_device_flushed(
-    //             base_scores_addr, noc_core_offset_scores_write_addr, metadata_size_per_core);
-    //     } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-    //         fabric_send_chip_unicast_noc_unicast_1d<
-    //         linearized_mesh_coord,
-    //         topology,
-    //         mesh_rows,
-    //         mesh_cols,
-    //         fabric_max_packet_size>(
-    //             output_scores_addr_gen,
-    //             fabric_connections,
-    //             scores_packet_header,
-    //             d,
-    //             base_scores_addr,
-    //             dispatch_index*tokens_per_device + token_start_idx,
-    //             (int)metadata_size_per_core,
-    //             16);
-    //         l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-    //             linearized_mesh_coord,
-    //             topology,
-    //             mesh_rows,
-    //             mesh_cols,
-    //             fabric_max_packet_size>(
-    //             fabric_connections,
-    //             metadata_packet_header,
-    //             d,
-    //             base_indices_addr,
-    //             noc_core_offset_md_write_addr,
-    //             global_noc_semaphore_address,
-    //             (int)metadata_size_per_core,
-    //             16,
-    //             1,
-    //             true);
-    //     }
-    // }
-    // Need to wait for the local flushed metadata write.
-    noc_async_write_barrier();
-
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     close_direction_connections(directions, fabric_connections);
+    noc_async_write_barrier();
 }
