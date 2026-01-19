@@ -152,8 +152,9 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch_name }}
+        ARCH_NAME: blackhole
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
