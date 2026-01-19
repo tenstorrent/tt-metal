@@ -20,41 +20,55 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-// Import types from the new TMP pattern
 using ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterProgramArtifacts;
 
 namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
 
-/*
- * Core Assignment:
- * - First core will be backward on link 0
- * - Second core will be forward on link 0
- * - Third core will be backward on link 1
- * - etc
- * Note:
- * - Always need a backward and forward core for each link being used, even if the forward worker isn't being used for
- * data
- * - Needed for pre op synchronization
- * - May need to add a single additional forward core to even it out (on top of the shard cores)
- */
-// TODO: (GR) only use the first x cores (the cores that actually have shards on them)
-std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
-    const NdShardSpec& input_nd_shard_spec, uint32_t num_directions_per_link) {
-    std::vector<CoreCoord> worker_cores = corerange_to_cores(input_nd_shard_spec.grid);
-    uint32_t clamped_num_links = tt::div_up(worker_cores.size(), num_directions_per_link);
+CoreCoord choose_additional_core(MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected) {
+    auto available_cores = mesh_device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                CoreCoord core = CoreCoord(x, y);
+                if (std::find(cores_already_selected.begin(), cores_already_selected.end(), core) ==
+                    cores_already_selected.end()) {
+                    return core;
+                }
+            }
+        }
+    }
 
-    // add additional forward core if needed
-    if (worker_cores.size() % 2 != 0) {
-        // which core to use based on which link it's being used for
-        // TODO: (GR) handle when selected core is already one of the shard cores (non optimal placement)
-        // TODO: (GR) pick optimal cores for the different cases
-        const std::vector<CoreCoord> supplemental_cores = {
-            CoreCoord(7, 0),
-            CoreCoord(7, 0),
-            CoreCoord(7, 0),
-            CoreCoord(7, 0),
-        };
-        worker_cores.emplace_back(supplemental_cores.at(clamped_num_links - 1));
+    TT_FATAL(false, "deepseek_reduce_scatter requires an even number of worker cores");
+
+    // TODO: (GR) pick optimal cores for the different cases (which link the core is getting added to)
+    // const std::vector<CoreCoord> supplemental_cores = {
+    //     CoreCoord(7, 0),
+    //     CoreCoord(7, 0),
+    //     CoreCoord(7, 0),
+    //     CoreCoord(7, 0),
+    // };
+}
+
+std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
+    MeshDevice* mesh_device,
+    const NdShardSpec& input_nd_shard_spec,
+    uint32_t num_shards,
+    uint32_t num_directions_per_link) {
+    uint32_t clamped_num_links = tt::div_up(num_shards, num_directions_per_link);
+
+    std::vector<CoreCoord> worker_cores = corerange_to_cores(
+        input_nd_shard_spec.grid, num_shards, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    TT_FATAL(
+        worker_cores.size() == num_shards,
+        "deepseek_reduce_scatter requires each shard to be located on a different core");
+
+    // always need a forward and backward core for each link being used (for in op synchronization), even if the forward
+    // worker isn't being used for data transfer due to an odd number of shards
+    if (num_shards % 2 != 0) {
+        worker_cores.emplace_back(choose_additional_core(mesh_device, worker_cores));
     }
 
     std::vector<CoreRange> worker_core_ranges;
@@ -83,18 +97,18 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     // hardcoded constants
     const uint32_t ring_size = 8;
     const uint32_t num_directions_per_link = 2;
-
-    // choose cores
-    const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
-    const auto [clamped_num_links, worker_core_range_set, worker_cores] =
-        get_cores(input_nd_shard_spec, num_directions_per_link);
-
-    // tensor details
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
+    // tensor details
+    const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
     const uint32_t num_pages_per_shard = input_nd_shard_spec.shard_shape.volume() / num_tile_elements;
+    const uint32_t num_shards = input_tensors.at(0).logical_volume() / (num_tile_elements * num_pages_per_shard);
     const uint32_t num_pages_per_slice = input_tensors.at(0).buffer()->num_pages();
     const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
+
+    // choose cores
+    const auto [clamped_num_links, worker_core_range_set, worker_cores] =
+        get_cores(mesh_device, input_nd_shard_spec, num_shards, num_directions_per_link);
 
     // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
     const uint32_t tile_granularity = 2;
