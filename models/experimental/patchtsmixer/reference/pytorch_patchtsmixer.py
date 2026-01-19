@@ -533,16 +533,16 @@ class PatchTSMixerLinearHead(nn.Module):
         num_channels: int,
         num_patches: int,
         num_targets: int,
-        head_agregation: str = None,  # None, "use_last", "max_pool", "avg_pool"
+        head_aggregation: str = None,  # None, "use_last", "max_pool", "avg_pool"
         output_range: tuple = None,
         head_dropout: float = 0.1,
     ):
         super().__init__()
-        self.head_aggregation = head_agregation
+        self.head_aggregation = head_aggregation
         self.output_range = output_range
 
         # Calculate input features based on aggregation
-        if head_agregation is None:
+        if head_aggregation is None:
             mul_factor = num_patches
         else:
             mul_factor = 1
@@ -552,7 +552,7 @@ class PatchTSMixerLinearHead(nn.Module):
         self.projection = nn.Linear(in_features, num_targets)
         self.dropout = nn.Dropout(head_dropout)
 
-        if head_agregation is None:
+        if head_aggregation is None:
             self.flatten = nn.Flatten(start_dim=-3)
         else:
             self.flatten = nn.Flatten(start_dim=-2)
@@ -583,3 +583,229 @@ class PatchTSMixerLinearHead(nn.Module):
             x = torch.sigmoid(x) * (max_val - min_val) + min_val
 
         return x
+
+
+class PatchTSMixerForTimeSeriesClassification(nn.Module):
+    """Classification variant."""
+
+    def __init__(
+        self,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        num_classes: int,  # Number of classes
+        mode: str = "common_channel",
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        head_dropout: float = 0.1,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+
+        # Calculate number of patches
+        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # Embedding
+        self.embedding = PatchTSMixerEmbedding(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # Positional encoding
+        self.pos_encoder = PatchTSMixerPositionalEncoding(
+            num_patches=num_patches,
+            d_model=d_model,
+        )
+
+        # Encoder
+        layer_kwargs = {
+            "num_patches": num_patches,
+            "d_model": d_model,
+            "num_channels": num_channels,
+            "mode": mode,
+            "expansion": expansion,
+            "dropout": dropout,
+            "use_gated_attn": use_gated_attn,
+            "eps": eps,
+        }
+        self.encoder = PatchTSMixerBlock(num_layers=num_layers, layer_kwargs=layer_kwargs)
+
+        # Classification head
+        self.head = PatchTSMixerLinearHead(
+            d_model=d_model,
+            num_channels=num_channels,
+            num_patches=num_patches,
+            num_targets=num_classes,
+            head_aggregation="avg_pool",  # Common for classification
+            head_dropout=head_dropout,
+        )
+
+    def forward(self, past_values):
+        # (B, L, C) -> (B, C, L)
+        x = past_values.transpose(1, 2)
+
+        x = self.embedding(x)  # (B, C, Np, D)
+        x = self.pos_encoder(x)  # (B, C, Np, D)
+        x, _ = self.encoder(x)  # Unpack tuple
+        logits = self.head(x)  # (B, num_classes)
+        return logits
+
+
+class PatchTSMixerForRegression(nn.Module):
+    """Regression variant."""
+
+    def __init__(
+        self,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        num_targets: int,  # Number of regression targets
+        output_range: tuple = None,  # (min, max)
+        mode: str = "common_channel",
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        head_dropout: float = 0.1,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+
+        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        self.embedding = PatchTSMixerEmbedding(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        self.pos_encoder = PatchTSMixerPositionalEncoding(
+            num_patches=num_patches,
+            d_model=d_model,
+        )
+
+        layer_kwargs = {
+            "num_patches": num_patches,
+            "d_model": d_model,
+            "num_channels": num_channels,
+            "mode": mode,
+            "expansion": expansion,
+            "dropout": dropout,
+            "use_gated_attn": use_gated_attn,
+            "eps": eps,
+        }
+        self.encoder = PatchTSMixerBlock(num_layers=num_layers, layer_kwargs=layer_kwargs)
+
+        self.head = PatchTSMixerLinearHead(
+            d_model=d_model,
+            num_channels=num_channels,
+            num_patches=num_patches,
+            num_targets=num_targets,
+            head_aggregation="avg_pool",
+            output_range=output_range,
+            head_dropout=head_dropout,
+        )
+
+    def forward(self, past_values):
+        # (B, L, C) -> (B, C, L)
+        x = past_values.transpose(1, 2)
+
+        x = self.embedding(x)
+        x = self.pos_encoder(x)
+        x, _ = self.encoder(x)  # Unpack tuple
+        predictions = self.head(x)  # (B, num_targets)
+        return predictions
+
+
+class PatchTSMixerPretrainHead(nn.Module):
+    """Head for self-supervised pre-training via masked patch prediction."""
+
+    def __init__(
+        self,
+        d_model: int,
+        patch_length: int,
+        head_dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.dropout = nn.Dropout(head_dropout)
+        # Project from d_model back to patch_length to reconstruct patches
+        self.projection = nn.Linear(d_model, patch_length)
+
+    def forward(self, hidden_features):
+        # hidden_features: (B, C, Np, D)
+        x = self.dropout(hidden_features)
+        x = self.projection(x)  # (B, C, Np, patch_length)
+        return x
+
+
+class PatchTSMixerForPretraining(nn.Module):
+    """Pre-training variant for masked patch prediction."""
+
+    def __init__(
+        self,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        mode: str = "common_channel",
+        expansion: int = 2,
+        dropout: float = 0.1,
+        use_gated_attn: bool = False,
+        head_dropout: float = 0.1,
+        eps: float = 1e-5,
+    ):
+        super().__init__()
+
+        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        self.embedding = PatchTSMixerEmbedding(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        self.pos_encoder = PatchTSMixerPositionalEncoding(
+            num_patches=num_patches,
+            d_model=d_model,
+        )
+
+        layer_kwargs = {
+            "num_patches": num_patches,
+            "d_model": d_model,
+            "num_channels": num_channels,
+            "mode": mode,
+            "expansion": expansion,
+            "dropout": dropout,
+            "use_gated_attn": use_gated_attn,
+            "eps": eps,
+        }
+        self.encoder = PatchTSMixerBlock(num_layers=num_layers, layer_kwargs=layer_kwargs)
+
+        # Pre-training head reconstructs patches
+        self.head = PatchTSMixerPretrainHead(
+            d_model=d_model,
+            patch_length=patch_length,
+            head_dropout=head_dropout,
+        )
+
+    def forward(self, past_values):
+        # (B, L, C) -> (B, C, L)
+        x = past_values.transpose(1, 2)
+
+        x = self.embedding(x)  # (B, C, Np, D)
+        x = self.pos_encoder(x)
+        x, _ = self.encoder(x)  # Unpack tuple
+        reconstructed = self.head(x)  # (B, C, Np, patch_length)
+        return reconstructed

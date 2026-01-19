@@ -485,6 +485,139 @@ class TtPatchTSMixerForecastHead:
         return y
 
 
+class TtPatchTSMixerLinearHead:
+    """
+    TTNN equivalent of PatchTSMixerLinearHead for Classification and Regression.
+
+    Input:  (B, C, Np, D)  rank-4
+    Output: (B, num_targets) rank-2 (after to_torch)
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        num_targets: int,
+        head_aggregation: str = None,  # None, "use_last", "max_pool", "avg_pool"
+        output_range: tuple = None,  # (min, max) for sigmoid scaling
+    ):
+        self.device = device
+        self.base = base_address
+        self.head_aggregation = head_aggregation
+        self.output_range = output_range
+        self.num_targets = num_targets
+
+        # Projection weight/bias
+        # Shape depends on aggregation:
+        # - None: (num_targets, C*D*Np)
+        # - aggregation: (num_targets, C*D)
+        self.projection_weight = parameters[f"{self.base}.projection.weight"]
+        self.projection_bias = parameters[f"{self.base}.projection.bias"]
+
+    def __call__(self, x):
+        """
+        Args:
+            x: TTNN tensor (B, C, Np, D)
+
+        Returns:
+            torch.Tensor (B, num_targets)
+        """
+        B, C, Np, D = x.shape
+
+        # Transpose: (B, C, Np, D) -> (B, C, D, Np)
+        x = ttnn.permute(x, (0, 1, 3, 2))
+
+        # Apply aggregation over patch dimension (last dim)
+        if self.head_aggregation == "use_last":
+            # Take last patch: (B, C, D, Np) -> (B, C, D, 1)
+            # TTNN slice syntax: tensor[start:stop] along dim
+            x = x[:, :, :, Np - 1 : Np]  # (B, C, D, 1)
+            x = ttnn.squeeze(x, -1)  # (B, C, D)
+
+        elif self.head_aggregation == "max_pool":
+            # Max pool over patches: (B, C, D, Np) -> (B, C, D)
+            x = ttnn.max(x, dim=-1)
+
+        elif self.head_aggregation == "avg_pool":
+            # Average pool over patches: (B, C, D, Np) -> (B, C, D)
+            x = ttnn.mean(x, dim=-1)
+
+        # else: head_aggregation is None, keep all patches (B, C, D, Np)
+
+        # Flatten: (B, C, D, ...) -> (B, C*D*...)
+        if self.head_aggregation is None:
+            # (B, C, D, Np) -> (B, C*D*Np)
+            x = ttnn.reshape(x, (B, C * D * Np))
+        else:
+            # (B, C, D) -> (B, C*D)
+            x = ttnn.reshape(x, (B, C * D))
+
+        # Linear projection: (B, features) -> (B, num_targets)
+        x = ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
+
+        # Convert to torch for final processing
+        x = ttnn.to_torch(x)  # May have shape (1, 1, B, num_targets) or similar
+
+        # Squeeze extra dimensions from ttnn.to_torch
+        while x.dim() > 2:
+            x = x.squeeze(0)
+
+        # Optional: Apply sigmoid + range scaling
+        if self.output_range is not None:
+            import torch
+
+            min_val, max_val = self.output_range
+            x = torch.sigmoid(x) * (max_val - min_val) + min_val
+
+        return x  # (B, num_targets)
+
+
+class TtPatchTSMixerPretrainHead:
+    """
+    TTNN equivalent of PatchTSMixerPretrainHead for self-supervised pre-training.
+
+    Projects from d_model back to patch_length to reconstruct masked patches.
+
+    Input:  (B, C, Np, D)  rank-4
+    Output: (B, C, Np, patch_length) rank-4 (as torch tensor)
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        patch_length: int,
+    ):
+        self.device = device
+        self.base = base_address
+        self.patch_length = patch_length
+
+        # Projection: d_model -> patch_length
+        self.projection_weight = parameters[f"{self.base}.projection.weight"]
+        self.projection_bias = parameters[f"{self.base}.projection.bias"]
+
+    def __call__(self, x):
+        """
+        x: TTNN tensor (B, C, Np, D)
+        returns: torch tensor (B, C, Np, patch_length)
+        """
+        # Linear projection: (B, C, Np, D) @ (D, patch_length) -> (B, C, Np, patch_length)
+        x = ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
+
+        # Convert to torch
+        x = ttnn.to_torch(x)
+
+        # Remove extra dimensions if present
+        while x.dim() > 4:
+            x = x.squeeze(0)
+
+        return x
+
+
 class TtPatchTSMixerPatchify:
     """
     Bring-up version:
@@ -721,3 +854,377 @@ class TtPatchTSMixerModelForForecasting:
         y = self.head(x)
 
         return y
+
+
+class TtPatchTSMixerForRegression:
+    """
+    PatchTSMixer for time series regression.
+
+    Returns continuous values for num_targets regression targets.
+    Optionally constrains outputs to a specified range using sigmoid.
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        num_targets: int,
+        output_range: tuple = None,  # (min, max)
+        mode: str = "common_channel",
+        expansion: int = 2,
+        use_gated_attn: bool = False,
+        head_aggregation: str = "avg_pool",
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.num_channels = num_channels
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.num_targets = num_targets
+        self.output_range = output_range
+        self.mode = mode
+        self.expansion = expansion
+        self.use_gated_attn = use_gated_attn
+        self.head_aggregation = head_aggregation
+        self.eps = eps
+
+        # HF-compatible num_patches
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # 1) patch embedding
+        embed_addr = f"{self.base}.embedding" if self.base else "embedding"
+        self.patch_embed = TtPatchTSMixerEmbedding(
+            device=device,
+            base_address=embed_addr,
+            parameters=parameters,
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # 2) positional encoding
+        pos_addr = f"{self.base}.pos_encoder" if self.base else "pos_encoder"
+        self.pos_enc = TtPatchTSMixerPositionalEncoding(
+            device=device,
+            base_address=pos_addr,
+            parameters=parameters,
+            num_patches=self.num_patches,
+            d_model=d_model,
+        )
+
+        # 3) encoder (mixer block)
+        layer_kwargs = dict(
+            num_patches=self.num_patches,
+            d_model=d_model,
+            num_channels=num_channels,
+            mode=mode,
+            expansion=expansion,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+        encoder_addr = f"{self.base}.encoder" if self.base else "encoder"
+        self.encoder = TtPatchTSMixerBlock(
+            device=device,
+            base_address=encoder_addr,
+            parameters=parameters,
+            num_layers=num_layers,
+            layer_kwargs=layer_kwargs,
+            norm_type="LayerNorm",
+        )
+
+        # 4) regression head
+        head_addr = f"{self.base}.head" if self.base else "head"
+        self.head = TtPatchTSMixerLinearHead(
+            device=device,
+            base_address=head_addr,
+            parameters=parameters,
+            num_targets=num_targets,
+            head_aggregation=head_aggregation,
+            output_range=output_range,
+        )
+
+    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+        """
+        past_values: torch tensor (B, L, C)
+        returns: torch tensor (B, num_targets)
+        """
+        B, L, C = past_values.shape
+        assert L == self.context_length
+        assert C == self.num_channels
+
+        # match PyTorch: (B, L, C) -> (B, C, L) for embedding
+        x_bcl = past_values.transpose(1, 2).contiguous()
+
+        # 1) embedding: returns TT (B, C, Np, D)
+        x = self.patch_embed(x_bcl, dtype=dtype)
+
+        # 2) PE: (B, C, Np, D)
+        x = self.pos_enc(x)
+
+        # 3) encoder
+        x, _ = self.encoder(x, output_hidden_states=False)
+
+        # 4) head: returns torch (B, num_targets)
+        predictions = self.head(x)
+
+        return predictions
+
+
+class TtPatchTSMixerForTimeSeriesClassification:
+    """
+    PatchTSMixer for time series classification.
+
+    Returns class logits for num_classes classification targets.
+    Typically uses avg_pool aggregation over patches.
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        num_classes: int,
+        mode: str = "common_channel",
+        expansion: int = 2,
+        use_gated_attn: bool = False,
+        head_aggregation: str = "avg_pool",
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.num_channels = num_channels
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.num_classes = num_classes
+        self.mode = mode
+        self.expansion = expansion
+        self.use_gated_attn = use_gated_attn
+        self.head_aggregation = head_aggregation
+        self.eps = eps
+
+        # HF-compatible num_patches
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # 1) patch embedding
+        embed_addr = f"{self.base}.embedding" if self.base else "embedding"
+        self.patch_embed = TtPatchTSMixerEmbedding(
+            device=device,
+            base_address=embed_addr,
+            parameters=parameters,
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # 2) positional encoding
+        pos_addr = f"{self.base}.pos_encoder" if self.base else "pos_encoder"
+        self.pos_enc = TtPatchTSMixerPositionalEncoding(
+            device=device,
+            base_address=pos_addr,
+            parameters=parameters,
+            num_patches=self.num_patches,
+            d_model=d_model,
+        )
+
+        # 3) encoder (mixer block)
+        layer_kwargs = dict(
+            num_patches=self.num_patches,
+            d_model=d_model,
+            num_channels=num_channels,
+            mode=mode,
+            expansion=expansion,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+        encoder_addr = f"{self.base}.encoder" if self.base else "encoder"
+        self.encoder = TtPatchTSMixerBlock(
+            device=device,
+            base_address=encoder_addr,
+            parameters=parameters,
+            num_layers=num_layers,
+            layer_kwargs=layer_kwargs,
+            norm_type="LayerNorm",
+        )
+
+        # 4) classification head
+        head_addr = f"{self.base}.head" if self.base else "head"
+        self.head = TtPatchTSMixerLinearHead(
+            device=device,
+            base_address=head_addr,
+            parameters=parameters,
+            num_targets=num_classes,
+            head_aggregation=head_aggregation,
+            output_range=None,  # No output range for classification
+        )
+
+    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+        """
+        past_values: torch tensor (B, L, C)
+        returns: torch tensor (B, num_classes)
+        """
+        B, L, C = past_values.shape
+        assert L == self.context_length
+        assert C == self.num_channels
+
+        # match PyTorch: (B, L, C) -> (B, C, L) for embedding
+        x_bcl = past_values.transpose(1, 2).contiguous()
+
+        # 1) embedding: returns TT (B, C, Np, D)
+        x = self.patch_embed(x_bcl, dtype=dtype)
+
+        # 2) PE: (B, C, Np, D)
+        x = self.pos_enc(x)
+
+        # 3) encoder
+        x, _ = self.encoder(x, output_hidden_states=False)
+
+        # 4) head: returns torch (B, num_classes)
+        logits = self.head(x)
+
+        return logits
+
+
+class TtPatchTSMixerForPretraining:
+    """
+    PatchTSMixer for self-supervised pre-training via masked patch prediction.
+
+    Reconstructs masked patches from their context.
+    Returns reconstructed patches of shape (B, C, Np, patch_length).
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        context_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        mode: str = "common_channel",
+        expansion: int = 2,
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.num_channels = num_channels
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.mode = mode
+        self.expansion = expansion
+        self.use_gated_attn = use_gated_attn
+        self.eps = eps
+
+        # HF-compatible num_patches
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # 1) patch embedding
+        embed_addr = f"{self.base}.embedding" if self.base else "embedding"
+        self.patch_embed = TtPatchTSMixerEmbedding(
+            device=device,
+            base_address=embed_addr,
+            parameters=parameters,
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # 2) positional encoding
+        pos_addr = f"{self.base}.pos_encoder" if self.base else "pos_encoder"
+        self.pos_enc = TtPatchTSMixerPositionalEncoding(
+            device=device,
+            base_address=pos_addr,
+            parameters=parameters,
+            num_patches=self.num_patches,
+            d_model=d_model,
+        )
+
+        # 3) encoder (mixer block)
+        layer_kwargs = dict(
+            num_patches=self.num_patches,
+            d_model=d_model,
+            num_channels=num_channels,
+            mode=mode,
+            expansion=expansion,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+        encoder_addr = f"{self.base}.encoder" if self.base else "encoder"
+        self.encoder = TtPatchTSMixerBlock(
+            device=device,
+            base_address=encoder_addr,
+            parameters=parameters,
+            num_layers=num_layers,
+            layer_kwargs=layer_kwargs,
+            norm_type="LayerNorm",
+        )
+
+        # 4) pre-training head
+        head_addr = f"{self.base}.head" if self.base else "head"
+        self.head = TtPatchTSMixerPretrainHead(
+            device=device,
+            base_address=head_addr,
+            parameters=parameters,
+            patch_length=patch_length,
+        )
+
+    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+        """
+        past_values: torch tensor (B, L, C)
+        returns: torch tensor (B, C, Np, patch_length)
+        """
+        B, L, C = past_values.shape
+        assert L == self.context_length
+        assert C == self.num_channels
+
+        # match PyTorch: (B, L, C) -> (B, C, L) for embedding
+        x_bcl = past_values.transpose(1, 2).contiguous()
+
+        # 1) embedding: returns TT (B, C, Np, D)
+        x = self.patch_embed(x_bcl, dtype=dtype)
+
+        # 2) PE: (B, C, Np, D)
+        x = self.pos_enc(x)
+
+        # 3) encoder
+        x, _ = self.encoder(x, output_hidden_states=False)
+
+        # 4) head: returns torch (B, C, Np, patch_length)
+        reconstructed = self.head(x)
+
+        return reconstructed
