@@ -29,6 +29,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
+#include "device/dummy_device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "host_api.hpp"
 #include "mesh_config.hpp"
@@ -217,7 +218,9 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
         this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
 }
 
-IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().at(0); }
+IDevice* MeshDeviceImpl::reference_device() const {
+    return view_->get_devices().empty() ? dummy_reference_device_.get() : this->get_devices().at(0);
+}
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
@@ -235,7 +238,8 @@ MeshDeviceImpl::MeshDeviceImpl(
     parent_mesh_(std::move(parent_mesh)),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
+    dummy_reference_device_(std::make_shared<DummyDevice>(0, tt::ARCH::Invalid)) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
     const auto& mpi_context = MetalContext::instance().global_distributed_context();
     distributed_context_ =
@@ -630,6 +634,11 @@ tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate&
 MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
     TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
     const auto& command_queue = mesh_command_queues_[id];
     TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
@@ -647,6 +656,9 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
+    if (view_->get_devices().empty()) {
+        return this->reference_device()->compute_with_storage_grid_size();
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
@@ -919,6 +931,10 @@ CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
     });
 }
 CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical_core) const {
+    // TODO(p1-0tr): need to centralise those calls
+    if (view_->get_devices().empty()) {
+        return this->reference_device()->worker_core_from_logical_core(logical_core);
+    }
     return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
         return device->worker_core_from_logical_core(logical_core);
     });
@@ -1132,7 +1148,14 @@ bool MeshDeviceImpl::initialize_impl(
 
     // If the mesh device has no local devices, do not attempt to initialize it.
     if (view_->get_devices().empty()) {
+        active_distributed_context_ = distributed_context_->split(
+            distributed::multihost::Color(1), distributed::multihost::Key(*distributed_context_->rank()));
+        mesh_command_queues_.push_back(
+            std::make_unique<DummyMeshCommandQueue>(pimpl_wrapper, 0, std::bind(&MeshDeviceImpl::lock_api, this)));
         return false;
+    } else {
+        active_distributed_context_ = distributed_context_->split(
+            distributed::multihost::Color(0), distributed::multihost::Key(*distributed_context_->rank()));
     }
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
@@ -1161,12 +1184,13 @@ bool MeshDeviceImpl::initialize_impl(
                 dispatch_thread_pool_,
                 reader_thread_pool_,
                 cq_shared_state,
-                std::bind(&MeshDeviceImpl::lock_api, this)));
+                std::bind(&MeshDeviceImpl::lock_api, this),
+                active_distributed_context_));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(
-                std::make_unique<SDMeshCommandQueue>(pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this)));
+            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
+                pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
         }
     }
     Inspector::mesh_device_initialized(this);
@@ -1292,6 +1316,10 @@ std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
+    // TODO(p1-0tr): need to centralise those calls
+    if (view_->get_devices().empty()) {
+        return this->reference_device()->allocator_impl();
+    }
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 

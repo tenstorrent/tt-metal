@@ -40,6 +40,7 @@ class Allocator;
 class HWCommandQueue;
 class SubDevice;
 class SystemMemoryManager;
+class DummyDevice;
 
 namespace experimental {
 class DispatchContext;
@@ -157,8 +158,12 @@ private:
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
     friend class ::tt::tt_metal::experimental::DispatchContext;
+
+    std::shared_ptr<DummyDevice> dummy_reference_device_;
 
 public:
     MeshDeviceImpl(

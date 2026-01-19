@@ -29,6 +29,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -297,7 +298,13 @@ Buffer::Buffer(
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
         this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->allocator_impl().get();
+        // check if device is a mesh device
+        auto mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+        if (mesh_device != nullptr && mesh_device->get_view().get_devices().empty()) {
+            this->allocator_ = nullptr;
+        } else {
+            this->allocator_ = device->allocator_impl().get();
+        }
     }
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
@@ -452,7 +459,8 @@ void Buffer::deallocate_impl() {
         return;
     }
 
-    if (device_->is_initialized() && size_ != 0) {
+    // TODO(p1-0tr): needed to flip around because of dummy Buffer (find a better solution)
+    if (size_ != 0 && device_->is_initialized()) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {

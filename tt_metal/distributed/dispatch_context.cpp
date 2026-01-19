@@ -67,7 +67,8 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
             mesh_device_impl.dispatch_thread_pool_,
             mesh_device_impl.reader_thread_pool_,
             cq_shared_state,
-            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl)));
+            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl),
+            mesh_device_impl.active_distributed_context_));
     }
     fast_dispatch_enabled_ = true;
     num_fd_inits_++;
@@ -86,7 +87,10 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
     for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
-            mesh_device, cq_id, std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl)));
+            mesh_device,
+            cq_id,
+            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl),
+            mesh_device_impl.active_distributed_context_));
     }
     for (const auto& dev : active_devices) {
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
