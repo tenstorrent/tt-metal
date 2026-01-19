@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 namespace tt {
 class Cluster;
@@ -378,15 +379,15 @@ private:
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
      * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
      *
-     * @param mesh_id Mesh ID
-     * @param adjacency_map_physical Physical adjacency maps for each mesh
-     * @param adjacency_map_logical Logical adjacency maps for each mesh
-     * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
+     * @param adjacency_map_physical Multi-mesh physical adjacency graph
+     * @param adjacency_map_logical Multi-mesh logical adjacency graph
+     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+     * @param fabric_node_id_to_mesh_rank Mapping of mesh IDs to fabric node IDs to mesh host ranks
      */
     void populate_fabric_node_id_to_asic_id_mappings(
-        MeshId mesh_id,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
-        const AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
+        const MeshId mesh_id,
+        const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
+        const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
         const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
         const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 

@@ -20,6 +20,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_metal::experimental::tt_fabric {
 
 // Import types from tt::tt_fabric for use in this API
+using ::tt::tt_fabric::AdjacencyGraph;
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
@@ -181,10 +182,10 @@ using LogicalMeshNode = MeshId;
  */
 struct LogicalMultiMeshGraph {
     // Map from MeshId to its internal adjacency graph (stored once, no duplication)
-    std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>> mesh_adjacency_graphs_;
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> mesh_adjacency_graphs_;
 
     // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
-    ::tt::tt_fabric::AdjacencyGraph<MeshId> mesh_level_graph_;
+    AdjacencyGraph<MeshId> mesh_level_graph_;
 };
 
 /**
@@ -223,10 +224,10 @@ using PhysicalMeshNode = MeshId;
  */
 struct PhysicalMultiMeshGraph {
     // Map from MeshId to its interkj/nal adjacency graph (stored once, no duplication)
-    std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
 
     // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
-    ::tt::tt_fabric::AdjacencyGraph<MeshId> mesh_level_graph_;
+    AdjacencyGraph<MeshId> mesh_level_graph_;
 };
 
 /**
