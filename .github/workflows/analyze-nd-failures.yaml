@@ -11,11 +11,6 @@ on:
         options:
           - update
           - rebuild
-      run_maintenance:
-        description: 'Run maintenance (cleanup old runs, ensure sorting)'
-        required: false
-        default: false
-        type: boolean
       start_date:
         description: 'Start date for fetching Slack messages (format: January 1, 2026)'
         required: false
@@ -49,6 +44,5 @@ jobs:
           # channel_id: Slack channel ID to fetch messages from
           channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           update_mode: ${{ inputs.update_mode || 'update' }}
-          run_maintenance: ${{ inputs.run_maintenance || 'false' }}
           start_date: ${{ inputs.start_date || 'January 1, 2026' }}
           end_date: ${{ inputs.end_date || '' }}
