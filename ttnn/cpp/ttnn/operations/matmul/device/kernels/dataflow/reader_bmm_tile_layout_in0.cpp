@@ -8,6 +8,7 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // RUNTIME ARGS
     uint32_t rt_args_idx = 0;
     // in0 tensor args

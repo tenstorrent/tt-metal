@@ -23,6 +23,7 @@
 
 namespace NAMESPACE {
 
+
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  *
@@ -138,6 +139,8 @@ inline void reblock_and_untilize(
 }
 
 void MAIN {
+
+    asm volatile("ebreak");
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;

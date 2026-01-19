@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    asm volatile("ebreak");
     // RUNTIME ARGS
     // READER
     uint32_t rt_args_idx = 0;

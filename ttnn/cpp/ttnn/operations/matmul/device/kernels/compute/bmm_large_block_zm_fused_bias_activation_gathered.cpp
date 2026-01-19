@@ -14,6 +14,7 @@
 
 namespace NAMESPACE {
 
+
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 FORCE_INLINE void reload_from_cb_to_dst(
@@ -133,6 +134,7 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
 }
 
 void MAIN {
+    asm volatile("ebreak");
     // Compile time args
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)

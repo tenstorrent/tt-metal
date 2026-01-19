@@ -63,6 +63,7 @@ void do_signaling(uint32_t& rt_args_idx) {
 }
 
 void kernel_main() {
+    asm volatile("ebreak");
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
     constexpr const bool in1_is_dram_sharded = get_compile_time_arg_val(1);

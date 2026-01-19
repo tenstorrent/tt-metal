@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
+    asm volatile("ebreak");
     bool one_time_profile = true;
 
     // in0 tensor args
