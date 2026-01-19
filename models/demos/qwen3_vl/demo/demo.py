@@ -263,7 +263,6 @@ def test_demo(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    is_ci_env = True
     if is_ci_env and (("accuracy" in test_id) or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
