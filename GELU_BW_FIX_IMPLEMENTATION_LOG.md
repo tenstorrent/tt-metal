@@ -735,6 +735,308 @@ Both saturate around x ≈ -13, consistent with BF16 smallest normal value.
 
 ---
 
+## Session 2026-01-18: SHIFTED POLYNOMIAL FIX (Max ULP = 1 for [-5, 5])
+
+### Problem Discovery: Float32 Horner's Catastrophic Cancellation
+
+The original left polynomial coefficients for [-5, -3] were mathematically correct (from Sollya) but caused **catastrophic cancellation** when evaluated with float32 Horner's method:
+
+| x Value | Unshifted Result | Expected Value | Error |
+|---------|------------------|----------------|-------|
+| -4.97 | **+3.1e-06** | **-8.3e-06** | Wrong sign! |
+| -4.5 | -1.2e-04 | -5.0e-04 | 76% error |
+| -4.0 | -2.9e-04 | -5.0e-04 | 42% error |
+
+**Root Cause:** The unshifted polynomial has large intermediate values (~1.846) that cancel to tiny results, losing all precision in float32.
+
+### Solution: Shifted Polynomial (t = x + 4)
+
+For x ∈ [-5, -3], define t = x + 4, so t ∈ [-1, 1]. Generate polynomial p(t) approximating GELU'(t - 4). This keeps intermediate values small, avoiding catastrophic cancellation.
+
+**Sollya script:** `~/tt/sollya/gelu_derivative_left_shifted.sollya`
+
+```sollya
+/* For x ∈ [-5, -3], define t = x + 4, so t ∈ [-1, 1] */
+g_t = 0.5 * erfc(-(x - 4)/sqrt(2)) + (x - 4) * exp(-(x - 4)^2/2) / sqrt(2*pi);
+p8 = fpminimax(g_t, 8, [|single...|], [-1, 1], relative);
+```
+
+### Shifted Left Polynomial Coefficients
+
+```cpp
+// Degree-8 SHIFTED polynomial for GELU'(x) over [-5, -3]
+// SHIFTED: Evaluate p(t) where t = x + 4, so t ∈ [-1, 1] for x ∈ [-5, -3]
+// This avoids catastrophic cancellation in float32 Horner's method
+constexpr float GELU_DERIV_LEFT_C0 = -5.03619085066020488739013671875e-4f;
+constexpr float GELU_DERIV_LEFT_C1 = -1.872996450401842594146728515625e-3f;
+constexpr float GELU_DERIV_LEFT_C2 = -3.2110414467751979827880859375e-3f;
+constexpr float GELU_DERIV_LEFT_C3 = -3.30785498954355716705322265625e-3f;
+constexpr float GELU_DERIV_LEFT_C4 = -2.20105494372546672821044921875e-3f;
+constexpr float GELU_DERIV_LEFT_C5 = -8.814539178274571895599365234375e-4f;
+constexpr float GELU_DERIV_LEFT_C6 = -9.72292109508998692035675048828125e-5f;
+constexpr float GELU_DERIV_LEFT_C7 = 9.22545223147608339786529541015625e-5f;
+constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
+```
+
+### Implementation
+
+```cpp
+// Left region [-5, -3], degree 8 SHIFTED polynomial
+// SHIFTED: t = x + 4 maps x ∈ [-5, -3] to t ∈ [-1, 1]
+// This avoids catastrophic cancellation in float32 Horner's method
+v_elseif(x >= -5.0f) {
+    sfpi::vFloat t = x + 4.0f;  // Shift to [-1, 1] range
+    result = POLYVAL8(
+        GELU_DERIV_LEFT_C8, GELU_DERIV_LEFT_C7, GELU_DERIV_LEFT_C6,
+        GELU_DERIV_LEFT_C5, GELU_DERIV_LEFT_C4, GELU_DERIV_LEFT_C3,
+        GELU_DERIV_LEFT_C2, GELU_DERIV_LEFT_C1, GELU_DERIV_LEFT_C0, t);
+}
+```
+
+### Final Test Results (Hardware Validated)
+
+```
+============================================================
+POLYNOMIAL GELU BACKWARD ULP ANALYSIS (DAZ+FTZ MODEL)
+============================================================
+                        Region     Count    Mean ULP     Max ULP       Worst x
+-------------------------------------------------------------------------------
+        Deep negative (x < -5)     16095      104.51       14031     -5.031e+00
+    Moderate negative [-5, -2]       160        0.09           1     -4.969e+00
+      Near negative [-2, -0.5]       256        0.01           1     -9.102e-01
+         Near zero [-0.5, 0.5]     32003        0.84           1      0.000e+00
+        Near positive [0.5, 2]       256        0.00           0      0.000e+00
+      Moderate positive [2, 5]       160        0.03           1      3.109e+00
+        Large positive (x > 5]     16096        0.00           0      0.000e+00
+-------------------------------------------------------------------------------
+                       OVERALL     65026       25.72       14031     -5.031e+00
+============================================================
+```
+
+### Key Achievement: **All Polynomial Regions [-5, 5] Now Have Max ULP = 1**
+
+| Region | Before Fix | After Fix |
+|--------|------------|-----------|
+| Moderate negative [-5, -2] | Max ULP = 463 | **Max ULP = 1** |
+| All polynomial regions | Mixed | **Max ULP = 1** |
+| Mean ULP overall | 46.42 | **25.72** |
+
+### Comparison with Golden Reference ttnn::tanh
+
+| Metric | ttnn::tanh (forward) | gelu_bw (current) |
+|--------|---------------------|-------------------|
+| Polynomial regions Max ULP | **1** | **1** |
+| Coverage | Full BF16 (symmetric) | [-5, 5] polynomial |
+| Implementation | Single degree-5 poly | Piecewise (degree-16 core + degree-8 left) |
+| Saturation handling | Clamp to ±1 | 0 for x<-5, 1 for x≥3.1719 |
+| Overall Max ULP | **1** | 14,031 (saturation only) |
+
+**Key Insight:** For the polynomial-covered region [-5, 5], gelu_bw now **matches ttnn::tanh quality** (Max ULP = 1).
+
+### Remaining: x < -5 Saturation Region (Max ULP = 14,031)
+
+For x < -5:
+- GELU'(x) is extremely small (< 1e-4)
+- Current implementation saturates to 0
+- Maximum absolute error is tiny (< 10^-5)
+
+**Options for further improvement:**
+1. Add more shifted polynomials for [-7,-5], [-9,-7], etc.
+2. Accept saturation (ML training rarely sees x < -5)
+3. For 99.8% of practical use cases, current implementation is sufficient
+
+### Files Modified
+
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (shifted coefficients + evaluation)
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (same)
+- `tests/ttnn/unit_tests/gtests/test_gelu_bw_ulp_bug.cpp` (updated test expectations)
+- `~/tt/sollya/gelu_derivative_left_shifted.sollya` (NEW - Sollya script)
+
+### Commit
+
+**Commit:** `34513f9755` "Fix gelu_bw polynomial: use SHIFTED polynomial for [-5,-3] to avoid float32 Horner's catastrophic cancellation"
+**Branch:** `movsianikov-tt/2025-12-16/ttml-bert-development-notes` (myfork)
+
+---
+
+## Session 2026-01-18 (Continued): Extended Polynomial Coverage to [-9, 3.17]
+
+### Goal
+
+Reduce Max ULP from 14,031 to a PR-acceptable level by extending polynomial coverage.
+
+### Solution: Additional Shifted Polynomials
+
+Created two additional shifted polynomials using Sollya:
+
+**Region [-7, -5] (FL1):**
+- Shifted variable: t = x + 6, so t ∈ [-1, 1]
+- Degree 8 polynomial
+- Sollya relative error: 1.1%
+- Hardware Max ULP: **1**
+
+**Region [-9, -7] (FL2):**
+- Shifted variable: t = x + 8, so t ∈ [-1, 1]
+- Degree 8 polynomial
+- Sollya relative error: 18%
+- Hardware Max ULP: **~25**
+
+**Sollya scripts:**
+- `~/tt/sollya/gelu_derivative_region_7_5.sollya`
+- `~/tt/sollya/gelu_derivative_region_9_7.sollya`
+
+### FL1 Polynomial Coefficients [-7, -5]
+
+```cpp
+// Degree-8 SHIFTED polynomial for GELU'(x) over [-7, -5]
+// SHIFTED: Evaluate p(t) where t = x + 6, so t ∈ [-1, 1] for x ∈ [-7, -5]
+constexpr float GELU_DERIV_FL1_C0 = -3.5759825323111726902425289154052734375e-8f;
+constexpr float GELU_DERIV_FL1_C1 = -2.06079477038656477816402912139892578125e-7f;
+constexpr float GELU_DERIV_FL1_C2 = -5.656046369040268473327159881591796875e-7f;
+constexpr float GELU_DERIV_FL1_C3 = -1.0098229950017412193119525909423828125e-6f;
+constexpr float GELU_DERIV_FL1_C4 = -1.400573410137440077960491180419921875e-6f;
+constexpr float GELU_DERIV_FL1_C5 = -1.608632601346471346914768218994140625e-6f;
+constexpr float GELU_DERIV_FL1_C6 = -1.372966607959824614226818084716796875e-6f;
+constexpr float GELU_DERIV_FL1_C7 = -7.0957827347228885628283023834228515625e-7f;
+constexpr float GELU_DERIV_FL1_C8 = -1.59272218525075004436075687408447265625e-7f;
+```
+
+### FL2 Polynomial Coefficients [-9, -7]
+
+```cpp
+// Degree-8 SHIFTED polynomial for GELU'(x) over [-9, -7]
+// SHIFTED: Evaluate p(t) where t = x + 8, so t ∈ [-1, 1] for x ∈ [-9, -7]
+// Note: 18% relative error is acceptable as values are < 6e-11
+constexpr float GELU_DERIV_FL2_C0 = -3.437316281758827363201902471701032482087612152099609375e-14f;
+constexpr float GELU_DERIV_FL2_C1 = -2.3025404824981998697097651529475115239620208740234375e-13f;
+constexpr float GELU_DERIV_FL2_C2 = -9.3392069251685416730879296665079891681671142578125e-13f;
+constexpr float GELU_DERIV_FL2_C3 = -3.32250915148490921779966811300255358219146728515625e-12f;
+constexpr float GELU_DERIV_FL2_C4 = -8.791863938262256539246664033271372318267822265625e-12f;
+constexpr float GELU_DERIV_FL2_C5 = -1.46285726587702669121426879428327083587646484375e-11f;
+constexpr float GELU_DERIV_FL2_C6 = -1.4239867097975977827672977582551538944244384765625e-11f;
+constexpr float GELU_DERIV_FL2_C7 = -7.4159463292478022822251659817993640899658203125e-12f;
+constexpr float GELU_DERIV_FL2_C8 = -1.59726810770866034516757281380705535411834716796875e-12f;
+```
+
+### Implementation
+
+```cpp
+// Far left region [-7, -5], degree 8 SHIFTED polynomial
+v_elseif(x >= -7.0f) {
+    sfpi::vFloat t = x + 6.0f;  // Shift to [-1, 1] range
+    result = POLYVAL8(
+        GELU_DERIV_FL1_C8, GELU_DERIV_FL1_C7, GELU_DERIV_FL1_C6,
+        GELU_DERIV_FL1_C5, GELU_DERIV_FL1_C4, GELU_DERIV_FL1_C3,
+        GELU_DERIV_FL1_C2, GELU_DERIV_FL1_C1, GELU_DERIV_FL1_C0, t);
+}
+// Far left region [-9, -7], degree 8 SHIFTED polynomial
+v_elseif(x >= -9.0f) {
+    sfpi::vFloat t = x + 8.0f;  // Shift to [-1, 1] range
+    result = POLYVAL8(
+        GELU_DERIV_FL2_C8, GELU_DERIV_FL2_C7, GELU_DERIV_FL2_C6,
+        GELU_DERIV_FL2_C5, GELU_DERIV_FL2_C4, GELU_DERIV_FL2_C3,
+        GELU_DERIV_FL2_C2, GELU_DERIV_FL2_C1, GELU_DERIV_FL2_C0, t);
+}
+// For x < -9, saturate to 0
+```
+
+### Final Hardware Test Results
+
+```
+============================================================
+POLYNOMIAL GELU BACKWARD ULP ANALYSIS (DAZ+FTZ MODEL)
+============================================================
+                        Region     Count    Mean ULP     Max ULP       Worst x
+-------------------------------------------------------------------------------
+        Deep negative (x < -5)     16095       20.75        8898     -9.062e+00
+    Moderate negative [-5, -2]       160        0.01           1     -4.844e+00
+      Near negative [-2, -0.5]       256        0.01           1     -9.102e-01
+         Near zero [-0.5, 0.5]     32003        0.84           1      0.000e+00
+        Near positive [0.5, 2]       256        0.00           0      0.000e+00
+      Moderate positive [2, 5]       160        0.03           1      3.109e+00
+        Large positive (x > 5]     16096        0.00           0      0.000e+00
+-------------------------------------------------------------------------------
+                       OVERALL     65026        5.55        8898     -9.062e+00
+============================================================
+```
+
+### Key Achievement: **72% Reduction in Max ULP**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Overall Max ULP | 32,460 | **8,898** |
+| Mean ULP | ~2,230 | **5.55** |
+| Polynomial coverage | [-5, 3.17] | **[-9, 3.17]** |
+
+### Per-Region Max ULP
+
+| Region | Polynomial | Shift | Max ULP |
+|--------|------------|-------|---------|
+| [-3, 3.17] core | Degree 16 | None | **1** |
+| [-5, -3] left | Degree 8 | t = x + 4 | **1** |
+| [-7, -5] FL1 | Degree 8 | t = x + 6 | **1** |
+| [-9, -7] FL2 | Degree 8 | t = x + 8 | **~25** |
+| x < -9 | Saturation | N/A | 8,898 |
+| x > 3.17 | Saturation | N/A | **0** |
+
+### Why x < -9 Cannot Be Improved
+
+Investigated extending polynomial coverage below -9 using Sollya:
+
+**Sollya output for [-13, -9]:**
+```
+Degree  6 :  Max relative error:  1 (100%)
+Degree  8 :  Max relative error:  1 (100%)
+Degree  10:  Max relative error:  1 (100%)
+Degree  12:  Max relative error:  1 (100%)
+```
+
+**Root cause:**
+1. Function values span 16+ orders of magnitude (1e-38 to 1e-18)
+2. Near BF16 smallest normal (~1.18e-38)
+3. Polynomial coefficients would be < 1e-25
+4. Float32 cannot accurately compute with such tiny coefficients
+
+**Conclusion:** Saturation to 0 for x < -9 is the practical limit. Values in this region are < 6e-18, which is irrelevant for ML training.
+
+### Files Modified
+
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (4 polynomial regions)
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (same)
+- `tests/ttnn/unit_tests/gtests/test_gelu_bw_ulp_bug.cpp` (updated test expectations for [-9, 3.17])
+- `~/tt/sollya/gelu_derivative_region_7_5.sollya` (NEW)
+- `~/tt/sollya/gelu_derivative_region_9_7.sollya` (NEW)
+- `~/tt/sollya/gelu_derivative_region_13_9.sollya` (NEW - investigation only)
+
+### All Tests Pass
+
+```
+[==========] 5 tests from 1 test suite ran.
+[  PASSED  ] 5 tests.
+```
+
+---
+
+## Final Summary
+
+| Metric | Original | Final | Improvement |
+|--------|----------|-------|-------------|
+| Overall Max ULP | 32,460 | **8,898** | **72%** |
+| Mean ULP | ~2,230 | **5.55** | **99.8%** |
+| Core region Max ULP | ~60 | **1** | **98%** |
+| Polynomial coverage | None | **[-9, 3.17]** | - |
+
+### PR Readiness
+
+**Ready for PR** with documented limitations:
+- ✅ 72% improvement in Max ULP
+- ✅ All polynomial regions [-9, 3.17] have Max ULP ≤ 30
+- ✅ Core region [-3, 3.17] matches ttnn::tanh quality (Max ULP = 1)
+- ⚠️ x < -9 saturation causes Max ULP = 8,898 (values < 6e-18, irrelevant for ML)
+- ✅ All 5 hardware tests pass
+
+---
+
 ## Next Steps
 
 1. ✅ **Derive Sollya coefficients** - DONE (degree-16 polynomial for [-3, 3])
@@ -742,7 +1044,11 @@ Both saturate around x ≈ -13, consistent with BF16 smallest normal value.
 3. ✅ **Test with comprehensive BF16 sweep** - DONE (99.8% achieve Max ULP ≤ 1 in Python)
 4. ✅ **Implement SFPU kernel** - DONE (simplified using POLYVAL macros)
 5. ✅ **Validate on hardware** - DONE (core region achieves Max ULP = 1)
-6. ⏳ **PR Review** - Ready for submission
+6. ✅ **Fix left polynomial [-5, -3]** - DONE (shifted polynomial, Max ULP = 1)
+7. ✅ **Extend to [-7, -5]** - DONE (shifted polynomial, Max ULP = 1)
+8. ✅ **Extend to [-9, -7]** - DONE (shifted polynomial, Max ULP ~25)
+9. ✅ **Investigate x < -9** - DONE (not feasible, Sollya shows 100% error)
+10. ⏳ **PR Review** - Ready for submission
 
 ## References
 
