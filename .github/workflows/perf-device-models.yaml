@@ -12,6 +12,17 @@ on:
         description: "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'"
         default: "all"
         type: string
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -20,6 +31,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
@@ -38,10 +54,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: ${{ inputs.enable-lto != false }}
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit

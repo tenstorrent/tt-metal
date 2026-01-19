@@ -20,6 +20,17 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -28,6 +39,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       regenerate-ttnn-cache:

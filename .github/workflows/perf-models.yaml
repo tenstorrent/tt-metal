@@ -28,6 +28,17 @@ on:
           - vovnet
           - ufld_v2
           - efficientnetb0
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -36,6 +47,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:

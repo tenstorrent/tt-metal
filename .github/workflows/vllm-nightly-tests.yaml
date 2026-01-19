@@ -20,6 +20,17 @@ on:
           - google/gemma-3-27b-it
           - openai/gpt-oss-120b
           - models/vllm_test_utils/t3000_multiproc_test
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -28,6 +39,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -38,8 +54,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: ${{ inputs.enable-lto != false }}
       build-wheel: true
   vllm-tests:
     needs: build-artifact

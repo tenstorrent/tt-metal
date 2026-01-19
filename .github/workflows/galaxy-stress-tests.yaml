@@ -5,6 +5,17 @@ on:
     - cron: "0 3 * * 6" # Run @ 3am every Saturday
   workflow_dispatch:
     inputs:
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -13,6 +24,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -21,9 +37,10 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: ${{ inputs.enable-lto != false }}
 
   galaxy-stress-test:
     needs: build-artifact

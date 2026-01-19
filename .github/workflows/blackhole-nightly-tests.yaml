@@ -65,6 +65,17 @@ on:
           - qwen3-32b
           - flux.1-dev
           - wan2.2-t2v-a14b
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
       platform:
         required: false
         type: choice
@@ -73,6 +84,11 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      enable-lto:
+        required: false
+        type: boolean
+        default: true
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
     inputs:
       platform:
@@ -90,10 +106,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: ${{ inputs.enable-lto != false }}
   bh-nightly:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact
