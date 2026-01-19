@@ -4,12 +4,20 @@
 
 #include <cstdint>
 
+#ifndef COMPILE_FOR_TRISC
+#include <overlay/meta/registers/overlay_reg_defines_core.h>
+#endif
+
 // Adds tile counters base array + struct definition
 
 #ifndef _TILE_COUNTERS_H_
 #define _TILE_COUNTERS_H_
 
-#define TILE_COUNTERS_BASE             0x0080c000
+#ifndef COMPILE_FOR_TRISC
+#define LOCAL_TILE_COUNTERS_BASE TT_OVERLAY_LLK_TILE_COUNTERS_REG_MAP_BASE_ADDR
+#else
+#define LOCAL_TILE_COUNTERS_BASE TILE_COUNTERS_BASE
+#endif
 
 constexpr uint32_t NUM_TILE_COUNTERS = 16;
 constexpr uint32_t NUM_WORDS_TILE_CNT = 8;

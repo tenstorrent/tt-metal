@@ -3,19 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
+namespace ttnn::experimental::prim {
 
 RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.is_decode_mode) {
-        return program::RotaryEmbeddingLlamaMultiCoreSharded{};
+        return RotaryEmbeddingLlamaMultiCoreSharded{};
     }
-    return program::RotaryEmbeddingLlamaMultiCore{};
+    return RotaryEmbeddingLlamaMultiCore{};
 }
 
 void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_hit(
@@ -186,7 +187,7 @@ tt::stl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
         operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
@@ -198,8 +199,7 @@ tt::tt_metal::Tensor rotary_embedding_llama(
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    using OperationType =
-        ttnn::operations::experimental::transformer::rotary_embedding_llama::RotaryEmbeddingLlamaDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();

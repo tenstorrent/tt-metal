@@ -42,7 +42,8 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
-volatile tile_counter_u* const tile_counters __attribute__((used)) = (volatile tile_counter_u* const)TILE_COUNTERS_BASE;
+volatile tile_counter_u* const tile_counters __attribute__((used)) =
+    (volatile tile_counter_u* const)LOCAL_TILE_COUNTERS_BASE;
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -167,6 +168,9 @@ extern "C" uint32_t _start1() {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
+    // Reset tile counters
+    tile_counters_reset();
 
     // risc_init();
     // Reset tile counters
