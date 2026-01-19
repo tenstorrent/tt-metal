@@ -132,7 +132,7 @@ class TTSampling(LightweightModule):
         else:
             # If the mesh is effectively 1D, use the non-singleton dimension.
             # If the mesh is 2D, use the configured gather axis.
-            if 1 in list(self.cluster_shape):
+            if 1 in self.cluster_shape:
                 num_devices_in_mesh = max(self.cluster_shape[0], self.cluster_shape[1])
             else:
                 assert self.sampling_all_gather_axis in (
