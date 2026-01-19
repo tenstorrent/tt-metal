@@ -20,8 +20,7 @@
 - [5. Multi-Processing Support](#5-multi-processing-support)
   - [5.1 Virtualizing a Galaxy as Multiple Meshes](#51-virtualizing-a-galaxy-as-multiple-meshes)
   - [5.2 TT_VISIBLE_DEVICES](#52-tt_visible_devices)
-  - [5.3 P300 Example (2-Chip Pipeline)](#53-p300-example-2-chip-pipeline)
-  - [5.4 Generating Rank Bindings for Galaxy Systems](#54-generating-rank-bindings-for-galaxy-systems)
+  - [5.3 Generating Rank Bindings for Galaxy Systems](#53-generating-rank-bindings-for-galaxy-systems)
 - [6. Fabric Configuration](#6-fabric-configuration)
   - [6.1 What is TT-Fabric?](#61-what-is-tt-fabric)
   - [6.2 FabricConfig Options](#62-fabricconfig-options)
@@ -337,69 +336,7 @@ if __name__ == "__main__":
     p0.join(); p1.join()
 ```
 
-### 5.3 P300 Example (2-Chip Pipeline)
-
-The P300 is a 2-chip Blackhole system with both devices PCIe-mapped. This is the simplest Multi-Mesh setup: two 1×1 meshes, one process per chip.
-
-**MGD for P300:**
-
-```proto
-# From: tests/tt_metal/tt_fabric/custom_mesh_descriptors/p300_split_1x1_multi_mesh.textproto
-
-mesh_descriptors {
-  name: "M0"
-  arch: BLACKHOLE  # P300 uses Blackhole chips
-  device_topology { dims: [ 1, 1 ] }  # Single chip per mesh
-  host_topology   { dims: [ 1, 1 ] }
-  channels { count: 2 policy: RELAXED }
-}
-
-graph_descriptors {
-  name: "G0"
-  type: "FABRIC"
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 2 }
-  }
-}
-
-top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-```
-
-**Rank Bindings for P300:**
-
-```yaml
-# From: tests/tt_metal/distributed/config/p300_1x1_multi_mesh_rank_binding.yaml
-
-rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    mesh_host_rank: 0
-    env_overrides:
-      TT_VISIBLE_DEVICES: "0"  # First PCIe device
-  - rank: 1
-    mesh_id: 1
-    mesh_host_rank: 0
-    env_overrides:
-      TT_VISIBLE_DEVICES: "1"  # Second PCIe device
-
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/p300_split_1x1_multi_mesh.textproto"
-```
-
-**Running on P300:**
-
-```bash
-tt-run --rank-binding tests/tt_metal/distributed/config/p300_1x1_multi_mesh_rank_binding.yaml \
-       --mpi-args "--tag-output" \
-       python3 tests/ttnn/distributed/test_multi_mesh_p300.py
-```
-
-The P300 example follows the same pattern as the Galaxy example but with a 1×1 mesh.
-
-### 5.4 Generating Rank Bindings for Galaxy Systems
+### 5.3 Generating Rank Bindings for Galaxy Systems
 
 >[!NOTE]
 >This tool is Galaxy-specific and generates preset rank binding configurations for testing Multi-Mesh workloads on a single Galaxy host.
@@ -418,7 +355,7 @@ python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 - `4x2_multi_mesh_rank_binding.yaml` - 4 meshes (one per tray)
 - `4x4_multi_big_mesh_rank_binding.yaml` - 2 meshes with 2 ranks each (simulates multi-host)
 
-Use the generated YAML files with `tt-run` to test different partitioning schemes. For other systems (P300, Closetbox, Blackhole), manually create rank binding files following the format shown in Section 5.3.
+Use the generated YAML files with `tt-run` to test different partitioning schemes. For other systems (Closetbox, Blackhole), manually create rank binding files following the format shown in Section 5.2.
 
 ## 6. Fabric Configuration
 
