@@ -264,7 +264,7 @@ def read_wait_globals(
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
-    # Use unique_id instead of device._id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
+    # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
     chip_id = location._device.unique_id
     x, y = virtual_coord
 

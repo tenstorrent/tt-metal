@@ -395,7 +395,7 @@ class TestTriage:
             filtered_results = [
                 check
                 for check in result
-                if check.location == expected_coord and check.device_description.device.id() == device_to_check
+                if check.location == expected_coord and check.device_description.device.id == device_to_check
             ]
 
         results_by_risc = {check.risc_name: check for check in filtered_results if check.risc_name in cores_to_check}
