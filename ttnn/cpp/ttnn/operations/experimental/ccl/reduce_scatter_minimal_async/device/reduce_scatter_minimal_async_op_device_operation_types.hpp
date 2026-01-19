@@ -16,7 +16,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+namespace ttnn::experimental::prim {
 
 // Shared struct for program artifacts - used for caching kernel handles and core info
 struct ReduceScatterProgramArtifacts {
@@ -29,7 +29,7 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
 };
 
-struct operation_attributes_t {
+struct ReduceScatterMinimalAsyncParams {
     uint32_t dim;
     uint32_t num_links;
     uint32_t ring_size;
@@ -66,14 +66,11 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct ReduceScatterMinimalAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
 };
-
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
 
 // Common validation function
 void reduce_scatter_common_validates(
@@ -85,4 +82,4 @@ void reduce_scatter_common_validates(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor);
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::experimental::prim

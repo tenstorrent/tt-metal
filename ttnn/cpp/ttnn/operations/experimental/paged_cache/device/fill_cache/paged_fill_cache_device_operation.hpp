@@ -15,16 +15,15 @@
 
 #include "paged_fill_cache_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::fill {
+namespace ttnn::experimental::prim {
 
 struct PagedFillCacheDeviceOperation {
-    using operation_attributes_t = FillParams;
-    using tensor_args_t = FillInputs;
+    using operation_attributes_t = PagedFillCacheParams;
+    using tensor_args_t = PagedFillCacheInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<program::PagedFillCacheProgramFactory, program::PagedFillCacheMeshWorkloadFactory>;
-    using shared_variables_t = program::PagedFillCacheProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<PagedFillCacheProgramFactory, PagedFillCacheMeshWorkloadFactory>;
+    using shared_variables_t = PagedFillCacheProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -39,12 +38,11 @@ struct PagedFillCacheDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::fill
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation::tensor_return_value_t
-paged_fill_cache(
+Tensor paged_fill_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,

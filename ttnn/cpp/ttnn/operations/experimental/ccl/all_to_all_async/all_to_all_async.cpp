@@ -38,7 +38,7 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
 
     if (rank == 4 && ((in_dim == 2 && out_dim == 3 && (input_shape[out_dim] / num_devices) % 32 == 0) ||
                       (in_dim == 3 && out_dim == 2 && input_shape[in_dim] % 32 == 0))) {
-        return ttnn::prim::all_to_all_async(
+        return ttnn::experimental::prim::all_to_all_async(
             input_tensor,
             persistent_intermediate_buffer,
             persistent_output_buffer,
