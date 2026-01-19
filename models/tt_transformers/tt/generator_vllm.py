@@ -617,12 +617,13 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def prefill_forward(
         self,
-        tokens: torch.Tensor,
-        images: Union[List[Image], List[List[Image]]],
-        page_table: torch.Tensor,
-        kv_cache,
-        prompt_lens,
-        cross_page_table: torch.Tensor,
+        tokens: torch.Tensor = None,
+        page_table: torch.Tensor = None,
+        kv_cache=None,
+        prompt_lens=None,
+        images: Union[List[Image], List[List[Image]]] = None,
+        cross_page_table: torch.Tensor = None,
+        pixel_values=None,
         **kwargs,
     ):
         """
@@ -630,16 +631,33 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
         Args:
             tokens: Input token IDs [batch, seq_len]
-            images: List of PIL images (one per batch item, or None for text-only)
             page_table: KV cache page table for text tokens
             kv_cache: KV cache storage
             prompt_lens: Length of each prompt in the batch
+            images: List of PIL images (one per batch item, or None for text-only)
             cross_page_table: Cross-attention page table for vision tokens
+            pixel_values: Alternative image input format (for vLLM compatibility)
             **kwargs: Additional arguments (e.g., enable_trace, empty_slots, etc.)
 
         Returns:
             Model outputs (logits)
         """
+        # Handle pixel_values input format (vLLM compatibility)
+        if pixel_values is not None and images is None:
+            images = pixel_values
+
+        # For text-only requests, use the text-only prefill path
+        if images is None or (isinstance(images, list) and all(img is None for img in images)):
+            # Text-only forward pass - delegate to parent's text-only method
+            return super().prefill_forward_text(
+                tokens=tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                **kwargs,
+            )
+
+        # Multimodal forward pass
         batch = tokens.shape[0]
 
         vision_images = []
