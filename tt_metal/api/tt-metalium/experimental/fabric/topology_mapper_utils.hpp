@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
@@ -156,6 +157,90 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
  */
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     tt::tt_metal::ClusterType cluster_type,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Represents a mesh node in a 2-layer adjacency graph
+ *
+ * Each mesh node contains its mesh ID and its internal adjacency graph.
+ */
+struct LogicalMeshNode {
+    MeshId mesh_id;
+    ::tt::tt_fabric::AdjacencyGraph<FabricNodeId> adjacency_graph;
+
+    // Comparison operators for use as key in std::map
+    bool operator<(const LogicalMeshNode& other) const { return mesh_id < other.mesh_id; }
+    bool operator==(const LogicalMeshNode& other) const { return mesh_id == other.mesh_id; }
+};
+
+/**
+ * @brief Multi-mesh adjacency graph where meshes are nodes
+ *
+ * This type represents a hierarchical adjacency graph:
+ * - Top layer: adjacency graph of mesh nodes (which meshes connect to which meshes)
+ * - Bottom layer: for each mesh node, its internal adjacency graph (which fabric nodes connect within the mesh)
+ *
+ * Each node in the graph is a MeshNode containing the mesh_id and its internal adjacency graph.
+ */
+using LogicalMultiMeshGraph = ::tt::tt_fabric::AdjacencyGraph<LogicalMeshNode>;
+
+/**
+ * @brief Build a logical multi-mesh adjacency graph from a mesh graph
+ *
+ * Creates an adjacency graph where mesh nodes are the graph nodes. Each mesh node contains:
+ * - The mesh ID
+ * - Its internal adjacency graph (AdjacencyGraph<FabricNodeId>)
+ *
+ * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
+ * while each mesh node contains its intra-mesh connectivity.
+ *
+ * @param mesh_graph Reference to the mesh graph object containing fabric topology
+ * @return MultiMeshGraph containing adjacency graph of mesh nodes
+ */
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
+
+/**
+ * @brief Represents a physical mesh node in a 2-layer adjacency graph
+ *
+ * Each physical mesh node contains its mesh ID and its internal adjacency graph of ASICs.
+ */
+struct PhysicalMeshNode {
+    MeshId mesh_id;
+    ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID> adjacency_graph;
+
+    // Comparison operators for use as key in std::map
+    bool operator<(const PhysicalMeshNode& other) const { return mesh_id < other.mesh_id; }
+    bool operator==(const PhysicalMeshNode& other) const { return mesh_id == other.mesh_id; }
+};
+
+/**
+ * @brief Multi-mesh adjacency graph for physical ASICs where meshes are nodes
+ *
+ * This type represents a hierarchical adjacency graph:
+ * - Top layer: adjacency graph of physical mesh nodes (which meshes connect to which meshes)
+ * - Bottom layer: for each mesh node, its internal adjacency graph (which ASICs connect within the mesh)
+ *
+ * Each node in the graph is a PhysicalMeshNode containing the mesh_id and its internal adjacency graph of ASICs.
+ */
+using PhysicalMultiMeshGraph = ::tt::tt_fabric::AdjacencyGraph<PhysicalMeshNode>;
+
+/**
+ * @brief Build a physical multi-mesh adjacency graph from physical system descriptor
+ *
+ * Creates an adjacency graph where physical mesh nodes are the graph nodes. Each mesh node contains:
+ * - The mesh ID
+ * - Its internal adjacency graph (AdjacencyGraph<AsicID>)
+ *
+ * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
+ * determined by checking if ASICs in one mesh connect to ASICs in another mesh.
+ * Each mesh node contains its intra-mesh connectivity.
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+ * @return PhysicalMultiMeshGraph containing adjacency graph of physical mesh nodes
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
