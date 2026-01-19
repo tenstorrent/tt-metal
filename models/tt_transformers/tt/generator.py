@@ -281,7 +281,8 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        # self.warmup_model_prefill(kv_cache, enable_trace)
+        # we need this here becuase of tt-metal tests
+        self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
