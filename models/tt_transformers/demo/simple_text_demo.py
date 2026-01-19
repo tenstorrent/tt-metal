@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -27,6 +28,32 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+
+
+def tt_to_torch(a, mesh_device=None):
+    """
+    Convert a (possibly multi-device, host- or device-sharded) TTNN tensor
+    to a single composed torch tensor.
+    """
+    return to_torch_auto_compose(a, device=mesh_device)
+
+
+def tt_equal(a, b, mesh_device=None):
+    """
+    Strict equality check: same shape & all elements exactly equal.
+    """
+    a_t = tt_to_torch(a, mesh_device)
+    b_t = tt_to_torch(b, mesh_device)
+    return torch.equal(a_t, b_t)
+
+
+def tt_allclose(a, b, rtol=1e-5, atol=1e-8, mesh_device=None):
+    """
+    Numeric closeness check with tolerances, NaNs treated as equal.
+    """
+    a_t = tt_to_torch(a, mesh_device)
+    b_t = tt_to_torch(b, mesh_device)
+    return torch.allclose(a_t, b_t, rtol=rtol, atol=atol, equal_nan=True)
 
 
 class TokenAccuracy:
@@ -947,6 +974,7 @@ def test_demo_text(
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
+        generator.model[0].iter = 0
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         generator.model[0].batch = batch_idx
@@ -993,6 +1021,7 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                # enable_trace=False if batch_idx == 0 else True,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1004,6 +1033,7 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                # enable_trace=False if batch_idx == 0 else True,
             )
             prefilled_token = torch.argmax(logits, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -1095,6 +1125,7 @@ def test_demo_text(
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
+                # reset_batch=True if iteration == 0 else False,
             )
 
             # Get the next token
@@ -1218,8 +1249,8 @@ def test_demo_text(
     # Finish profiling at the end of inference for all repeated batches
 
     profiler.end("run")
-    """device = generator.model_args[0].mesh_device
-    for i in range(len(generator.model[0].debug["before"][0])):
+    device = generator.model_args[0].mesh_device
+    """for i in range(len(generator.model[0].debug["before"][0])):
         before0 = generator.model[0].debug["before"][0][i]
         after0 = generator.model[0].debug["after"][0][i]
         after_sampling0 = generator.model[0].debug["after_sampling"][0][i]
@@ -1276,8 +1307,39 @@ def test_demo_text(
         ttnn.deallocate(equal_after_sampling)
         ttnn.deallocate(suma_after_sampling)
 
-    ttnn.synchronize_device(device)
-    """
+    ttnn.synchronize_device(device)"""
+
+    """for i in range(len(generator.model[0].debug["before"][0])):
+        before0 = generator.model[0].debug["before"][0][i]
+        after0 = generator.model[0].debug["after"][0][i]
+        after_sampling0 = generator.model[0].debug["after_sampling"][0][i]
+        before1 = generator.model[0].debug["before"][1][i]
+        after1 = generator.model[0].debug["after"][1][i]
+        after_sampling1 = generator.model[0].debug["after_sampling"][1][i]
+
+        print("--------------------------------")
+        print(f"ITERATION: {i}")
+
+        print("BEFORE:")
+        equal_before = tt_equal(before0, before1, device)
+        print(equal_before)
+
+        ttnn.synchronize_device(device)
+
+        print("AFTER:")
+        equal_after = tt_equal(after0, after1, device)
+        print(equal_after)
+
+        ttnn.synchronize_device(device)
+
+
+        print("AFTER SAMPLING:")
+        equal_after_sampling = tt_equal(after_sampling0, after_sampling1, device)
+        print(equal_after_sampling)
+
+        ttnn.synchronize_device(device)
+
+    ttnn.synchronize_device(device)"""
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0

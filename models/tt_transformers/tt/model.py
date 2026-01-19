@@ -35,6 +35,7 @@ class Transformer(LightweightModule):
     ):
         super().__init__()
         self.args = args
+        self.iter = 0
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
         self.n_layers = args.n_layers
@@ -45,6 +46,10 @@ class Transformer(LightweightModule):
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
         self.tt_ccl = TT_CCL(self.mesh_device)
+
+        self.a = None
+        self.b = None
+        self.c = None
 
         embd_kwargs = {
             "mesh_device": mesh_device,
@@ -462,23 +467,29 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-        # self.debug["after"][self.batch].append(tt_logits.cpu(blocking=True))
+        self.debug["after"][self.batch].append(tt_logits.cpu(blocking=True))
         # ttnn.synchronize_device(self.mesh_device)
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
                 return tt_logits
             tt_toks, tt_log_probs = self.sampling.sample(
-                tt_logits,
+                tt_logits,  # if self.batch == 0 else ttnn.to_device(self.debug["after"][0][self.iter], self.mesh_device),
                 tt_out_tok=x,
                 enable_trace=False,
-                # b0=self.debug["after"][0][0],
+                b0=self.debug["after"][0][0],
                 # b1=self.debug["after"][1][0] if len(self.debug["after"][1]) > 1 else None,
             )
-
+            # self.iter += 1
+            # print(f"iter: {self.iter}")
             # ttnn.synchronize_device(self.mesh_device)
-
             # self.debug["after_sampling"][self.batch].append(tt_toks.cpu(blocking=True))
+            # if self.batch > 0:
+            #    a = ttnn.to_device(self.debug["after_sampling"][0][self.iter], self.mesh_device)
+            #     self.iter += 1
+            #    return a, tt_log_probs
+
+            # time.sleep(1)
 
             return tt_toks, tt_log_probs
 
@@ -547,20 +558,16 @@ class Transformer(LightweightModule):
             )
 
         if mode == "prefill" and get_last_token == -1:
-            self.persistent_buffer_a = ttnn.slice(x, (0, 0, 96, 0), (1, 1, 96 + 32, x.shape[-1]))
-            self.persistent_buffer_b = self.norm(self.persistent_buffer_a, mode=mode)
-            self.persistent_buffer_c = ttnn.interleaved_to_sharded(
-                self.persistent_buffer_b, self.model_config["LM_HEAD_INPUT_MEMCFG"]
-            )
-            self.persistent_buffer_d = self.lm_head(self.persistent_buffer_c)
-            self.persistent_buffer_e = ttnn.to_layout(
-                self.persistent_buffer_d, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            a = ttnn.slice(x, (0, 0, 96, 0), (1, 1, 96 + 32, x.shape[-1]))
+            b = self.norm(a, mode=mode)
+            c = ttnn.interleaved_to_sharded(b, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+            d = self.lm_head(c)
+            e = ttnn.to_layout(d, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, 128, 0), (1, 1, 128 + 32, x.shape[-1]))
+            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode)

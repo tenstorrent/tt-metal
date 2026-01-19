@@ -113,12 +113,12 @@ class Generator:
         enable_trace,
         sampling_params=None,
     ):
+        return
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
-        sequence_lengths_to_warmup = [128, 1024]
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
@@ -357,6 +357,10 @@ class Generator:
                 )
                 # ttnn.synchronize_device(self.model[model_id].mesh_device)
                 # print(f"address: {self.model[model_id].persistent_buffer_a.buffer_address()}")
+            # ttnn.deallocate(self.model[0].a)
+            # ttnn.deallocate(self.model[0].b)
+            # ttnn.deallocate(self.model[0].c)
+            # tttn.synchronize_device(self.model[model_id].mesh_device)
             if enable_trace_current_prompt:
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
@@ -491,7 +495,7 @@ class Generator:
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
-        ttnn.synchronize_device(self.model_args[0].mesh_device)
+        enable_trace = False
         mode_switched = False
         if self.mode != "decode":
             self.mode = "decode"
