@@ -19,6 +19,10 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
+// Progress logging interval mask: log every 2^18 (262144) DFS calls
+// Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
+constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
+
 // NOTE: This mapping algorithm uses nested lambdas and deep control flow for
 // pruning and search. Refactoring would be non-trivial and risks regressions,
 // so we suppress the cognitive-complexity check for this function.
@@ -552,7 +556,7 @@ TopologyMappingResult map_mesh_to_physical(
 
         // Periodic progress logging
         dfs_calls++;
-        if ((dfs_calls & ((1u << 18) - 1)) == 0) {
+        if ((dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
             std::size_t assigned = 0;
             for (auto v : mapping) {
                 assigned += (v != -1);
