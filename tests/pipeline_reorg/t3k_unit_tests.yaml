@@ -145,7 +145,7 @@
 - name: t3k_qwen3_vl_tests
   cmd: run_t3000_qwen3_vl_unit_tests
   sku: wh_llmbox
-  owner_id: U07RY6B5FLJ # FIXME: add owner ID
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
   timeout: 20
   model-name: qwen3_vl

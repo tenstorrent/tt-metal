@@ -130,7 +130,7 @@ class VisionModelArgs(ModelArgs):
 
     def reference_patch_merger(self):
         return self.reference_vision_model().merger
-    
+
     def reference_deepstack_merger(self):
         return self.reference_vision_model().deepstack_merger_list[0]
 

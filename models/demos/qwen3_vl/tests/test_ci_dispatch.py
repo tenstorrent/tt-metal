@@ -13,10 +13,10 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
 @pytest.mark.parametrize(
     "model_weights",
     [
-        "Qwen/Qwen2.5-VL-3B-Instruct",
+        "Qwen/Qwen3-VL-32B-Instruct",
     ],
     ids=[
-        "qwen25_vl-3B",
+        "qwen3_vl-32B",
     ],
 )
 def test_ci_dispatch(model_weights):
@@ -27,14 +27,14 @@ def test_ci_dispatch(model_weights):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/demos/qwen25_vl/tests/test_rms_norm.py",
-            "models/demos/qwen25_vl/tests/test_mlp.py",
-            "models/demos/qwen25_vl/tests/test_patch_merger.py",
-            "models/demos/qwen25_vl/tests/test_vision_attention.py",
-            "models/demos/qwen25_vl/tests/test_vision_block.py",
-            "models/demos/qwen25_vl/tests/test_model.py",
-            "models/demos/qwen25_vl/tests/test_wrapped_model.py",
-            "models/demos/qwen25_vl/tests/test_windowed_sdpa.py",
+            "models/demos/qwen3_vl/tests/test_rms_norm.py",
+            "models/demos/qwen3_vl/tests/test_mlp.py",
+            "models/demos/qwen3_vl/tests/test_patch_merger.py",
+            "models/demos/qwen3_vl/tests/test_vision_attention.py",
+            "models/demos/qwen3_vl/tests/test_vision_block.py",
+            "models/demos/qwen3_vl/tests/test_model.py",
+            "models/demos/qwen3_vl/tests/test_wrapped_model.py",
+            "models/demos/qwen3_vl/tests/test_windowed_sdpa.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
