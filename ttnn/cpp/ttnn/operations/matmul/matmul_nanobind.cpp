@@ -241,6 +241,8 @@ void py_module(nb::module_& mod) {
         When true, batch dimensions are fused with the M dimension, allowing for more
         efficient processing of batched matrix multiplications. This can improve performance
         for operations with large batch sizes. Defaults to true.
+
+        Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
@@ -372,6 +374,8 @@ void py_module(nb::module_& mod) {
             When true, batch dimensions are incorporated into the matrix computation,
             allowing for more efficient processing of batched operations in the 1D
             multicast implementation.
+
+            Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
         )doc")
         .def_rw("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation, R"doc(
             Optional fused activation function to apply during computation.
