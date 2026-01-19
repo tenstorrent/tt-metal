@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.qwen3_vl.tt.vision_rmsnorm import LayerNorm
+from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL

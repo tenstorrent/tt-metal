@@ -1,205 +1,112 @@
-# Qwen2.5-VL Conversion Framework
+# Qwen3-VL Reference Implementation
 
-This repository contains a framework for converting the Qwen2.5-VL model from its original PyTorch module implementation to a clean, functional implementation that's easier to understand and modify.
+This directory contains reference implementations for the Qwen3-VL vision-language model, including both the official HuggingFace transformers module-based implementation and functional equivalents for easier porting and testing.
 
-## Installation
+## Contents
 
-Install the Qwen2.5-VL model dependencies:
+### `model.py`
 
-```bash
-pip install -r requirements.txt
-```
+The official HuggingFace transformers implementation of Qwen3-VL, automatically generated from `src/transformers/models/qwen3_vl/modular_qwen3_vl.py`. This file contains the complete PyTorch module hierarchy:
 
-Note that this uses a recent commit of the main branch of transformers, not a release. It also requires python 3.9 or higher.
+**Vision Components:**
+- `Qwen3VLVisionMLP` - MLP block for the vision transformer
+- `Qwen3VLVisionPatchEmbed` - 3D convolution-based patch embedding (handles temporal dimension)
+- `Qwen3VLVisionRotaryEmbedding` - Rotary position embeddings for vision
+- `Qwen3VLVisionPatchMerger` - Merges spatial patches with LayerNorm and MLP
+- `Qwen3VLVisionAttention` - Multi-head attention with rotary embeddings
+- `Qwen3VLVisionBlock` - Transformer block combining attention and MLP
+- `Qwen3VLVisionModel` - Complete vision encoder with DeepStack feature extraction
 
-## Overview
+**Text Components:**
+- `Qwen3VLTextRotaryEmbedding` - Multi-dimensional RoPE (M-RoPE) for temporal/spatial awareness
+- `Qwen3VLTextRMSNorm` - RMS normalization layer
+- `Qwen3VLTextAttention` - Grouped-query attention with Q/K normalization
+- `Qwen3VLTextMLP` - Gated MLP with SiLU activation
+- `Qwen3VLTextDecoderLayer` - Decoder layer combining attention and MLP
+- `Qwen3VLTextModel` - Text decoder with DeepStack visual feature integration
 
-The conversion process follows these steps:
+**Combined Model:**
+- `Qwen3VLModel` - Unified vision-language model
+- `Qwen3VLForConditionalGeneration` - Full model with language modeling head
 
-1. **Instrumentation**: Using `instrument.py` to capture inputs and outputs of module calls in the original model
-2. **Recording**: Running `record.py` to generate test data from model execution
-3. **State Dict Conversion**: Using `convert.py` to transform flat state dicts to nested dictionaries
-4. **Functional Reimplementation**: Creating clean functional implementations in `functional.py`
-5. **Testing**: Using `test_functional.py` to validate functional implementations against recorded data
+### `functional.py`
 
-## Instrumentation (instrument.py)
+Stateless functional implementations of key vision components. These pure functions take weights as explicit parameters, making them easier to port to other frameworks or accelerators.
 
-`instrument.py` provides a decorator that records the inputs, outputs, and settings of model modules during execution:
-
-```python
-@instrument("ModuleName")
-def forward(self, *args, **kwargs):
-    # Original module code...
-```
-
-When applied to module forward methods, this decorator:
-
-- Creates a timestamped directory for each call
-- Saves input tensors and parameters
-- Captures module configuration
-- Records output tensors
-- Stores metadata in a JSON file
-
-This instrumentation is critical for understanding how the original model works and generates data for testing functional reimplementations.
-
-### Directory Structure
-
-Instrumented calls create this directory structure:
-```
-module_io_data/
-    ModuleName_TIMESTAMP/
-        metadata.json      # Contains settings and references to tensors
-        inputs/           # Directory for input tensors
-            arg_0.pt      # Input tensors
-            kwarg_name.pt
-        outputs/          # Directory for output tensors
-            output.pt
-```
-
-## Recording (record.py)
-
-`record.py` loads the model and runs it on sample inputs to generate the instrumented data:
+**Available Functions:**
 
 ```python
-python record.py
+# Rotary embedding helpers
+rotate_half(x)
+apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+# Position embedding computation
+qwen3_vision_rotary_embedding(seqlen, dim, theta=10000.0, device=None)
+qwen3_vl_rot_pos_emb(grid_thw, spatial_merge_size, head_dim)
+qwen3_vl_fast_pos_embed_interpolation(grid_thw, num_grid_per_side, pos_embed, spatial_merge_size)
+
+# Preprocessing
+qwen3_vision_transformer_preprocess(seq_len, grid_thw, head_dim, spatial_merge_size)
 ```
 
-This script:
-1. Loads the Qwen2.5-VL model with instrumented modules
-2. Processes a sample image input
-3. Performs model inference
-4. Generates instrumented data for each module's execution
+### `model.txt`
 
-After running, the `module_io_data` directory will contain recordings for each module's execution, providing test data for the functional implementations.
+A text representation of the model's weight structure and tensor shapes. Useful for understanding the model architecture at a glance.
 
-## State Dict Conversion (convert.py)
+## Key Architecture Details
 
-`convert.py` transforms the model's flat state dictionaries into nested dictionaries that mirror the module hierarchy:
+### Vision Encoder
+
+- **Patch Embedding**: Uses 3D convolution with kernel `[temporal_patch_size, patch_size, patch_size]` to handle video frames
+- **Spatial Merge**: Reduces spatial resolution by merging patches (default 2×2)
+- **DeepStack**: Extracts intermediate visual features at specified layer indices for early fusion with text
+
+### Text Decoder
+
+- **M-RoPE**: Multi-dimensional rotary position embeddings that encode temporal (T), height (H), and width (W) positions separately
+- **DeepStack Integration**: Visual features from intermediate vision layers are added to early decoder hidden states
+- **QK Normalization**: Both query and key projections use RMSNorm
+
+### Position Encoding
+
+The model uses an interleaved M-RoPE scheme:
+1. Separate position IDs for temporal, height, and width dimensions
+2. Frequencies are interleaved as `[THWTHWTHW...TT]` pattern
+3. Vision tokens use 2D spatial coordinates; text tokens use sequential positions
+
+## Usage
+
+### Loading the Reference Model
 
 ```python
-python convert.py
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+model = Qwen3VLForConditionalGeneration.from_pretrained("Qwen/Qwen3-VL-32B-Instruct")
+processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-32B-Instruct")
 ```
 
-### Purpose
-
-The script serves these critical functions:
-
-1. **Structure Transformation**: Converts flat state_dict keys like `'model.blocks.0.norm1.weight'` into intuitive nested structures: `model['blocks']['0']['norm1']['weight']`
-2. **Vision Component Extraction**: Isolates just the vision-related components from the full model
-3. **Weight Preparation**: Creates a structured weights file used by the functional implementations
-
-### How It Works
-
-The conversion process follows these steps:
-
-1. Load the pretrained Qwen2.5-VL model
-2. Extract the flat state dictionary
-3. Recursively build a nested dictionary structure by splitting key paths
-4. Extract only vision-related components (patch embedding, blocks, rotary embeddings, etc.)
-5. Save the nested dictionary to `weights/vision_weights.pt`
-
-Example of the transformation:
-```python
-# Original flat dict
-flat_dict = {
-    'visual.patch_embed.proj.weight': tensor(...),
-    'visual.blocks.0.norm1.weight': tensor(...)
-}
-
-# Converted nested dict
-nested_dict = {
-    'patch_embed': {
-        'proj': {
-            'weight': tensor(...)
-        }
-    },
-    'blocks': {
-        '0': {
-            'norm1': {
-                'weight': tensor(...)
-            }
-        }
-    }
-}
-```
-
-This structured format makes the functional implementations much more intuitive and easier to debug, as they can directly access the weights with a hierarchy that matches the original module structure.
-
-## Functional Reimplementation (functional.py)
-
-`functional.py` contains clean, functional implementations of the model's modules:
-
-- Each module is reimplemented as a simple function
-- Functions match input/output signatures of original modules
-- Implementations use pure PyTorch operations
-- Code is simplified and well-documented
-
-For example, the RMSNorm implementation:
+### Using Functional Implementations
 
 ```python
-def qwen2_rms_norm(x: torch.Tensor, state_dict: Dict, eps: float = 1e-6) -> torch.Tensor:
-    """RMSNorm with weight scaling."""
-    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * state_dict['weight']
+from functional import (
+    qwen3_vision_transformer_preprocess,
+    qwen3_vl_rot_pos_emb,
+)
+
+# Compute rotary embeddings for vision
+grid_thw = torch.tensor([[1, 28, 28]])  # 1 frame, 28x28 patches
+rotary_emb = qwen3_vl_rot_pos_emb(grid_thw, spatial_merge_size=2, head_dim=80)
+
+# Get preprocessing outputs
+cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
+    seq_len=784,
+    grid_thw=grid_thw,
+    head_dim=80,
+    spatial_merge_size=2,
+)
 ```
 
-### State Dict to Nested Dict Conversion
+## References
 
-A key aspect of the functional implementation is converting PyTorch's flat state dictionaries to nested dictionaries that match the module hierarchy. This makes the functional implementations more intuitive:
-
-1. The original model uses a flat state dict with keys like `"blocks.0.norm1.weight"`
-2. The functional implementation converts this to a nested structure: `state_dict['blocks']['0']['norm1']['weight']`
-
-This conversion happens when loading the weights for testing:
-
-```python
-# Example of nested structure in the vision weights
-weights_path = 'weights/vision_weights.pt'
-vision_weights = torch.load(weights_path, weights_only=False)
-
-# Using the nested structure
-block_weights = vision_weights['blocks']['0']
-```
-
-## Testing (test_functional.py)
-
-`test_functional.py` validates the functional implementations against the recorded data:
-
-```python
-pytest test_functional.py
-```
-
-For each module:
-1. Loads the earliest recorded run from `module_io_data`
-2. Extracts inputs and expected outputs
-3. Runs the functional implementation with the same inputs
-4. Compares results using Pearson correlation coefficient
-5. Verifies the correlation exceeds 0.999
-
-This approach ensures that the functional implementations faithfully reproduce the behavior of the original model.
-
-## Usage Example
-
-To convert and test a new module:
-
-1. Apply the `@instrument` decorator to the module's forward method
-2. Run `record.py` to generate test data
-3. Run `convert.py` to create the nested weights structure
-4. Implement the functional version in `functional.py`
-5. Add a test case in `test_functional.py`
-6. Run the test to validate the implementation
-
-## Vision Transformer Specifics
-
-The conversion particularly focuses on the vision components of Qwen2.5-VL, including:
-
-- Patch embedding
-- Self-attention mechanisms
-- MLP blocks
-- Rotary position embeddings
-- Window attention mechanisms
-
-These components handle the visual processing in Qwen2.5-VL before integration with the language model.
-
-## Conclusion
-
-This framework enables a systematic conversion of the complex Qwen2.5-VL model into a more understandable functional implementation, facilitating research, optimization, and educational purposes.
+- [Qwen3-VL Model Card](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)
+- [HuggingFace Transformers](https://github.com/huggingface/transformers)
