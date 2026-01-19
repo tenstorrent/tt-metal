@@ -505,20 +505,21 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
 }
 
 // Shard a tensor across one mesh dimension, and replicate the tensor along the other dimensions.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis) {
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis) {
     if (!cluster_axis.has_value()) {
         return shard_tensor_to_mesh_mapper(mesh_device, dim);
     }
-    TT_FATAL(mesh_device.shape().dims()==2, "Mesh device shape must be 2D");
-    TT_FATAL(dim >= 0 && cluster_axis >= 0 && cluster_axis < mesh_device.shape().dims(), "Dimension {} or {} is out of range", dim, cluster_axis);
-    tt::stl::SmallVector<MeshMapperConfig::Placement> placements(2);
-    placements[0] = MeshMapperConfig::Replicate{};
-    placements[1] = MeshMapperConfig::Replicate{};
+    TT_FATAL(
+        cluster_axis.value() >= 0 && cluster_axis.value() < mesh_device.shape().dims(),
+        "Cluster axis {} is out of range for mesh device with {} dimensions",
+        cluster_axis.value(),
+        mesh_device.shape().dims());
+    tt::stl::SmallVector<MeshMapperConfig::Placement> placements(
+        mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
     placements[cluster_axis.value()] = MeshMapperConfig::Shard{dim};
-    return std::make_unique<TensorToMesh>(TensorToMesh::create(
-        mesh_device,
-        MeshMapperConfig{
-            .placements = placements}));
+    return std::make_unique<TensorToMesh>(
+        TensorToMesh::create(mesh_device, MeshMapperConfig{.placements = placements}));
 }
 
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config) {

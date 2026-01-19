@@ -82,4 +82,20 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, std::optional<u
     return out;
 }
 
+autograd::TensorPtr ring_shift(const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis, bool forward) {
+    // Forward pass: shift in the specified direction
+    auto out = autograd::create_tensor(ttnn_fixed::distributed::ring_shift(tensor->get_value(), cluster_axis, forward));
+
+    // Backward pass: shift in the opposite direction to route gradients back
+    autograd::GradFunction grad = [tensor, out, cluster_axis, forward]() {
+        if (out->is_grad_initialized()) {
+            tensor->add_grad(ttnn_fixed::distributed::ring_shift(out->get_grad(), cluster_axis, !forward));
+        }
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 }  // namespace ttml::ops::distributed
