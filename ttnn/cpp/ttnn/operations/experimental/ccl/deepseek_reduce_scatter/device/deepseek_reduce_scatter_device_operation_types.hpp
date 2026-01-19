@@ -31,6 +31,7 @@ struct DeepseekReduceScatterProgramArtifacts {
 
 struct operation_attributes_t {
     ttnn::MemoryConfig output_memory_config;
+    uint32_t dim;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;
 
@@ -39,6 +40,7 @@ struct operation_attributes_t {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("output_memory_config", output_memory_config);
+        attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;

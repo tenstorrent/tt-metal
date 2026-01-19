@@ -19,7 +19,7 @@ DeepseekReduceScatterDeviceOperation::program_factory_t DeepseekReduceScatterDev
 
 void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Lightweight validation for cache hits
+    // lightweight validation for cache hits
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     for (const ttnn::Tensor& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
@@ -31,35 +31,105 @@ void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
+    // hardcoded constants
+    const uint32_t required_ring_size = 8;
+    const uint32_t num_directions_per_link = 2;
+    const ttnn::ccl::Topology required_topology = tt::tt_fabric::Topology::Ring;
+    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
+
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
+    uint32_t dim = operation_attributes.dim;
+    uint32_t num_links = operation_attributes.num_links;
+    std::optional<uint32_t> cluster_axis = operation_attributes.cluster_axis;
 
-    // hardcoded constants
-    const uint32_t ring_size = 8;
-
-    // validate input tensors
+    // number of input tensors
     TT_FATAL(
-        input_tensors.size() == ring_size,
+        input_tensors.size() == required_ring_size,
         "deepseek_reduce_scatter requires 8 input tensors, but has {}",
         input_tensors.size());
-    const ttnn::Tensor& input_tensor_0 = input_tensors.at(0);
 
-    // TODO: (GR) fix since equality operator not provided
-    // for (const ttnn::Tensor& input_tensor : input_tensors) {
-    //     TT_FATAL(input_tensor == input_tensor_0, "deepseek_reduce_scatter requires all input tensors to be
-    //     identical");
-    // }
-
+    // input tensor properties
+    const ttnn::Tensor& first_input_tensor = input_tensors.at(0);
     TT_FATAL(
-        input_tensor_0.buffer()->page_size() % input_tensor_0.buffer()->alignment() == 0,
-        "deepseek_reduce_scatter currently requires aligned pages");
+        first_input_tensor.buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
+        "deepseek_reduce_scatter requires aligned pages");
+    TT_FATAL(first_input_tensor.buffer()->is_l1(), "deepseek_reduce_scatter requires input tensors allocated in L1");
+    TT_FATAL(first_input_tensor.layout() == ttnn::Layout::TILE, "deepseek_reduce_scatter requires tiled input tensors");
     TT_FATAL(
-        input_tensor_0.buffer()->num_pages() % 2 == 0,
-        "deepseek_reduce_scatter hardcoded to operate on slices with multiple of 2 number of pages");
+        first_input_tensor.element_size() <= 2,
+        "deepseek_reduce_scatter requires element size <= 2 bytes for scatter_write usage");
 
-    // TODO: (GR) input shard spec
+    // input tensor shard spec properties
+    TT_FATAL(
+        first_input_tensor.nd_shard_spec().has_value(), "deepseek_reduce_scatter requires nd sharded input tensors");
+    const uint32_t num_pages_per_shard =
+        first_input_tensor.nd_shard_spec().value().shard_shape.volume() / num_tile_elements;
+    const uint32_t num_shards = first_input_tensor.logical_volume() / (num_tile_elements * num_pages_per_shard);
+    TT_FATAL(num_pages_per_shard % 2 == 0, "deepseek_reduce_scatter requires shards have an even number pages");
+    TT_FATAL(
+        num_shards <= num_directions_per_link * num_links,
+        "deepseek_reduce_scatter requires number of shards per input tensor is <= num_directions_per_link * num_links");
 
-    // validate output memory config
+    // all input tensors must be identical
+    for (uint32_t i = 1; i < input_tensors.size(); ++i) {
+        const ttnn::Tensor& input_tensor = input_tensors.at(i);
+
+        TT_FATAL(
+            first_input_tensor.dtype() == input_tensor.dtype(),
+            "deepseek_reduce_scatter requires all input tensors have the same dtype");
+        TT_FATAL(
+            first_input_tensor.layout() == input_tensor.layout(),
+            "deepseek_reduce_scatter requires all input tensors have the same layout");
+        TT_FATAL(
+            first_input_tensor.logical_shape() == input_tensor.logical_shape(),
+            "deepseek_reduce_scatter requires all input tensors have the same logical shape");
+        TT_FATAL(
+            first_input_tensor.padded_shape() == input_tensor.padded_shape(),
+            "deepseek_reduce_scatter requires all input tensors have the same padded shape");
+        TT_FATAL(
+            first_input_tensor.tensor_spec() == input_tensor.tensor_spec(),
+            "deepseek_reduce_scatter requires all input tensors have the same tensor spec");
+        TT_FATAL(
+            first_input_tensor.memory_config() == input_tensor.memory_config(),
+            "deepseek_reduce_scatter requires all input tensors have the same memory config");
+        TT_FATAL(
+            first_input_tensor.buffer()->alignment() == input_tensor.buffer()->alignment(),
+            "deepseek_reduce_scatter requires all input tensors have the same page alignment");
+        TT_FATAL(
+            first_input_tensor.buffer()->page_size() == input_tensor.buffer()->page_size(),
+            "deepseek_reduce_scatter requires all input tensors have the same page size");
+        TT_FATAL(
+            first_input_tensor.buffer()->num_pages() == input_tensor.buffer()->num_pages(),
+            "deepseek_reduce_scatter requires all input tensors have the same number of pages");
+        TT_FATAL(
+            input_tensor.nd_shard_spec().has_value() &&
+                first_input_tensor.nd_shard_spec().value() == input_tensor.nd_shard_spec().value(),
+            "deepseek_reduce_scatter requires all input tensors have the same nd shard spec");
+    }
+
+    // number of devices
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensors.at(0), cluster_axis);
+    TT_FATAL(
+        num_devices == required_ring_size,
+        "deepseek_reduce_scatter is hardcoded for 8 devices, but has {}",
+        num_devices);
+
+    // topology
+    ttnn::ccl::Topology usable_topology =
+        ttnn::ccl::get_usable_topology(input_tensors.at(0), required_topology, cluster_axis);
+    TT_FATAL(
+        usable_topology == required_topology,
+        "deepseek_reduce_scatter is hardcoded for tt::tt_fabric::Topology::Ring, but has usable_topology {}",
+        usable_topology);
+
+    // dim
+    TT_FATAL(
+        dim == input_tensors.at(0).logical_shape().rank() - 1,
+        "deepseek_reduce_scatter only supports scattering on the last dim, but has dim {}",
+        dim);
+
+    // output memory config
     TT_FATAL(!output_memory_config.is_sharded(), "deepseek_reduce_scatter only supports interleaved output tensor");
 }
 
@@ -117,6 +187,7 @@ tt::stl::hash::hash_t DeepseekReduceScatterDeviceOperation::compute_program_hash
 
     return tt::tt_metal::operation::hash_operation<DeepseekReduceScatterDeviceOperation>(
         operation_attributes.output_memory_config,
+        operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
         tensor_args,
@@ -132,13 +203,14 @@ ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekRe
     deepseek_reduce_scatter(
         const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
+        uint32_t dim,
         uint32_t num_links,
         std::optional<uint32_t> cluster_axis) {
     using OperationType =
         ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{std::move(output_memory_config), num_links, cluster_axis},
+        OperationType::operation_attributes_t{std::move(output_memory_config), dim, num_links, cluster_axis},
         OperationType::tensor_args_t{input_tensors});
 }
 

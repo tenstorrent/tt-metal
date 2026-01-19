@@ -55,6 +55,7 @@ namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
  * - Needed for pre op synchronization
  * - May need to add a single additional forward core to even it out (on top of the shard cores)
  */
+// TODO: (GR) only use the first x cores (the cores that actually have shards on them)
 std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     const NdShardSpec& input_nd_shard_spec, uint32_t num_directions_per_link) {
     std::vector<CoreCoord> worker_cores = corerange_to_cores(input_nd_shard_spec.grid);

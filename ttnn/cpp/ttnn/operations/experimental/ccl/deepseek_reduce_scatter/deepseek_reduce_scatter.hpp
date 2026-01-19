@@ -15,6 +15,7 @@ struct ExecuteDeepseekReduceScatter {
     static ttnn::Tensor invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
+        int32_t dim,
         uint32_t num_links = 1,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };

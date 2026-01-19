@@ -97,6 +97,7 @@ def run_reduce_scatter_impl(
         tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_reduce_scatter(
             tt_input_tensor_mesh_list[i],
             output_memory_config=mem_config_rs,
+            dim=dim,
             num_links=num_links,
             cluster_axis=cluster_axis,
         )
