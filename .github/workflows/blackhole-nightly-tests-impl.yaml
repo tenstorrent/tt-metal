@@ -32,8 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            { model: whisper, cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
+            { model: llama3.1-8b, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
     runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
@@ -78,12 +78,6 @@ jobs:
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   nightly-bh-models-ci-v2:
@@ -94,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
+            { model: panoptic-deeplab, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
           ]
     name: Nightly P150 110 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
@@ -132,9 +126,3 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}

@@ -170,11 +170,6 @@ jobs:
               pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
     # Check if triggered by `workflow_run` with specific conclusion states,
     # or if it's triggered by `workflow_call` or `workflow_dispatch`

@@ -133,12 +133,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -185,12 +179,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -235,12 +223,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U08DCK9MA1E # Miłosz Gajewski
 
   ttnn-fused-tests:
     if: ${{ inputs.run_fused_tests }}
@@ -285,12 +267,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -337,12 +313,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -389,12 +359,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -449,12 +413,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07N3CUUN05 # Iva Potkonjak
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -503,12 +461,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U082L4RSULT # Denys Makoviichuk
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-sdpa-stress-tests:
@@ -555,12 +507,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -592,15 +538,12 @@ jobs:
           - test_type: conv
             test_path: tests/ttnn/nightly/unit_tests/operations/conv
             test_filter: "panoptic or _oft"
-            owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: pool
             test_path: tests/ttnn/nightly/unit_tests/operations/pool
             test_filter: "panoptic or _oft"
-            owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: group_norm
             test_path: tests/ttnn/unit_tests/operations/fused
             test_filter: "_oft"
-            owner: U06Q7ESTFEV # Borys Bradel
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -621,12 +564,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.owner }}
 
   ttnn-eltwise-tests:
     if: ${{ inputs.run_eltwise_tests }}
@@ -684,12 +621,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07RNEH2NR4 # Wenbin Lyu
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -737,12 +668,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06UEFWB4P9 # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-moreh-tests:
@@ -789,12 +714,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084B1CES7M # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-data_movement-tests:
@@ -850,12 +769,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084DDYSWCW # Adrian Morrison
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-misc-tests:
@@ -903,11 +816,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U084B1CES7M # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

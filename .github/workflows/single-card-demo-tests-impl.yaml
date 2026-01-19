@@ -40,70 +40,70 @@ jobs:
   define-demo-tests:
     runs-on: ubuntu-latest
     outputs:
-      demo-tests: ${{ steps.compute-tests.outputs.demo-tests }}
+      demo-tests: ${{ steps.compute-tests.outputs.demo-tests }},
     strategy:
       matrix:
         default-demo-tests:
           [[
-            { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
-            { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
-            { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
-            { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
-            { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
-            { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
-            { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
-            { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
-            { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, # Joseph Chu
-            { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
-            { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
-            { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "swin_s", runner-label: "N150", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
-            { name: "vit", runner-label: "N150", performance: false, cmd: run_vit_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga
-            { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
-            { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
-            { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability, owner_id: U0837MYG788}, # Marko Radosavljevic
-            { name: "sdxl", runner-label: "N150", performance: false, cmd: run_sdxl_func, owner_id: U0837MYG788}, # Marko Radosavljevic
-            { name: "efficientnet_b0", runner-label: "N150", performance: false, cmd: run_efficientnet_b0_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "vovnet", runner-label: "N150", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "swin_v2", runner-label: "N150", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            { name: "swin_s", runner-label: "N300", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
-            { name: "vit", runner-label: "N300", performance: false, cmd: run_vit_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga
-            { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
-            { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
-            { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
-            { name: "bert_tiny", runner-label: "N300", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
-            { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
-            { name: "resnet", runner-label: "N300", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
-            { name: "distilbert", runner-label: "N300", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
-            { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
-            { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
-            { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
+            { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func},
+            { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func},
+            { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func},
+            { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func},
+            { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func},
+            { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func},
+            { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func},
+            { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func},
+            { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func},
+            { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func},
+            { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, civ2-compatible: true},
+            { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, civ2-compatible: true},
+            { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, civ2-compatible: true},
+            { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, civ2-compatible: true},
+            { name: "swin_s", runner-label: "N150", performance: false, cmd: run_swin_s_demo, civ2-compatible: true},
+            { name: "vit", runner-label: "N150", performance: false, cmd: run_vit_demo, civ2-compatible: true},
+            { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, civ2-compatible: true},
+            { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, civ2-compatible: true},
+            { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability},
+            { name: "sdxl", runner-label: "N150", performance: false, cmd: run_sdxl_func},
+            { name: "efficientnet_b0", runner-label: "N150", performance: false, cmd: run_efficientnet_b0_func, civ2-compatible: true},
+            { name: "vovnet", runner-label: "N150", performance: false, cmd: run_vovnet_demo, civ2-compatible: true},
+            { name: "swin_v2", runner-label: "N150", performance: false, cmd: run_swin_v2_demo, civ2-compatible: true},
+            { name: "swin_s", runner-label: "N300", performance: false, cmd: run_swin_s_demo, civ2-compatible: true},
+            { name: "vit", runner-label: "N300", performance: false, cmd: run_vit_demo, civ2-compatible: true},
+            { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func},
+            { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func},
+            { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func},
+            { name: "bert_tiny", runner-label: "N300", performance: false, cmd: run_bert_tiny_func},
+            { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func},
+            { name: "resnet", runner-label: "N300", performance: false, cmd: run_resnet_func},
+            { name: "distilbert", runner-label: "N300", performance: false, cmd: run_distilbert_func},
+            { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func},
+            { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func},
+            { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, civ2-compatible: true},
+            { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, civ2-compatible: true},
             # Return N150 and N300 mistral7b tests after https://github.com/tenstorrent/tt-metal/issues/34763 is done
-            # { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-            # { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
+            # { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf},
+            # { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf},
             # Return N300 llama3 tests after https://github.com/tenstorrent/tt-metal/issues/35120 is done
-            # { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
-            { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
-            { name: "efficientnet_b0", runner-label: "N300", performance: false, cmd: run_efficientnet_b0_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
-  #          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
-            { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
-            { name: "sentence_bert", runner-label: "N300", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
-            { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
-            { name: "vovnet", runner-label: "N300", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
+            # { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf},
+            { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf},
+            { name: "efficientnet_b0", runner-label: "N300", performance: false, cmd: run_efficientnet_b0_func0, civ2-compatible: true},
+            { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf},
+  #          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf},
+            { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, civ2-compatible: true},
+            { name: "sentence_bert", runner-label: "N300", performance: false, cmd: run_sentencebert_func, civ2-compatible: true},
+            { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, civ2-compatible: true},
+            { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, civ2-compatible: true},
+            { name: "vovnet", runner-label: "N300", performance: false, cmd: run_vovnet_demo, civ2-compatible: true},
+            { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, civ2-compatible: true},
             # Moved to t3k tests until OOM on single card runners resolved
-            # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
-            { name: "qwen25_vl", runner-label: "N150", performance: false, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-            { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-            { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
-            # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
-            { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
-            # { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
+            # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func},
+            { name: "qwen25_vl", runner-label: "N150", performance: false, cmd: run_qwen25_vl_perfunc},
+            { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc},
+            { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, civ2-compatible: true},
+            # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf},  # TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
+            { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf}
+            # { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, civ2-compatible: true}
           ]]
     steps:
       - name: Compute tests
@@ -119,9 +119,9 @@ jobs:
           echo $default_demo_tests | jq
           requested_demo_tests=$default_demo_tests
 
-          requested_models=${{ toJSON(inputs.requested-models) }}
+          requested_models=${{ toJSON(inputs.requested-models) }},
           echo "[info] requested-models: $requested_models"
-          run_perf_tests=${{ inputs.run-perf-tests }}
+          run_perf_tests=${{ inputs.run-perf-tests }},
           echo "[info] run-perf-tests: $run_perf_tests"
 
           if [[ "$requested_models" != "all" ]]; then
@@ -149,8 +149,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJSON(needs.define-demo-tests.outputs.demo-tests) }}
-    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
+        test-group: ${{ fromJSON(needs.define-demo-tests.outputs.demo-tests) }},
+    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }},
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -164,25 +164,25 @@ jobs:
               matrix.test-group.runner-label,
               inputs.extra-tag
             ))
-      }}
+      }},
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }},
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch }}
+        ARCH_NAME: ${{ inputs.arch }},
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HUB_CACHE: ${{ (!matrix.test-group.civ2-compatible && '/mnt/MLPerf/huggingface/hub') || '' }}
-        HTTP_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTP_PROXY) || '' }}
-        HTTPS_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTPS_PROXY) || '' }}
-        NO_PROXY: ${{ (matrix.test-group.civ2-compatible && env.NO_PROXY) || '' }}
+        HF_HUB_CACHE: ${{ (!matrix.test-group.civ2-compatible && '/mnt/MLPerf/huggingface/hub') || '' }},
+        HTTP_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTP_PROXY) || '' }},
+        HTTPS_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTPS_PROXY) || '' }},
+        NO_PROXY: ${{ (matrix.test-group.civ2-compatible && env.NO_PROXY) || '' }},
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }},
       options: >-
         --device /dev/tenstorrent ${{ matrix.test-group.civ2-compatible == true && '-e TT_GH_CI_INFRA=1' || '' }} --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys
     defaults:
@@ -199,22 +199,22 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }},
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }},
       - name: Check for invalid performance + civ2-compatible combination
-        if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
+        if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }},
         run: |
           echo "::error::Performance tests are not compatible with civ2-compatible tests"
           echo "::error::test-group.performance: ${{ matrix.test-group.performance }}"
           echo "::error::test-group.civ2-compatible: ${{ matrix.test-group.civ2-compatible }}"
           exit 1
       - name: Enable Performance mode
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }},
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Check Weka mount
-        if: ${{ !matrix.test-group.civ2-compatible }}
+        if: ${{ !matrix.test-group.civ2-compatible }},
         run: |
           if [ -d "/mnt/MLPerf" ] && mountpoint -q /mnt/MLPerf; then
             echo "CIv1: ✓ Weka is mounted at /mnt/MLPerf"
@@ -229,19 +229,19 @@ jobs:
         env:
           # When ops recording is enabled, wrap pytest with Tracy profiler
           # Tracy flags: -r (report), -p (device profiler), --dump-device-data-mid-run (prevent buffer overflow)
-          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=30000 -m pytest' || 'pytest' }}
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=30000 -m pytest' || 'pytest' }},
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
-          ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }},
       - name: Prepare Tracy reports
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: ${{ !cancelled() && inputs.enable-ops-recording }},
         uses: ./docker-job/.github/actions/prepare-tracy-reports
         with:
           profiler-dir: /work/generated/profiler
-          model-name: ${{ matrix.test-group.name }}
-          card: ${{ matrix.test-group.runner-label }}
+          model-name: ${{ matrix.test-group.name }},
+          card: ${{ matrix.test-group.runner-label }},
       - name: Upload Tracy profiler reports (operations recording)
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: ${{ !cancelled() && inputs.enable-ops-recording }},
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
@@ -249,7 +249,7 @@ jobs:
           prefix: "tracy_ops_${{ matrix.test-group.name }}_${{ matrix.test-group.runner-label }}_"
       - name: Save environment data
         id: save-environment-data
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }},
         shell: bash
         run: |
           if [ -d "generated/benchmark_data" ]; then
@@ -260,34 +260,29 @@ jobs:
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }},
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }},
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }},
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }},
           path: /work
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() }},
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable Performance mode
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible && always() }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible && always() }},
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
 
   aggregate-ops-recording:
     needs: single-card-demo-tests
-    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    if: ${{ !cancelled() && inputs.enable-ops-recording }},
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

@@ -7,7 +7,6 @@
 # name: The name of the test
 # cmd: The command to run the test
 # sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
-# owner_id: The owner of the test
 
 
 name: "[testing] Ops Sanity pipeline"
@@ -134,10 +133,5 @@ jobs:
         run: |
           echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

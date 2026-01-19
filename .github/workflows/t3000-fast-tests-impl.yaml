@@ -91,11 +91,6 @@ jobs:
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ttfabric_tests
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.t3k-fabric-tests.outcome == 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: UJ45FEC7M #Allan Liu
       - name: Run t3k ttnn multiprocess tests
         id: t3k-ttnn-multiprocess-tests
         timeout-minutes: 15
@@ -104,11 +99,6 @@ jobs:
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ttnn_multiprocess_tests
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.t3k-ttnn-multiprocess-tests.outcome == 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: UBHPP2NDP #Joseph Chu
 
       - name: Run t3k ttnn ccl tests
         id: t3k-ttnn-ccl-tests
@@ -118,11 +108,6 @@ jobs:
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           run_t3000_ccl_tests
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.t3k-ttnn-ccl-tests.outcome == 'failure' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06LRK6JDGB #Saad Jameel
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 17
         if: ${{ !cancelled() }}

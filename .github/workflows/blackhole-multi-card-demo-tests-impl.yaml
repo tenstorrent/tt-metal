@@ -43,23 +43,18 @@ jobs:
           - name: "llama3.1-8b ${{ inputs.runner-label }} performance"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072
-            owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }} --max_seq_len 131072
-            owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
-            owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
@@ -148,11 +143,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   generate-large-models-matrix:
@@ -172,48 +162,36 @@ jobs:
               "model": "llama3.3-70b",
               "arch": "blackhole",
               "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and ci-32\" --max_seq_len 131072",
-              "owner_id": "U03PUAKE719",
-              "owner_name": "Miguel Tairum"
             },
             {
               "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)",
               "model": "llama3.3-70b",
               "arch": "blackhole",
               "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k \"prefill-llama3_70b-2-131072-2-2-1-1-False\"",
-              "owner_id": "U08GELBB1AP",
-              "owner_name": "Ambrose Ling"
             },
             {
               "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)",
               "model": "llama3.3-70b",
               "arch": "blackhole",
               "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k \"decode-llama3_70b-2-131072-2-10-1-1-False\"",
-              "owner_id": "U08GELBB1AP",
-              "owner_name": "Ambrose Ling"
             },
             {
               "name": "qwen3-32b ${{ inputs.runner-label }} batch-32 performance",
               "model": "qwen3-32b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and ci-32\" --max_seq_len 32768",
-              "owner_id": "U08GELBB1AP",
-              "owner_name": "Ambrose Ling"
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and ci-32\" --max_seq_len 40960",
             },
             {
               "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill",
               "model": "qwen3-32b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"prefill-qwen3_32b-2-32768-2-2-1-1-False\"",
-              "owner_id": "U08GELBB1AP",
-              "owner_name": "Ambrose Ling"
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"prefill-qwen3_32b-2-40960-2-2-1-1-False\"",
             },
             {
               "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode",
               "model": "qwen3-32b",
               "arch": "blackhole",
-              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"decode-qwen3_32b-2-32768-2-10-1-1-False\"",
-              "owner_id": "U08GELBB1AP",
-              "owner_name": "Ambrose Ling"
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"decode-qwen3_32b-2-40960-2-10-1-1-False\"",
             }
           ]'
 
@@ -317,11 +295,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   generate-tt-dit-matrix:
@@ -345,8 +318,6 @@ jobs:
               "arch": "blackhole",
               "runner-label": "P300-viommu",
               "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"1x2sp0tp1\"",
-              "owner_id": "U08TED0JM9D",
-              "owner_name": "Samuel Adesoye"
             },
             {
               "name": "Flux.1-dev BH-QB-GE performance (2x2sp0tp1)",
@@ -354,8 +325,6 @@ jobs:
               "arch": "blackhole",
               "runner-label": "BH-QB-GE",
               "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"2x2sp0tp1\"",
-              "owner_id": "U08TED0JM9D",
-              "owner_name": "Samuel Adesoye"
             },
             {
               "name": "Flux.1-dev BH-LoudBox performance (bh_2x4sp0tp1)",
@@ -363,26 +332,13 @@ jobs:
               "arch": "blackhole",
               "runner-label": "BH-LoudBox",
               "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"bh_2x4sp0tp1\"",
-              "owner_id": "U09ELB03XRU",
-              "owner_name": "Stephen Osborne"
             },
             {
               "name": "Wan2.2-T2V-A14B BH-QB-GE performance",
               "model": "wan2.2-t2v-a14b",
               "arch": "blackhole",
               "runner-label": "BH-QB-GE",
-              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"2x2sp0tp1 and resolution_480p\"",
-              "owner_id": "U08TED0JM9D",
-              "owner_name": "Samuel Adesoye"
-            },
-            {
-              "name": "Wan2.2-T2V-A14B BH-LoudBox performance",
-              "model": "wan2.2-t2v-a14b",
-              "arch": "blackhole",
-              "runner-label": "BH-LoudBox",
-              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x8sp0tp1 and resolution_480p\"",
-              "owner_id": "U09ELB03XRU",
-              "owner_name": "Stephen Osborne"
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x4sp0tp1 and resolution_480p\"",
             }
           ]'
 
@@ -502,10 +458,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

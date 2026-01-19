@@ -41,8 +41,7 @@ jobs:
             arch: wormhole_b0,
             cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc',
             model: llama3,
-            timeout: 10,
-            owner_id: U053W15B6JF
+            timeout: 10
           }, # Djordje Ivanovic
         ]
     runs-on:
@@ -84,8 +83,3 @@ jobs:
         run: |
           echo "Running command: ${{ matrix.test-group.cmd }}"
           eval "${{ matrix.test-group.cmd }}"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}

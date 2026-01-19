@@ -74,11 +74,6 @@ jobs:
             mkdir -p generated/test_reports
             uv pip install -r tools/triage/requirements.txt
             TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U066XH7HD6W # Vuk Jovanovic
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

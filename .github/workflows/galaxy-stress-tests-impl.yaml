@@ -66,11 +66,6 @@ jobs:
             echo "🔁 Run #$i"
             timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
@@ -83,15 +78,13 @@ jobs:
             name: "Galaxy Fabric Stability Tests",
             arch: wormhole_b0,
             cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml,
-            timeout: 100,
-            owner_id: U08FXFFH7L0
+            timeout: 100
           }, # Abhishek Agarwal
           {
             name: "Llama Galaxy Long Stress Test",
             arch: wormhole_b0,
             cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
-            timeout: 140,
-            owner_id: U053W15B6JF
+            timeout: 140
           } # Djordje Ivanovic
         ]
     name: ${{ matrix.test-group.name }}
@@ -133,11 +126,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
