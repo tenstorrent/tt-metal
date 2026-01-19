@@ -50,7 +50,8 @@ template <
     uint32_t LinearizedSrcMeshCoord,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis>
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    bool DoubleAntipodalAtomicInc = false>
 FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -61,12 +62,16 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
     // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
     // dispatch_devices=MeshCols
-    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+    constexpr uint32_t dispatch_devices =
+        Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
 
     // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
-    constexpr uint32_t positive_range = dispatch_devices / 2;
-    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
+    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
+    // dispatch_devices) if DoubleAntipodalAtomicInc is true
+    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2;
+    constexpr uint32_t negative_range =
+        DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range;
 
     // Determine directions based on axis:
     // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
@@ -95,6 +100,73 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
             static_cast<uint8_t>(1),
             static_cast<uint8_t>(negative_range));
     }
+}
+
+// Fabric multicast metadata write helper - handles scatter writes in both directions along a 1D ring
+// Similar to fabric_multicast_bidirectional_atomic_inc_ring_1d but for scatter writes
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis>
+FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const std::array<uint64_t, 2>& noc_addresses,
+    const std::array<uint16_t, 2>& chunk_sizes) {
+    using ttnn::operations::ccl::common::ReplicateGroup;
+
+    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
+    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
+    // dispatch_devices=MeshCols
+    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    // Split the ring: positive direction gets half, negative direction gets the other half
+    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
+    constexpr uint32_t positive_range = dispatch_devices / 2;
+    constexpr uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+
+    constexpr uint32_t positive_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+
+    // Use pointer-based constructor: (addresses*, chunk_sizes*, num_addresses)
+    const auto scatter_cmd_header =
+        tt::tt_fabric::NocUnicastScatterCommandHeader{noc_addresses.data(), chunk_sizes.data(), 2};
+    const uint32_t total_payload_size = chunk_sizes[0] + chunk_sizes[1];
+
+    // Send multicast scatter write in positive direction
+    if constexpr (positive_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+            &fabric_connections[positive_direction],
+            packet_header,
+            src_addr,
+            total_payload_size,
+            scatter_cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(positive_range));
+    }
+
+    // Send multicast scatter write in negative direction
+    if constexpr (negative_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+            &fabric_connections[negative_direction],
+            packet_header,
+            src_addr,
+            total_payload_size,
+            scatter_cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(negative_range));
+    }
+
+    // Also write to local device - scatter means contiguous src, separate destinations
+    // First chunk: src_addr -> noc_addresses[0], chunk_sizes[0] bytes
+    // Second chunk: src_addr + chunk_sizes[0] -> noc_addresses[1], chunk_sizes[1] bytes
+    noc_async_write(src_addr, noc_addresses[0], chunk_sizes[0]);
+    noc_async_write(src_addr + chunk_sizes[0], noc_addresses[1], chunk_sizes[1]);
+    noc_async_writes_flushed();
 }
 
 }  // namespace detail
@@ -209,13 +281,17 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto output_scores_addr_gen = TensorAccessor(scores_out_args, scores_out_tensor_address, scores_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+    auto* scores_packet_header =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+    uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -316,34 +392,66 @@ void kernel_main() {
     uint64_t noc_core_offset_md_write_addr = metadata_output_base_addr + dispatch_index * metadata_size_per_device +
                                              token_start_idx * aligned_metadata_page_size;
 
-    for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-        if (d == linearized_mesh_coord) {
-            // dispatch the metadata to the local device
-            detail::dispatch_input_local_device_flushed(
-                base_indices_addr, noc_core_offset_md_write_addr, metadata_size_per_core);
-        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-            l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
-                linearized_mesh_coord,
-                topology,
-                mesh_rows,
-                mesh_cols,
-                fabric_max_packet_size>(
-                fabric_connections,
-                metadata_packet_header,
-                d,
-                base_indices_addr,
-                noc_core_offset_md_write_addr,
-                global_noc_semaphore_address,
-                (int)metadata_size_per_core,
-                16,
-                1,
-                true);
-        }
-    }
+    uint64_t scores_output_base_addr =
+        get_noc_addr(drain_sync_tilizer_noc_x, drain_sync_tilizer_noc_y, scores_out_tensor_address);
+    uint64_t noc_core_offset_scores_write_addr = scores_output_base_addr + dispatch_index * metadata_size_per_device +
+                                                 token_start_idx * aligned_scores_page_size;
+
+    cb_wait_front(metadata_buffer_id, tokens_per_device);
+    uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
+    detail::fabric_multicast_bidirectional_scatter_write_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
+        fabric_connections,
+        metadata_packet_header,
+        base_metadata_addr,
+        {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
+        {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
+    cb_pop_front(metadata_buffer_id, tokens_per_device);
+    // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including antipodal
+    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
+        fabric_connections, metadata_packet_header, global_noc_semaphore_address);
+
+    // for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
+    //     if (d == linearized_mesh_coord) {
+    //         // dispatch the metadata to the local device
+    //         detail::dispatch_input_local_device_flushed(
+    //             base_indices_addr, noc_core_offset_md_write_addr, metadata_size_per_core);
+    //         detail::dispatch_input_local_device_flushed(
+    //             base_scores_addr, noc_core_offset_scores_write_addr, metadata_size_per_core);
+    //     } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
+    //         fabric_send_chip_unicast_noc_unicast_1d<
+    //         linearized_mesh_coord,
+    //         topology,
+    //         mesh_rows,
+    //         mesh_cols,
+    //         fabric_max_packet_size>(
+    //             output_scores_addr_gen,
+    //             fabric_connections,
+    //             scores_packet_header,
+    //             d,
+    //             base_scores_addr,
+    //             dispatch_index*tokens_per_device + token_start_idx,
+    //             (int)metadata_size_per_core,
+    //             16);
+    //         l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+    //             linearized_mesh_coord,
+    //             topology,
+    //             mesh_rows,
+    //             mesh_cols,
+    //             fabric_max_packet_size>(
+    //             fabric_connections,
+    //             metadata_packet_header,
+    //             d,
+    //             base_indices_addr,
+    //             noc_core_offset_md_write_addr,
+    //             global_noc_semaphore_address,
+    //             (int)metadata_size_per_core,
+    //             16,
+    //             1,
+    //             true);
+    //     }
+    // }
     // Need to wait for the local flushed metadata write.
     noc_async_write_barrier();
-    noc_semaphore_inc(global_noc_semaphore_address, 1);
-    noc_async_atomic_barrier();
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 

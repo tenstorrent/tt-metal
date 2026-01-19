@@ -84,9 +84,9 @@ void kernel_main() {
 
     // read the expert mapping table
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
-    uint32_t base_indices_addr = get_write_ptr(mapping_tensor_cb_id);
+    uint32_t base_mapping_addr = get_write_ptr(mapping_tensor_cb_id);
     for (uint32_t i = 0; i < mapping_pages; i++) {
-        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id) + i * aligned_mapping_page_size;
+        uint32_t l1_write_addr = base_mapping_addr + i * aligned_mapping_page_size;
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
     }
     noc_async_read_barrier();
@@ -95,6 +95,8 @@ void kernel_main() {
     ASSERT(indices_pages == input_pages);
     ASSERT(scores_pages == indices_pages);
     // read the input tokens, selected experts, and scores for each token
+    uint32_t base_indices_addr = get_write_ptr(indices_tensor_cb_id);
+    uint32_t base_scores_addr = get_write_ptr(scores_tensor_cb_id);
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
         cb_reserve_back(scores_tensor_cb_id, 1);
@@ -114,6 +116,19 @@ void kernel_main() {
         cb_push_back(scores_tensor_cb_id, 1);
         cb_push_back(input_tensor_cb_id, 1);
     }
+
+    // copy indices and scores to the metadata buffer id CB with 2 reads
+    cb_reserve_back(metadata_buffer_id, tokens_per_device);
+    noc_async_read(
+        get_noc_addr(base_indices_addr),
+        get_write_ptr(metadata_buffer_id),
+        (token_end_idx - token_start_idx) * aligned_indices_page_size);
+    noc_async_read(
+        get_noc_addr(base_scores_addr),
+        get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_indices_page_size,
+        (token_end_idx - token_start_idx) * aligned_scores_page_size);
+    noc_async_read_barrier();
+    cb_push_back(metadata_buffer_id, tokens_per_device);
 
     // Wait for all other devices to finish dispatching their input tokens and metadata.
     // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,

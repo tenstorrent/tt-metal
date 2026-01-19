@@ -346,21 +346,21 @@ def run_all_to_all_dispatch_metadata_test(
             break
 
         # Verify scores
-        # scores_all_close = torch.allclose(
-        #     tt_scores_out_tensor, output_scores_goldens_list[tensor_index], rtol=1e-2, atol=1e-2
-        # )
-        # if not scores_all_close:
-        #     scores_passed = False
-        #     first_failed_scores_index = tensor_index
-        #     # Find indices where scores differ
-        #     diff = torch.abs(tt_scores_out_tensor - output_scores_goldens_list[tensor_index])
-        #     failed_scores_indices = torch.where(diff > 1e-2)
-        #     logger.info(f"All failed scores indices: {failed_scores_indices}")
-        #     logger.info(f"Failing tt_scores_out_tensor tensor {tt_scores_out_tensor[failed_scores_indices][:10]}")
-        #     logger.info(
-        #         f"Relevant output_scores_goldens_list tensor {output_scores_goldens_list[tensor_index][failed_scores_indices][:10]}"
-        #     )
-        #     break
+        scores_all_close = torch.allclose(
+            tt_scores_out_tensor, output_scores_goldens_list[tensor_index], rtol=1e-2, atol=1e-2
+        )
+        if not scores_all_close:
+            scores_passed = False
+            first_failed_scores_index = tensor_index
+            # Find indices where scores differ
+            diff = torch.abs(tt_scores_out_tensor - output_scores_goldens_list[tensor_index])
+            failed_scores_indices = torch.where(diff > 1e-2)
+            logger.info(f"All failed scores indices: {failed_scores_indices}")
+            logger.info(f"Failing tt_scores_out_tensor tensor {tt_scores_out_tensor[failed_scores_indices][:10]}")
+            logger.info(
+                f"Relevant output_scores_goldens_list tensor {output_scores_goldens_list[tensor_index][failed_scores_indices][:10]}"
+            )
+            break
 
         # Verify output tokens with new shape [devices, total_tokens, hidden_size]
         for t in range(total_tokens_out):

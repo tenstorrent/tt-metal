@@ -56,11 +56,8 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     auto mesh_view = input_tensor.device()->get_view();
     uint32_t num_devices = mesh_view.num_devices();
 
-    uint32_t dispatch_devices =
-        axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
-
     constexpr uint32_t buffering_factor = 2;
-    constexpr uint32_t num_packet_headers = 2;
+    constexpr uint32_t num_packet_headers = 8;
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -69,7 +66,7 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
         tokens_per_core * aligned_indices_page_size,
         mapping_pages * aligned_mapping_page_size,
         num_devices * tokens_per_core * sizeof(uint8_t),
-        tokens_per_device * dispatch_devices * aligned_indices_page_size,
+        tokens_per_device * (aligned_indices_page_size + aligned_scores_page_size),
         num_packet_headers * packet_header_size_bytes,
         tokens_per_core * aligned_scores_page_size,  // scores tensor CB
     };
@@ -79,7 +76,7 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
         aligned_indices_page_size,
         aligned_mapping_page_size,
         tokens_per_core * sizeof(uint8_t),
-        aligned_indices_page_size,
+        aligned_indices_page_size + aligned_scores_page_size,
         packet_header_size_bytes,
         aligned_scores_page_size,  // scores tensor page size
     };
