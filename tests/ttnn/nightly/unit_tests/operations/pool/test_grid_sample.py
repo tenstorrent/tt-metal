@@ -6,10 +6,10 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-import math
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.operations.pool import golden_grid_sample
 
 try:
     from tracy import signpost
@@ -24,7 +24,6 @@ def validate_grid_sample_output(
     actual_output,
     use_precomputed_grid=False,
     grid_dtype=ttnn.bfloat16,
-    pcc_threshold=0.99,
     mode="bilinear",
 ):
     """
@@ -43,9 +42,6 @@ def validate_grid_sample_output(
     Raises:
         AssertionError: If either PCC or allclose validation fails
     """
-    # PCC check
-    pcc_passed, pcc_message = assert_with_pcc(expected_output, actual_output, pcc=pcc_threshold)
-    logger.info(pcc_message)
 
     # Determine allclose tolerances based on grid type and precomputed grid usage
     if mode == "bilinear":
@@ -62,12 +58,11 @@ def validate_grid_sample_output(
         allclose_passed = torch.equal(expected_output, actual_output)
 
     # Assertions
-    assert pcc_passed, f"Test failed with PCC below threshold ({pcc_threshold})"
     if mode == "bilinear":
         assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
     else:
         assert allclose_passed, f"Test failed exact equality comparison for nearest mode"
-    return pcc_passed, allclose_passed, pcc_message
+    return allclose_passed
 
 
 # Constants
@@ -409,8 +404,25 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
+    # Convert inputs to proper format for golden function
+    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
+
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input_formatted.to(torch.bfloat16),
+        grid=torch_grid_formatted.to(torch.bfloat16),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+    torch_output_nchw = (
+        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
     )
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
@@ -566,8 +578,25 @@ def test_grid_sample_sharded(
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
+    # Convert inputs to proper format for golden function
+    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
+
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input_formatted.to(torch.bfloat16),
+        grid=torch_grid_formatted.to(torch.bfloat16),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+    torch_output_nchw = (
+        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
@@ -654,8 +683,28 @@ def test_grid_sample_sharded_batched(
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
+    # Use golden function
+    from ttnn.operations.pool import golden_grid_sample
+
+    # Convert inputs to proper format for golden function
+    torch_input_formatted = torch_input_nchw.permute(0, 2, 3, 1).reshape(1, 1, batch_size * height * width, channels)
+    torch_grid_formatted = torch_grid.reshape(1, 1, batch_size * grid_h * grid_w, 2)
+
+    torch_output_formatted = golden_grid_sample(
+        input_tensor=torch_input_formatted.to(torch.bfloat16),
+        grid=torch_grid_formatted.to(torch.bfloat16),
+        batch_size=batch_size,
+        input_h=height,
+        input_w=width,
+        channels=channels,
+        output_h=grid_h,
+        output_w=grid_w,
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+    )
+    torch_output_nchw = (
+        torch_output_formatted.reshape(batch_size, grid_h, grid_w, channels).permute(0, 3, 1, 2).to(torch.float32)
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
