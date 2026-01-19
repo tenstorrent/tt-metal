@@ -28,7 +28,6 @@ target_sources(
             device/sequential_device_operation_types.hpp
     PRIVATE
         sequential.cpp
-        sequential_nanobind.cpp
         device/sequential_device_operation.cpp
 )
 
