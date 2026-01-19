@@ -245,7 +245,7 @@ jobs:
           uv pip install codechecker
 
       - name: 🔬 Analyze with CodeChecker
-        uses: blozano-tt/codechecker-analysis-action@add-version-skip-support
+        uses: ./.github/actions/codechecker-analysis-action
         id: codechecker
         with:
           logfile: /work/.build/clang-static-analyzer/compile_commands.json

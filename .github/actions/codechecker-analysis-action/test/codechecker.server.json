@@ -1,0 +1,13 @@
+{
+  "authentication": {
+    "enabled": true,
+    "session_lifetime": 86400,
+    "refresh_time": 86400,
+    "logins_until_cleanup": 42,
+    "method_dictionary": {
+      "enabled": true,
+      "auths": [],
+      "groups": {}
+    }
+  }
+}

@@ -1,0 +1,319 @@
+name: 'CodeChecker Static Analysis'
+author: 'Whisperity'
+description: 'Execute C/C++ static analysis of LLVM/Clang (Clang Static Analyzer and Clang-Tidy) driven via CodeChecker.'
+branding:
+  icon: 'cloud-lightning'
+  color: 'blue'
+
+inputs:
+  install-custom:
+    description: 'Whether to download, check out, and build a CodeChecker package manually in the CI.'
+    required: true
+    default: 'false'
+  repository:
+    description: 'The CodeChecker repository to check out and build from.'
+    required: true
+    default: 'Ericsson/CodeChecker'
+  version:
+    description: 'The version of the CodeChecker suite to obtain and execute. Might be a Git commit SHA, a branch name, or a tag if building a custom package, or a release version if downloading from PyPI. If "master" and downloading from PyPI, fetch the latest release. If "ignore", assume CodeChecker is already installed and available in PATH (useful for Docker containers with pre-installed tools).'
+    required: true
+    default: 'master'
+  llvm-version:
+    description: 'The major version of LLVM to install and use. LLVM is installed from the community PPA at http://apt.llvm.org. The value MUST be a major version (e.g. 13) that is supported by the PPA for the OS used! If "latest", automatically gather the latest version. If "ignore", do not install anything. (Not recommended.)'
+    required: true
+    default: 'latest'
+
+  config:
+    description: 'The CodeChecker configuration JSON that contains for each CodeChecker action (analyze, parse, ...) the list of flags that should be appended to the invocation of the command.'
+    required: false
+
+  logfile:
+    description: 'The location of the JSON Compilation Database for the project. This file describes how the project is compiled, and thus how it should be analysed. Mutually exclusive with "build-command".'
+    required: false
+  build-command:
+    description: 'The build command to execute and log for the creation of a JSON Compilation Database. Mutually exclusive with "logfile".'
+    required: false
+
+  analyze-output:
+    description: 'The output directory where the raw analysis output should be stored. If left the default empty, the path will be generated automatically.'
+    required: false
+    default: ''
+  ctu:
+    description: 'Whether to enable Cross Translation Unit (CTU) analysis in the Clang Static Analyzer.'
+    required: true
+    default: 'false'
+  ignore-analyze-crashes:
+    description: 'If set to "true", the "analyze" action will ALWAYS pass, and not report a failure if some analysis jobs fail to execute due to internal crashes in the Clang analysers.'
+    required: true
+    default: 'true'
+
+  report-converter:
+    description: 'Whether to perform report conversion from analyses executed by third-party analysers instead of driving the analysis via CodeChecker directly.'
+    required: true
+    default: 'false'
+  original-analyser:
+    description: 'The type of the third-party analyser which performed the analysis. Passed to the report converter executable, as a mandatory input parameter.'
+    required: false
+  original-analysis-output:
+    description: 'The location of the analysis data emitted by the third-party analyser. Passed to the report converter executable, as a mandatory input parameter.'
+    required: false
+
+  diff:
+    description: 'Whether to enable calculating the different of the current analysis results against a run stored on a CodeChecker server. If enabled, other flags, such as "diff-url" must also be set.'
+    required: true
+    default: 'false'
+  diff-url:
+    description: 'The CodeChecker product URL (usually in the format of http://example.com/ProductName) where the diff should connect to. Mandatory if "diff" is true.'
+    required: false
+  diff-username:
+    description: 'If the server requires authentication, the username to authenticate with.'
+    required: false
+  diff-password:
+    description: 'The password (or generated private access token) corresponding to the user.'
+    required: false
+  diff-run-name:
+    description: 'An identifying name of the analysis run. A run usually correlates to a set of configuration, e.g. analysis mode, branch, etc. If left default, the name is automatically generated from the current repository and branch name.'
+    required: true
+    default: '__DEFAULT__'
+
+  store:
+    description: 'Whether to enable storing the results to a CodeChecker server. If enabled, other flags, such as "store-url" must also be set.'
+    required: true
+    default: 'false'
+  store-url:
+    description: 'The CodeChecker product URL (usually in the format of http://example.com/ProductName) where the store should connect to. Mandatory if "store" is true.'
+    required: false
+  store-username:
+    description: 'If the server requires authentication, the username to authenticate with.'
+    required: false
+  store-password:
+    description: 'The password (or generated private access token) corresponding to the user.'
+    required: false
+  store-run-name:
+    description: 'An identifying name of the analysis run. A run usually correlates to a set of configuration, e.g. analysis mode, branch, etc. If left default, the name is automatically generated from the current repository and branch name.'
+    required: true
+    default: '__DEFAULT__'
+
+outputs:
+  codechecker-version:
+    description: 'The version of the installed CodeChecker package.'
+    value: ${{ steps.codechecker.outputs.VERSION }}
+  codechecker-hash:
+    description: 'The Git hash of the installed CodeChecker package.'
+    value: ${{ steps.codechecker.outputs.GITSEVEN }}
+  llvm-version:
+    description: 'The version of the installed LLVM package, if the install was requested.'
+    value: ${{ steps.llvm.outputs.REAL_VERSION }}
+
+  logfile:
+    description: 'The location of the JSON Compilation Database that was used for the analysis.'
+    value: ${{ steps.log.outputs.COMPILATION_DATABASE }}
+
+  analyze-output:
+    description: 'The output directory where the raw analysis or converted output was stored to.'
+    value: ${{ steps.analyze-or-report.outputs.OUTPUT_DIR }}
+
+  warnings:
+    description: 'Whether the static analyser(s) reported any findings.'
+    value: ${{ steps.parse.outputs.HAS_FINDINGS }}
+  result-log:
+    description: 'The file where the output of CodeChecker parse is written to verbatim.'
+    value: ${{ steps.parse.outputs.OUTPUT_LOG }}
+  result-html-dir:
+    description: 'The output directory where the user-friendly HTML reports were stored to.'
+    value: ${{ steps.parse.outputs.HTML_DIR }}
+
+  diff-html-dir:
+    description: 'The output directory where the user-friendly HTML reports about the new findings (if "diff" was enabled) were stored to.'
+    value: ${{ steps.diff.outputs.HTML_DIR }}
+  diff-run-name:
+    description: 'The name of the analysis run against which the current reports were compared.'
+    value: ${{ steps.diff-pre.outputs.RUN_NAME }}
+  diff-result-log:
+    description: 'The file where the output of CodeChecker cmd diff is written to verbatim.'
+    value: ${{ steps.diff.outputs.OUTPUT_LOG }}
+  warnings-in-diff:
+    description: 'Whether the current analysis produced any reports that were NEW, compared to the configured analysis run on the server.'
+    value: ${{ steps.diff.outputs.HAS_NEW_FINDINGS }}
+
+  store-run-name:
+    description: 'The name of the analysis run that the results were uploaded to.'
+    value: ${{ steps.store-pre.outputs.RUN_NAME }}
+  store-successful:
+    description: 'Whether storing the analysis results to the configured server was successful. Useful for breaking the build in a later step if the store action is deemed mandatory.'
+    value: ${{ steps.store.outputs.SUCCESS }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Check out repository ${{ inputs.repository }}"
+      uses: actions/checkout@v3
+      if: ${{ inputs.install-custom == 'true' }}
+      with:
+        path: CodeChecker
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.version }}
+
+    - name: "Install LLVM (${{ inputs.llvm-version }})"
+      id: llvm
+      if: ${{ inputs.llvm-version != 'ignore' && inputs.report-converter != 'true' }}
+      env:
+        IN_LLVM_VERSION: ${{ inputs.llvm-version }}
+      shell: bash
+      run: ${{ github.action_path }}/src/get-llvm.sh
+
+    - name: "Build and Package CodeChecker"
+      id: codechecker
+      env:
+        CODECHECKER_WILL_USE_WEB_API: ${{ inputs.store == 'true' || inputs.diff == 'true' }}
+
+        IN_INSTALL_CUSTOM: ${{ inputs.install-custom }}
+        IN_VERSION: ${{ inputs.version }}
+      shell: bash
+      run: |
+        echo "Creating a CodeChecker package..."
+        if [[ ! -z "$CODECHECKER_ACTION_DEBUG" ]]; then
+          set -x
+        fi
+
+        if [[ "$IN_INSTALL_CUSTOM" == "true" ]]; then
+          ${{ github.action_path }}/src/build-codechecker.sh
+        else
+          ${{ github.action_path }}/src/pip-codechecker.sh
+        fi
+
+    - name: "Prepare JSON Compilation Database"
+      id: log
+      if: ${{ inputs.report-converter != 'true' }}
+      env:
+        ACTION_NAME: ${{ github.action }}
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+
+        IN_LOGFILE: ${{ inputs.logfile }}
+        IN_COMMAND: ${{ inputs.build-command }}
+
+        OUT_FILE: ${{ github.workspace }}/${{ github.action }}_codechecker_compilation_database.json
+      shell: bash
+      run: ${{ github.action_path }}/src/get-or-create-build-json.sh
+
+    - name: "Execute static analysis for C/C++"
+      id: analyze
+      if: ${{ inputs.report-converter != 'true' }}
+      env:
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+        COMPILATION_DATABASE: ${{ steps.log.outputs.COMPILATION_DATABASE }}
+        GITHUB_ACTION_NAME: ${{ github.action }}
+
+        IN_CONFIGFILE: ${{ inputs.config }}
+        IN_CTU: ${{ inputs.ctu }}
+        IN_IGNORE_CRASHES: ${{ inputs.ignore-analyze-crashes }}
+        IN_OUTPUT_DIR: ${{ inputs.analyze-output }}
+      shell: bash
+      run: ${{ github.action_path }}/src/execute-analysis.sh
+
+    - name: "Perform report-converter"
+      id: report-convert
+      if: ${{ inputs.report-converter == 'true' }}
+      env:
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+        GITHUB_ACTION_NAME: ${{ github.action }}
+
+        IN_ORIGINAL_ANALYSER: ${{ inputs.original-analyser }}
+        IN_ORIGINAL_ANALYSIS_OUTPUT: ${{ inputs.original-analysis-output }}
+        IN_IGNORE_CRASHES: ${{ inputs.ignore-analyze-crashes }}
+        IN_OUTPUT_DIR: ${{ inputs.analyze-output }}
+      shell: bash
+      run: ${{ github.action_path }}/src/report-converter.sh
+
+    # This step is needed because it is forbidden to reuse the 'id' of a step,
+    # even if the two steps taking the same 'id' are mutually exclusive.
+    - name: "(Internal: set output variables for steps after analyze/convert)"
+      id: analyze-or-report
+      shell: bash
+      run: |
+        echo "(Executing GitHub Actions technical detail...)"
+        echo "::group::(Technical detail, forwarding result of analysis...)"
+        if [[ ! -z "$CODECHECKER_ACTION_DEBUG" ]]; then
+          set -x
+        fi
+
+        if [[ "${{ inputs.report-converter }}" != "true" ]]
+        then
+          echo "OUTPUT_DIR=${{ steps.analyze.outputs.OUTPUT_DIR }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "OUTPUT_DIR=${{ steps.report-convert.outputs.OUTPUT_DIR }}" >> "$GITHUB_OUTPUT"
+        fi
+        echo "::endgroup::"
+
+    - name: "Parse and convert results to HTML"
+      id: parse
+      env:
+        PROJECT_PATH: ${{ github.workspace }}
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+        RAW_RESULT_DIR: ${{ steps.analyze-or-report.outputs.OUTPUT_DIR }}
+
+        IN_CONFIGFILE: ${{ inputs.config }}
+      shell: bash
+      run: ${{ github.action_path }}/src/parse-results.sh
+
+    - name: "Generate the configuration for diffing current results against previously stored"
+      id: diff-pre
+      if: ${{ inputs.diff == 'true' }}
+      env:
+        IN_DIFF_URL: ${{ inputs.diff-url }}
+        IN_DIFF_USERNAME: ${{ inputs.diff-username }}
+        IN_DIFF_PASSWORD: ${{ inputs.diff-password }}
+        IN_DIFF_RUN_NAME: ${{ inputs.diff-run-name }}
+
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_REF_TYPE: ${{ github.ref_type }}
+      shell: bash
+      run: ${{ github.action_path }}/src/diff-pre.sh
+
+    - name: "Diff current results against previously stored run"
+      id: diff
+      if: ${{ steps.diff-pre.outputs.DIFF_CONFIGURED == 'true' }}
+      env:
+        PROJECT_PATH: ${{ github.workspace }}
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+        CODECHECKER_DIFF_RUN_NAME: ${{ steps.diff-pre.outputs.RUN_NAME }}
+        RAW_RESULT_DIR: ${{ steps.analyze-or-report.outputs.OUTPUT_DIR }}
+
+        IN_CONFIGFILE: ${{ inputs.config }}
+        IN_DIFF_URL: ${{ inputs.diff-url }}
+      shell: bash
+      run: ${{ github.action_path }}/src/diff.sh
+
+    - name: "Generate the configuration for uploading results"
+      id: store-pre
+      if: ${{ inputs.store == 'true' }}
+      env:
+        IN_STORE_URL: ${{ inputs.store-url }}
+        IN_STORE_USERNAME: ${{ inputs.store-username }}
+        IN_STORE_PASSWORD: ${{ inputs.store-password }}
+        IN_STORE_RUN_NAME: ${{ inputs.store-run-name }}
+
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_REF_TYPE: ${{ github.ref_type }}
+        GITHUB_SHA: ${{ github.sha }}
+      shell: bash
+      run: ${{ github.action_path }}/src/store-pre.sh
+
+    - name: "Store analysis results to server"
+      id: store
+      if: ${{ steps.store-pre.outputs.STORE_CONFIGURED == 'true' }}
+      env:
+        PROJECT_PATH: ${{ github.workspace }}
+        CODECHECKER_PATH: ${{ steps.codechecker.outputs.PATH }}
+        CODECHECKER_STORE_RUN_NAME: ${{ steps.store-pre.outputs.RUN_NAME }}
+        CODECHECKER_STORE_RUN_TAG: ${{ steps.store-pre.outputs.RUN_TAG }}
+        RAW_RESULT_DIR: ${{ steps.analyze-or-report.outputs.OUTPUT_DIR }}
+
+        IN_CONFIGFILE: ${{ inputs.config }}
+        IN_STORE_URL: ${{ inputs.store-url }}
+      shell: bash
+      run: ${{ github.action_path }}/src/store.sh

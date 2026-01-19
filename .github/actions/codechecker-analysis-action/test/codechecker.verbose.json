@@ -1,0 +1,5 @@
+{
+    "analyze": [
+        "--verbose=debug"
+    ]
+}
