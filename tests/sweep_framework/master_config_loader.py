@@ -19,6 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from .operation_parameter_extractors import OperationParameterExtractors
+from framework.constants import LEAD_MODELS
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -61,7 +62,57 @@ class TensorConfig:
 
 
 class MasterConfigLoader:
-    """Loads and converts master JSON configurations to sweep test parameters"""
+    """Loads and converts master JSON configurations to sweep test parameters
+
+    Class Attributes:
+        lead_models_only: When True, filters configurations to only include
+            those from lead models (e.g., deepseek_v3). Set via set_lead_models_filter()
+            before importing sweep modules that use this loader.
+    """
+
+    # Class-level filter setting (replaces environment variable approach)
+    # This is set by sweeps_parameter_generator.py before importing sweep modules
+    _lead_models_only: bool = False
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        """Set the lead models filter.
+
+        Args:
+            enabled: If True, only configurations from lead models will be loaded.
+                    If False, all configurations will be loaded.
+
+        Note:
+            This must be called BEFORE importing sweep modules that use MasterConfigLoader,
+            as the filtering happens at module load time when get_suite_parameters() is called.
+        """
+        cls._lead_models_only = enabled
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        """Get the current lead models filter setting."""
+        return cls._lead_models_only
+
+    @staticmethod
+    def _source_matches_lead_models(source) -> bool:
+        """Check if source matches any lead model pattern.
+
+        Args:
+            source: Either a string path or a list of string paths
+
+        Returns:
+            True if any source path contains a lead model pattern
+        """
+        # Normalize source to a list
+        sources = source if isinstance(source, list) else [source]
+
+        for src in sources:
+            if not isinstance(src, str):
+                continue
+            src_lower = src.lower()
+            if any(pattern.lower() in src_lower for pattern in LEAD_MODELS):
+                return True
+        return False
 
     def _matches_operation(self, operation_name: str, base_name: str) -> bool:
         """Check if operation_name matches any variant of base_name.
@@ -162,27 +213,58 @@ class MasterConfigLoader:
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
         """
         Normalize configurations to always return list of (argument list, source) tuples.
-        Handles both old format (list) and new format (dict with source).
+        Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
-            configs: List of configurations (either list of args or dict with 'arguments' and 'source')
+            configs: List of configurations (either list of args or dict with 'arguments' and 'source'/'contexts')
 
         Returns:
-            List of (arguments, source) tuples for traceability
+            List of (arguments, source, machine_info) tuples for traceability
         """
+        # Check if we should filter for lead models only
+        # Uses class-level setting instead of environment variable for cleaner control
+        lead_models_only = MasterConfigLoader._lead_models_only
+
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
-                # New format: extract arguments, source, and machine_info
-                source = config.get("source", "unknown")
-                machine_info = config.get("machine_info", None)
-                normalized.append((config["arguments"], source, machine_info))
+                # Check if this config has the new contexts format
+                if "contexts" in config:
+                    # New contexts format: expand each context into separate tuples
+                    arguments = config["arguments"]
+                    for context in config["contexts"]:
+                        # Extract source (should be a list in new format)
+                        source_list = context.get("source", ["unknown"])
+                        source = source_list[0] if isinstance(source_list, list) and len(source_list) > 0 else "unknown"
+
+                        # Extract machine_info
+                        machine_info = context.get("machine_info", None)
+
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not self._source_matches_lead_models(source_list):
+                                continue  # Skip this context
+
+                        normalized.append((arguments, source, machine_info))
+                else:
+                    # Old single source/machine_info format
+                    source = config.get("source", "unknown")
+                    machine_info = config.get("machine_info", None)
+
+                    # Filter for lead models if requested
+                    if lead_models_only:
+                        if not self._source_matches_lead_models(source):
+                            continue  # Skip this config
+
+                    normalized.append((config["arguments"], source, machine_info))
             elif isinstance(config, list):
                 # Old format: use as-is with unknown source and no machine_info
-                normalized.append((config, "unknown", None))
+                # Skip if lead_models_only since we can't determine source
+                if not lead_models_only:
+                    normalized.append((config, "unknown", None))
             else:
-                # Fallback: wrap in list with unknown source
-                normalized.append((config if isinstance(config, list) else [config], "unknown"))
+                # Fallback: wrap in list with unknown source and no machine_info
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -2881,6 +2963,7 @@ class MasterConfigLoader:
                     "input_b_memory_config",
                     "output_memory_config",
                     "traced_source",
+                    "traced_machine_info",
                 ]
                 param_lists = [
                     [cfg.get("input_shape") for cfg in paired_configs],
@@ -2893,6 +2976,7 @@ class MasterConfigLoader:
                     [cfg.get("input_b_memory_config") for cfg in paired_configs],
                     [cfg.get("output_memory_config") for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("traced_machine_info") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations

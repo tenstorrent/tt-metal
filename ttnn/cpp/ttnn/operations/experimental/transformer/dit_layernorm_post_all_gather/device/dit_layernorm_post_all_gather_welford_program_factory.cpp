@@ -18,11 +18,11 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::dit_layernorm::program {
+namespace ttnn::experimental::prim {
 
 PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgramFactory::create(
-    const PostAllGatherOperationAttributes& operation_attributes,
-    const PostAllGatherTensorArgs& tensor_args,
+    const DitLayernormPostAllGatherParams& operation_attributes,
+    const DitLayernormPostAllGatherInputs& tensor_args,
     Tensor& output) {
     using tt::tt_metal::CircularBufferConfig;
 
@@ -297,8 +297,8 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
 
 void PostAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const PostAllGatherOperationAttributes&,
-    const PostAllGatherTensorArgs& tensor_args,
+    const DitLayernormPostAllGatherParams&,
+    const DitLayernormPostAllGatherInputs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
@@ -335,4 +335,4 @@ void PostAllGatherWelfordProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::dit_layernorm::program
+}  // namespace ttnn::experimental::prim

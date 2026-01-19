@@ -21,16 +21,6 @@
 
 </div>
 
-## Quick Links
-
-- [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
-- [TT-Forge-FE](https://github.com/tenstorrent/tt-forge-fe)
-- [TT-Torch](https://github.com/tenstorrent/tt-torch)
-- [TT-XLA](https://github.com/tenstorrent/tt-xla)
-- [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
-- [TT-TVM](https://github.com/tenstorrent/tt-tvm)
-- [Releases](https://github.com/tenstorrent/tt-metal/releases)
-
 ## Featured Models
 
 The Models team is focused on developing the following models, optimizing them for performance, accuracy, and compatibility. Follow each model link for more details.

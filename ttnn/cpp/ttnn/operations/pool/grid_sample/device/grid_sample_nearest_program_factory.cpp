@@ -15,7 +15,7 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_nearest_program_factory.hpp"
 
-namespace ttnn::operations::pool::grid_sample::program {
+namespace ttnn::prim {
 
 GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactory::create(
     const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
@@ -285,4 +285,4 @@ void GridSampleNearestProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::pool::grid_sample::program
+}  // namespace ttnn::prim
