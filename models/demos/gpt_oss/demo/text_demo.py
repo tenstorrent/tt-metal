@@ -438,6 +438,21 @@ def test_gpt_oss_demo(
         logger.info(
             f"Long-context mode: {num_real_users} real users with 128k context, {global_batch_size - num_real_users} padding users"
         )
+    elif users_row_sharded and len(real_prompts) < global_batch_size:
+        # Randomize prompt order per row to help debug bad output patterns
+        # This ensures each row gets the same prompts but in different order
+        import random
+        random.seed(42)  # Fixed seed for reproducibility
+        input_prompts = []
+        num_prompts = len(real_prompts)
+        for row in range(mesh_device.shape[0]):
+            # Create a shuffled copy of prompts for this row
+            row_prompts = real_prompts.copy()
+            random.shuffle(row_prompts)
+            # Repeat if needed to fill users_per_row slots
+            row_prompts_extended = (row_prompts * ((users_per_row // num_prompts) + 1))[:users_per_row]
+            input_prompts.extend(row_prompts_extended)
+        logger.info(f"Row-sharded mode: randomized {num_prompts} prompts per row (seed=42)")
     else:
         input_prompts = real_prompts
 

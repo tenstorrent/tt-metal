@@ -51,8 +51,7 @@ def create_rope_setup(
         head_dim=hf_config.head_dim,
         max_seq_len=max_seq_len,
         rope_theta=getattr(hf_config, "rope_theta", 150000.0),
-        # rope_scaling=rope_scaling,
-        rope_scaling=None,
+        rope_scaling=rope_scaling,
         datatype=datatype,
         shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
     )

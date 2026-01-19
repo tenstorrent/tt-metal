@@ -79,6 +79,9 @@ def decode_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
+    # DEBUG: Check for NaN/Inf in Q/K after rope (enable with DEBUG_ATTENTION=1)
+    # Disabled by default to avoid performance impact
+
     # Update KV cache
     k_cache, v_cache = kv_cache
     tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
