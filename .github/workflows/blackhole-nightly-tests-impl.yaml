@@ -103,8 +103,9 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch_name }}
+        ARCH_NAME: blackhole
         LOGURU_LEVEL: INFO
         TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
       volumes:
