@@ -706,14 +706,6 @@ class GptOssForCausalLM(Generator):
             model_args.append(model_args_i)
             model.append(model_i)
 
-        # Select the generator implementation based on max_batch_size.
-        # For large batch sizes with users_row_sharded, we need a prefill path
-        # that uses global user slots when filling the KV cache.
-        if users_row_sharded:
-            from models.demos.gpt_oss.tt.generator import GPTOSSRowShardedGenerator
-
-            return GPTOSSRowShardedGenerator(model, model_args, mesh_device)
-
         return cls(model, model_args, mesh_device)
 
     @property
