@@ -348,6 +348,48 @@ class TestCustomOperationsWithDevice:
         expected = input_data * 3.0 + 1.0
         np.testing.assert_array_almost_equal(output_data, expected, decimal=5)
 
+    def test_multiple_output_tensors(self):
+        """Test custom operation that returns multiple output tensors as a tuple."""
+        import ttnn
+
+        class SplitOp(Function):
+            """Splits input into two outputs: one scaled by 2, one scaled by 3."""
+
+            @staticmethod
+            def forward(ctx, input):
+                ctx.save_for_backward(input)
+                value = input.get_value()
+                out1_value = ttnn.multiply(value, 2.0)
+                out2_value = ttnn.multiply(value, 3.0)
+                out1 = ttml.autograd.create_tensor(out1_value, True)
+                out2 = ttml.autograd.create_tensor(out2_value, True)
+                return out1, out2
+
+            @staticmethod
+            def backward(ctx, grad_out1, grad_out2):
+                # Gradient is 2 * grad_out1 + 3 * grad_out2
+                grad1 = ttnn.multiply(grad_out1, 2.0)
+                grad2 = ttnn.multiply(grad_out2, 3.0)
+                grad_input_value = ttnn.add(grad1, grad2)
+                return ttml.autograd.create_tensor(grad_input_value, False)
+
+        # Create input tensor
+        input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+
+        # Forward pass - returns tuple
+        out1, out2 = SplitOp.apply(input_tensor)
+
+        # Verify forward outputs
+        out1_data = out1.to_numpy()
+        out2_data = out2.to_numpy()
+        np.testing.assert_array_almost_equal(out1_data, input_data * 2.0, decimal=5)
+        np.testing.assert_array_almost_equal(out2_data, input_data * 3.0, decimal=5)
+
+        # Verify both outputs have nodes set (for backward graph)
+        assert out1.get_node() is not None, "First output should have node set"
+        assert out2.get_node() is not None, "Second output should have node set"
+
 
 class TestCustomOperationsNoDevice:
     """Tests for custom operations that don't require a device.
@@ -415,8 +457,8 @@ class TestCustomOperationsNoDevice:
 
             @staticmethod
             def backward(ctx, grad_output):
-                x, y = ctx.saved_tensors
-                alpha = ctx.alpha
+                _x, _y = ctx.saved_tensors  # Retrieve to verify API works
+                _alpha = ctx.alpha  # Retrieve to verify API works
                 # Return gradients for x and y (None would mean no gradient needed)
                 return grad_output, grad_output
 
