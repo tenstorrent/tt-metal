@@ -7,7 +7,7 @@
 
 #include "tt-metalium/mesh_coord.hpp"
 
-#include <tt-metalium/experimental/tensor/details/storage.hpp>
+#include "tensor/details/storage.hpp"
 
 namespace tt::tt_metal {
 

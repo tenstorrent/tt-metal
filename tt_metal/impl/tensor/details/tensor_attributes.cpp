@@ -4,8 +4,8 @@
 
 #include <tt-metalium/host_buffer.hpp>
 
-#include <tt-metalium/experimental/tensor/details/storage.hpp>
-#include <tt-metalium/experimental/tensor/details/tensor_attributes.hpp>
+#include "tensor/details/storage.hpp"
+#include "tensor/details/tensor_attributes.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {

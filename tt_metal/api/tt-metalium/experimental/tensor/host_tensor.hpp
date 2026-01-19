@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,6 +23,9 @@
 #include <tt-metalium/memory_pin.hpp>
 
 namespace tt::tt_metal /*::tensor*/ {
+
+class TensorAttributes;
+
 /**
  * HostTensor is a host data class. It has the semantics of a container, and all host <-> device communications are
  * explicit.
@@ -45,14 +49,14 @@ public:
     /**
      * Constructs an empty host tensor.
      */
-    HostTensor() = default;
-    ~HostTensor() = default;
+    HostTensor();
+    ~HostTensor();
 
-    HostTensor(const HostTensor&) = default;
-    HostTensor& operator=(const HostTensor&) = default;
+    HostTensor(const HostTensor&);
+    HostTensor& operator=(const HostTensor&);
 
-    HostTensor(HostTensor&&) = default;
-    HostTensor& operator=(HostTensor&&) = default;
+    HostTensor(HostTensor&&) noexcept;
+    HostTensor& operator=(HostTensor&&) noexcept;
 
     // End special member functions
 
@@ -181,6 +185,9 @@ public:
     void reshape(/* */);
 
     /* with_tensor_topology? */
+
+private:
+    std::unique_ptr<TensorAttributes> impl;
 };
 
 }  // namespace tt::tt_metal

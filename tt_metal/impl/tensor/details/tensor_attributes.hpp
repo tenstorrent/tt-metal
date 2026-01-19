@@ -6,7 +6,7 @@
 
 #include <memory>
 
-#include <tt-metalium/experimental/tensor/details/storage.hpp>
+#include "tensor/details/storage.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
