@@ -176,8 +176,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     if (attributes.bcast_batch.value()) {
         TT_FATAL(
             get_batch_size(b_shape) == 1,
-            "matmul (batch bcast variant) expects input tensors of shapes "
-            "BCMK*11KN=BCMN or equivalent");
+            "The batch bcast variant of matmul requires input tensors of shapes BCMK*11KN=BCMN "
+            "or equivalent. Please change the second input tensor or adjust the program config.");
     } else {
         // same condition as above, different message
         TT_FATAL(
@@ -317,6 +317,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
                 TT_FATAL(program_config.per_core_M != 0, "per_core_M is 0, which is not valid");
                 TT_FATAL(program_config.per_core_N != 0, "per_core_N is 0, which is not valid");
+                if (program_config.fuse_batch) {
+                    TT_FATAL(
+                        get_batch_size(b_shape_padded) == 1,
+                        "Matmul with fused batch requires input tensors of shapes BCMK*11KN=BCMN "
+                        "or equivalent. Please change the second input tensor or adjust the program config.");
+                }
             }
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
             // or single row/col We can uplift these variants to skip mcasting to
