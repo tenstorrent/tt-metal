@@ -1200,6 +1200,109 @@ TEST_F(GeluBwPolyTest, CompareWithStandard) {
 }
 
 // =============================================================================
+// Exp-Based Region Full Dump: All 70 BF16 values in (-13.375, -9)
+// =============================================================================
+
+TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
+    // Collect all BF16 values in the exp-based region (-13.375, -9)
+    std::vector<float> exp_region_values;
+
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+            continue;  // NaN
+        }
+        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+            continue;  // Inf
+        }
+        if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
+            continue;  // Denormal
+        }
+
+        float x = bf16_ulp_bw::bf16_bits_to_float(bf16_bits);
+        if (x > -13.375f && x < -9.0f) {
+            exp_region_values.push_back(x);
+        }
+    }
+
+    // Sort by x value (most negative first)
+    std::sort(exp_region_values.begin(), exp_region_values.end());
+
+    const size_t count = exp_region_values.size();
+    std::cout << "\n================================================================================\n";
+    std::cout << "EXP-BASED REGION FULL DUMP: All " << count << " BF16 values in (-13.375, -9)\n";
+    std::cout << "================================================================================\n";
+
+    // Pad for tensor
+    const size_t tile_size = 32 * 32;
+    size_t padded_size = ((count + tile_size - 1) / tile_size) * tile_size;
+    std::vector<float> padded_values = exp_region_values;
+    padded_values.resize(padded_size, 0.0f);
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+
+    std::vector<::bfloat16> bf16_inputs, bf16_grads;
+    for (float x : padded_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+        bf16_grads.push_back(::bfloat16(1.0f));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Print header
+    std::cout << std::setw(8) << "Index" << std::setw(12) << "x" << std::setw(16) << "BF16 bits" << std::setw(18)
+              << "Expected" << std::setw(18) << "Actual" << std::setw(10) << "ULP" << "\n";
+    std::cout << std::string(82, '-') << "\n";
+
+    int total_ulp = 0;
+    int max_ulp = 0;
+    float worst_x = 0;
+    int count_le_1 = 0;
+
+    for (size_t i = 0; i < count; ++i) {
+        float x = exp_region_values[i];
+        uint16_t bits = bf16_ulp_bw::float_to_bf16_bits(x);
+        float actual = static_cast<float>(output_vec[i]);
+        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
+
+        std::cout << std::setw(8) << i << std::setw(12) << std::fixed << std::setprecision(4) << x << "    0x"
+                  << std::hex << std::setw(4) << std::setfill('0') << bits << std::dec << std::setfill(' ')
+                  << std::setw(18) << std::scientific << std::setprecision(6) << expected << std::setw(18) << actual
+                  << std::setw(10) << ulp << "\n";
+
+        total_ulp += ulp;
+        if (ulp > max_ulp) {
+            max_ulp = ulp;
+            worst_x = x;
+        }
+        if (ulp <= 1) {
+            count_le_1++;
+        }
+    }
+
+    std::cout << std::string(82, '-') << "\n";
+    std::cout << "SUMMARY:\n";
+    std::cout << "  Total values: " << count << "\n";
+    std::cout << "  Mean ULP: " << std::fixed << std::setprecision(2) << (double)total_ulp / count << "\n";
+    std::cout << "  Max ULP: " << max_ulp << " at x = " << std::setprecision(4) << worst_x << "\n";
+    std::cout << "  Values with ULP <= 1: " << count_le_1 << " (" << std::setprecision(1)
+              << (100.0 * count_le_1 / count) << "%)\n";
+    std::cout << "================================================================================\n";
+}
+
+// =============================================================================
 // Deep Negative Region Analysis: Why polynomial coverage stops at x = -9
 // =============================================================================
 // This test documents why extending polynomial coverage below x = -9 is impractical:
