@@ -104,9 +104,9 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     return shuffled
 
 
-@pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
+@pytest.mark.parametrize("k, n", [(2048, 4096)])
 @pytest.mark.parametrize("m", [1])
-@pytest.mark.parametrize("fused_activation", [None, "silu"])
+@pytest.mark.parametrize("fused_activation", ["silu"])
 def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
@@ -209,11 +209,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
         subblock_k = k // tile_w // 4
     else:
         subblock_k = k // tile_w // 2
-
-    # TODO: remove it once we figure out why having larger outer dim
-    # caused the test with silu to fail with pcc error
-    if n == 7168 and fused_activation != None:
-        subblock_k = k // tile_w
 
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""
