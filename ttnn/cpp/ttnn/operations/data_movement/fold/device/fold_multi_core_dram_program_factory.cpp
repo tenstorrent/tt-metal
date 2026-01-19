@@ -159,6 +159,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     }*/
 
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
 
     // Create main compute kernel
     tt::tt_metal::CreateKernel(
@@ -167,6 +169,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         core_range,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
         });
 
@@ -178,6 +181,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
             core_range_cliff,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .compile_args = compute_compile_time_args_cliff,
             });
     }
