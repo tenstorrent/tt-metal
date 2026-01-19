@@ -12,7 +12,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt_stl/span.hpp>
 
-namespace ttnn::operations::copy::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
@@ -55,7 +55,7 @@ ChunkSizeConfig calculate_chunk_config(
 }  // anonymous namespace
 
 TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -243,9 +243,9 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
 
 void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const TypecastParams& /*operation_attributes*/,
+    const TypecastInputs& tensor_args,
+    Tensor& output) {
     const tt::tt_metal::KernelHandle typecast_reader_kernel_id =
         cached_program.shared_variables.typecast_reader_kernel_id;
     const tt::tt_metal::KernelHandle typecast_writer_kernel_id =
@@ -290,4 +290,4 @@ void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::copy::program
+}  // namespace ttnn::prim
