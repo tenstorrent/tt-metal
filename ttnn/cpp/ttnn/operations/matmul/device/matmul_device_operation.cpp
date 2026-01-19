@@ -837,6 +837,14 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 const auto batch_size_b = get_batch_size(b_shape_padded);
                 bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
                 TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
+                if (batch_size_a > 1 && batch_size_b > 1) {
+                    TT_FATAL(
+                        M % program_config.out_subblock_h == 0,
+                        "out_subblock_h ({}) needs to divide M ({}) evenly and does not. "
+                        "Please update your program config.",
+                        program_config.out_subblock_h,
+                        M);
+                }
 
                 if (input_tensor_b.is_sharded()) {
                     TT_FATAL(per_core_M % M == 0, "per_core_M must be a multiple of M if input b is sharded!");
