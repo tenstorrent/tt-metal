@@ -419,7 +419,6 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        print("tt_out", tt_out.storage_type())
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
         return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
 

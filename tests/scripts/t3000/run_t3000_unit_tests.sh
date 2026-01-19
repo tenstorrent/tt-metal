@@ -538,6 +538,28 @@ run_t3000_qwen25_vl_unit_tests() {
   echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
+run_t3000_qwen3_vl_unit_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  # install qwen3_vl requirements
+  pip install -r models/demos/qwen3_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
+
+  # run unit tests
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Unit tests for $qwen3_vl_32b on T3K completed in $duration seconds"
+}
+
 run_t3000_deepseek_tests() {
   uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 

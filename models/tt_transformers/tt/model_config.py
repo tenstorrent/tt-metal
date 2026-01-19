@@ -1717,7 +1717,6 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
-        print("vision_config", config.get("vision_config", None))
         self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
