@@ -294,7 +294,7 @@ class TTSampling(LightweightModule):
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
-            sampling_cluster_axis = None if 1 in list(self.cluster_shape) else self.sampling_all_gather_axis
+            sampling_cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
 
             # Gather top-k values across all devices
             topk_values_gathered = self._perform_all_gather(
