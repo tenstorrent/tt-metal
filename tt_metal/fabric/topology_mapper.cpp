@@ -467,6 +467,8 @@ void TopologyMapper::build_mapping() {
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ ||
         *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() == 0) {
+        // TODO: Do mesh to mesh mapping first
+
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_graph_logical(mesh_graph_);
         auto adjacency_map_physical = build_adjacency_graph_physical(physical_system_descriptor_, asic_id_to_mesh_rank);
