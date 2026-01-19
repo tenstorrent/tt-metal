@@ -239,13 +239,20 @@ jobs:
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
           update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
 
+      - name: Install CodeChecker
+        run: |
+          # Pre-install CodeChecker in the container's venv using uv.
+          # Pin to a specific version for reproducibility.
+          uv pip install codechecker==6.27.1
+
       - name: 🔬 Analyze with CodeChecker
-        uses: whisperity/codechecker-analysis-action@v1.0.4
+        uses: blozano-tt/CodeChecker-Action@v1.0.5-tt
         id: codechecker
         with:
           logfile: /work/.build/clang-static-analyzer/compile_commands.json
           llvm-version: ignore # Already installed in our Docker container
           config: /work/.codechecker.json
+          version: ignore # Already installed in our Docker container
 
       - name: Upload CodeChecker reports
         uses: actions/upload-artifact@v4
@@ -274,7 +281,7 @@ jobs:
       - name: Publish to blozano-tt/clangsa-results (gh-pages)
         uses: peaceiris/actions-gh-pages@v4
         with:
-          personal_token: ${{ secrets.WILDER_PAT }}
+          personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
           external_repository: blozano-tt/clangsa-results
           publish_branch: gh-pages
           publish_dir: site
