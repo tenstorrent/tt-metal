@@ -15,11 +15,12 @@
 
 /**
  * @file binary_op_helpers.hpp
- * @brief Single unified binary operation functions (add, sub, mul) with automatic dispatch
+ * @brief Single unified binary operation functions (add, sub, mul, square) with automatic dispatch
  *
  * Provides unified functions that handle all binary operations:
  * - Element-wise add/sub/mul
- * - Broadcast variants (row, col, scalar)
+ * - Square (single-input: A * A)
+ * - Broadcast variants (row, col, scalar) for add/sub/mul
  * - Multiple input modes (streaming, batched, preloaded, persistent)
  *
  * This library hides the complexity of:
@@ -50,12 +51,16 @@
  *
  *   // Add N tiles in streaming mode:
  *   compute_kernel_lib::add(cb_in0, cb_in1, cb_out,
- *       compute_kernel_lib::BinaryTileShape::block(N));
+ *       compute_kernel_lib::BinaryTileShape::row(N));
  *
  *   // Add with row broadcast:
  *   compute_kernel_lib::add<compute_kernel_lib::BroadcastDim::ROW>(
  *       cb_data, cb_bias, cb_out,
  *       compute_kernel_lib::BinaryTileShape::grid(Ht, Wt));
+ *
+ *   // Square tiles (single input, no second CB needed):
+ *   compute_kernel_lib::square(cb_in, cb_out,
+ *       compute_kernel_lib::BinaryTileShape::row(N));
  */
 
 namespace compute_kernel_lib {
@@ -68,9 +73,10 @@ namespace compute_kernel_lib {
  * @brief Binary operation type
  */
 enum class BinaryOpType {
-    ADD,  // A + B
-    SUB,  // A - B
-    MUL   // A * B
+    ADD,    // A + B
+    SUB,    // A - B
+    MUL,    // A * B
+    SQUARE  // A * A (single input, icb_b ignored)
 };
 
 /**
@@ -120,28 +126,24 @@ enum class BinaryDataFormatReconfig {
 /**
  * @brief Tile shape specification for binary operations
  *
- * Specifies the tile grid dimensions (rows x cols x batches).
+ * Specifies the tile grid dimensions (rows x cols).
  * For most binary ops, both inputs have same shape (or one is broadcast).
  */
 struct BinaryTileShape {
     uint32_t rows;
     uint32_t cols;
-    uint32_t batches;
 
     // Full grid specification
-    static constexpr BinaryTileShape grid(uint32_t r, uint32_t c, uint32_t b = 1) { return {r, c, b}; }
+    static constexpr BinaryTileShape grid(uint32_t r, uint32_t c) { return {r, c}; }
 
-    // Single tile (1x1x1)
-    static constexpr BinaryTileShape single() { return {1, 1, 1}; }
+    // Single tile (1x1)
+    static constexpr BinaryTileShape single() { return {1, 1}; }
 
-    // Single row of tiles (1 x cols x batches)
-    static constexpr BinaryTileShape row(uint32_t c, uint32_t b = 1) { return {1, c, b}; }
+    // Single row of tiles (1 x cols)
+    static constexpr BinaryTileShape row(uint32_t c) { return {1, c}; }
 
-    // Single column of tiles (rows x 1 x batches)
-    static constexpr BinaryTileShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
-
-    // Linear block of tiles (1 x tiles x batches) - for streaming N tiles
-    static constexpr BinaryTileShape block(uint32_t tiles, uint32_t b = 1) { return {1, tiles, b}; }
+    // Single column of tiles (rows x 1)
+    static constexpr BinaryTileShape col(uint32_t r) { return {r, 1}; }
 };
 
 /**
@@ -151,16 +153,14 @@ struct BinaryTileShape {
  * Used when input_mode is PRELOADED or PERSISTENT.
  */
 struct BinaryTileLayout {
-    uint32_t row_stride_a = 0;    // 0 = auto-detect from cols (contiguous row-major)
-    uint32_t row_stride_b = 0;    // Separate stride for second input (for broadcast patterns)
-    uint32_t batch_stride_a = 0;  // Reserved for future use
-    uint32_t batch_stride_b = 0;
+    uint32_t row_stride_a = 0;  // 0 = auto-detect from cols (contiguous row-major)
+    uint32_t row_stride_b = 0;  // Separate stride for second input (for broadcast patterns)
 
     // Factory methods
     static constexpr BinaryTileLayout contiguous() { return {}; }
-    static constexpr BinaryTileLayout with_stride_a(uint32_t s) { return {s, 0, 0, 0}; }
-    static constexpr BinaryTileLayout with_stride_b(uint32_t s) { return {0, s, 0, 0}; }
-    static constexpr BinaryTileLayout with_strides(uint32_t sa, uint32_t sb) { return {sa, sb, 0, 0}; }
+    static constexpr BinaryTileLayout with_stride_a(uint32_t s) { return {s, 0}; }
+    static constexpr BinaryTileLayout with_stride_b(uint32_t s) { return {0, s}; }
+    static constexpr BinaryTileLayout with_strides(uint32_t sa, uint32_t sb) { return {sa, sb}; }
 };
 
 // NoAccumulation is defined in common_types.hpp
@@ -232,6 +232,8 @@ ALWI void binary_init_none(uint32_t icb_a, uint32_t icb_b) {
         add_tiles_init(icb_a, icb_b);
     } else if constexpr (op_type == BinaryOpType::SUB) {
         sub_tiles_init(icb_a, icb_b);
+    } else if constexpr (op_type == BinaryOpType::SQUARE) {
+        mul_tiles_init(icb_a, icb_a);  // Same CB for both operands
     } else {
         mul_tiles_init(icb_a, icb_b);
     }
@@ -307,6 +309,8 @@ ALWI void binary_exec_none(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uin
         add_tiles(icb_a, icb_b, itile_a, itile_b, idst);
     } else if constexpr (op_type == BinaryOpType::SUB) {
         sub_tiles(icb_a, icb_b, itile_a, itile_b, idst);
+    } else if constexpr (op_type == BinaryOpType::SQUARE) {
+        mul_tiles(icb_a, icb_a, itile_a, itile_a, idst);  // Same CB and tile for both operands
     } else {
         mul_tiles(icb_a, icb_b, itile_a, itile_b, idst);
     }
@@ -408,6 +412,7 @@ ALWI void reload_accumulator_if_needed_binary(uint32_t icb_a, uint32_t icb_b, co
  *
  * Element-wise operation: C[i] = A[i] op B[i]
  * Both inputs have identical shape.
+ * For SQUARE: C[i] = A[i] * A[i], icb_b is ignored.
  */
 template <BinaryOpType op_type, BinaryInputMode input_mode, bool init, typename AccumT, typename PostOp>
 ALWI void binary_op_none(
@@ -420,13 +425,13 @@ ALWI void binary_op_none(
     PostOp post_op) {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr uint32_t onetile = 1;
+    constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
-    const uint32_t num_batches = shape.batches;
-    const uint32_t total_tiles = Ht * Wt * num_batches;
+    const uint32_t total_tiles = Ht * Wt;
     const uint32_t stride_a = (layout.row_stride_a > 0) ? layout.row_stride_a : Wt;
-    const uint32_t stride_b = (layout.row_stride_b > 0) ? layout.row_stride_b : Wt;
+    [[maybe_unused]] const uint32_t stride_b = (layout.row_stride_b > 0) ? layout.row_stride_b : Wt;
 
     // Initialization
     if constexpr (init) {
@@ -436,7 +441,9 @@ ALWI void binary_op_none(
     // PERSISTENT: wait for all tiles upfront
     if constexpr (input_mode == BinaryInputMode::PERSISTENT) {
         cb_wait_front(icb_a, total_tiles);
-        cb_wait_front(icb_b, total_tiles);
+        if constexpr (!is_square) {
+            cb_wait_front(icb_b, total_tiles);
+        }
     }
 
     // PRELOADED: bulk reserve output upfront
@@ -445,111 +452,118 @@ ALWI void binary_op_none(
     }
 
     uint32_t index_offset_a = 0;
-    uint32_t index_offset_b = 0;
+    [[maybe_unused]] uint32_t index_offset_b = 0;
     uint32_t output_offset = 0;
 
     // Account for base_dst offset when calculating effective DEST capacity
     const uint32_t base_dst = get_binary_dst_index(accum);
     const uint32_t effective_dest_limit = dest_limit - base_dst;
 
-    for (uint32_t nc = 0; nc < num_batches; ++nc) {
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
-            // Process row in chunks that fit within DEST limit
-            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
-                const uint32_t chunk_size =
-                    (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Process row in chunks that fit within DEST limit
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
 
-                // STREAMING_BATCHED: wait for chunk upfront
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_wait_front(icb_a, chunk_size);
+            // STREAMING_BATCHED: wait for chunk upfront
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_wait_front(icb_a, chunk_size);
+                if constexpr (!is_square) {
                     cb_wait_front(icb_b, chunk_size);
                 }
+            }
 
-                tile_regs_acquire();
+            tile_regs_acquire();
 
-                // Reload accumulator if needed
-                reload_accumulator_if_needed_binary<op_type, BroadcastDim::NONE>(icb_a, icb_b, accum);
+            // Reload accumulator if needed
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::NONE>(icb_a, icb_b, accum);
 
-                for (uint32_t wt = 0; wt < chunk_size; ++wt) {
-                    uint32_t tile_a, tile_b, dst_idx;
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                uint32_t tile_a, tile_b, dst_idx;
 
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        cb_wait_front(icb_a, onetile);
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
+                    cb_wait_front(icb_a, onetile);
+                    if constexpr (!is_square) {
                         cb_wait_front(icb_b, onetile);
-                        tile_a = 0;
-                        tile_b = 0;
-                        dst_idx = base_dst;
-                    } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                        tile_a = wt;
-                        tile_b = wt;
-                        dst_idx = base_dst + wt;
-                    } else {
-                        // PRELOADED or PERSISTENT
-                        tile_a = index_offset_a + wt_base + wt;
-                        tile_b = index_offset_b + wt_base + wt;
-                        dst_idx = base_dst + wt;
                     }
-
-                    binary_exec_none<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        // Immediate commit/pack for streaming
-                        tile_regs_commit();
-                        tile_regs_wait();
-
-                        cb_reserve_back(ocb, onetile);
-                        pack_tile(base_dst, ocb);
-                        cb_push_back(ocb, onetile);
-
-                        cb_pop_front(icb_a, onetile);
-                        cb_pop_front(icb_b, onetile);
-
-                        tile_regs_release();
-
-                        if (wt < chunk_size - 1) {
-                            tile_regs_acquire();
-                        }
-                    }
+                    tile_a = 0;
+                    tile_b = 0;
+                    dst_idx = base_dst;
+                } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                    tile_a = wt;
+                    tile_b = wt;
+                    dst_idx = base_dst + wt;
+                } else {
+                    // PRELOADED or PERSISTENT
+                    tile_a = index_offset_a + wt_base + wt;
+                    tile_b = index_offset_b + wt_base + wt;
+                    dst_idx = base_dst + wt;
                 }
 
-                // Post-op callback
-                if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        post_op(base_dst + i);
-                    }
-                }
+                binary_exec_none<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
+                    // Immediate commit/pack for streaming
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_reserve_back(ocb, chunk_size);
-                    }
+                    cb_reserve_back(ocb, onetile);
+                    pack_tile(base_dst, ocb);
+                    cb_push_back(ocb, onetile);
 
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        pack_tile(base_dst + i, ocb, output_offset + i);
-                    }
-
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_push_back(ocb, chunk_size);
+                    cb_pop_front(icb_a, onetile);
+                    if constexpr (!is_square) {
+                        cb_pop_front(icb_b, onetile);
                     }
 
                     tile_regs_release();
-                }
 
-                // STREAMING_BATCHED: pop after chunk
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_pop_front(icb_a, chunk_size);
-                    cb_pop_front(icb_b, chunk_size);
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
                 }
-
-                output_offset += chunk_size;
             }
 
-            // Update indices for indexed modes
-            if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
-                index_offset_a += stride_a;
+            // Post-op callback
+            if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    post_op(base_dst + i);
+                }
+            }
+
+            if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_reserve_back(ocb, chunk_size);
+                }
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    pack_tile(base_dst + i, ocb, output_offset + i);
+                }
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_push_back(ocb, chunk_size);
+                }
+
+                tile_regs_release();
+            }
+
+            // STREAMING_BATCHED: pop after chunk
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_pop_front(icb_a, chunk_size);
+                if constexpr (!is_square) {
+                    cb_pop_front(icb_b, chunk_size);
+                }
+            }
+
+            output_offset += chunk_size;
+        }
+
+        // Update indices for indexed modes
+        if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
+            index_offset_a += stride_a;
+            if constexpr (!is_square) {
                 index_offset_b += stride_b;
             }
         }
@@ -581,8 +595,7 @@ ALWI void binary_op_row(
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
-    const uint32_t num_batches = shape.batches;
-    const uint32_t total_tiles_a = Ht * Wt * num_batches;
+    const uint32_t total_tiles_a = Ht * Wt;
     const uint32_t stride_a = (layout.row_stride_a > 0) ? layout.row_stride_a : Wt;
 
     // Initialization
@@ -613,95 +626,92 @@ ALWI void binary_op_row(
     const uint32_t base_dst = get_binary_dst_index(accum);
     const uint32_t effective_dest_limit = dest_limit - base_dst;
 
-    for (uint32_t nc = 0; nc < num_batches; ++nc) {
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
-            // Process row in chunks that fit within DEST limit
-            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
-                const uint32_t chunk_size =
-                    (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Process row in chunks that fit within DEST limit
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
 
-                // STREAMING_BATCHED: wait for A chunk
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_wait_front(icb_a, chunk_size);
+            // STREAMING_BATCHED: wait for A chunk
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+
+            tile_regs_acquire();
+
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::ROW>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                uint32_t tile_a, tile_b, dst_idx;
+
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
+                    cb_wait_front(icb_a, onetile);
+                    tile_a = 0;
+                    tile_b = wt_base + wt;  // Index into persisted B tiles
+                    dst_idx = base_dst;
+                } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                    tile_a = wt;
+                    tile_b = wt_base + wt;
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = index_offset_a + wt_base + wt;
+                    tile_b = wt_base + wt;  // B always indexed from 0
+                    dst_idx = base_dst + wt;
                 }
 
-                tile_regs_acquire();
+                binary_exec_row<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                reload_accumulator_if_needed_binary<op_type, BroadcastDim::ROW>(icb_a, icb_b, accum);
-
-                for (uint32_t wt = 0; wt < chunk_size; ++wt) {
-                    uint32_t tile_a, tile_b, dst_idx;
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        cb_wait_front(icb_a, onetile);
-                        tile_a = 0;
-                        tile_b = wt_base + wt;  // Index into persisted B tiles
-                        dst_idx = base_dst;
-                    } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                        tile_a = wt;
-                        tile_b = wt_base + wt;
-                        dst_idx = base_dst + wt;
-                    } else {
-                        tile_a = index_offset_a + wt_base + wt;
-                        tile_b = wt_base + wt;  // B always indexed from 0
-                        dst_idx = base_dst + wt;
-                    }
-
-                    binary_exec_row<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        tile_regs_commit();
-                        tile_regs_wait();
-
-                        cb_reserve_back(ocb, onetile);
-                        pack_tile(base_dst, ocb);
-                        cb_push_back(ocb, onetile);
-
-                        cb_pop_front(icb_a, onetile);
-
-                        tile_regs_release();
-
-                        if (wt < chunk_size - 1) {
-                            tile_regs_acquire();
-                        }
-                    }
-                }
-
-                if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        post_op(base_dst + i);
-                    }
-                }
-
-                if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_reserve_back(ocb, chunk_size);
-                    }
+                    cb_reserve_back(ocb, onetile);
+                    pack_tile(base_dst, ocb);
+                    cb_push_back(ocb, onetile);
 
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        pack_tile(base_dst + i, ocb, output_offset + i);
-                    }
-
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_push_back(ocb, chunk_size);
-                    }
+                    cb_pop_front(icb_a, onetile);
 
                     tile_regs_release();
-                }
 
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_pop_front(icb_a, chunk_size);
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
                 }
-
-                output_offset += chunk_size;
             }
 
-            if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
-                index_offset_a += stride_a;
+            if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    post_op(base_dst + i);
+                }
             }
+
+            if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_reserve_back(ocb, chunk_size);
+                }
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    pack_tile(base_dst + i, ocb, output_offset + i);
+                }
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_push_back(ocb, chunk_size);
+                }
+
+                tile_regs_release();
+            }
+
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+
+            output_offset += chunk_size;
+        }
+
+        if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
+            index_offset_a += stride_a;
         }
     }
 
@@ -731,8 +741,7 @@ ALWI void binary_op_col(
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
-    const uint32_t num_batches = shape.batches;
-    const uint32_t total_tiles_a = Ht * Wt * num_batches;
+    const uint32_t total_tiles_a = Ht * Wt;
     const uint32_t stride_a = (layout.row_stride_a > 0) ? layout.row_stride_a : Wt;
 
     if constexpr (init) {
@@ -741,7 +750,7 @@ ALWI void binary_op_col(
 
     if constexpr (input_mode == BinaryInputMode::PERSISTENT) {
         cb_wait_front(icb_a, total_tiles_a);
-        cb_wait_front(icb_b, Ht * num_batches);  // Ht tiles per batch for col broadcast
+        cb_wait_front(icb_b, Ht);  // Ht tiles for col broadcast
     }
 
     if constexpr (input_mode == BinaryInputMode::PRELOADED) {
@@ -756,106 +765,101 @@ ALWI void binary_op_col(
     const uint32_t base_dst = get_binary_dst_index(accum);
     const uint32_t effective_dest_limit = dest_limit - base_dst;
 
-    for (uint32_t nc = 0; nc < num_batches; ++nc) {
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
-            // For col broadcast, wait for one B tile per row
-            if constexpr (
-                input_mode == BinaryInputMode::STREAMING || input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                cb_wait_front(icb_b, onetile);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // For col broadcast, wait for one B tile per row
+        if constexpr (input_mode == BinaryInputMode::STREAMING || input_mode == BinaryInputMode::STREAMING_BATCHED) {
+            cb_wait_front(icb_b, onetile);
+        }
+
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_wait_front(icb_a, chunk_size);
             }
 
-            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
-                const uint32_t chunk_size =
-                    (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+            tile_regs_acquire();
 
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_wait_front(icb_a, chunk_size);
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::COL>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                uint32_t tile_a, tile_b, dst_idx;
+
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
+                    cb_wait_front(icb_a, onetile);
+                    tile_a = 0;
+                    tile_b = 0;  // Same B tile for entire row
+                    dst_idx = base_dst;
+                } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                    tile_a = wt;
+                    tile_b = 0;
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = index_offset_a + wt_base + wt;
+                    tile_b = index_offset_b;
+                    dst_idx = base_dst + wt;
                 }
 
-                tile_regs_acquire();
+                binary_exec_col<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                reload_accumulator_if_needed_binary<op_type, BroadcastDim::COL>(icb_a, icb_b, accum);
-
-                for (uint32_t wt = 0; wt < chunk_size; ++wt) {
-                    uint32_t tile_a, tile_b, dst_idx;
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        cb_wait_front(icb_a, onetile);
-                        tile_a = 0;
-                        tile_b = 0;  // Same B tile for entire row
-                        dst_idx = base_dst;
-                    } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                        tile_a = wt;
-                        tile_b = 0;
-                        dst_idx = base_dst + wt;
-                    } else {
-                        tile_a = index_offset_a + wt_base + wt;
-                        tile_b = index_offset_b;
-                        dst_idx = base_dst + wt;
-                    }
-
-                    binary_exec_col<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        tile_regs_commit();
-                        tile_regs_wait();
-
-                        cb_reserve_back(ocb, onetile);
-                        pack_tile(base_dst, ocb);
-                        cb_push_back(ocb, onetile);
-
-                        cb_pop_front(icb_a, onetile);
-
-                        tile_regs_release();
-
-                        if (wt < chunk_size - 1) {
-                            tile_regs_acquire();
-                        }
-                    }
-                }
-
-                if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        post_op(base_dst + i);
-                    }
-                }
-
-                if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_reserve_back(ocb, chunk_size);
-                    }
+                    cb_reserve_back(ocb, onetile);
+                    pack_tile(base_dst, ocb);
+                    cb_push_back(ocb, onetile);
 
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        pack_tile(base_dst + i, ocb, output_offset + i);
-                    }
-
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_push_back(ocb, chunk_size);
-                    }
+                    cb_pop_front(icb_a, onetile);
 
                     tile_regs_release();
+
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
+                }
+            }
+
+            if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    post_op(base_dst + i);
+                }
+            }
+
+            if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_reserve_back(ocb, chunk_size);
                 }
 
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_pop_front(icb_a, chunk_size);
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    pack_tile(base_dst + i, ocb, output_offset + i);
                 }
 
-                output_offset += chunk_size;
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_push_back(ocb, chunk_size);
+                }
+
+                tile_regs_release();
             }
 
-            // Pop B tile after processing entire row
-            if constexpr (
-                input_mode == BinaryInputMode::STREAMING || input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                cb_pop_front(icb_b, onetile);
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_pop_front(icb_a, chunk_size);
             }
 
-            if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
-                index_offset_a += stride_a;
-                index_offset_b += 1;  // One B tile per row
-            }
+            output_offset += chunk_size;
+        }
+
+        // Pop B tile after processing entire row
+        if constexpr (input_mode == BinaryInputMode::STREAMING || input_mode == BinaryInputMode::STREAMING_BATCHED) {
+            cb_pop_front(icb_b, onetile);
+        }
+
+        if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
+            index_offset_a += stride_a;
+            index_offset_b += 1;  // One B tile per row
         }
     }
 
@@ -884,8 +888,7 @@ ALWI void binary_op_scalar(
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
-    const uint32_t num_batches = shape.batches;
-    const uint32_t total_tiles_a = Ht * Wt * num_batches;
+    const uint32_t total_tiles_a = Ht * Wt;
     const uint32_t stride_a = (layout.row_stride_a > 0) ? layout.row_stride_a : Wt;
 
     if constexpr (init) {
@@ -913,93 +916,90 @@ ALWI void binary_op_scalar(
     const uint32_t base_dst = get_binary_dst_index(accum);
     const uint32_t effective_dest_limit = dest_limit - base_dst;
 
-    for (uint32_t nc = 0; nc < num_batches; ++nc) {
-        for (uint32_t ht = 0; ht < Ht; ++ht) {
-            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
-                const uint32_t chunk_size =
-                    (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
 
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_wait_front(icb_a, chunk_size);
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+
+            tile_regs_acquire();
+
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::SCALAR>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                uint32_t tile_a, tile_b, dst_idx;
+
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
+                    cb_wait_front(icb_a, onetile);
+                    tile_a = 0;
+                    tile_b = 0;  // Always same scalar tile
+                    dst_idx = base_dst;
+                } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                    tile_a = wt;
+                    tile_b = 0;
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = index_offset_a + wt_base + wt;
+                    tile_b = 0;
+                    dst_idx = base_dst + wt;
                 }
 
-                tile_regs_acquire();
+                binary_exec_scalar<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
-                reload_accumulator_if_needed_binary<op_type, BroadcastDim::SCALAR>(icb_a, icb_b, accum);
-
-                for (uint32_t wt = 0; wt < chunk_size; ++wt) {
-                    uint32_t tile_a, tile_b, dst_idx;
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        cb_wait_front(icb_a, onetile);
-                        tile_a = 0;
-                        tile_b = 0;  // Always same scalar tile
-                        dst_idx = base_dst;
-                    } else if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                        tile_a = wt;
-                        tile_b = 0;
-                        dst_idx = base_dst + wt;
-                    } else {
-                        tile_a = index_offset_a + wt_base + wt;
-                        tile_b = 0;
-                        dst_idx = base_dst + wt;
-                    }
-
-                    binary_exec_scalar<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
-
-                    if constexpr (input_mode == BinaryInputMode::STREAMING) {
-                        tile_regs_commit();
-                        tile_regs_wait();
-
-                        cb_reserve_back(ocb, onetile);
-                        pack_tile(base_dst, ocb);
-                        cb_push_back(ocb, onetile);
-
-                        cb_pop_front(icb_a, onetile);
-
-                        tile_regs_release();
-
-                        if (wt < chunk_size - 1) {
-                            tile_regs_acquire();
-                        }
-                    }
-                }
-
-                if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        post_op(base_dst + i);
-                    }
-                }
-
-                if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                if constexpr (input_mode == BinaryInputMode::STREAMING) {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_reserve_back(ocb, chunk_size);
-                    }
+                    cb_reserve_back(ocb, onetile);
+                    pack_tile(base_dst, ocb);
+                    cb_push_back(ocb, onetile);
 
-                    for (uint32_t i = 0; i < chunk_size; ++i) {
-                        pack_tile(base_dst + i, ocb, output_offset + i);
-                    }
-
-                    if constexpr (input_mode != BinaryInputMode::PRELOADED) {
-                        cb_push_back(ocb, chunk_size);
-                    }
+                    cb_pop_front(icb_a, onetile);
 
                     tile_regs_release();
-                }
 
-                if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
-                    cb_pop_front(icb_a, chunk_size);
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
                 }
-
-                output_offset += chunk_size;
             }
 
-            if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
-                index_offset_a += stride_a;
+            if constexpr (!std::is_same_v<PostOp, NoOp> && input_mode != BinaryInputMode::STREAMING) {
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    post_op(base_dst + i);
+                }
             }
+
+            if constexpr (input_mode != BinaryInputMode::STREAMING) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_reserve_back(ocb, chunk_size);
+                }
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    pack_tile(base_dst + i, ocb, output_offset + i);
+                }
+
+                if constexpr (input_mode != BinaryInputMode::PRELOADED) {
+                    cb_push_back(ocb, chunk_size);
+                }
+
+                tile_regs_release();
+            }
+
+            if constexpr (input_mode == BinaryInputMode::STREAMING_BATCHED) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+
+            output_offset += chunk_size;
+        }
+
+        if constexpr (input_mode == BinaryInputMode::PRELOADED || input_mode == BinaryInputMode::PERSISTENT) {
+            index_offset_a += stride_a;
         }
     }
 
@@ -1156,6 +1156,31 @@ ALWI void mul(
     PostOp post_op = {}) {
     binary_op<BinaryOpType::MUL, bcast_dim, input_mode, reconfig, init, uninit, AccumT, PostOp>(
         icb_a, icb_b, ocb, shape, layout, accum, post_op);
+}
+
+/**
+ * @brief Square tiles helper - C[i] = A[i] * A[i]
+ *
+ * Single-input operation that squares each tile element-wise.
+ * Only icb_a is used; no second input CB is needed.
+ */
+template <
+    BinaryInputMode input_mode = BinaryInputMode::STREAMING,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void square(
+    uint32_t icb_a,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    // icb_b is ignored for SQUARE, pass icb_a as placeholder
+    binary_op<BinaryOpType::SQUARE, BroadcastDim::NONE, input_mode, reconfig, init, uninit, AccumT, PostOp>(
+        icb_a, icb_a, ocb, shape, layout, accum, post_op);
 }
 
 }  // namespace compute_kernel_lib
