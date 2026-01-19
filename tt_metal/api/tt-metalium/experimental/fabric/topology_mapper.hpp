@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -404,9 +405,11 @@ private:
     void rebuild_host_rank_structs_from_mapping(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
-    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
+    void print_logical_adjacency_map(
+        const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const;
 
-    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
+    void print_physical_adjacency_map(
+        const tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const;
 };
 
 }  // namespace tt::tt_fabric
