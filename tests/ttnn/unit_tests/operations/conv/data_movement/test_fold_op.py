@@ -78,10 +78,11 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 
 
 @pytest.mark.parametrize("nhw", [(3, 64, 64)])
-@pytest.mark.parametrize("channels", [268, 320])
+# @pytest.mark.parametrize("channels", [3, 32, 268, 320])
+@pytest.mark.parametrize("channels", [256, 288])
 @pytest.mark.parametrize("stride", [(16, 16)])
 @pytest.mark.parametrize("padding", [(0, 0)])
-@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32])
 def test_fold_with_permute_for_dram_tensor_fp32(device, nhw, channels, stride, padding, input_layout, input_dtype):
     batch_size, height, width = nhw
