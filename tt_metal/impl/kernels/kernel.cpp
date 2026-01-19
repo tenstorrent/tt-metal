@@ -242,7 +242,7 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_include_paths(const std::function<void(const std::string& path)> callback) const {
+void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
     // For FILE_PATH kernels, add the kernel source directory to the include path.
     // This enables relative includes (e.g., #include "foo.inc") to work when the kernel
     // source is transformed and inlined (as with simplified compute kernel syntax).
