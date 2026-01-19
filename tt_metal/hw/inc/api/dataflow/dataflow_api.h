@@ -486,6 +486,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | use_vc                            | Enable use of virtual channels for this transfer   | bool      | 0 or 1                           | False    |
  */
 // clang-format on
 template <bool enable_noc_tracing = true, bool use_vc = false>
