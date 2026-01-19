@@ -8,23 +8,25 @@
 #include "minimal_matmul_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul::program {
+namespace ttnn::experimental::prim {
 
 struct MinimalMatmulSplitProgramFactory {
     // Reuse shared_variables_t from MinimalMatmulProgramFactory
     using shared_variables_t = MinimalMatmulProgramFactory::shared_variables_t;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
+    using tensor_return_value_t = std::vector<Tensor>;
+
     static cached_program_t create(
-        const split_operation_attributes_t& operation_attributes,
-        const split_tensor_args_t& tensor_args,
-        split_tensor_return_value_t& tensor_return_value);
+        const MinimalMatmulSplitParams& operation_attributes,
+        const MinimalMatmulSplitInputs& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const split_operation_attributes_t& operation_attributes,
-        const split_tensor_args_t& tensor_args,
-        split_tensor_return_value_t& tensor_return_value);
+        const MinimalMatmulSplitParams& operation_attributes,
+        const MinimalMatmulSplitInputs& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::program
+}  // namespace ttnn::experimental::prim

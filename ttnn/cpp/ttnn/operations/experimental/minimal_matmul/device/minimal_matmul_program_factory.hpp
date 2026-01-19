@@ -55,7 +55,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const MinimalMatmulConfig>& config,
     const std::vector<Tensor>& output_tensors,
     const DeviceComputeKernelConfig& compute_kernel_config,

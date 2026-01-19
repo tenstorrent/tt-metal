@@ -12,7 +12,7 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::minimal_matmul {
+namespace ttnn::operations::experimental::minimal_matmul_split {
 
 std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
     const ttnn::Tensor& input_tensor,
@@ -21,7 +21,7 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
     const int32_t dim,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<unary::UnaryWithParam> fused_activation,
-    const std::optional<const MinimalMatmulConfig>& config,
+    const std::optional<const MinimalMatmulSplitConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -57,4 +57,4 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul
+}  // namespace ttnn::operations::experimental::minimal_matmul_split
