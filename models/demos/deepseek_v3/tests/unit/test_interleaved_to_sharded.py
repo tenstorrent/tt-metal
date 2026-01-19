@@ -139,9 +139,9 @@ def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enabl
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     coords = list(tt_out_tensors.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for coord, tt_out_tensor in zip(coords, ttnn.get_device_tensors(tt_out_tensors)):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         torch_out = ttnn.to_torch(tt_out_tensor)
         eq, output = comp_equal(torch_out, torch_input)
