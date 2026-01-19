@@ -137,7 +137,8 @@ public:
 
     // Can't these be derived from other functions?
     volumn_type logical_volume() const;
-    volumn_type physical_volume() const;
+    // This was called "physical_volumn", renaming here to be consistent with `padded_shape`.
+    volumn_type padded_volume() const;
 
     // Can't this be accessed from tensor_spec?
     const MemoryConfig& memory_config() const;
@@ -159,9 +160,6 @@ public:
     // "Extra helper functions"
     // Shape is a weird class to return, isn't a vector sufficient?
     Shape strides() const;
-
-    // Do we need this? This was meant to be pair with item() which is removed?
-    bool is_scalar() const;
 
     // Host buffer is always allocated:
     // bool is_allocated() const;

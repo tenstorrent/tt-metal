@@ -73,15 +73,10 @@ Shape HostTensor::strides() const {
 
 HostTensor::volumn_type HostTensor::logical_volume() const { return logical_shape().volume(); }
 
-HostTensor::volumn_type HostTensor::physical_volume() const { return padded_shape().volume(); }
+HostTensor::volumn_type HostTensor::padded_volume() const { return padded_shape().volume(); }
 
 // Host tensors are never sharded
 bool HostTensor::is_sharded() const { return false; }
-
-bool HostTensor::is_scalar() const {
-    const Shape& shape = logical_shape();
-    return shape.rank() == 0 || shape.volume() == 1;
-}
 
 // Following tensor_impl.cpp:54-66
 std::size_t HostTensor::element_size() const {
