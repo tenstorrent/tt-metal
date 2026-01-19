@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_llama8b_tp_dp"
   seed: 5489
   model_save_interval: 500
-  batch_size: 32  # Total batch size across all DP groups (8 per DP group with 4 DP groups)
+  batch_size: 8  # Total batch size across all DP groups (16 per DP group with 4 DP groups)
   gradient_accumulation_steps: 1
   num_epochs: 1
   max_steps: 10

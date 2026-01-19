@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Configure parallelization context for TP+DP
-    ttml::autograd::ctx().get_parallelization_context().configure(device, /*enable_dp=*/true, /*enable_tp=*/true);
+    ttml::autograd::ctx().get_parallelism_context().configure(device, /*enable_dp=*/true, /*enable_tp=*/true);
 
     // Generate training dataset
     auto training_params = ttml::datasets::MakeRegressionParams{
@@ -153,8 +153,8 @@ int main(int argc, char** argv) {
     auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
 
     // Initialize model based on parallelism type
-    // Get tp_axis from ParallelizationContext and pass to linear layers
-    auto tp_axis = ttml::autograd::ctx().get_parallelization_context().get_tp_axis();
+    // Get tp_axis from ParallelismContext and pass to linear layers
+    auto tp_axis = ttml::autograd::ctx().get_parallelism_context().get_tp_axis();
     std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_row_parallel) {
         fmt::print("Using RowParallelLinear: shards input features, all_reduces output\n");
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DP groups (average gradients for data parallelism)
-            ttml::core::distributed::synchronize_parameters(model->parameters(), 0U);
+            ttml::core::distributed::synchronize_gradients(model->parameters(), 0U);
 
             // Optimizer step
             optimizer.step();

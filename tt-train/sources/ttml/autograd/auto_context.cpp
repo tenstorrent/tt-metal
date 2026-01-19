@@ -129,11 +129,15 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return *m_socket_manager;
 }
 
-[[nodiscard]] ParallelizationContext& AutoContext::get_parallelization_context() {
-    return m_parallelization_context;
+[[nodiscard]] ParallelismContext& AutoContext::get_parallelism_context() {
+    return m_parallelism_context;
 }
 
-void ParallelizationContext::configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp) {
+void ParallelismContext::configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp) {
+    TT_FATAL(
+        (uint32_t)enable_dp + (uint32_t)enable_tp <= mesh_device->shape().dims(),
+        "Mesh shape dimensions must be greater than the number of parallelization axes");
+
     m_mesh_device = mesh_device;
 
     uint32_t axis = 0;
@@ -145,14 +149,14 @@ void ParallelizationContext::configure(ttnn::distributed::MeshDevice* mesh_devic
     }
 }
 
-uint32_t ParallelizationContext::get_dp_size() const {
+uint32_t ParallelismContext::get_dp_size() const {
     if (!m_dp_axis.has_value() || m_mesh_device == nullptr) {
         return 1U;
     }
     return m_mesh_device->shape()[m_dp_axis.value()];
 }
 
-uint32_t ParallelizationContext::get_tp_size() const {
+uint32_t ParallelismContext::get_tp_size() const {
     if (m_mesh_device == nullptr) {
         return 1U;
     }
