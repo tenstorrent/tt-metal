@@ -104,31 +104,6 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         - All tensors must be on the same device and allocated in device buffers
         - All tensors must be in TILE layout
         - Weight and bias must have 1 in all leading dimensions (dims < -2)
-
-        Example
-        -------
-        >>> import ttnn
-        >>> qkv = ...  # TILE tensor with shape [batch, seq, hidden], dtype=ttnn.bfloat16, on device
-        >>> qkv_proj = ...  # TILE tensor with shape [hidden, 3*head_dim], same dtype/device
-        >>> bias = ...  # Optional TILE tensor with shape [3*head_dim]
-        >>> Q, K, V = ttnn.experimental.minimal_matmul_split(
-        ...     input_tensor=qkv,
-        ...     weight_tensor=qkv_proj,
-        ...     bias_tensor=bias,
-        ...     chunks=3,
-        ...     dim=-1,
-        ...     config=ttnn.MinimalMatmulConfig(
-        ...         M_block_size=8,
-        ...         K_block_size=8,
-        ...         N_block_size=8,
-        ...         subblock_h=2,
-        ...         subblock_w=2,
-        ...         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        ...     ),
-        ... )
-        >>> Q.shape  # [batch, seq, head_dim]
-        >>> K.shape  # [batch, seq, head_dim]
-        >>> V.shape  # [batch, seq, head_dim]
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
