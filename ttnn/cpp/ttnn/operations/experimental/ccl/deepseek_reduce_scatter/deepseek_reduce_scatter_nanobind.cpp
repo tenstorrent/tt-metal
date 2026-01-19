@@ -47,31 +47,34 @@ void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& opera
 
 }  // namespace
 
-// TODO: (GR) update doc string
 void bind_deepseek_reduce_scatter(nb::module_& mod) {
     bind_deepseek_reduce_scatter(
         mod,
         ttnn::experimental::deepseek_reduce_scatter,
         R"doc(
-        Performs a reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
+        Reduce-scatter operation across devices along a selected dimension and optional cluster axis. This operation reduces the mesh tensor across the devices in the mesh, along the specified dimension. It then scatters the reduced tensor back to the devices in the mesh, along the same dimension. When cluster axis is specified, we reduce and scatter along the cluster axis. When it is not specified, then we reduce and scatter across all devices in the mesh.
 
         Args:
-            input_tensor (ttnn.Tensor): multi-device tensor.
-            dim (int): Dimension to scatter.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
-
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
+            input_tensors (List of ttnn.Tensor): the input tensors, which when concatted together on the scatter dim repesent the single logical input tensor.
+            output_memory_config (ttnn.MemoryConfig): output memory configuration.
+            dim (int): dimension along which to scatter.
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            num_links (int, optional): the number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
+            cluster_axis (int, optional): the cluster axis to reduce across. Defaults to `None`.
+            topology (ttnn.Topology, optional): fabric topology. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape (the logical input shape) for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
         Example:
-
+            >>> # ttnn_tensor shape is [1, 1, 32, 7168]
+            >>> # num_devices along cluster_axis is 8
+            >>> input_tensors = ttnn.split(ttnn_tensor, split_size=896, dim=3)
+            >>> output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            >>> output = ttnn.reduce_scatter(input_tensors, output_memory_config=output_memory_config, dim=3, cluster_axis=1)
+            >>> print(output.shape)
+            [1, 1, 32, 896]
         )doc");
 }
 
