@@ -662,11 +662,14 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     TT_FATAL(
         result.success,
         "The logical graph specified in the Mesh Graph Descriptor (MGD) could not fit in the discovered physical "
-        "topology for mesh {}. {}{}Expected: The logical graph topology from the MGD. "
-        "Found: The physical topology discovered from the system. "
-        "Either relax pinnings in the MGD or modify the MGD to match the physical topology. "
+        "topology for mesh {}.\n"
+        "{}\n"
+        "{}\n"
+        "Expected: The logical graph topology from the MGD.\n"
+        "Found: The physical topology discovered from the system.\n"
+        "Either relax pinnings in the MGD or modify the MGD to match the physical topology.\n"
         "To debug this issue, you can run with TT_METAL_LOGGER_LEVEL=debug to view the logical and physical adjacency "
-        "graphs. "
+        "graphs.\n"
         "If this is unexpected, run ./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
         mesh_id.get(),
         mgd_path_info,
