@@ -132,7 +132,7 @@ FORCE_INLINE void recordMulticastNocEvent(
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>
 FORCE_INLINE void recordNocEventWithID(
-    uint32_t local_addr, NocIDU32 noc_id, AddrGen addrgen, uint32_t num_bytes, uint32_t offset, int8_t vc) {
+    uint32_t local_addr, NocIDU32 noc_id, AddrGen addrgen, uint32_t offset, uint32_t num_bytes, int8_t vc) {
     static_assert(std::is_same_v<NocIDU32, uint32_t>);
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
