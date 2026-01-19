@@ -951,8 +951,53 @@ class MLA1D(AbstractModule):
             qk_rope_head_dim,
         )
 
+        #####################
+        ### Norm and Rope ###
+        #####################
+
         # Q path: norm + wq_b
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
+
+        # KV Norm
+        tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
+
+        # KV RoPE
+        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
+            tt_kv_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=False,
+        )
+
+        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+
+        ttnn.deallocate(tt_kv_nope)
+        ttnn.deallocate(tt_kv_rope)
+
+        ########################
+        ### Paged Fill Cache ###
+        ########################
+
+        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
+
+        # Update KVPE Cache
+        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
+        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
+        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+
+        ttnn.experimental.paged_fill_cache(
+            kvpe_cache,
+            tt_kvpe,
+            page_table=page_table,
+            batch_idx=local_batch_idx,
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
+        )
+
+        #####################
+        ### Q Rope + Nope ###
+        #####################
+
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
@@ -976,39 +1021,10 @@ class MLA1D(AbstractModule):
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
-        # KV Norm
-        tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
+        #################
+        ### Flash MLA ###
+        #################
 
-        # KV RoPE
-        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
-        )
-
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-
-        ttnn.deallocate(tt_kv_nope)
-        ttnn.deallocate(tt_kv_rope)
-
-        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
-
-        # Update KVPE Cache
-        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
-        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
-        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
-
-        ttnn.experimental.paged_fill_cache(
-            kvpe_cache,
-            tt_kvpe,
-            page_table=page_table,
-            batch_idx=local_batch_idx,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
-        )
-
-        # FlashMLA
         attn_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_kvpe,
@@ -1016,13 +1032,24 @@ class MLA1D(AbstractModule):
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
 
+        #########################
+        ### AG after FlashMLA ###
+        #########################
+
         # DP wkv_b2 to match decode weights
         v_out = ttnn.experimental.all_gather_async(
             attn_out, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
-        # wkv_b2
+        ##############
+        ### Wkv_b2 ###
+        ##############
+
         v_out = ttnn.linear(v_out, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
+
+        ##########
+        ### WO ###
+        ##########
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
