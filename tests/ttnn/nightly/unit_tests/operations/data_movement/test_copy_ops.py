@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,11 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
 from models.common.utility_functions import is_grayskull
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
+
+pytestmark = pytest.mark.use_module_device
 
 
 def run_copy_test(N, C, H, W, layout, device):
@@ -440,3 +442,58 @@ def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, dev
     # Verify layouts are preserved
     assert output_rm.layout == ttnn.ROW_MAJOR_LAYOUT, "Row-major output should maintain ROW_MAJOR_LAYOUT"
     assert output_tile.layout == ttnn.TILE_LAYOUT, "Tile output should maintain TILE_LAYOUT"
+
+
+@pytest.mark.parametrize(
+    "output_dtype",
+    (
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.uint16,
+        ttnn.uint8,
+        ttnn.bfloat16,
+    ),
+    ids=[
+        "UINT32",
+        "INT32",
+        "UINT16",
+        "UINT8",
+        "BFLOAT16",
+    ],
+)
+@pytest.mark.parametrize("preferred_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_typecast_host_tensor(output_dtype, preferred_layout, device):
+    """
+    Test that typecast works on host tensors (fixes issue #16279).
+
+    This test reproduces the scenario from the bug report and tests various dtypes:
+    - Create a host tensor from torch (no device parameter)
+    - Call typecast on the host tensor
+    - Verify it works without throwing an error
+    """
+    torch.manual_seed(2005)
+    shape = [32, 2048]
+    torch_tensor = torch.rand(shape, dtype=torch.float32)
+
+    # Create host tensor
+    ttnn_tensor_host = ttnn.from_torch(torch_tensor, layout=preferred_layout)
+
+    # Verify input is on host
+    assert ttnn_tensor_host.storage_type() == ttnn.StorageType.HOST
+
+    # Perform typecast on host tensor
+    ttnn_tensor_typecast = ttnn.typecast(ttnn_tensor_host, dtype=output_dtype)
+
+    # Verify output properties
+    assert ttnn_tensor_typecast.shape == ttnn_tensor_host.shape
+    assert ttnn_tensor_typecast.dtype == output_dtype
+    assert ttnn_tensor_typecast.storage_type() == ttnn.StorageType.HOST
+
+    # Convert back to torch and verify the shape
+    torch_output = ttnn.to_torch(ttnn_tensor_typecast)
+    assert torch_output.shape == tuple(shape)
+
+    # Verify values are reasonable
+    torch_dtype = tt_dtype_to_torch_dtype[output_dtype]
+    torch_expected = torch_tensor.to(torch_dtype)
+    torch.equal(torch_expected, torch_output)
