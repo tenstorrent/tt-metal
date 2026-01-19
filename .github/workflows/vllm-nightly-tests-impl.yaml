@@ -248,7 +248,6 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x2",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 2}",
               "additional-server-args": "--data_parallel_size 2",
               "use-vllm-v1": true,
               "structured-output": true,
