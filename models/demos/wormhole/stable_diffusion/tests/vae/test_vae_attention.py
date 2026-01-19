@@ -49,4 +49,4 @@ def test_vae_attention(
     ttnn_output = ttnn_output.reshape([batch_size, in_channels, height, width])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, 0.9897)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
