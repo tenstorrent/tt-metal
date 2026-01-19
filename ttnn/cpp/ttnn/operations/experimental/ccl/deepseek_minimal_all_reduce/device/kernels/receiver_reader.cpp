@@ -40,7 +40,7 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
-    // const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "compile time args:\n";
@@ -58,6 +58,7 @@ void kernel_main() {
 
     DPRINT << "arg vals:\n";
     DPRINT << " tensor_address0: " << (uint32_t)tensor_address0 << "\n";
+    DPRINT << " intermediate_base_addr: " << (uint32_t)intermediate_base_addr << "\n";
     DPRINT << " sender_semaphore_addr: " << (uint32_t)sender_semaphore_addr << "\n";
     DPRINT << " num_connections: " << (uint32_t)num_connections << "\n";
 
@@ -99,10 +100,10 @@ void kernel_main() {
     close_connections(fabric_connection);
 
     cb_reserve_back(receiver_cb, input_num_tiles);
-    // const uint32_t packet_l1_addr = get_write_ptr(receiver_cb);
-    // const uint64_t packet_noc_addr = get_noc_addr(data_noc_x, data_noc_y, intermediate_base_addr);
-    // noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
-    // noc_async_read_barrier();
+    const uint32_t packet_l1_addr = get_write_ptr(receiver_cb);
+    const uint64_t packet_noc_addr = get_noc_addr(data_noc_x, data_noc_y, intermediate_base_addr);
+    noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
+    noc_async_read_barrier();
     cb_push_back(receiver_cb, input_num_tiles);
     DPRINT << "end of receiver reader kernel\n";
 }
