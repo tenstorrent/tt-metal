@@ -115,28 +115,28 @@ jobs:
               standalone_models=$(jq -nc "[$falcon7b_wh_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             p100)
-              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             p150)
-              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             p300)
-              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
+              standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-LOUDBOX)
-              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$mobilenet_v2_test,$unet_vanilla_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-QB2)
-              standalone_models=$(jq -nc "[$llama33_70b_text_test,$flux1_dev_test,$wan2_2_test,$whisper_test,$mobilenet_v2_test,$unet_vanilla_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$llama33_70b_text_test,$flux1_dev_test,$wan2_2_test,$whisper_test,$mobilenet_v2_test,$segformer_test,$bert_large_test]")
               ;;
             BH-LOUDBOX)
-              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$mobilenet_v2_test,$unet_vanilla_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-6U)
-              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$mobilenet_v2_test,$unet_vanilla_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-6U)
-              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$mobilenet_v2_test,$unet_vanilla_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
           esac
 
