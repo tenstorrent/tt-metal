@@ -596,6 +596,12 @@ void calculate_exponential_polynomial() {
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
         INSERT_SFPNOP();
 
+        // Handle underflow: if k == 0, exp(x) = 0 (fixes -inf case).
+        TTI_SFPENCC(1, 0, 0, 2);               // Enable conditional execution.
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 6);  // Set LaneFlags = (LREG1 == 0).
+        TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);     // LREG2 = 0 for lanes where LREG1 == 0.
+        TTI_SFPENCC(0, 0, 0, 10);              // Disable conditional execution and clear LaneFlags.
+
         // Store the result.
         if constexpr (!IS_FP32_DEST_ACC_EN) {
             // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it
