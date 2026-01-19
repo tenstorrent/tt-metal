@@ -221,7 +221,7 @@ void kernel_main() {
                         }
                     }
                 }
-                // Send to remote destinations, if any
+                // If there are any, send to remote destinations
                 if (num_remote_token_destinations > 0) {
                     fabric_send_chip_sparse_multicast_noc_unicast_1d<
                         linearized_mesh_coord,
@@ -230,14 +230,14 @@ void kernel_main() {
                         mesh_cols,
                         num_devices,
                         fabric_max_packet_size>(
-                        output_addr_gen, 
-                        fabric_connections, 
-                        unicast_packet_header, 
-                        remote_token_destinations, 
-                        num_remote_token_destinations, 
-                        input_token_read_addr, 
-                        global_token, 
-                        (int)output_page_size, 
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        remote_token_destinations,
+                        num_remote_token_destinations,
+                        input_token_read_addr,
+                        global_token,
+                        (int)output_page_size,
                         alignment);
                 }
             } else {

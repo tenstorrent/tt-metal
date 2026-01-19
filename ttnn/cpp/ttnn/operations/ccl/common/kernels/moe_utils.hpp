@@ -661,6 +661,8 @@ inline uint16_t generate_fabric_mcast_hop_mask(
     return fabric_mcast_hop_mask;
 }
 
+// Send a sparse multicast packet to destinations along a specific direction
+// Supply hop mask and direction to the function
 template <
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType>
