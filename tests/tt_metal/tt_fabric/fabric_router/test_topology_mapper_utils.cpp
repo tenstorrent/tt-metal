@@ -699,22 +699,21 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_ClosetboxSuperpod) {
 
     ::tt::tt_fabric::MeshGraph mesh_graph(mesh_graph_desc_path.string());
     const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
-    const auto& nodes = multi_mesh_graph.get_nodes();
 
-    EXPECT_EQ(nodes.size(), 4u);
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
 
     // Verify each mesh has correct structure and internal connectivity
-    for (const auto& mesh_node : nodes) {
-        const auto& internal_nodes = mesh_node.adjacency_graph.get_nodes();
+    for (const auto& [mesh_id, adjacency_graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& internal_nodes = adjacency_graph.get_nodes();
         EXPECT_EQ(internal_nodes.size(), 8u);
 
         // Check a few internal connections
-        FabricNodeId node0(mesh_node.mesh_id, 0);
-        FabricNodeId node1(mesh_node.mesh_id, 1);
-        FabricNodeId node4(mesh_node.mesh_id, 4);
+        FabricNodeId node0(mesh_id, 0);
+        FabricNodeId node1(mesh_id, 1);
+        FabricNodeId node4(mesh_id, 4);
 
         if (std::find(internal_nodes.begin(), internal_nodes.end(), node0) != internal_nodes.end()) {
-            const auto& neighbors0 = mesh_node.adjacency_graph.get_neighbors(node0);
+            const auto& neighbors0 = adjacency_graph.get_neighbors(node0);
             EXPECT_GT(neighbors0.size(), 0u);
             if (std::find(internal_nodes.begin(), internal_nodes.end(), node1) != internal_nodes.end()) {
                 EXPECT_TRUE(std::find(neighbors0.begin(), neighbors0.end(), node1) != neighbors0.end());
@@ -727,22 +726,22 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_ClosetboxSuperpod) {
 
     // Verify ALL_TO_ALL inter-mesh connectivity
     // MGD specifies channels { count: 2 } for ALL_TO_ALL topology
-    for (const auto& mesh_node : nodes) {
-        const auto& neighbors = multi_mesh_graph.get_neighbors(mesh_node);
+    for (const auto& [mesh_id, _] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
         if (neighbors.size() > 0) {
             EXPECT_EQ(neighbors.size(), 6u);
             std::unordered_set<MeshId> neighbor_ids;
             std::map<MeshId, uint32_t> neighbor_counts;
             for (const auto& n : neighbors) {
-                EXPECT_NE(n.mesh_id, mesh_node.mesh_id);
-                neighbor_ids.insert(n.mesh_id);
-                neighbor_counts[n.mesh_id]++;
+                EXPECT_NE(n, mesh_id);
+                neighbor_ids.insert(n);
+                neighbor_counts[n]++;
             }
-            for (const auto& other : nodes) {
-                if (other.mesh_id != mesh_node.mesh_id) {
-                    EXPECT_TRUE(neighbor_ids.contains(other.mesh_id));
+            for (const auto& [other_mesh_id, _] : multi_mesh_graph.mesh_adjacency_graphs_) {
+                if (other_mesh_id != mesh_id) {
+                    EXPECT_TRUE(neighbor_ids.contains(other_mesh_id));
                     // Verify channel count: each mesh should appear 2 times (channels.count from MGD)
-                    EXPECT_EQ(neighbor_counts.at(other.mesh_id), 2u);
+                    EXPECT_EQ(neighbor_counts.at(other_mesh_id), 2u);
                 }
             }
         }
@@ -756,7 +755,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
     //   +-------------------------+
     //   |  Mesh 0    |  Mesh 1    |
     //   |  1 === 2 -- 5 === 6     |
-    //   |  ||   ||    ||   ||     |
     //   |  ||   ||    ||   ||     |
     //   +--+---+------+---+-------+
     //      |   |      |   |
@@ -814,25 +812,24 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
     // Build physical multi-mesh adjacency graph
     const auto multi_mesh_graph =
         build_physical_multi_mesh_adjacency_graph(physical_system_descriptor, asic_id_to_mesh_rank);
-    const auto& nodes = multi_mesh_graph.get_nodes();
 
     // Verify we have 2 mesh nodes
-    EXPECT_EQ(nodes.size(), 2u) << "Should have 2 meshes";
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u) << "Should have 2 meshes";
 
     // Verify each mesh has correct structure and internal connectivity
-    for (const auto& mesh_node : nodes) {
-        const auto& internal_nodes = mesh_node.adjacency_graph.get_nodes();
+    for (const auto& [mesh_id, adjacency_graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& internal_nodes = adjacency_graph.get_nodes();
         EXPECT_EQ(internal_nodes.size(), 4u) << "Each mesh should have 4 ASICs (2 per host)";
 
         // Verify internal connections within each mesh
         // Mesh 0: ASICs 1-2 (host0) and 3-4 (host1)
         // Mesh 1: ASICs 5-6 (host0) and 7-8 (host1)
-        if (mesh_node.mesh_id == MeshId{0}) {
+        if (mesh_id == MeshId{0}) {
             // Check local connections on host0
             auto asic1 = tt::tt_metal::AsicID{1};
             auto asic2 = tt::tt_metal::AsicID{2};
             if (std::find(internal_nodes.begin(), internal_nodes.end(), asic1) != internal_nodes.end()) {
-                const auto& neighbors1 = mesh_node.adjacency_graph.get_neighbors(asic1);
+                const auto& neighbors1 = adjacency_graph.get_neighbors(asic1);
                 EXPECT_GT(neighbors1.size(), 0u) << "ASIC 1 should have neighbors";
                 EXPECT_TRUE(std::find(neighbors1.begin(), neighbors1.end(), asic2) != neighbors1.end())
                     << "ASIC 1 should be connected to ASIC 2";
@@ -842,17 +839,17 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
             auto asic3 = tt::tt_metal::AsicID{3};
             auto asic4 = tt::tt_metal::AsicID{4};
             if (std::find(internal_nodes.begin(), internal_nodes.end(), asic3) != internal_nodes.end()) {
-                const auto& neighbors3 = mesh_node.adjacency_graph.get_neighbors(asic3);
+                const auto& neighbors3 = adjacency_graph.get_neighbors(asic3);
                 EXPECT_GT(neighbors3.size(), 0u) << "ASIC 3 should have neighbors";
                 EXPECT_TRUE(std::find(neighbors3.begin(), neighbors3.end(), asic4) != neighbors3.end())
                     << "ASIC 3 should be connected to ASIC 4";
             }
-        } else if (mesh_node.mesh_id == MeshId{1}) {
+        } else if (mesh_id == MeshId{1}) {
             // Check local connections on host0
             auto asic5 = tt::tt_metal::AsicID{5};
             auto asic6 = tt::tt_metal::AsicID{6};
             if (std::find(internal_nodes.begin(), internal_nodes.end(), asic5) != internal_nodes.end()) {
-                const auto& neighbors5 = mesh_node.adjacency_graph.get_neighbors(asic5);
+                const auto& neighbors5 = adjacency_graph.get_neighbors(asic5);
                 EXPECT_GT(neighbors5.size(), 0u) << "ASIC 5 should have neighbors";
                 EXPECT_TRUE(std::find(neighbors5.begin(), neighbors5.end(), asic6) != neighbors5.end())
                     << "ASIC 5 should be connected to ASIC 6";
@@ -862,7 +859,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
             auto asic7 = tt::tt_metal::AsicID{7};
             auto asic8 = tt::tt_metal::AsicID{8};
             if (std::find(internal_nodes.begin(), internal_nodes.end(), asic7) != internal_nodes.end()) {
-                const auto& neighbors7 = mesh_node.adjacency_graph.get_neighbors(asic7);
+                const auto& neighbors7 = adjacency_graph.get_neighbors(asic7);
                 EXPECT_GT(neighbors7.size(), 0u) << "ASIC 7 should have neighbors";
                 EXPECT_TRUE(std::find(neighbors7.begin(), neighbors7.end(), asic8) != neighbors7.end())
                     << "ASIC 7 should be connected to ASIC 8";
@@ -873,21 +870,21 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
     // Verify inter-mesh connectivity (if established)
     // Since meshes are on different hosts but connected via exit nodes,
     // they should be connected in the multi-mesh graph
-    for (const auto& mesh_node : nodes) {
-        const auto& neighbors = multi_mesh_graph.get_neighbors(mesh_node);
+    for (const auto& [mesh_id, _] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
         // Each mesh should be connected to the other mesh via cross-host connections
         if (neighbors.size() > 0) {
             EXPECT_EQ(neighbors.size(), 2u) << "Each mesh should be connected to the other mesh";
             std::unordered_set<MeshId> neighbor_ids;
             for (const auto& n : neighbors) {
-                EXPECT_NE(n.mesh_id, mesh_node.mesh_id) << "Mesh should not be connected to itself";
-                neighbor_ids.insert(n.mesh_id);
+                EXPECT_NE(n, mesh_id) << "Mesh should not be connected to itself";
+                neighbor_ids.insert(n);
             }
             // Verify bidirectional connectivity
-            for (const auto& other : nodes) {
-                if (other.mesh_id != mesh_node.mesh_id) {
-                    EXPECT_TRUE(neighbor_ids.contains(other.mesh_id))
-                        << "Mesh " << mesh_node.mesh_id.get() << " should be connected to mesh " << other.mesh_id.get();
+            for (const auto& [other_mesh_id, _] : multi_mesh_graph.mesh_adjacency_graphs_) {
+                if (other_mesh_id != mesh_id) {
+                    EXPECT_TRUE(neighbor_ids.contains(other_mesh_id))
+                        << "Mesh " << mesh_id.get() << " should be connected to mesh " << other_mesh_id.get();
                 }
             }
         }
