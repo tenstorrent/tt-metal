@@ -18,13 +18,13 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program {
+namespace ttnn::prim {
 
 RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const RingJointSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -38,10 +38,10 @@ RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory:
 }
 
 RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
-    const operation_attributes_t& args,
+    const RingJointSDPAParams& args,
     const ttnn::MeshCoordinate& coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -142,7 +142,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
-    std::optional<detail::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = detail::RingSDPAFusedOpSignaler();
+    std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
         args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
@@ -948,9 +948,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
 void RingJointSDPAProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
@@ -1015,4 +1015,4 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa::program
+}  // namespace ttnn::prim

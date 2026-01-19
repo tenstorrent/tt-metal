@@ -3044,7 +3044,7 @@ typedef union {
     SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RD2_UHS_reg_t f;
 } SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RD2_UHS_reg_u;
 
-#define SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RD2_UHS_REG_DEFAULT (0x00000455)
+#define SMN_SLV_BLOCK_SMN_SLV_TILE_MEM_CFG_RD2_UHS_REG_DEFAULT (0x00000655)
 
 typedef struct {
     uint64_t fcw_int_min : 8;
@@ -5645,7 +5645,7 @@ typedef union {
     TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_t f;
 } TEMP_SENSOR_TEMP_SENSOR_CFG_0_reg_u;
 
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_REG_DEFAULT (0x00000000)
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_0_REG_DEFAULT (0x00000110)
 
 typedef struct {
     uint32_t ts_coa0 : 4;
@@ -5657,7 +5657,7 @@ typedef union {
     TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_t f;
 } TEMP_SENSOR_TEMP_SENSOR_CFG_1_reg_u;
 
-#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_REG_DEFAULT (0x00000000)
+#define TEMP_SENSOR_TEMP_SENSOR_CFG_1_REG_DEFAULT (0x00000079)
 
 typedef struct {
     uint32_t ts_cob0 : 7;
@@ -5717,7 +5717,7 @@ typedef union {
     TEMP_SENSOR_DAC_GAIN_reg_t f;
 } TEMP_SENSOR_DAC_GAIN_reg_u;
 
-#define TEMP_SENSOR_DAC_GAIN_REG_DEFAULT (0x00000008)
+#define TEMP_SENSOR_DAC_GAIN_REG_DEFAULT (0x00000020)
 
 typedef struct {
     uint32_t ts_co : 6;
