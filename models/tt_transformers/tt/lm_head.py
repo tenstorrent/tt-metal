@@ -41,10 +41,8 @@ class LMHead(LightweightModule):
         tile_size = 32
         padded_vocab_size = math.ceil(self.vocab_size / (tile_size * self.num_devices)) * (tile_size * self.num_devices)
         size_per_device = padded_vocab_size // self.num_devices
-
-        max_columns_per_device_decode = math.ceil((max_columns_per_device // 4) / tile_size) * tile_size
-        max_columns_per_device_prefill = max_columns_per_device // 4
-
+        max_columns_per_device_decode = math.ceil((max_columns_per_device // 16) / (tile_size * 8)) * tile_size * 8
+        max_columns_per_device_prefill = max_columns_per_device // 16
         self.model_config = args.get_model_config()
 
         if args.is_galaxy:
@@ -62,6 +60,7 @@ class LMHead(LightweightModule):
 
         split_sizes_decode = [min(size_per_device, max_columns_per_device_decode)] * (num_splits_decode - 1)
         split_sizes_decode.append(size_per_device - sum(split_sizes_decode))  # remaining columns
+
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
 
