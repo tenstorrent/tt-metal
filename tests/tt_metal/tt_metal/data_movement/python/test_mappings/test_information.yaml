@@ -135,7 +135,7 @@ tests:
 
   16:
     name: "Loopback Packet Sizes"
-    # TODO issue #35917 issue #35917
+    # TODO issue #35917
 
   17:
     name: "Reshard Hardcoded Small"
