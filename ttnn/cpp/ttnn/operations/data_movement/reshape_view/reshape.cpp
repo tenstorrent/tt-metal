@@ -60,11 +60,17 @@ ttnn::Tensor perform_reshape_on_2D_RM(
             const auto& output_shape = temp_tensor2.tensor_spec();
 
             // Update specs for output tensor
-            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                auto core_range = input_shard_spec.grid.bounding_box();
-                auto orientation = input_shard_spec.orientation;
+            auto core_range = input_shard_spec.grid.bounding_box();
+            auto orientation = input_shard_spec.orientation;
 
+            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto updated_spec = output_shape.block_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            } else if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                auto updated_spec = output_shape.height_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                auto updated_spec = output_shape.width_sharded(core_range, orientation);
                 output_mem_config = updated_spec.memory_config();
             }
         }
@@ -247,11 +253,17 @@ ttnn::Tensor reshape_tiled(
             const auto& output_shape = output_tensor_3d.tensor_spec();
 
             // Update specs for output tensor
-            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                auto core_range = input_shard_spec.grid.bounding_box();
-                auto orientation = input_shard_spec.orientation;
+            auto core_range = input_shard_spec.grid.bounding_box();
+            auto orientation = input_shard_spec.orientation;
 
+            if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto updated_spec = output_shape.block_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            } else if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                auto updated_spec = output_shape.height_sharded(core_range, orientation);
+                output_mem_config = updated_spec.memory_config();
+            } else if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                auto updated_spec = output_shape.width_sharded(core_range, orientation);
                 output_mem_config = updated_spec.memory_config();
             }
         }
