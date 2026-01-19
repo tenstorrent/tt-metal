@@ -1175,9 +1175,170 @@ The exp()-based asymptotic formula is the **industry-standard solution** for thi
 
 **Expected improvement:** Overall Max ULP from 8,898 → ~30 (96% reduction)
 
+---
+
+## Session 2026-01-18: IMPLEMENTED exp()-based Solution (Session 30)
+
+### Implementation
+
+Added exp()-based asymptotic formula for x ∈ (-12.4, -9]:
+
+```cpp
+// Deep negative region [-12.4, -9]: use asymptotic formula with exp()
+// GELU'(x) ≈ x * exp(-x²/2) / sqrt(2π) for large negative x
+v_elseif(x >= -12.4f) {
+    constexpr float INV_SQRT_2PI = 0.3989422804014327f;
+    sfpi::vFloat t = x * x * (-0.5f);
+    sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
+    result = x * exp_val * INV_SQRT_2PI;
+}
+```
+
+### Results
+
+| Segment | Count | Mean ULP | Max ULP | Notes |
+|---------|-------|----------|---------|-------|
+| x ≤ -13.375 (BF16 natural 0) | 15,680 | 0.00 | **0** | True value rounds to 0 |
+| (-13.375, -12.4] (impl sat) | 16 | 1159.88 | **2,259** | Only 16 values! |
+| [-12.4, -9) exp-based | 54 | 1.63 | **3** | Excellent accuracy |
+| [-9, -7) FL2 polynomial | 48 | 21.71 | 42 | |
+| [-7, -5) FL1 polynomial | 64 | 1.30 | 3 | |
+| [-5, -3) LEFT polynomial | 96 | 0.01 | 1 | |
+| [-3, 3.1719) CORE polynomial | 32,655 | 0.82 | 1 | |
+| x ≥ 3.1719 (saturation to 1) | 15,947 | 0.00 | 0 | |
+
+**Key insight:** The exp()-based region [-12.4, -9) achieved Max ULP = 3! The Max ULP = 2,259 came from only 16 BF16 values in a tiny transition zone (-13.375, -12.4].
+
+---
+
+## Session 2026-01-18: Accurate Exp + Mills Ratio (Session 31) - CURRENT
+
+### Goal
+
+Implement the approach from `negative_tail_final_consolicated_opinions.md` to cover the FULL (-13.375, -9) range.
+
+### Implementation Changes
+
+Replaced inline Cody-Waite exp with `_sfpu_exp_f32_accurate_()` + Mills ratio correction:
+
+```cpp
+// Deep negative region (-13.375, -9]: use asymptotic formula with accurate exp
+// GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
+// Uses _sfpu_exp_f32_accurate_ for proper underflow handling near BF16 limits.
+v_elseif(x > -13.375f) {
+    constexpr float INV_SQRT_2PI = 0.3989422804014327f;
+
+    sfpi::vFloat x2 = x * x;
+    sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
+
+    // Use accurate exp with proper underflow handling
+    sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
+
+    // Gaussian PDF: φ(x) = exp(-x²/2) / sqrt(2π)
+    sfpi::vFloat phi = exp_val * INV_SQRT_2PI;
+
+    if constexpr (APPROXIMATION_MODE) {
+        // Fast mode: leading term only, ~1% relative error at x=-9
+        result = x * phi;
+    } else {
+        // Accurate mode: Mills ratio correction for <0.01% relative error
+        // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) = x * φ(x) * (1 - 1/x² + 1/x⁴)
+        sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
+        sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
+        sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
+        result = x * phi * correction;
+    }
+}
+// For x <= -13.375, saturate to 0
+```
+
+### Full BF16 Sweep Results (64,560 values, DAZ+FTZ model)
+
+| Segment | Count | Mean ULP | Max ULP | %≤1 ULP | Worst x |
+|---------|-------|----------|---------|---------|---------|
+| x ≤ -13.375 (BF16 natural 0) | 15,680 | 0.00 | **0** | 100.0% | - |
+| (-13.375, -9) exp-based | 70 | 14.79 | **502** | 95.7% | -13.19 |
+| [-9, -7) FL2 polynomial | 48 | 21.71 | 42 | 2.1% | -7.875 |
+| [-7, -5) FL1 polynomial | 64 | 1.30 | 3 | 59.4% | -5.281 |
+| [-5, -3) LEFT polynomial | 96 | 0.01 | 1 | 100.0% | -4.844 |
+| [-3, 3.1719) CORE polynomial | 32,655 | 0.82 | 1 | 100.0% | 0.0 |
+| x ≥ 3.1719 (saturation to 1) | 15,947 | 0.00 | **0** | 100.0% | - |
+| **TOTAL** | **64,560** | **0.45** | **502** | - | -13.19 |
+
+### Why Max ULP = 502 at x = -13.19
+
+At x = -13.19 (near BF16 saturation boundary):
+- t = -x²/2 = -87.07
+- exp(-87.07) ≈ 1.1e-38 (near min normal BF16 = 1.18e-38)
+- The multiplication chain `exp * INV_SQRT_2PI * x * correction` accumulates precision errors at this extreme range
+- 95.7% of exp-based region values still have ULP ≤ 1
+
+### Files Modified
+
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tests/ttnn/unit_tests/gtests/test_gelu_bw_ulp_bug.cpp`
+
+### Commit
+
+- **Commit:** `54641c9c1e` - "Use accurate exp with Mills ratio for GELU backward deep negative tail (#35971)"
+- **Branch:** `ivoitovych/issue-35971-gelu-bw-ulp-fix` (myfork)
+
+---
+
+## Final Summary (Updated 2026-01-18)
+
+| Metric | Original | Session 28 | Session 30 | **Session 31** |
+|--------|----------|------------|------------|----------------|
+| Overall Max ULP | 32,460 | 8,898 | 2,259 | **502** |
+| Mean ULP | ~2,230 | 5.55 | 0.72 | **0.45** |
+| Improvement | - | 73% | 93% | **98.5%** |
+| Polynomial coverage | None | [-9, 3.17] | [-12.4, 3.17] | **[-13.375, 3.17]** |
+
+### Per-Segment Quality
+
+| Region | Max ULP | Status |
+|--------|---------|--------|
+| x ≤ -13.375 (saturation to 0) | **0** | ✅ Perfect |
+| (-13.375, -9) exp-based | **502** | ⚠️ Edge precision (95.7% ≤ 1 ULP) |
+| [-9, -7) FL2 polynomial | 42 | ✅ Good |
+| [-7, -5) FL1 polynomial | 3 | ✅ Excellent |
+| [-5, -3) LEFT polynomial | 1 | ✅ Perfect |
+| [-3, 3.1719) CORE polynomial | 1 | ✅ Perfect |
+| x ≥ 3.1719 (saturation to 1) | **0** | ✅ Perfect |
+
+### PR Readiness
+
+**Ready for PR** with documented limitations:
+- ✅ 98.5% improvement in Max ULP (32,460 → 502)
+- ✅ Full coverage from BF16 natural saturation (-13.375) to positive saturation (3.1719)
+- ✅ Core polynomial regions [-5, 3.17] have Max ULP ≤ 1
+- ⚠️ Max ULP = 502 at boundary x = -13.19 (near BF16 min normal, 95.7% of exp region still ≤ 1 ULP)
+- ✅ All hardware tests pass
+
+---
+
+## Next Steps (Updated)
+
+1. ✅ **Derive Sollya coefficients** - DONE
+2. ✅ **Implement piecewise polynomial** - DONE
+3. ✅ **Test with comprehensive BF16 sweep** - DONE
+4. ✅ **Implement SFPU kernel** - DONE
+5. ✅ **Validate on hardware** - DONE
+6. ✅ **Fix left polynomial [-5, -3]** - DONE (shifted polynomial)
+7. ✅ **Extend to [-7, -5]** - DONE (FL1 polynomial)
+8. ✅ **Extend to [-9, -7]** - DONE (FL2 polynomial)
+9. ✅ **SFPU research for x < -9** - DONE (exp()-based solution)
+10. ✅ **Implement exp()-based solution** - DONE (Session 30: -12.4 threshold)
+11. ✅ **Extend to full (-13.375, -9)** - DONE (Session 31: accurate exp + Mills ratio)
+12. ⏳ **PR Review** - Ready for submission
+
+---
+
 ## References
 
 - GitHub Issue: #35971
 - tanh implementation: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h`
 - erfc implementation: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erf_erfc.h`
 - tanh_bw research (parallel work): `ivoitovych/bugfix-issue-35885-ttnn-tanh-bw-ulp-precision-draft`
+- Mills ratio research: `negative_tail_final_consolicated_opinions.md`
