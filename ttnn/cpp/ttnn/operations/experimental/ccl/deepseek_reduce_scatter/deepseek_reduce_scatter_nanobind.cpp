@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/deepseek_reduce_scatter.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/deepseek_reduce_scatter.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

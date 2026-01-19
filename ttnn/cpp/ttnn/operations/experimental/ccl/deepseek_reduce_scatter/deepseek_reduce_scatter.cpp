@@ -1,10 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
 #include "deepseek_reduce_scatter.hpp"
 #include "device/deepseek_reduce_scatter_device_operation.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
+
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

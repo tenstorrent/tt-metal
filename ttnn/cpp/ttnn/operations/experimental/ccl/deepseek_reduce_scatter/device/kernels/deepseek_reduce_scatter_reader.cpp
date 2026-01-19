@@ -1,13 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
-#include <utility>
+
+#include "api/dataflow/dataflow_api.h"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);

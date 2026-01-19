@@ -1,39 +1,21 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-#include <algorithm>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 #include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_program_factory.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-
-#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
-
-#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-
-#include <sstream>
-#include <type_traits>
-#include <ranges>
-#include <optional>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

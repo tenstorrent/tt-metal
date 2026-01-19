@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <optional>
+#include <vector>
+
 #include "deepseek_reduce_scatter_device_operation.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 using namespace tt::tt_metal;
 
