@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from models.tt_cnn.tt.builder import (
@@ -114,12 +115,20 @@ class ModelOptimisations:
             conv_act_dtype: Default data type for convolution activations.
             conv_w_dtype: Default data type for convolution weights.
         """
+        import loguru
+
         self.device = device
         self.conv_output_dtype = conv_act_dtype
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
 
         compute_grid = device.compute_with_storage_grid_size()
+        loguru.logger.debug(
+            f"[GRID_DEBUG] Device grid detected: {compute_grid.x}x{compute_grid.y} = {compute_grid.x * compute_grid.y} cores"
+        )
+        loguru.logger.debug(
+            f"[GRID_DEBUG] Environment variable: {os.environ.get('TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE', 'NOT SET')}"
+        )
         self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         # Default overrides applied to all layers
@@ -151,8 +160,10 @@ class ModelOptimisations:
 
         # Create the appropriate optimization strategy
         if self.is_20_core:
+            loguru.logger.debug("APPLIED 20-CORE OPTIMISER")
             self.optimiser = TwentyCoreOptimiser(self)
         else:
+            loguru.logger.debug("APPLIED 110-CORE OPTIMISER")
             self.optimiser = HundredTenCoreOptimiser(self)
 
     # =========================================================================
