@@ -281,7 +281,7 @@ jobs:
       - name: Publish to blozano-tt/clangsa-results (gh-pages)
         uses: peaceiris/actions-gh-pages@v4
         with:
-          personal_token: ${{ secrets.WILDER_PAT }}
+          personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
           external_repository: blozano-tt/clangsa-results
           publish_branch: gh-pages
           publish_dir: site
