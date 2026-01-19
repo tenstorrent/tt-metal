@@ -535,7 +535,7 @@ class PatchTSMixerLinearHead(nn.Module):
         num_targets: int,
         head_aggregation: str = None,  # None, "use_last", "max_pool", "avg_pool"
         output_range: tuple = None,
-        head_dropout: float = 0.1,
+        head_dropout: float = 0.0,
     ):
         super().__init__()
         self.head_aggregation = head_aggregation
@@ -599,9 +599,9 @@ class PatchTSMixerForTimeSeriesClassification(nn.Module):
         num_classes: int,  # Number of classes
         mode: str = "common_channel",
         expansion: int = 2,
-        dropout: float = 0.1,
+        dropout: float = 0.0,
         use_gated_attn: bool = False,
-        head_dropout: float = 0.1,
+        head_dropout: float = 0.0,
         eps: float = 1e-5,
     ):
         super().__init__()
@@ -672,9 +672,9 @@ class PatchTSMixerForRegression(nn.Module):
         output_range: tuple = None,  # (min, max)
         mode: str = "common_channel",
         expansion: int = 2,
-        dropout: float = 0.1,
+        dropout: float = 0.0,
         use_gated_attn: bool = False,
-        head_dropout: float = 0.1,
+        head_dropout: float = 0.0,
         eps: float = 1e-5,
     ):
         super().__init__()
@@ -733,7 +733,7 @@ class PatchTSMixerPretrainHead(nn.Module):
         self,
         d_model: int,
         patch_length: int,
-        head_dropout: float = 0.1,
+        head_dropout: float = 0.0,
     ):
         super().__init__()
         self.dropout = nn.Dropout(head_dropout)
@@ -760,9 +760,9 @@ class PatchTSMixerForPretraining(nn.Module):
         num_layers: int,
         mode: str = "common_channel",
         expansion: int = 2,
-        dropout: float = 0.1,
+        dropout: float = 0.0,
         use_gated_attn: bool = False,
-        head_dropout: float = 0.1,
+        head_dropout: float = 0.0,
         eps: float = 1e-5,
     ):
         super().__init__()
