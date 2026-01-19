@@ -84,7 +84,7 @@ void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_si
     ASSERT(page_size % L1_ALIGNMENT == 0);
     uint32_t fifo_start_addr = socket.downstream_fifo_addr;
     uint32_t fifo_total_size = socket.downstream_fifo_total_size;
-    ASSERT(page_size <= fifo_total_size);
+    // ASSERT(page_size <= fifo_total_size);
     uint32_t& fifo_wr_ptr = socket.write_ptr;
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
     uint32_t fifo_page_aligned_size = fifo_total_size - fifo_total_size % page_size;

@@ -25,16 +25,17 @@ constexpr uint32_t output_args_crta_idx = 0;
 FORCE_INLINE void notify_sender(
     SocketReceiverInterface& receiver_socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
     noc_async_writes_flushed();
-    fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+    fabric_socket_notify_sender_stateful(
+        receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
 }
 
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "Receiver inplace writer started" << ENDL();
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -49,40 +50,32 @@ void kernel_main() {
 
     // Create Socket Interface
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
-    DPRINT << "Mesh Socket config addr: " << socket_config_addr << ENDL();
-    DPRINT << "Recv Socket bytes_acked addr: " << receiver_socket.upstream_bytes_acked_addr << ENDL();
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
     bool ack_sent = false;
+
+    fabric_set_unicast_route(socket_packet_header_addr, receiver_socket);
+
+    uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
+        receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, receiver_socket.upstream_bytes_acked_addr);
+
     for (int i = 0; i < 1000000; i++) {
-        DPRINT << "Waiting for pages:" << i << ENDL();
         auto noc_write_addr = output_addr_gen.get_noc_addr(0);
         socket_wait_for_pages(receiver_socket, 1);
-        DPRINT << "Done waiting for pages:" << i << ENDL();
-        // uint32_t l1_read_addr = receiver_socket.read_ptr;
-        // uint32_t val = 0;
-        // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
-        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
-        //         while (true);
-        //     }
-        //     val++;
-        // }
         noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
         socket_pop_pages(receiver_socket, 1);
-        // if (i % num_pages_per_ack == 0) {
-        notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        ack_sent = true;
-        // }
+        if (i % num_pages_per_ack == 0) {
+            notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
+            ack_sent = true;
+        }
     }
 
-    // if (!ack_sent) {
-    //     DPRINT << "Notifying sender final time" << ENDL();
-    //     notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-    // }
+    if (!ack_sent) {
+        notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr, upstream_bytes_acked_noc_addr);
+    }
 
     update_socket_config(receiver_socket);
     fabric_connection.close();
-    DPRINT << "Receiver inplace writer done" << ENDL();
 }
