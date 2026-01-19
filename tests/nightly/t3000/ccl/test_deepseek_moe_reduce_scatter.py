@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.common.utility_functions import skip_for_blackhole
 
 
-def run_deepseek_reduce_scatter_impl(
+def run_deepseek_moe_reduce_scatter_impl(
     mesh_device,
     num_devices,
     dtype,
@@ -77,7 +77,7 @@ def run_deepseek_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
-        tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_reduce_scatter(
+        tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_moe_reduce_scatter(
             tt_input_tensor_mesh_list[i],
             output_memory_config=rs_output_memory_config,
             dim=rs_dim,
@@ -194,7 +194,7 @@ def run_deepseek_reduce_scatter_impl(
     ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("enable_trace, num_iters", [(True, 5)])
-def test_deepseek_reduce_scatter(
+def test_deepseek_moe_reduce_scatter(
     mesh_device,
     dtype,
     layout,
@@ -208,7 +208,7 @@ def test_deepseek_reduce_scatter(
     enable_trace,
     num_iters,
 ):
-    run_deepseek_reduce_scatter_impl(
+    run_deepseek_moe_reduce_scatter_impl(
         mesh_device=mesh_device,
         num_devices=mesh_device.get_num_devices(),
         dtype=dtype,

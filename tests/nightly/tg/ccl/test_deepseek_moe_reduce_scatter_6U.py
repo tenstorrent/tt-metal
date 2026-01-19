@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_deepseek_reduce_scatter_impl
+from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepseek_moe_reduce_scatter_impl
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -129,7 +129,7 @@ from tests.nightly.t3000.ccl.test_deepseek_reduce_scatter import run_deepseek_re
     ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("enable_trace, num_iters", [(True, 5)])
-def test_deepseek_reduce_scatter_async(
+def test_deepseek_moe_reduce_scatter_async(
     mesh_device,
     dtype,
     layout,
@@ -146,7 +146,7 @@ def test_deepseek_reduce_scatter_async(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((8, 1)))
     cluster_axis = 0
 
-    run_deepseek_reduce_scatter_impl(
+    run_deepseek_moe_reduce_scatter_impl(
         mesh_device=submesh_device,
         num_devices=submesh_device.get_num_devices(),
         dtype=dtype,

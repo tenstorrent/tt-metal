@@ -6,8 +6,8 @@
 #include <optional>
 #include <vector>
 
-#include "deepseek_reduce_scatter.hpp"
-#include "device/deepseek_reduce_scatter_device_operation.hpp"
+#include "deepseek_moe_reduce_scatter.hpp"
+#include "device/deepseek_moe_reduce_scatter_device_operation.hpp"
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -30,12 +30,12 @@ ttnn::Tensor ExecuteDeepseekReduceScatter::invoke(
     usable_topology = ttnn::ccl::convert_2d_to_1d_topology(usable_topology);
     TT_FATAL(
         usable_topology == required_topology,
-        "deepseek_reduce_scatter is hardcoded for tt::tt_fabric::Topology::Ring, but has usable_topology {}",
+        "deepseek_moe_reduce_scatter is hardcoded for tt::tt_fabric::Topology::Ring, but has usable_topology {}",
         usable_topology);
 
     // call the prim operation
-    std::vector<ttnn::Tensor> result =
-        ttnn::prim::deepseek_reduce_scatter(input_tensors, output_memory_config, scatter_dim, num_links, cluster_axis);
+    std::vector<ttnn::Tensor> result = ttnn::prim::deepseek_moe_reduce_scatter(
+        input_tensors, output_memory_config, scatter_dim, num_links, cluster_axis);
 
     // return the output tensor (first 8 are intermediates)
     return result.at(8);

@@ -9,8 +9,8 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
 
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -20,9 +20,9 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-using ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterProgramArtifacts;
+using ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekReduceScatterProgramArtifacts;
 
-namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
 CoreCoord choose_additional_core(MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected) {
     auto available_cores = mesh_device->worker_cores(
@@ -41,7 +41,7 @@ CoreCoord choose_additional_core(MeshDevice* mesh_device, const std::vector<Core
         }
     }
 
-    TT_FATAL(false, "deepseek_reduce_scatter requires an even number of worker cores");
+    TT_FATAL(false, "deepseek_moe_reduce_scatter requires an even number of worker cores");
 
     // TODO: (GR) pick optimal cores for the different cases (which link the core is getting added to)
     // const std::vector<CoreCoord> supplemental_cores = {
@@ -63,7 +63,7 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
         input_nd_shard_spec.grid, num_shards, input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     TT_FATAL(
         worker_cores.size() == num_shards,
-        "deepseek_reduce_scatter requires each shard to be located on a different core");
+        "deepseek_moe_reduce_scatter requires each shard to be located on a different core");
 
     // always need a forward and backward core for each link being used (for in op synchronization), even if the forward
     // worker isn't being used for data transfer due to an odd number of shards
@@ -80,7 +80,7 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     return {clamped_num_links, worker_core_range_set, worker_cores};
 }
 
-DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_artifacts(
+DeepseekReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
@@ -313,8 +313,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     };
 
     std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/"
-        "deepseek_reduce_scatter_reader.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/"
+        "deepseek_moe_reduce_scatter_reader.cpp";
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, worker_core_range_set, tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
@@ -346,8 +346,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
 
     std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/"
-        "deepseek_reduce_scatter_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/"
+        "deepseek_moe_reduce_scatter_writer.cpp";
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, worker_core_range_set, tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
@@ -378,7 +378,8 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     };
 
     std::string reduce_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/kernels/deepseek_reduction.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/"
+        "deepseek_moe_reduce_scatter_reduction.cpp";
 
     auto reduce_kernel_id =
         tt::tt_metal::CreateKernel(program, reduce_kernel_path, worker_core_range_set, reduce_kernel_config);
@@ -474,7 +475,7 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         intermediate_cb_handles};
 }
 
-void deepseek_reduce_scatter_helper_override_runtime_arguments(
+void deepseek_moe_reduce_scatter_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
@@ -608,7 +609,7 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     tt::tt_metal::Program program{};
-    auto deepseek_reduce_scatter_program_artifacts = build_deepseek_reduce_scatter_program_artifacts(
+    auto deepseek_moe_reduce_scatter_program_artifacts = build_deepseek_moe_reduce_scatter_program_artifacts(
         program,
         input_tensors,
         intermediate_slice_tensors,
@@ -624,7 +625,7 @@ DeepseekReduceScatterMeshWorkloadFactory::create_at(
     shared_variables_t shared_vars{
         .op_semaphore = op_semaphore,
         .pre_op_barrier_semaphore = pre_op_barrier_semaphore,
-        .program_artifacts = deepseek_reduce_scatter_program_artifacts};
+        .program_artifacts = deepseek_moe_reduce_scatter_program_artifacts};
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -642,7 +643,7 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        deepseek_reduce_scatter_helper_override_runtime_arguments(
+        deepseek_moe_reduce_scatter_helper_override_runtime_arguments(
             program,
             shared_vars.program_artifacts.reader_kernel_id,
             shared_vars.program_artifacts.writer_kernel_id,
@@ -659,4 +660,4 @@ void DeepseekReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail

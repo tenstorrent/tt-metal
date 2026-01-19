@@ -28,8 +28,8 @@ struct ExecuteDeepseekReduceScatter {
 
 namespace experimental {
 
-constexpr auto deepseek_reduce_scatter = ttnn::register_operation<
-    "ttnn::experimental::deepseek_reduce_scatter",
+constexpr auto deepseek_moe_reduce_scatter = ttnn::register_operation<
+    "ttnn::experimental::deepseek_moe_reduce_scatter",
     ttnn::operations::experimental::ccl::ExecuteDeepseekReduceScatter>();
 
 }  // namespace experimental

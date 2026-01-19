@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "deepseek_reduce_scatter_nanobind.hpp"
+#include "deepseek_moe_reduce_scatter_nanobind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -14,14 +14,14 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/deepseek_reduce_scatter.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 namespace {
 
 template <typename ccl_operation_t>
-void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+void bind_deepseek_moe_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -47,10 +47,10 @@ void bind_deepseek_reduce_scatter(nb::module_& mod, const ccl_operation_t& opera
 
 }  // namespace
 
-void bind_deepseek_reduce_scatter(nb::module_& mod) {
-    bind_deepseek_reduce_scatter(
+void bind_deepseek_moe_reduce_scatter(nb::module_& mod) {
+    bind_deepseek_moe_reduce_scatter(
         mod,
-        ttnn::experimental::deepseek_reduce_scatter,
+        ttnn::experimental::deepseek_moe_reduce_scatter,
         R"doc(
         Reduce-scatter operation across devices along a selected dimension and optional cluster axis. This operation reduces the mesh tensor across the devices in the mesh, along the specified dimension. It then scatters the reduced tensor back to the devices in the mesh, along the same dimension. When cluster axis is specified, we reduce and scatter along the cluster axis. When it is not specified, then we reduce and scatter across all devices in the mesh.
 

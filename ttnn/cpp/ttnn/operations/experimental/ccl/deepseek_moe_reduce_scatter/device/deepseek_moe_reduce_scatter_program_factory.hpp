@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "deepseek_reduce_scatter_device_operation_types.hpp"
+#include "deepseek_moe_reduce_scatter_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
 struct DeepseekReduceScatterMeshWorkloadFactory {
     struct shared_variables_t {
@@ -40,4 +40,4 @@ struct DeepseekReduceScatterMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail

@@ -8,20 +8,20 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/deepseek_reduce_scatter/device/deepseek_reduce_scatter_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
 struct DeepseekReduceScatterDeviceOperation {
-    using operation_attributes_t = deepseek_reduce_scatter::detail::operation_attributes_t;
-    using tensor_args_t = deepseek_reduce_scatter::detail::tensor_args_t;
-    using spec_return_value_t = deepseek_reduce_scatter::detail::spec_return_value_t;
-    using tensor_return_value_t = deepseek_reduce_scatter::detail::tensor_return_value_t;
+    using operation_attributes_t = deepseek_moe_reduce_scatter::detail::operation_attributes_t;
+    using tensor_args_t = deepseek_moe_reduce_scatter::detail::tensor_args_t;
+    using spec_return_value_t = deepseek_moe_reduce_scatter::detail::spec_return_value_t;
+    using tensor_return_value_t = deepseek_moe_reduce_scatter::detail::tensor_return_value_t;
     using program_factory_t = std::variant<DeepseekReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -37,13 +37,13 @@ struct DeepseekReduceScatterDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
+ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
     tensor_return_value_t
-    deepseek_reduce_scatter(
+    deepseek_moe_reduce_scatter(
         const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
         uint32_t dim,

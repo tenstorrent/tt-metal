@@ -12,7 +12,7 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail {
+namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
 // Shared struct for program artifacts - used for caching kernel handles and core info
 struct DeepseekReduceScatterProgramArtifacts {
@@ -50,4 +50,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_reduce_scatter::detail
+}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail
