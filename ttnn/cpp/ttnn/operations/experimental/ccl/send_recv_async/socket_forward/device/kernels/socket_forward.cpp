@@ -69,8 +69,6 @@ void kernel_main() {
 
     SocketSenderInterface send_socket = create_sender_socket_interface(send_socket_config_addr);
     SocketReceiverInterface recv_socket = create_receiver_socket_interface(recv_socket_config_addr);
-    DPRINT << "Recv Socket bytes_acked addr: " << recv_socket.upstream_bytes_acked_addr << ENDL();
-    DPRINT << "Send Socket bytes_sent addr: " << send_socket.downstream_bytes_sent_addr << ENDL();
 
     set_sender_socket_page_size(send_socket, socket_block_size);
     set_receiver_socket_page_size(recv_socket, socket_block_size);
@@ -90,16 +88,12 @@ void kernel_main() {
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
     for (int i = 0; i < 1000000; i++) {
-        DPRINT << "Reserving page:" << i << ENDL();
         socket_reserve_pages(send_socket, 1);
-        DPRINT << "Done reserving page:" << i << ENDL();
         socket_wait_for_pages(recv_socket, 1);
-        DPRINT << "Done waiting for pages:" << i << ENDL();
         auto l1_read_addr = recv_socket.read_ptr;
         uint64_t dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
 
         // Forward data to downstream
-        DPRINT << "Writing " << num_whole_packets_link_0 << " whole packets over link 0" << ENDL();
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection,
@@ -111,7 +105,6 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
-        DPRINT << "Writing " << num_whole_packets_link_1 << " whole packets over link 1" << ENDL();
         for (uint32_t j = 0; j < num_whole_packets_link_1; ++j) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
@@ -123,7 +116,6 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
-        DPRINT << "Writing " << aligned_partial_packet_size << " bytes over link 1" << ENDL();
         if constexpr (aligned_partial_packet_size) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
@@ -134,19 +126,19 @@ void kernel_main() {
                 aligned_partial_packet_size);
         }
         // Notify Upstream and Downstream that data has been consumed or produced
-        DPRINT << "Pushing page:" << i << ENDL();
         socket_push_pages(send_socket, 1);
-        DPRINT << "Done pushing page:" << i << ENDL();
         socket_pop_pages(recv_socket, 1);
-        // if ((i & 3) == 0) {
-        fabric_socket_notify_sender(recv_socket, upstream_fabric_connection, upstream_socket_packet_header_addr);
-        DPRINT << "Done notifying sender:" << i << ENDL();
-        // }
+        if ((i & 1) == 0) {
+            fabric_socket_notify_sender_stateful(
+                recv_socket,
+                upstream_fabric_connection,
+                upstream_socket_packet_header_addr,
+                upstream_bytes_acked_noc_addr);
+        }
     }
     update_socket_config(send_socket);
     update_socket_config(recv_socket);
     upstream_fabric_connection.close();
     downstream_fabric_connection.close();
     downstream_fabric_connection_2.close();
-    DPRINT << "Socket forward done" << ENDL();
 }

@@ -375,18 +375,14 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        std::cout << "Writing receiver socket configs" << std::endl;
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
         const auto local_coord_range = control_plane.get_coord_range(
             local_descriptor.config.receiver_mesh_id.value(), tt_fabric::MeshScope::LOCAL);
-        std::cout << "Grouped connections size: " << grouped_connections.size() << std::endl;
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            // if (!local_coord_range.contains(device_coord)) {
-            //     std::cout << "Skipping device: " << device_coord << " because it is not in the local coordinate
-            //     range" << std::endl; continue;
-            // }
-            std::cout << "Writing receiver socket configs for device: " << device_coord << std::endl;
+            if (!local_coord_range.contains(device_coord)) {
+                continue;
+            }
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
                 const auto& [conn_idx, connection] =
                     indexed_connections.front();  // Only one connection per receiver core for now
@@ -417,7 +413,6 @@ void write_socket_configs(
                 md.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
                 md.is_sender = is_sender;
-                std::cout << "Upstream bytes acked addr: " << md.upstream_bytes_acked_addr << std::endl;
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }

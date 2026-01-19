@@ -122,8 +122,6 @@ RecvAsyncMeshWorkloadFactory::create_at(
         "receiver_inplace_writer.cpp",
         receiver_core_coord,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
-    std::cout << "Mesh Socket config addr: " << mesh_socket.get_config_buffer()->address() << std::endl;
-
     std::vector<uint32_t> writer_rt_args = {
         mesh_socket.get_config_buffer()->address(), output_tensor.buffer()->address()};
     tt::tt_fabric::append_fabric_connection_rt_args(
