@@ -316,6 +316,137 @@ class RefinerModelOptimisations(ModelOptimisations):
             fused_activation=None,
         )
 
+        # 40 cores configs for RESNET_LINEAR2
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_4096x384x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=3,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_1024x768x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_256x3072x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=12,
+            per_core_M=1,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_1024x3072x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_1024x2304x1536_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=10,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_4096x2304x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_4096x1536x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_4096x1152x768_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=6,
+            per_core_M=16,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_16384x1152x384_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=1,  # TODO: Check if this is correct, should be 2 for 16384x1152x384
+            per_core_M=64,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs[
+            "2D_RESNET_LINEAR2_16384x768x384_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=1,  # TODO: Check if this is correct, should be 2 for 16384x768x384
+            per_core_M=64,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
         self.matmul_configs["2D_GEGLU_LINEAR1_4096x768x3072"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=6,
@@ -347,6 +478,47 @@ class RefinerModelOptimisations(ModelOptimisations):
             out_subblock_w=6,
             transpose_mcast=False,
             fused_activation=None,
+        )
+
+        # 40 cores configs for GEGLU_LINEAR2
+        self.matmul_configs[
+            "2D_GEGLU_LINEAR2_4096x768x3072_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=3,  # TODO: Check if this is correct, should be 6 for 4096x768x3072
+            per_core_M=16,
+            per_core_N=20,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs[
+            "2D_GEGLU_LINEAR2_1024x1536x6144_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=8,
+            per_core_M=4,
+            per_core_N=39,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs[
+            "1D_GEGLU_LINEAR2_256x1536x6144_40_CORES"
+        ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,
+            per_core_M=8,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
         )
 
         self.matmul_configs["2D_FF_LINEAR_4096x3072x768"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -715,17 +887,17 @@ class RefinerModelOptimisations(ModelOptimisations):
         if "net.0.proj" in matmul_path:
             if "mid_block" in matmul_path:
                 if "gelu" in matmul_path:
-                    return self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"]
+                    return self.matmul_configs["1D_GEGLU_LINEAR2_256x1536x6144_40_CORES"]
                 else:
                     return self.matmul_configs["1D_GEGLU_LINEAR1_256x1536x6144_40_CORES"]
             elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
                 if "gelu" in matmul_path:
-                    return self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"]
+                    return self.matmul_configs["2D_GEGLU_LINEAR2_4096x768x3072_40_CORES"]
                 else:
                     return self.matmul_configs["2D_GEGLU_LINEAR1_4096x768x3072_40_CORES"]
             elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
                 if "gelu" in matmul_path:
-                    return self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"]
+                    return self.matmul_configs["2D_GEGLU_LINEAR2_1024x1536x6144_40_CORES"]
                 else:
                     return self.matmul_configs["2D_GEGLU_LINEAR1_1024x1536x6144_40_CORES"]
 
@@ -741,33 +913,33 @@ class RefinerModelOptimisations(ModelOptimisations):
         # # # RESNET # # #
         if "resnets" in matmul_path:
             if matmul_path in ["down_blocks.1.resnets.0.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_4096x384x768"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_4096x384x768_40_CORES"]
             if matmul_path in ["down_blocks.2.resnets.0.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_1024x768x1536"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_1024x768x1536_40_CORES"]
             if matmul_path in [
                 "up_blocks.0.resnets.0.conv_shortcut",
                 "up_blocks.0.resnets.1.conv_shortcut",
                 "up_blocks.0.resnets.2.conv_shortcut",
             ]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_256x3072x1536"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_256x3072x1536_40_CORES"]
             if matmul_path in [
                 "up_blocks.1.resnets.0.conv_shortcut",
                 "up_blocks.1.resnets.1.conv_shortcut",
                 "up_blocks.1.resnets.2.conv_shortcut",
             ]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_1024x3072x1536"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_1024x3072x1536_40_CORES"]
             if matmul_path in ["up_blocks.2.resnets.0.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_4096x2304x768"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_4096x2304x768_40_CORES"]
             if matmul_path in ["up_blocks.2.resnets.1.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_4096x1536x768"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_4096x1536x768_40_CORES"]
             if matmul_path in ["up_blocks.2.resnets.2.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_4096x1152x768"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_4096x1152x768_40_CORES"]
             if matmul_path in ["up_blocks.3.resnets.0.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_16384x1152x384"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_16384x1152x384_40_CORES"]
             if matmul_path in ["up_blocks.3.resnets.1.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_16384x768x384"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_16384x768x384_40_CORES"]
             if matmul_path in ["up_blocks.3.resnets.2.conv_shortcut"]:
-                return self.matmul_configs["2D_RESNET_LINEAR2_16384x768x384"]
+                return self.matmul_configs["2D_RESNET_LINEAR2_16384x768x384_40_CORES"]
             if matmul_path in [
                 "down_blocks.0.resnets.0.linear",
                 "down_blocks.0.resnets.1.linear",
