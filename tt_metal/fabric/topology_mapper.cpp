@@ -650,7 +650,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         config);
 
     // Build informative error message with MGD path and details
-    std::string mgd_path_info = "";
+    std::string mgd_path_info;
     auto mgd_path_opt = mesh_graph_.get_mesh_graph_descriptor_path();
     if (mgd_path_opt.has_value()) {
         auto mgd_path = mgd_path_opt.value();
