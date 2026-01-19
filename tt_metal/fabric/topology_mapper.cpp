@@ -464,9 +464,8 @@ void TopologyMapper::build_mapping() {
         }
 
         // Build logical and physical adjacency maps
-        auto adjacency_map_logical = ::tt::tt_fabric::build_adjacency_map_logical(mesh_graph_);
-        auto adjacency_map_physical =
-            ::tt::tt_fabric::build_adjacency_map_physical(physical_system_descriptor_, asic_id_to_mesh_rank);
+        auto adjacency_map_logical = build_adjacency_graph_logical(mesh_graph_);
+        auto adjacency_map_physical = build_adjacency_graph_physical(physical_system_descriptor_, asic_id_to_mesh_rank);
 
         print_logical_adjacency_map(adjacency_map_logical);
         print_physical_adjacency_map(adjacency_map_physical);
@@ -1664,8 +1663,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     for (const auto& asic_id : all_asic_ids) {
         asic_id_to_mesh_rank[MeshId{0}][asic_id] = MeshHostRankId{0};
     }
-    auto physical_adjacency_matrix =
-        ::tt::tt_fabric::build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+    auto physical_adjacency_matrix = build_adjacency_graph_physical(physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Generate possible mesh shapes
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
@@ -1674,7 +1672,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     const MeshId mesh_id{0};
     for (const auto& mesh_shape : mesh_shapes_to_try) {
         auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(mesh_shape, fabric_type, number_of_connections);
-        auto logical_adjacency_matrix = ::tt::tt_fabric::build_adjacency_map_logical(mesh_graph);
+        auto logical_adjacency_matrix = build_adjacency_graph_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
         if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {

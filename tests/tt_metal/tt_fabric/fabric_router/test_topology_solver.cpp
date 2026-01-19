@@ -34,7 +34,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
     auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
 
     // Build adjacency map logical
-    auto adjacency_map = build_adjacency_map_logical(mesh_graph);
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_GT(adjacency_map.size(), 0u);
@@ -83,7 +83,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map = build_adjacency_graph_physical(physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";

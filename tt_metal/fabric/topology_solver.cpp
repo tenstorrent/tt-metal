@@ -12,7 +12,7 @@
 
 namespace tt::tt_fabric {
 
-std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const MeshGraph& mesh_graph) {
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph) {
     std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
 
     auto get_local_adjacents = [&](FabricNodeId fabric_node_id, MeshId mesh_id) {
@@ -44,7 +44,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const
     return adjacency_map;
 }
 
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_map_physical(
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> adjacency_map;
