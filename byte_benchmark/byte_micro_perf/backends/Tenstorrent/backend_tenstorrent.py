@@ -8,8 +8,10 @@ import subprocess
 import signal
 from datetime import timedelta
 
+from pydash import lines
 import torch
 import torch.distributed as dist
+from tracy import signpost
 
 
 FILE_DIR = pathlib.Path(__file__).parent.absolute()
@@ -29,6 +31,33 @@ class TimeoutError(Exception):
     """Custom timeout exception for CCL initialization"""
 
     pass
+
+
+def get_avg_duration(perf_data: dict, iterations: int) -> str:
+    """Pretty-print program perf data mapping: chip_id -> set[ProgramAnalysisData]."""
+
+    def _program_sort_key(p):
+        uid = p.program_execution_uid
+        return (uid.runtime_id, uid.trace_id, uid.trace_id_counter)
+
+    total_duration = 0
+    core_count = 0
+    for device_id in sorted(perf_data.keys()):
+        programs = sorted(list(perf_data[device_id]), key=_program_sort_key)
+        assert len(programs) == iterations, f"Expected {iterations} programs, got {len(programs)}"
+        for program in programs:
+            uid = program.program_execution_uid
+            analyses_items = sorted(program.program_analyses_results.items())
+            if core_count == 0:
+                core_count = program.core_count
+            else:
+                assert core_count == program.core_count, "Inconsistent core counts across programs"
+            for name, res in analyses_items:
+                if "FW" in name and "ns" in name:
+                    total_duration += res.duration
+                    break
+
+    return total_duration / iterations
 
 
 class BackendTenstorrent(Backend):
@@ -279,16 +308,6 @@ class BackendTenstorrent(Backend):
         op_group = op_instance.op_group
         group_size = op_instance.group_size
 
-        # Hardware profiling with ttnn device profiler
-        # Note: ttnn uses Tracy-based profiling which requires:
-        # 1. Environment variable TT_METAL_DEVICE_PROFILER=1
-        # 2. Build with profiler support
-        # 3. Use ttnn.ReadDeviceProfiler(device) to read results
-        # Since this requires special build configuration, we skip to timer-based measurement
-        # See: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html
-        pass
-        print("TTNN available:", self.ttnn_available)
-        # Event-based timing (similar to GPU's torch.cuda.Event)
         if self.ttnn_available:
             try:
                 import ttnn
@@ -306,13 +325,22 @@ class BackendTenstorrent(Backend):
 
                 start_time = time.perf_counter_ns()
 
+                if profiling:
+                    self.device_synchronize(op_instance.device)
+                    ttnn.ReadDeviceProfiler(op_instance.device)
+
                 for i in range(prefer_iterations):
                     op_instance.core_run(tensor_list[i % len(tensor_list)])
 
                 self.device_synchronize(op_instance.device)
                 end_time = time.perf_counter_ns()
 
-                latency_us = (end_time - start_time) / 1e3 / prefer_iterations
+                if profiling:
+                    ttnn.ReadDeviceProfiler(op_instance.device)
+                    latest_data = ttnn.get_latest_programs_perf_data()
+                    latency_us = get_avg_duration(latest_data, prefer_iterations) / 1000.0
+                else:
+                    latency_us = (end_time - start_time) / 1e3 / prefer_iterations
                 return latency_us, []
 
             except Exception as e:
