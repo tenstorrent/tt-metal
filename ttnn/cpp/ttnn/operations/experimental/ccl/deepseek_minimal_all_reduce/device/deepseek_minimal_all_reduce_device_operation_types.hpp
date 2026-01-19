@@ -19,6 +19,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     Tensor input_tensor;
+    std::optional<Tensor> intermediate_tensor;
 };
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

@@ -14,8 +14,8 @@ struct DeepseekMinimalAllReduceProgramFactory {
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
         tt::tt_metal::KernelHandle worker_receiver_reader_kernel_id{};
         tt::tt_metal::KernelHandle worker_receiver_writer_kernel_id{};
-        tt::tt_metal::GlobalSemaphore semaphore;
-        tt::tt_metal::GlobalSemaphore barrier_semaphore;
+        tt::tt_metal::GlobalSemaphore semaphore1;
+        tt::tt_metal::GlobalSemaphore semaphore2;
         uint32_t ring_index = 0;
     };
 
@@ -41,8 +41,9 @@ private:
         const ttnn::MeshCoordinate& coord,
         const tensor_args_t& tensor_args,
         Tensor& output_tensor,
-        const tt::tt_metal::GlobalSemaphore& semaphore,
-        const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
+        const Tensor& intermediate_tensor,
+        const tt::tt_metal::GlobalSemaphore& semaphore1,
+        const tt::tt_metal::GlobalSemaphore& semaphore2);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::program

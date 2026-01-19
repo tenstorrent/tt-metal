@@ -32,6 +32,13 @@
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/core/core.hpp"
+
 namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::program {
 
 DeepseekMinimalAllReduceProgramFactory::cached_mesh_workload_t
@@ -44,24 +51,24 @@ DeepseekMinimalAllReduceProgramFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    const auto available_cores = mesh_device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
 
-    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto semaphore1 = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto semaphore2 = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
+
+    // Get or create intermediate tensor
+    TT_FATAL(
+        tensor_args.intermediate_tensor.has_value(),
+        "Intermediate tensor must be provided for deepseek_minimal_all_reduce");
+    const auto& intermediate_tensor = tensor_args.intermediate_tensor.value();
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = DeepseekMinimalAllReduceProgramFactory::create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            final_barrier_semaphore,
-            init_barrier_semaphore);
+            operation_attributes, coord, tensor_args, tensor_return_value, intermediate_tensor, semaphore1, semaphore2);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -74,12 +81,13 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const MeshCoordinate& self_coord,
     const tensor_args_t& tensor_args,
     Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& semaphore,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const Tensor& intermediate_tensor,
+    const tt::tt_metal::GlobalSemaphore& semaphore1,
+    const tt::tt_metal::GlobalSemaphore& semaphore2) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
-    uint32_t num_links = operation_attributes.num_links;
+    // uint32_t num_links = operation_attributes.num_links;
     uint32_t ring_size = operation_attributes.ring_size;
     uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, self_coord, operation_attributes.cluster_axis);
@@ -133,31 +141,26 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     TT_FATAL(cores.size() == 1, "Input tensor must be sharded to a single core");
 
     // need two worker cores for 2 links
-    // each link for a direction
-    // link 0: device 0 sends to device 1
-    // link 1: device 1 sends to device 0
-    std::vector<CoreCoord> sender_worker_cores;
-    sender_worker_cores.push_back(cores[0]);
-    if (num_links == 2) {
-        CoreCoord next_core;
-        if (cores[0].x > 0) {
-            next_core = CoreCoord{cores[0].x - 1, cores[0].y};
-        } else {
-            next_core = CoreCoord{cores[0].x + 1, cores[0].y};
-        }
-        sender_worker_cores.push_back(next_core);
+    // For 2-device all-reduce:
+    // Link 0 : Device 0 sends → Device 1 receives
+    // Link 1 : Device 1 sends → Device 0 receives
+
+    std::vector<CoreCoord> worker_cores;
+    worker_cores.push_back(cores[0]);
+    CoreCoord second_core;
+    if (cores[0].x > 0) {
+        second_core = CoreCoord{cores[0].x - 1, cores[0].y};
+    } else {
+        second_core = CoreCoord{cores[0].x + 1, cores[0].y};
     }
-    auto sender_worker_core_range = CoreRangeSet(sender_worker_cores);
+    worker_cores.push_back(second_core);
+    auto worker_core_range = CoreRangeSet(worker_cores);
 
-    // Get OP Config, topology config
-    auto [num_targets_forward, num_targets_backward] =
-        ::ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
-
-    TT_FATAL(
-        num_targets_backward + num_targets_forward == 1,
-        "Send to a single neighbour device only. Got num_targets_forward: {}, num_targets_backward: {}",
-        num_targets_forward,
-        num_targets_backward);
+    // Determine which core is sender and which is receiver based on device position
+    // Device 0 (is_first_chip): core0=sender, core1=receiver
+    // Device 1 (is_last_chip): core0=receiver, core1=sender
+    CoreCoord sender_core = is_first_chip ? worker_cores[0] : worker_cores[1];
+    CoreCoord receiver_core = is_first_chip ? worker_cores[1] : worker_cores[0];
 
     // Tensor Info - get num_pages early for CB config
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -168,7 +171,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const uint32_t input_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const size_t packet_size_bytes = input_page_size_bytes * input_tensor_num_pages;
-    printf("packet_size_bytes: %u\n", packet_size_bytes);
+    printf("packet_size_bytes: %zu\n", packet_size_bytes);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -177,7 +180,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, input_page_size_bytes)
             .set_tile_dims(src0_cb_index, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
     // two buffers for reduction inputs and one for output
     constexpr auto compute_cb_in1 = tt::CBIndex::c_1;
@@ -185,21 +188,21 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in1, df}})
             .set_page_size(compute_cb_in1, input_page_size_bytes)
             .set_tile_dims(compute_cb_in1, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, compute_cb_in1_config);
+    CreateCircularBuffer(program, worker_core_range, compute_cb_in1_config);
 
     constexpr auto compute_cb_in2 = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig compute_cb_in2_config =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in2, df}})
             .set_page_size(compute_cb_in2, input_page_size_bytes)
             .set_tile_dims(compute_cb_in2, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, compute_cb_in2_config);
+    CreateCircularBuffer(program, worker_core_range, compute_cb_in2_config);
 
     constexpr auto compute_cb_out = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig compute_cb_out_config =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_out, df}})
             .set_page_size(compute_cb_out, input_page_size_bytes)
             .set_tile_dims(compute_cb_out, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, compute_cb_out_config);
+    CreateCircularBuffer(program, worker_core_range, compute_cb_out_config);
 
     constexpr auto packet_header_cb_id = tt::CBIndex::c_4;
     constexpr auto buffering_factor = 2;
@@ -211,23 +214,33 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes)
             .set_tile_dims(packet_header_cb_id, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_header_config);
+    CreateCircularBuffer(program, worker_core_range, cb_header_config);
 
     constexpr auto packet_cb_id = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, df}})
             .set_page_size(packet_cb_id, packet_size_bytes)
             .set_tile_dims(packet_cb_id, tiny_tile);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_packet_config);
+    CreateCircularBuffer(program, worker_core_range, cb_packet_config);
 
-    // Sender info
-    bool is_sender = false;
-    auto data_core_coord = mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
+    // Sender info - use the data core (where input tensor is sharded)
+    auto data_core_coord = mesh_device->worker_core_from_logical_core(cores[0]);
     auto core_noc_x = data_core_coord.x;
     auto core_noc_y = data_core_coord.y;
 
+    auto sender_physical = mesh_device->worker_core_from_logical_core(sender_core);
+    auto receiver_physical = mesh_device->worker_core_from_logical_core(receiver_core);
+
+    // The remote sender is at the same physical coordinates as our receiver (due to symmetric layout)
+    auto remote_sender_noc_x = receiver_physical.x;
+    auto remote_sender_noc_y = receiver_physical.y;
+
+    // Similarly, the sender should signal the core at the same logical position as itself on the remote device
+    auto remote_receiver_noc_x = sender_physical.x;
+    auto remote_receiver_noc_y = sender_physical.y;
+
     // KERNEL CREATION
-    // Reader
+    // Sender kernels run on sender_core, receiver kernels run on receiver_core
     std::vector<uint32_t> sender_reader_compile_args = {
         src0_cb_index,           // cb0_id
         input_tensor_num_pages,  // num_tiles
@@ -242,8 +255,10 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         input_tensor_num_pages,
         input_page_size_bytes,
         packet_size_bytes,
-        core_noc_x,
+        core_noc_x,  // data core for writing payload
         core_noc_y,
+        remote_receiver_noc_x,  // remote receiver core for semaphore
+        remote_receiver_noc_y,
     };
 
     std::vector<uint32_t> receiver_reader_compile_args = {
@@ -254,8 +269,10 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         input_tensor_num_pages,
         input_page_size_bytes,
         packet_size_bytes,
-        core_noc_x,
+        core_noc_x,  // data core for reading local tensor
         core_noc_y,
+        remote_sender_noc_x,  // remote sender core for semaphore
+        remote_sender_noc_y,
     };
 
     std::vector<uint32_t> receiver_writer_compile_args = {
@@ -266,28 +283,30 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         core_noc_y,
     };
 
+    // Create sender kernels on sender_core
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/sender_reader.cpp",
-        {sender_worker_cores[0]},
+        {sender_core},
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args));
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/sender_writer.cpp",
-        {sender_worker_cores[0]},
+        {sender_core},
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args));
 
+    // Create receiver kernels on receiver_core
     auto worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_reader.cpp",
-        {sender_worker_cores[1]},
+        {receiver_core},
         tt::tt_metal::ReaderDataMovementConfig(receiver_reader_compile_args));
 
     auto worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_writer.cpp",
-        {sender_worker_cores[1]},
+        {receiver_core},
         tt::tt_metal::WriterDataMovementConfig(receiver_writer_compile_args));
 
     auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
@@ -296,11 +315,12 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_configuration);
 
-    compute_ct_args = {compute_cb_in1, compute_cb_in2, compute_cb_out, 1, input_tensor_num_pages};
+    // Compute kernel runs on receiver_core (where reduction happens)
+    std::vector<uint32_t> compute_ct_args = {compute_cb_in1, compute_cb_in2, compute_cb_out, 1, input_tensor_num_pages};
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/reduction.cpp",
-        {sender_worker_cores[1]},
+        {receiver_core},
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = true,
@@ -309,70 +329,77 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         });
 
     // Kernel Runtime Args
-    CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
-                                // semaphore
-    CoreCoord barrier_core;
-    for (uint32_t link = 0; link < num_links; link++) {
-        CoreCoord core = sender_worker_cores[link];
-        if (link == 0) {
-            // drain sync core is the first worker core
-            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
-        }
+    // For 2-device all-reduce:
+    // - Device 0 sends forward (link 0) using semaphore1, Device 1 receives
+    // - Device 1 sends backward (link 1) using semaphore2, Device 0 receives
+    //
+    // Sender writes to intermediate_tensor on the receiver's device
+    // Receiver reads from intermediate_tensor after semaphore signals data arrived
 
-        if (link == 0) {
-            std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),  // tensor_address0
-            };
-            tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+    const auto self_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
 
-            std::vector<uint32_t> writer_rt_args = {
-                intermediate_tensor.buffer()->address(),
-                semaphore1.address(),   // barrier_sem
-                is_first_chip ? 1 : 0,  // dst is forward
-            };
+    const uint32_t sender_link = is_first_chip ? 0 : 1;
+    const uint32_t receiver_link = is_first_chip ? 1 : 0;
 
-            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
-            const auto dst_fabric_node_id = is_first_chip ? mesh_device->get_fabric_node_id(forward_coord.value())
-                                                          : mesh_device->get_fabric_node_id(backward_coord.value());
-            append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id,
-                dst_fabric_node_id,
-                {link},
-                program,
-                worker_sender_writer_kernel_id,
-                {core},
-                writer_rt_args);
-            tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
-        } else {
-            // Set reader runtime args
-            std::vector<uint32_t> reader_rt_args = {
-                input_buffer()->address(),                // tensor_address0
-                intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                semaphore2.address(),
-                is_first_chip ? 0 : 1,  // src is forward
-            };
-            const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
-            const auto dst_fabric_node_id = is_first_chip ? mesh_device->get_fabric_node_id(forward_coord.value())
-                                                          : mesh_device->get_fabric_node_id(backward_coord.value());
-            append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id,
-                dst_fabric_node_id,
-                {link},
-                program,
-                worker_receiver_reader_kernel_id,
-                {core},
-                reader_rt_args);
-            tt::tt_metal::SetRuntimeArgs(program, worker_receiver_reader_kernel_id, {core}, reader_rt_args);
+    const auto& sender_semaphore = is_first_chip ? semaphore1 : semaphore2;
+    const auto& receiver_semaphore = is_first_chip ? semaphore2 : semaphore1;
 
-            // Set writer runtime args
-            std::vector<uint32_t> writer_rt_args = {output_tensor.buffer()->address()};
-            tt::tt_metal::SetRuntimeArgs(program, worker_receiver_writer_kernel_id, {core}, writer_rt_args);
-        }
-    }
+    TT_FATAL(
+        (is_first_chip && forward_coord.has_value()) || (!is_first_chip && backward_coord.has_value()),
+        "Missing expected neighbor coordinate");
+    const auto neighbor_coord = is_first_chip ? forward_coord.value() : backward_coord.value();
+    const auto neighbor_fabric_node_id = mesh_device->get_fabric_node_id(neighbor_coord);
+
+    constexpr uint32_t num_connections = 1;  // Each worker has one fabric connection
+
+    std::vector<uint32_t> sender_reader_rt_args = {
+        input_tensor.buffer()->address(),  // tensor_address0
+    };
+    tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {sender_core}, sender_reader_rt_args);
+
+    // Sender writer sends data to receiver's intermediate buffer
+    std::vector<uint32_t> sender_writer_rt_args = {
+        intermediate_tensor.buffer()->address(),
+        sender_semaphore.address(),
+        num_connections,
+    };
+    append_routing_plane_connection_manager_rt_args(
+        self_fabric_node_id,
+        {neighbor_fabric_node_id},
+        {sender_link},
+        program,
+        worker_sender_writer_kernel_id,
+        sender_core,
+        sender_writer_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {sender_core}, sender_writer_rt_args);
+
+    // === RECEIVER RUNTIME ARGS ===
+    // Receiver reader reads local data + receives remote data via fabric
+    std::vector<uint32_t> receiver_reader_rt_args = {
+        input_tensor.buffer()->address(),
+        intermediate_tensor.buffer()->address(),
+        receiver_semaphore.address(),
+        num_connections,
+    };
+    append_routing_plane_connection_manager_rt_args(
+        self_fabric_node_id,
+        {neighbor_fabric_node_id},
+        {receiver_link},
+        program,
+        worker_receiver_reader_kernel_id,
+        receiver_core,
+        receiver_reader_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, worker_receiver_reader_kernel_id, {receiver_core}, receiver_reader_rt_args);
+
+    // Receiver writer writes reduced output
+    std::vector<uint32_t> receiver_writer_rt_args = {
+        output_tensor.buffer()->address(),
+    };
+    tt::tt_metal::SetRuntimeArgs(program, worker_receiver_writer_kernel_id, {receiver_core}, receiver_writer_rt_args);
 
     shared_variables_t shared_variables{
-        .sender_worker_cores = sender_worker_cores,
-        .receiver_worker_cores = {},
+        .sender_worker_cores = {sender_core},
+        .receiver_worker_cores = {receiver_core},
         .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .worker_receiver_reader_kernel_id = worker_receiver_reader_kernel_id,
@@ -392,28 +419,42 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
 
+    TT_FATAL(
+        tensor_args.intermediate_tensor.has_value(),
+        "Intermediate tensor must be provided for deepseek_minimal_all_reduce");
+    const auto& intermediate = tensor_args.intermediate_tensor.value();
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        // const auto& coord = coordinate_range.start_coord();
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        log_trace(tt::LogOp, "DEBUG: semaphore: {}", shared_vars.semaphore.address());
-        log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", shared_vars.barrier_semaphore.address());
-        // update senders
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
+        log_trace(tt::LogOp, "DEBUG: semaphore1: {}", shared_vars.semaphore1.address());
+        log_trace(tt::LogOp, "DEBUG: semaphore2: {}", shared_vars.semaphore2.address());
+
+        bool is_first_chip = shared_vars.ring_index == 0;
+        const auto& sender_semaphore = is_first_chip ? shared_vars.semaphore1 : shared_vars.semaphore2;
+        const auto& receiver_semaphore = is_first_chip ? shared_vars.semaphore2 : shared_vars.semaphore1;
 
         for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
+            // Sender reader
+            auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id)[core.x][core.y];
+            reader_args[0] = input.buffer()->address();
 
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = output.buffer()->address();
-            worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
-            worker_writer_sender_runtime_args[9] = shared_vars.barrier_semaphore.address();
+            // Sender writer
+            auto& writer_args = GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id)[core.x][core.y];
+            writer_args[0] = intermediate.buffer()->address();
+            writer_args[1] = sender_semaphore.address();
+        }
+
+        for (const auto& core : shared_vars.receiver_worker_cores) {
+            // Receiver reader
+            auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_receiver_reader_kernel_id)[core.x][core.y];
+            reader_args[0] = input.buffer()->address();
+            reader_args[1] = intermediate.buffer()->address();
+            reader_args[2] = receiver_semaphore.address();
+
+            // Receiver writer
+            auto& writer_args = GetRuntimeArgs(program, shared_vars.worker_receiver_writer_kernel_id)[core.x][core.y];
+            writer_args[0] = output.buffer()->address();
         }
     }
 }

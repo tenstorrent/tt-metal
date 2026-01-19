@@ -29,8 +29,8 @@ void DeepseekMinimalAllReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
     TT_FATAL(
-        operation_attributes.num_links > 0,
-        "Error, num_links should be more than 0 but has {}",
+        operation_attributes.num_links == 2,
+        "Error, num_links must be exactly 2 for deepseek_minimal_all_reduce but has {}",
         operation_attributes.num_links);
 
     TT_FATAL(
@@ -61,18 +61,17 @@ void DeepseekMinimalAllReduceDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be in tile size (1,32). Got tile size: ({}, {})",
         tile_height,
         tile_width);
-    // input shape should be (1,2048)
-    // To do add shape (1,7168) once fabric supports larger packets
+    // input shape should be (1, 2048)
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 2048,
-        "Input tensor shape must be (1,2048). Got shape: ({}, {})",
+        input_shape[0] == 1 && input_shape[1] % 32 == 0,
+        "Input tensor shape must be (1, 2048). Got shape: ({}, {})",
         input_shape[0],
         input_shape[1]);
 }
 
 TensorSpec DeepseekMinimalAllReduceDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
     const auto& input_memory_config = input_tensor.memory_config();
@@ -135,7 +134,8 @@ ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinima
         num_devices);
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_links = num_links, .ring_size = num_devices, .topology = topology, .cluster_axis = cluster_axis};
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+    auto tensor_args =
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .intermediate_tensor = intermediate_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

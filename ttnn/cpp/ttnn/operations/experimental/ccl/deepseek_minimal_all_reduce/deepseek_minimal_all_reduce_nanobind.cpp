@@ -28,8 +28,8 @@ void bind_deepseek_minimal_all_reduce_op(nb::module_ mod, const ccl_operation_t&
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::Tensor>& intermediate_tensor,
                std::optional<uint32_t> cluster_axis,
+               const std::optional<ttnn::Tensor>& intermediate_tensor,
                const uint32_t num_links,
                const tt::tt_fabric::Topology topology) -> ttnn::Tensor {
                 return self(input_tensor, num_links, topology, cluster_axis, intermediate_tensor);
@@ -38,7 +38,7 @@ void bind_deepseek_minimal_all_reduce_op(nb::module_ mod, const ccl_operation_t&
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = 2,
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
 }
 
