@@ -428,123 +428,6 @@ ALWI void INSERT_SFPNOP() {
 }
 
 /**
- * Initialization for the run_clamp_loadmacro function.
- */
-template <uint32_t scale>
-inline void init_clamp_loadmacro() {
-    constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
-    constexpr float THRESHOLD = -88.5f;
-    constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
-
-    TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-    TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
-    TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
-
-    // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which
-    // is not normally a legal value
-    //      (we are cheating a bit here, since we only care about one half of the swap and we want to use a constant for
-    //      the other half)
-    //
-    //              imm12 = 0,       lreg_src_c = 0 (will be fed by value loaded from Dest into Loadmacro lreg_dest),
-    //              lreg_dest = LREG[14] = - 88.5, instr_mod1 = 1 swap the values with the larger of the two ending up
-    //              in lreg_dest -> but we will use the Loadmacro lreg_dest register as output
-    // TTI_SFP_SWAP(0,               0, 14,                            1);
-    TTI_SFPLOADI(0, 0xA, 0x00E1);
-    TTI_SFPLOADI(0, 0x8, 0x9200);
-    TTI_SFPCONFIG(
-        0, 0, 0);  // SFPCONFIG Dest 0 = Programmable Macro instruction 0: TTI_SFPSWAP(0, 0, 14, 1); // compare against
-                   // LREG[14] (-88.5), and put the larger value into LREG[loadmacro_lreg_dest]
-    TTI_SFPNOP;
-
-    // So at this point, we have the following instructions loaded into our macro registers:
-    //
-    // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not programmable
-    // 01: ( Rsvd                                                            ) <-- these are fixed / not programmable
-    // 02: ( NOP                                                             ) <-- these are fixed / not programmable
-    // 03: ( SFPSTORE                                                        ) <-- these are fixed / not programmable
-    // 04: TTI_SFPSWAP       (0, 0, 11, 1)
-
-    // Now we want to set up our sequence
-
-    // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
-    //       Delay slot:                  0     1        2
-    TTI_SFPLOADI(
-        0,
-        0xA,
-        0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0 ;
-                  // not using staging flop as dest; not using load reg as srcb : 8'b0_______0_______000_____100 = 0x04
-                  // slot2 : MAD    UNIT, unused : 8'b0_______0_______000_____000          = 0x00
-    TTI_SFPLOADI(
-        0, 0x8, 0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 : STORE
-                          // UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2 ; not using
-                          // staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
-    TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
-}
-
-/**
- * Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more
- * negative than that, swap the input value with -88.5 and store back to DEST
- *  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}.
- * This only runs on the odd columns of 1 face.
- */
-inline void run_clamp_loadmacro() {
-    // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a range we
-    // can handle, and then store them back to dest
-    //  LD     : bring in the original value from DEST (y)
-    //  MAD    : unused
-    //  ROUND  : unused
-    //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
-    //  STORE  : store the sanitized value back to dest
-    TTI_SFPLOADMACRO(
-        4,
-        0,
-        ADDR_MOD_X,
-        0);      // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
-                 // Dest offset  0 is targeting the even columns for rows   3: 0
-    TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
-    TTI_SFPLOADMACRO(
-        6,
-        0,
-        ADDR_MOD_X,
-        4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
-             // Dest offset  4 is targeting the even columns for rows   7: 4
-    TTI_SFPNOP;
-    TTI_SFPLOADMACRO(
-        4,
-        0,
-        ADDR_MOD_X,
-        8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value
-             // Dest offset  8 is targeting the even columns for rows  11: 8
-    TTI_SFPNOP;
-    TTI_SFPLOADMACRO(
-        6,
-        0,
-        ADDR_MOD_X,
-        12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value
-              // Dest offset 12 is targeting the even columns for rows  15:12
-    TTI_SFPNOP;
-}
-
-template <uint32_t SCALE>
-void calculate_exponential_polynomial_init() {
-    // L11 is used by the SFPI compiler for -1.
-
-    constexpr float scale_fp32 = __builtin_bit_cast(float, SCALE);
-    TTI_SFPLOADI(0, 0xA, lo16(scale_fp32));
-    TTI_SFPLOADI(0, 0x8, hi16(scale_fp32));
-    TTI_SFPCONFIG(0, 12, 0);
-
-    constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
-    TTI_SFPLOADI(0, 0xA, lo16(M_LN2));
-    TTI_SFPLOADI(0, 0x8, hi16(M_LN2));
-    TTI_SFPCONFIG(0, 13, 0);
-
-    // L14 is used by SWAP LoadMacro.
-
-    init_clamp_loadmacro<SCALE>();
-}
-
-/**
  * Computes exp(x) using polynomial approximation after range reduction.
  *
  * Clamps input to >= -88.5, scales by configured factor, then reduces to exp(r) * 2^k
@@ -557,8 +440,15 @@ void calculate_exponential_polynomial_init() {
  * @tparam ITERATIONS Number of 32-element vectors to process per tile
  * @tparam POLY_DEGREE Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
  * @tparam IS_FP32_DEST_ACC_EN Float32 accumulation to dest register enabled.
+ * @tparam SCALE_BF16 Bfloat16 scale factor represented as uint16_t.
  */
-template <bool SCALE_EN, int ITERATIONS, bool USE_SFPARECIP_INSTR, int POLY_DEGREE, bool IS_FP32_DEST_ACC_EN>
+template <
+    bool SCALE_EN,
+    int ITERATIONS,
+    bool USE_SFPARECIP_INSTR,
+    int POLY_DEGREE,
+    bool IS_FP32_DEST_ACC_EN,
+    uint16_t SCALE_BF16>
 void calculate_exponential_polynomial() {
     addr_mod_t{
         .srca = {.incr = 0},
@@ -566,9 +456,6 @@ void calculate_exponential_polynomial() {
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_7);
-
-    // Clamp values < -88.5 to 0.
-    run_clamp_loadmacro();
 
     if (!USE_SFPARECIP_INSTR) {
         ASSERT(
@@ -619,8 +506,9 @@ void calculate_exponential_polynomial() {
         TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
 
         if constexpr (SCALE_EN) {
-            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            // No-op not needed.
+            TTI_SFPLOADI(p_sfpu::LREG0, 0, SCALE_BF16);
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            INSERT_SFPNOP();
         }
 
         // Multiply by 1/ln(2) and round.
@@ -629,7 +517,8 @@ void calculate_exponential_polynomial() {
         TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         INSERT_SFPNOP();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+        TTI_SFP_STOCH_RND(
+            0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);  // Clamp to [-127,+127].
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         if constexpr (USE_SFPARECIP_INSTR) {
@@ -646,7 +535,11 @@ void calculate_exponential_polynomial() {
             ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
 #endif
         } else {
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
+            TTI_SFPLOADI(p_sfpu::LREG0, 0xA, lo16(M_LN2));
+            TTI_SFPLOADI(p_sfpu::LREG0, 0x8, hi16(M_LN2));
+
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             INSERT_SFPNOP();
 
             // Calculate polynomial.
@@ -696,8 +589,8 @@ void calculate_exponential_polynomial() {
 /**
  * exp_tile on only the columns 0:8 of a face
  */
-template <bool SDPA_EXP_APPROX_MODE>
-void calculate_exponential_first_column(int scale_bf16) {
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+void calculate_exponential_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
@@ -712,17 +605,17 @@ void calculate_exponential_first_column(int scale_bf16) {
         }
     } else {
         if constexpr (DST_ACCUM_MODE) {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4, true>();
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4, true, scale_bf16>();
         } else {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, false>();
+            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, false, scale_bf16>();
         }
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE>
-void exp_tile_first_column(uint32_t idst, int scale_bf16) {
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
-        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE>, idst, (int)VectorMode::C, scale_bf16);
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
 #endif
 
@@ -734,9 +627,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
-    if constexpr (!EXP_APPROX_MODE) {
-        MATH((calculate_exponential_polynomial_init<scale_fp32>()));
-    }
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -750,7 +640,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
         // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
+        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
 
         pack_tile(0, out_cb);
 
@@ -813,7 +703,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
-        MATH((exp_tile_first_column<false /*APPROX_MODE*/>(0, (uint16_t)0xBF80 /*bf16(-1.0) scale*/)));
+        MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
         MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
         // recip_tile<false>(0, (int)VectorMode::C);
