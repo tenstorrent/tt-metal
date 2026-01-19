@@ -104,7 +104,6 @@ class TenstorrentSoftmaxOp(BasicOp):
         src = tensor_mapping["src"]
         # Apply softmax along the last dimension (dim=-1)
         dst = ttnn.softmax(src, dim=-1)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

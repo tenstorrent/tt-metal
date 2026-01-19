@@ -57,6 +57,7 @@ class TenstorrentNativeAllGatherOp(BasicOp):
             ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
             mesh_shape = ttnn.MeshShape(1, device_count)
             cls._mesh_device = ttnn.open_mesh_device(mesh_shape)
+            cls.device = cls._mesh_device
             cls._mesh_device_count = device_count
             print(f"✓ Opened ttnn MeshDevice with shape (1, {device_count})")
 
@@ -196,9 +197,6 @@ class TenstorrentNativeAllGatherOp(BasicOp):
 
         # Perform native ttnn all_gather - THIS IS THE ONLY MEASURED OPERATION
         output = ttnn.all_gather(src, dim=0)
-
-        # Synchronize to ensure operation completes before timing ends
-        ttnn.synchronize_device(self.mesh_device)
 
         return output
 

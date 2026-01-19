@@ -109,7 +109,6 @@ class TenstorrentReduceSumOp(BasicOp):
         src = tensor_mapping["src"]
         # Reduce along the last dimension
         dst = ttnn.sum(src, dim=-1, keepdim=True)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

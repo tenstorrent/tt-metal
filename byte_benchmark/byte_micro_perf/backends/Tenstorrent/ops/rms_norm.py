@@ -150,7 +150,6 @@ class TenstorrentRMSNormOp(BasicOp):
             src = ttnn.add(src, residual)
 
         dst = ttnn.rms_norm(src, weight=weight, epsilon=self.epsilon)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

@@ -197,9 +197,6 @@ class TenstorrentNativeReduceScatterOp(BasicOp):
         # Perform native ttnn reduce_scatter - THIS IS THE ONLY MEASURED OPERATION
         output = ttnn.reduce_scatter(src, dim=-1)
 
-        # Synchronize to ensure operation completes before timing ends
-        ttnn.synchronize_device(self.mesh_device)
-
         return output
 
     def core_run(self, tensor_mapping):

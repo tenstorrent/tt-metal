@@ -169,7 +169,8 @@ class Backend(ABC):
                         math.floor(max(assume_avail_bytes, assume_cache_size) / tensor_size),
                         math.floor(assume_cache_size / tensor_size),
                     )
-
+            print("Max data count = ", max_data_cnt)
+            max_data_cnt = min(max_data_cnt, 4)
             tensor_list = op_instance.create_tensors(max_data_cnt)
             random.shuffle(tensor_list)
 

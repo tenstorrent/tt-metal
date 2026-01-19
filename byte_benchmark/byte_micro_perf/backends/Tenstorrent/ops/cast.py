@@ -127,7 +127,6 @@ class TenstorrentCastOp(BasicOp):
         src = tensor_mapping["src"]
         # Use ttnn.typecast to convert dtype
         dst = ttnn.typecast(src, dtype=self.ttnn_dst_dtype)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

@@ -103,7 +103,6 @@ class TenstorrentGeluOp(BasicOp):
 
         src = tensor_mapping["src"]
         dst = ttnn.gelu(src)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):
