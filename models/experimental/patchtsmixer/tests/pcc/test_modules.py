@@ -549,7 +549,8 @@ def test_patchtsmixer_embedding(device, reset_seeds):
 
     torch_out = torch_embed(x)  # (B,C,Np,d_model)
 
-    tt_out = tt_embed(x, dtype=ttnn.bfloat16)
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_embed(tt_x, dtype=ttnn.bfloat16)
     tt_out_torch = ttnn.to_torch(tt_out)
 
     assert_with_pcc(torch_out, tt_out_torch, 0.99)
