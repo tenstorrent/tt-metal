@@ -53,16 +53,24 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Pre-add tie-breaker LSB before hardware RNE conversion
-            sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
-            sfpi::vUInt lsb = ((~bits) >> 16) & 1;
-            bits = bits - lsb;
+            // // Pre-subtract tie-breaker to compensate for float_to_fp16b using 0x8000 instead of 0x7fff
+            // // Skip for zero to avoid underflow (0x00000000 - 1 = garbage)
+            // sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
+            // sfpi::vUInt lsb = ((~bits) >> 16) & 1;
+            // bits = bits - lsb;
 
-            result = sfpi::reinterpret<sfpi::vFloat>(bits);
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            // result = sfpi::reinterpret<sfpi::vFloat>(bits);
+            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
 
-            // // Old software RNE approach (kept for reference):
-            // result = float32_to_bf16_rne(result);
+            // sfpi::vUInt in0_bits = sfpi::reinterpret<sfpi::vUInt>(in0);
+            // sfpi::vUInt in1_bits = sfpi::reinterpret<sfpi::vUInt>(in1);
+            // sfpi::vInt in0_is_zero = (in0_bits & 0x7FFFFFFFU);  // catches +0.0 AND -0.0
+            // sfpi::vInt in1_is_zero = (in1_bits & 0x7FFFFFFFU);
+            // v_if( (in0_is_zero   == 0) || (in1_is_zero == 0) ) { result = 0.0f; }
+            // v_endif;
+
+            // Old software RNE approach (kept for reference):
+            result = float32_to_bf16_rne(result);
 
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
@@ -97,22 +105,28 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
 
         // Apply RNE rounding outside conditional block to avoid compiler ICE
         if constexpr (!is_fp32_dest_acc_en) {
-            // Pre-subtract tie-breaker to compensate for float_to_fp16b using 0x8000 instead of 0x7fff
-            // Skip for zero to avoid underflow (0x00000000 - 1 = garbage)
-            sfpi::vFloat original_result = result;
-            sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
-            sfpi::vUInt lsb = ((~bits) >> 16) & 1;
-            bits = bits - lsb;
+            // // Pre-subtract tie-breaker to compensate for float_to_fp16b using 0x8000 instead of 0x7fff
+            // // Skip for zero to avoid underflow (0x00000000 - 1 = garbage)
+            // sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
+            // sfpi::vUInt lsb = ((~bits) >> 16) & 1;
+            // bits = bits - lsb;
 
-            result = sfpi::reinterpret<sfpi::vFloat>(bits);
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            // result = sfpi::reinterpret<sfpi::vFloat>(bits);
+            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
 
-            // Restore zero if original was zero (avoid underflow corruption)
-            v_if(original_result == 0.0f) { result = 0.0f; }
-            v_endif;
+            // sfpi::vUInt in0_bits = sfpi::reinterpret<sfpi::vUInt>(in0);
+            // sfpi::vUInt in1_bits = sfpi::reinterpret<sfpi::vUInt>(in1);
+            // sfpi::vInt in0_is_zero = (in0_bits & 0x7FFFFFFFU);  // catches +0.0 AND -0.0
+            // sfpi::vInt in1_is_zero = (in1_bits & 0x7FFFFFFFU);
+            // v_if( (in0_is_zero   == 0) || (in1_is_zero == 0) ) { result = 0.0f; }
+            // v_endif;
 
             // software RNE approach (kept for reference):
-            // result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne(result);
+
+            // // Restore zero if original was zero (avoid underflow corruption)
+            // v_if(original_result == 0.0f) { result = 0.0f; }
+            // v_endif;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
