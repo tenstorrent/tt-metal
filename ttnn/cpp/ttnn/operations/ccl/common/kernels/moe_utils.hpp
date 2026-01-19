@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "api/debug/dprint.h"
 
 namespace ttnn::operations::ccl::common {
 
@@ -650,36 +651,40 @@ inline uint16_t generate_fabric_mcast_hop_mask(
     uint32_t linearized_dest_mesh_coords[MaxNumDestinations],
     uint32_t NumDestinations) {
     uint16_t fabric_mcast_hop_mask = 0;
+    DPRINT << "Inside generate_fabric_mcast_hop_mask" << ENDL();
+    DPRINT << "NumDestinations: " << NumDestinations << ENDL();
+    // DPRINT << "Src Coord: " << LinearizedSrcMeshCoord << ENDL();
+    // DPRINT << "Dest Coords: " << ENDL();
     for (uint32_t i = 0; i < NumDestinations; i++) {
         // Calculate the number of hops between source chip and destination
-        // Although manhattan_distance returns the number of row + col hops, since this is a 1D topology this will only ever return hops in 1 dimension
+        // Although manhattan_distance returns the number of row + col hops, since this is a 1D topology this will only
+        // ever return hops in 1 dimension DPRINT << "Dest Coord: " << linearized_dest_mesh_coords[i] << ENDL();
         uint32_t num_hops =
             manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i]);
+        // DPRINT << "Num Hops: " << num_hops << ENDL();
         // Set the corresponding bit in the fabric multicast hop mask
-        fabric_mcast_hop_mask |= (1 << num_hops);
+        fabric_mcast_hop_mask |= (1 << (num_hops - 1));
     }
+    // DPRINT << "Fabric Mcast Hop Mask: " << fabric_mcast_hop_mask << ENDL();
     return fabric_mcast_hop_mask;
 }
 
 // Send a sparse multicast packet to destinations along a specific direction
 // Supply hop mask and direction to the function
-template <
-    int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
     // Fabric parameters
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t fabric_mcast_hop_mask,
-    eth_chan_directions fabric_direction, // eth_chan_directions index
+    uint32_t fabric_direction,  // eth_chan_directions index
     // NoC Parameters
     uint32_t payload_l1_address,
     uint32_t noc_payload_page,
     int32_t size_bytes,
     const uint32_t alignment,
     uint32_t offset = 0) {
-
     // Separate the list of destinations by direction relative to the source chip
     // Set the sparse multicast fabric route in the packet header
     fabric_set_sparse_multicast_route((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, fabric_mcast_hop_mask);
@@ -720,11 +725,13 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
     uint32_t offset = 0) {
 
     // Generate the fabric multicast hop mask
-    uint16_t fabric_mcast_hop_mask = generate_fabric_mcast_hop_mask<Topology, MeshRows, MeshCols, FabricMaxNumDestinations>(
-        linearized_dest_mesh_coords, NumDestinations);
+    uint16_t fabric_mcast_hop_mask =
+        generate_fabric_mcast_hop_mask<LinearizedSrcMeshCoord, Topology, MeshRows, MeshCols, FabricMaxNumDestinations>(
+            linearized_dest_mesh_coords, NumDestinations);
 
     // Determine the fabric direction based on the first destination coordinate
-    eth_chan_directions routing_direction = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[0]);
+    uint32_t routing_direction =
+        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[0]);
 
     // Send the packet
     fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
@@ -735,7 +742,9 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
         routing_direction,
         payload_l1_address,
         noc_payload_page,
-        size_bytes, alignment, offset);
+        size_bytes,
+        alignment,
+        offset);
 }
 
 }  // namespace ttnn::operations::ccl::common
