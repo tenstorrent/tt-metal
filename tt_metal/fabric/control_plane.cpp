@@ -2925,6 +2925,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                         num_ports_assigned_at_exit_node[node] = 0;
                     }
                 }
+
+                // Check if Z direction should be assigned for this mesh pair
+                bool should_assign_z = mesh_graph.should_assign_z_direction(local_mesh_id, neighbor_node.mesh_id);
+
                 std::optional<RoutingDirection> local_dir = std::nullopt;
                 std::optional<RoutingDirection> neighbor_dir = std::nullopt;
                 for (const auto& [local_port_id, local_chip_id] : mesh_edges) {
@@ -2935,6 +2939,14 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                     if (num_connections_assigned >= connected_eth_chans.size()) {
                         break;
                     }
+
+                    // Skip Z-direction ports unless explicitly requested via assign_z_direction
+                    // Skip non-Z ports if assign_z_direction is requested
+                    bool is_z_direction = (local_port_id.first == RoutingDirection::Z);
+                    if (should_assign_z != is_z_direction) {
+                        continue;
+                    }
+
                     // Skip if this port doesn't match our node and direction constraints
                     if (!should_process_direction_for_chip(node, local_chip_id, local_dir, local_port_id.first)) {
                         continue;
@@ -2952,6 +2964,13 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                     bool found_neighbor = false;
                     for (const auto& [neighbor_port_id, neighbor_chip_id] :
                          mesh_graph.get_mesh_edge_ports_to_chip_id().at(*neighbor_node.mesh_id)) {
+                        // Skip Z-direction ports unless explicitly requested via assign_z_direction
+                        // Skip non-Z ports if assign_z_direction is requested
+                        bool neighbor_is_z_direction = (neighbor_port_id.first == RoutingDirection::Z);
+                        if (should_assign_z != neighbor_is_z_direction) {
+                            continue;
+                        }
+
                         if (!should_process_direction_for_chip(
                                 neighbor_node, neighbor_chip_id, neighbor_dir, neighbor_port_id.first)) {
                             continue;
