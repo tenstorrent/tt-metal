@@ -695,7 +695,8 @@ class Operation:
                 global_golden_function_output = []
                 output_tensors = []
 
-                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
+                    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
                 try:
                     if cq_id is None:
@@ -770,7 +771,10 @@ class Operation:
                                 # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
 
                 finally:
-                    captured_graph = ttnn.graph.end_graph_capture()
+                    if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
+                        captured_graph = ttnn.graph.end_graph_capture()
+                    else:
+                        captured_graph = None
 
                     if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_path is not None:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
