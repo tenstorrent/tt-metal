@@ -1211,7 +1211,176 @@ v_elseif(x >= -12.4f) {
 
 ---
 
-## Session 2026-01-18: Accurate Exp + Mills Ratio (Session 31) - CURRENT
+## Session 2026-01-18: BREAKTHROUGH - Fused x*exp(t) Eliminates Underflow (Session 33) - CURRENT
+
+### Goal
+
+Fix the remaining 3 BF16 values with ULP > 0 in the exp-based region by eliminating intermediate underflow.
+
+### The Problem: Intermediate Underflow
+
+Analysis of the 3 failing values (x = -13.3125, -13.25, -13.1875) revealed the root cause:
+
+| x | t = -x²/2 | exp(t) | x * exp(t) | Issue |
+|---|-----------|--------|------------|-------|
+| -13.3125 | -88.62 | 2.1e-39 | -2.8e-38 | exp(t) < min normal → FTZ to 0! |
+| -13.2500 | -87.78 | 4.8e-39 | -6.4e-38 | exp(t) < min normal → FTZ to 0! |
+| -13.1875 | -86.96 | 1.1e-38 | -1.5e-37 | exp(t) ≈ min normal, edge case |
+
+The intermediate `exp(t)` underflows to 0, but the FINAL result `x * exp(t)` would be representable!
+
+### The Solution: Fused `x_times_exp_deep_negative_tail()`
+
+Multiply x by poly BEFORE the 2^k exponent shift:
+
+```cpp
+// OLD: exp(t) underflows, then x * 0 = 0
+exp_val = poly * 2^k;        // → 0 (FTZ when k < -126)
+result = x * exp_val;         // → 0
+
+// NEW: fused multiply avoids intermediate underflow
+x_poly = x * poly;            // → -9 (safe range!)
+result = x_poly * 2^k;        // → -1.73e-38 (representable!)
+```
+
+### Implementation
+
+```cpp
+sfpi_inline sfpi::vFloat x_times_exp_deep_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
+    // Cody-Waite range reduction
+    constexpr float INV_LN2 = 1.4426950408889634f;
+    constexpr float LN2_HI = -0.6931152343750000f;
+    constexpr float LN2_LO = -3.19461832987e-05f;
+
+    sfpi::vFloat z = t * INV_LN2;
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat r = k * LN2_HI + t;
+    r = k * LN2_LO + r;
+
+    // Degree-5 Taylor polynomial
+    sfpi::vFloat poly = 1.0f + r * (1.0f + r * (0.5f + r * (0.166666667f +
+                        r * (0.0416666667f + r * 0.00833333333f))));
+
+    // FUSED MULTIPLY - key to avoiding underflow!
+    sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 (safe range)
+
+    // Exponent manipulation on FUSED result
+    sfpi::vInt xpoly_exp = sfpi::exexp_nodebias(x_poly);
+    sfpi::vInt new_exp = xpoly_exp + k_int;
+
+    // FTZ check on FINAL result, not intermediate
+    sfpi::vFloat result = sfpi::vConst0;
+    v_if(new_exp > 0) {
+        result = sfpi::setexp(x_poly, new_exp);
+    }
+    v_endif;
+    return result;
+}
+```
+
+### Results: PERFECT Accuracy in Exp-Based Region
+
+| Segment | Count | Mean ULP | Max ULP | % ≤ 1 ULP |
+|---------|-------|----------|---------|-----------|
+| x ≤ -13.375 (saturation 0) | 15,680 | 0.00 | **0** | 100.0% |
+| **(-13.375, -9) exp-based** | 70 | **0.00** | **0** | **100.0%** |
+| [-9, -7) FL2 polynomial | 48 | 21.71 | 42 | 2.1% |
+| [-7, -5) FL1 polynomial | 64 | 1.30 | 3 | 59.4% |
+| [-5, -3) LEFT polynomial | 96 | 0.01 | 1 | 100.0% |
+| [-3, 3.17) CORE polynomial | 32,655 | 0.82 | 1 | 100.0% |
+| x ≥ 3.17 (saturation 1) | 15,947 | 0.00 | **0** | 100.0% |
+| **TOTAL** | **64,560** | **0.43** | **42** | - |
+
+### Commit
+
+- **Commit:** `499283a8fb` - "Fused x*exp(t) for GELU backward: eliminates intermediate underflow (#35971)"
+- **Branch:** `ivoitovych/issue-35971-gelu-bw-ulp-fix` (myfork)
+
+### Files Modified
+
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tests/ttnn/unit_tests/gtests/test_gelu_bw_ulp_bug.cpp` (added ExpBasedRegionFullDump test)
+
+---
+
+## Session 2026-01-18: Inline Exp with Direct Bit Manipulation (Session 32) - SUPERSEDED
+
+### Goal
+
+Implement inline specialized exp() with direct exponent bit manipulation as recommended by `negative_tail_final_consolicated_opinions.md`, replacing external `_sfpu_exp_f32_accurate_()` calls.
+
+**Status:** SUPERSEDED by Session 33 - inline exp alone didn't fix underflow; fused x*exp(t) was needed.
+
+### Implementation: `exp_deep_negative_tail()`
+
+Added inline specialized exp function:
+
+```cpp
+sfpi_inline sfpi::vFloat exp_deep_negative_tail(sfpi::vFloat t) {
+    // Cody-Waite constants for extended precision
+    constexpr float INV_LN2 = 1.4426950408889634f;
+    constexpr float LN2_HI = -0.6931152343750000f;
+    constexpr float LN2_LO = -3.19461832987e-05f;
+
+    // Range reduction: t = k·ln(2) + r
+    sfpi::vFloat z = t * INV_LN2;
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat r = k * LN2_HI + t;
+    r = k * LN2_LO + r;
+
+    // Degree-5 Taylor polynomial for exp(r)
+    sfpi::vFloat poly = 1.0f + r * (1.0f + r * (0.5f + r * (0.166666667f +
+                        r * (0.0416666667f + r * 0.00833333333f))));
+
+    // DIRECT EXPONENT BIT MANIPULATION - the key optimization!
+    sfpi::vInt poly_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt new_exp = poly_exp + k_int;
+
+    // FTZ handling
+    sfpi::vFloat result = sfpi::vConst0;
+    v_if(new_exp > 0) {
+        result = sfpi::setexp(poly, new_exp);  // FREE bit manipulation!
+    }
+    v_endif;
+    return result;
+}
+```
+
+### Key Finding: Max ULP = 502 is Fundamental
+
+The consolidated opinions suggested Max ULP ≤ 1 was achievable like `ttnn::tanh`, but analysis shows:
+
+1. **At x = -13.19 (worst case):**
+   - t = -x²/2 = -87.07
+   - exp(-87.07) ≈ 1.1e-38 (near min normal BF16 = 1.18e-38)
+   - GELU'(x) ≈ 5e-37, represented by only a few ULP above zero in BF16
+   - Any computation error translates to large ULP distance
+
+2. **95.7% of exp-based region values have ULP ≤ 1** - excellent for non-boundary cases
+
+3. **Inline exp produces identical results to `_sfpu_exp_f32_accurate_()`** because they use the same algorithm
+
+### Performance Improvement
+
+| Metric | External `_sfpu_exp_f32_accurate_()` | Inline `exp_deep_negative_tail()` |
+|--------|--------------------------------------|-----------------------------------|
+| Operations | ~25-30 | ~15-18 |
+| External calls | 1 | 0 |
+| Overflow/NaN checks | Yes (unnecessary) | No |
+| Accuracy | < 1 ULP | < 1 ULP |
+
+### Bug Fix
+
+Fixed incorrect `LN2_LO` constant from consolidated opinions document:
+- **Wrong:** 1.42860682030941723e-06f
+- **Correct:** 3.19461832987e-05f
+
+---
+
+## Session 2026-01-18: Accurate Exp + Mills Ratio (Session 31)
 
 ### Goal
 
@@ -1286,22 +1455,25 @@ At x = -13.19 (near BF16 saturation boundary):
 
 ---
 
-## Final Summary (Updated 2026-01-18)
+## Final Summary (Updated 2026-01-18, Session 33)
 
-| Metric | Original | Session 28 | Session 30 | **Session 31** |
-|--------|----------|------------|------------|----------------|
-| Overall Max ULP | 32,460 | 8,898 | 2,259 | **502** |
-| Mean ULP | ~2,230 | 5.55 | 0.72 | **0.45** |
-| Improvement | - | 73% | 93% | **98.5%** |
-| Polynomial coverage | None | [-9, 3.17] | [-12.4, 3.17] | **[-13.375, 3.17]** |
+| Metric | Original | Session 28 | Session 30 | Session 31 | Session 32 | **Session 33** |
+|--------|----------|------------|------------|------------|------------|----------------|
+| Overall Max ULP | 32,460 | 8,898 | 2,259 | 502 | 502 | **42** |
+| Mean ULP | ~2,230 | 5.55 | 0.72 | 0.45 | 0.45 | **0.43** |
+| Improvement | - | 73% | 93% | 98.5% | 98.5% | **99.87%** |
+| Polynomial coverage | None | [-9, 3.17] | [-12.4, 3.17] | [-13.375, 3.17] | [-13.375, 3.17] | **[-13.375, 3.17]** |
+| Deep neg impl | Formula | Formula | exp() | ext exp() | inline exp() | **fused x*exp(t)** |
 
-### Per-Segment Quality
+**Session 33 BREAKTHROUGH:** The fused `x_times_exp_deep_negative_tail()` function eliminated intermediate underflow by computing `(x * poly) * 2^k` instead of `x * (poly * 2^k)`. This avoids the FTZ check triggering on the intermediate exp(t) value, allowing the final result x*exp(t) to be computed correctly. **All 70 values in the exp-based region now have ULP = 0!**
+
+### Per-Segment Quality (Session 33)
 
 | Region | Max ULP | Status |
 |--------|---------|--------|
 | x ≤ -13.375 (saturation to 0) | **0** | ✅ Perfect |
-| (-13.375, -9) exp-based | **502** | ⚠️ Edge precision (95.7% ≤ 1 ULP) |
-| [-9, -7) FL2 polynomial | 42 | ✅ Good |
+| (-13.375, -9) exp-based (fused) | **0** | ✅ **PERFECT** (was 502!) |
+| [-9, -7) FL2 polynomial | **42** | ⚠️ Remaining max (polynomial limit) |
 | [-7, -5) FL1 polynomial | 3 | ✅ Excellent |
 | [-5, -3) LEFT polynomial | 1 | ✅ Perfect |
 | [-3, 3.1719) CORE polynomial | 1 | ✅ Perfect |
@@ -1309,16 +1481,17 @@ At x = -13.19 (near BF16 saturation boundary):
 
 ### PR Readiness
 
-**Ready for PR** with documented limitations:
-- ✅ 98.5% improvement in Max ULP (32,460 → 502)
+**READY FOR PR** with excellent quality:
+- ✅ **99.87% improvement** in Max ULP (32,460 → 42)
 - ✅ Full coverage from BF16 natural saturation (-13.375) to positive saturation (3.1719)
+- ✅ **Exp-based region (-13.375, -9) now has Max ULP = 0** (breakthrough fused x*exp(t) function!)
 - ✅ Core polynomial regions [-5, 3.17] have Max ULP ≤ 1
-- ⚠️ Max ULP = 502 at boundary x = -13.19 (near BF16 min normal, 95.7% of exp region still ≤ 1 ULP)
+- ⚠️ Max ULP = 42 in FL2 polynomial region [-9, -7) (Sollya polynomial limit, values < 6e-11)
 - ✅ All hardware tests pass
 
 ---
 
-## Next Steps (Updated)
+## Next Steps (Updated Session 33)
 
 1. ✅ **Derive Sollya coefficients** - DONE
 2. ✅ **Implement piecewise polynomial** - DONE
@@ -1331,7 +1504,8 @@ At x = -13.19 (near BF16 saturation boundary):
 9. ✅ **SFPU research for x < -9** - DONE (exp()-based solution)
 10. ✅ **Implement exp()-based solution** - DONE (Session 30: -12.4 threshold)
 11. ✅ **Extend to full (-13.375, -9)** - DONE (Session 31: accurate exp + Mills ratio)
-12. ⏳ **PR Review** - Ready for submission
+12. ✅ **BREAKTHROUGH: Fused x*exp(t)** - DONE (Session 33: Max ULP 502 → 0 in exp region!)
+13. ⏳ **PR Review** - Ready for submission (Max ULP = 42, 99.87% improvement)
 
 ---
 

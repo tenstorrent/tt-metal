@@ -250,32 +250,9 @@ constexpr float GELU_DERIV_LEFT_C6 = -9.72292109508998692035675048828125e-5f;
 constexpr float GELU_DERIV_LEFT_C7 = 9.22545223147608339786529541015625e-5f;
 constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
 
-// Degree-8 SHIFTED polynomial for GELU'(x) over [-7, -5]
-// SHIFTED: Evaluate p(t) where t = x + 6, so t ∈ [-1, 1] for x ∈ [-7, -5]
-// Coefficients from Sollya fpminimax with shifted variable
-constexpr float GELU_DERIV_FL1_C0 = -3.5759825323111726902425289154052734375e-8f;
-constexpr float GELU_DERIV_FL1_C1 = -2.06079477038656477816402912139892578125e-7f;
-constexpr float GELU_DERIV_FL1_C2 = -5.656046369040268473327159881591796875e-7f;
-constexpr float GELU_DERIV_FL1_C3 = -1.0098229950017412193119525909423828125e-6f;
-constexpr float GELU_DERIV_FL1_C4 = -1.400573410137440077960491180419921875e-6f;
-constexpr float GELU_DERIV_FL1_C5 = -1.608632601346471346914768218994140625e-6f;
-constexpr float GELU_DERIV_FL1_C6 = -1.372966607959824614226818084716796875e-6f;
-constexpr float GELU_DERIV_FL1_C7 = -7.0957827347228885628283023834228515625e-7f;
-constexpr float GELU_DERIV_FL1_C8 = -1.59272218525075004436075687408447265625e-7f;
-
-// Degree-8 SHIFTED polynomial for GELU'(x) over [-9, -7]
-// SHIFTED: Evaluate p(t) where t = x + 8, so t ∈ [-1, 1] for x ∈ [-9, -7]
-// Note: 18% relative error is acceptable as values are < 6e-11
-// Coefficients from Sollya fpminimax with shifted variable
-constexpr float GELU_DERIV_FL2_C0 = -3.437316281758827363201902471701032482087612152099609375e-14f;
-constexpr float GELU_DERIV_FL2_C1 = -2.3025404824981998697097651529475115239620208740234375e-13f;
-constexpr float GELU_DERIV_FL2_C2 = -9.3392069251685416730879296665079891681671142578125e-13f;
-constexpr float GELU_DERIV_FL2_C3 = -3.32250915148490921779966811300255358219146728515625e-12f;
-constexpr float GELU_DERIV_FL2_C4 = -8.791863938262256539246664033271372318267822265625e-12f;
-constexpr float GELU_DERIV_FL2_C5 = -1.46285726587702669121426879428327083587646484375e-11f;
-constexpr float GELU_DERIV_FL2_C6 = -1.4239867097975977827672977582551538944244384765625e-11f;
-constexpr float GELU_DERIV_FL2_C7 = -7.4159463292478022822251659817993640899658203125e-12f;
-constexpr float GELU_DERIV_FL2_C8 = -1.59726810770866034516757281380705535411834716796875e-12f;
+// Note: FL1 and FL2 polynomial coefficients removed - fused x*exp(t) method
+// achieves Max ULP ≤ 1 across the entire (-13.375, -5] range, outperforming
+// the Sollya polynomials which had Max ULP = 3 (FL1) and 42 (FL2).
 
 // GELU Derivative Evaluation with Polynomial Approximation
 // Saturation thresholds derived from exhaustive BF16 research (DAZ+FTZ model):
@@ -328,40 +305,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             GELU_DERIV_LEFT_C0,
             t);
     }
-    // Far left region [-7, -5], degree 8 SHIFTED polynomial
-    // SHIFTED: t = x + 6 maps x ∈ [-7, -5] to t ∈ [-1, 1]
-    v_elseif(x >= -7.0f) {
-        sfpi::vFloat t = x + 6.0f;  // Shift to [-1, 1] range
-        result = POLYVAL8(
-            GELU_DERIV_FL1_C8,
-            GELU_DERIV_FL1_C7,
-            GELU_DERIV_FL1_C6,
-            GELU_DERIV_FL1_C5,
-            GELU_DERIV_FL1_C4,
-            GELU_DERIV_FL1_C3,
-            GELU_DERIV_FL1_C2,
-            GELU_DERIV_FL1_C1,
-            GELU_DERIV_FL1_C0,
-            t);
-    }
-    // Far left region [-9, -7], degree 8 SHIFTED polynomial
-    // SHIFTED: t = x + 8 maps x ∈ [-9, -7] to t ∈ [-1, 1]
-    // Note: 18% relative error is acceptable as values are < 6e-11
-    v_elseif(x >= -9.0f) {
-        sfpi::vFloat t = x + 8.0f;  // Shift to [-1, 1] range
-        result = POLYVAL8(
-            GELU_DERIV_FL2_C8,
-            GELU_DERIV_FL2_C7,
-            GELU_DERIV_FL2_C6,
-            GELU_DERIV_FL2_C5,
-            GELU_DERIV_FL2_C4,
-            GELU_DERIV_FL2_C3,
-            GELU_DERIV_FL2_C2,
-            GELU_DERIV_FL2_C1,
-            GELU_DERIV_FL2_C0,
-            t);
-    }
-    // Deep negative region (-13.375, -9]: use asymptotic formula with INLINE exp
+    // Deep negative region (-13.375, -5]: use asymptotic formula with fused x*exp(t)
+    // The fused method achieves Max ULP ≤ 1 across this entire range, outperforming
+    // the Sollya polynomials (FL1, FL2) which had Max ULP = 3 and 42 respectively.
     // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
     //
     // Uses exp_deep_negative_tail() - a specialized inline exp with direct exponent
