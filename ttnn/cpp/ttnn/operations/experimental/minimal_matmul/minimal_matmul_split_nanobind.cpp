@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ void bind_minimal_matmul_split(nb::module_& mod) {
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with output splitting along the last dimension.
         This op performs a matmul and splits the result into `chunks` separate output tensors, fusing the common
-        Q/K/V projection pattern: Q, K, V = minimal_matmul_split(qkv, qkv_proj, chunks=3)
+        Q/K/V projection pattern: Q, K, V = ttnn.minimal_matmul_split(qkv, qkv_proj, chunks=3)
 
         This is equivalent to:
         ```python
