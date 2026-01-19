@@ -248,12 +248,12 @@ if(TT_ENABLE_LTO)
         # For Release builds, enable more aggressive deduplication
         add_compile_options(
             $<$<CONFIG:Release>:-ffunction-sections>
-            #$<$<CONFIG:Release>:-fdata-sections>
+            $<$<CONFIG:Release>:-fdata-sections>
         )
 
         add_link_options(
             $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-Wl,--icf=safe>
-            #$<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-Wl,--ignore-data-address-equality>
+            $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-Wl,--ignore-data-address-equality>
             $<$<CONFIG:Release>:-Wl,--gc-sections>
         )
 
