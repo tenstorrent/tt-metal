@@ -92,6 +92,14 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
 #endif
+    DPRINT << "compile time args:" << ENDL();
+    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+    DPRINT << "ring_size: " << ring_size << ENDL();
+    DPRINT << "cb_input_id: " << cb_input_id << ENDL();
+    DPRINT << "cb_intermediate_id: " << cb_intermediate_id << ENDL();
+    DPRINT << "cb_reader_output_id: " << cb_reader_output_id << ENDL();
+    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
+    DPRINT << "page_size: " << page_size << ENDL();
 
     // Let's set some particular values for the params used
     const uint32_t M_blocks_per_core = 1;
@@ -100,16 +108,12 @@ void kernel_main() {
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-    uint32_t actual_slice_idx;
-    if (direction) {
-        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-    } else {
-        actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-    }
+
+    ASSERT(dim == 3);
+    ASSERT(slice_C == 1);
     DPRINT << "The reader kernel running its loop." << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "slice_idx: " << slice_idx << ENDL();
-    DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
     DPRINT << "slice_Wt: " << slice_Wt << ENDL();
     DPRINT << "slice_Ht: " << slice_Ht << ENDL();
     DPRINT << "slice_C (must be 1): " << slice_C << ENDL();
@@ -126,6 +130,16 @@ void kernel_main() {
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                uint32_t actual_slice_idx;
+                if (direction) {
+                    actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                } else {
+                    actual_slice_idx =
+                        slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                }
+                const uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
+                const uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
                     uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
@@ -136,6 +150,24 @@ void kernel_main() {
                                << " do_reduce: " << (uint32_t)do_reduce << ENDL();
                         DPRINT << "chunk_idx: " << chunk_idx << " chunk_piece_idx: " << chunk_piece_idx << ENDL();
                         DPRINT << "--------------------------------" << ENDL();
+
+                        uint32_t chunk_piece_tile_width = 1;
+                        uint32_t tiles_to_read_in_current_direction = 1;
+                        uint32_t direction_offset = direction ? 0 : input_tensor_Wt;
+                        uint32_t input_row_offset = start_row_offset;
+
+                        // cb_reserve_back(cb_in0, tile_granularity);
+                        // uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                        for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                            uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset;
+                            DPRINT << "input_tile_id: " << input_tile_id_start << ENDL();
+                            DPRINT << "input_row_offset: " << input_row_offset << ENDL();
+                            DPRINT << "direction_offset: " << direction_offset << ENDL();
+                            // uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                            // noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                            // l1_write_addr += page_size;
+                        }
+                        // tiles_read += tiles_to_read_in_current_direction;
                     }
                 }
             }
