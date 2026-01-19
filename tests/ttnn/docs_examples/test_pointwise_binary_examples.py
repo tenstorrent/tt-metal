@@ -575,6 +575,22 @@ def test_scatter(device):
     logger.info(f"Scatter operation result: {output}")
 
 
+def test_scatter_add(device):
+    # Create input, index, and source tensors for scatter_add
+    input_torch = torch.tensor([[1, 2], [3, 4]], dtype=torch.float32)
+    index_torch = torch.tensor([[0, 1], [1, 0]], dtype=torch.int64)
+    source_torch = torch.tensor([[5, 6], [7, 8]], dtype=torch.float32)
+
+    input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    dim = 1
+
+    # Perform scatter_add operation (adds source values to input at specified indices)
+    output = ttnn.scatter_add(input_ttnn, dim, index_ttnn, source_ttnn)
+    logger.info(f"Scatter add operation result: {output}")
+
+
 def test_fmod(device):
     # Create two tensors for floating-point modulo
     tensor1 = ttnn.from_torch(

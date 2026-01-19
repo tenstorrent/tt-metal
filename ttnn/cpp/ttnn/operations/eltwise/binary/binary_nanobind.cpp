@@ -1952,26 +1952,53 @@ void bind_logical_inplace_operation(
 
 template <typename binary_operation_t>
 void bind_binary_inplace_operation(
-    nb::module_& mod, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+    nb::module_& mod,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            {4}
+        .. math::
+            {3}
 
-            .. math::
-                {3}
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
-            Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor or Number)
-            Keyword args:
-                * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+        Keyword args:
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
+            use_legacy (bool, optional): use legacy implementation. Defaults to `None`.
+            sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
+
+        {6}
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         math,
+        supported_dtype,
+        note,
         BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
@@ -1998,8 +2025,8 @@ void bind_binary_inplace_operation(
                     use_legacy,
                     sub_core_grids);
             },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
@@ -2027,8 +2054,8 @@ void bind_binary_inplace_operation(
                     use_legacy,
                     sub_core_grids);
             },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
@@ -2202,7 +2229,8 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2216,7 +2244,8 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2230,7 +2259,8 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::multiply_,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(\mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
 
     detail::bind_binary_operation(
         mod,

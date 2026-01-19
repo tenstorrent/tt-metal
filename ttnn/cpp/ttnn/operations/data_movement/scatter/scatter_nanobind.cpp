@@ -94,8 +94,20 @@ void bind_scatter_add(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor with scattered values.
 
+        Example:
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id=device_id)
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            >>> index = ttnn.from_torch(torch.tensor([[0, 1], [1, 0]], dtype=torch.int64), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            >>> src = ttnn.from_torch(torch.tensor([[5, 6], [7, 8]], dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            >>> output = ttnn.scatter_add(input_tensor, 1, index, src)
+            >>> print(output)
+            ttnn.Tensor([[6, 8], [11, 10]], dtype=float32)
+
         Note:
             * Input tensors must be interleaved and on device.
+            * Supported dtypes: float32, bfloat16, int32
+            * Supported layouts: ROW_MAJOR, TILE
         )doc";
 
     using OperationType = decltype(ttnn::scatter_add);
