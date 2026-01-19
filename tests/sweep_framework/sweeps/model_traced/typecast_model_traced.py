@@ -72,25 +72,28 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    # Map TTNN dtype to PyTorch dtype for reference
-    ttnn_to_torch_dtype = {
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-        ttnn.bfloat8_b: torch.float32,  # No direct PyTorch equivalent, use float32
-        ttnn.uint16: torch.int32,  # PyTorch doesn't have uint16, use int32
-        ttnn.uint32: torch.int32,  # Approximation
-        ttnn.int32: torch.int32,
-    }
-
-    # Get PyTorch dtype for output
-    target_torch_dtype = ttnn_to_torch_dtype.get(output_dtype, torch.float32)
-
-    # Typecast to output dtype in PyTorch reference
-    # First convert to appropriate dtype for comparison
-    if target_torch_dtype == torch.bfloat16:
+    # Create PyTorch reference output based on output_dtype
+    # Handle each dtype conversion explicitly for correct reference
+    if output_dtype == ttnn.float32:
+        # Convert to float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.bfloat16:
+        # Convert to bfloat16 then back to float32 for comparison
         torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
+    elif output_dtype == ttnn.bfloat8_b:
+        # bfloat8_b doesn't have PyTorch equivalent, use float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.uint16:
+        # PyTorch doesn't have uint16, keep as int32
+        torch_output_tensor = torch_input_tensor_a.clamp(0, 65535).to(torch.int32)
+    elif output_dtype == ttnn.uint32:
+        # For uint32 output, clamp to uint32 range and keep as int64 to avoid overflow
+        torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1).to(torch.int64)
+    elif output_dtype == ttnn.int32:
+        torch_output_tensor = torch_input_tensor_a.to(torch.int32)
     else:
-        torch_output_tensor = torch_input_tensor_a.to(target_torch_dtype)
+        # Default to float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -114,8 +117,14 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Convert both to float32 for comparison to avoid dtype mismatch in PCC
-    torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
-    output_tensor_f32 = output_tensor.to(torch.float32)
+    # Handle uint32 specially to avoid overflow in conversion
+    if output_dtype == ttnn.uint32:
+        # For uint32, convert to int64 first to avoid overflow, then to float
+        torch_output_tensor_f32 = torch_output_tensor.to(torch.int64).to(torch.float32)
+        output_tensor_f32 = output_tensor.to(torch.int64).to(torch.float32)
+    else:
+        torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
+        output_tensor_f32 = output_tensor.to(torch.float32)
 
     # Check with PCC
     pcc = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, 0.999)

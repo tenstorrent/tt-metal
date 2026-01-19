@@ -278,40 +278,34 @@ def run(
 
     start_time = start_measuring_time()
 
-    try:
-        # rotary_embedding_llama_fused_qk returns a tuple of (Q_rotated, K_rotated)
-        # API signature: (q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat)
-        result = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            input_tensor_a,  # q_input_tensor
-            input_tensor_b,  # k_input_tensor
-            input_tensor_c,  # cos_cache
-            input_tensor_d,  # sin_cache
-            input_tensor_e,  # trans_mat
-        )
+    # rotary_embedding_llama_fused_qk returns a tuple of (Q_rotated, K_rotated)
+    # API signature: (q_input_tensor, k_input_tensor, cos_cache, sin_cache, trans_mat)
+    result = ttnn.experimental.rotary_embedding_llama_fused_qk(
+        input_tensor_a,  # q_input_tensor
+        input_tensor_b,  # k_input_tensor
+        input_tensor_c,  # cos_cache
+        input_tensor_d,  # sin_cache
+        input_tensor_e,  # trans_mat
+    )
 
-        # The operation returns a tuple of (Q_rotated, K_rotated)
-        if isinstance(result, (list, tuple)) and len(result) == 2:
-            output_tensor_q = ttnn.to_torch(result[0])
-            output_tensor_k = ttnn.to_torch(result[1])
-        else:
-            e2e_perf = stop_measuring_time(start_time)
-            return [(False, f"Expected tuple of 2 tensors, got {type(result)}"), e2e_perf]
-
+    # The operation returns a tuple of (Q_rotated, K_rotated)
+    if isinstance(result, (list, tuple)) and len(result) == 2:
+        output_tensor_q = ttnn.to_torch(result[0])
+        output_tensor_k = ttnn.to_torch(result[1])
+    else:
         e2e_perf = stop_measuring_time(start_time)
+        return [(False, f"Expected tuple of 2 tensors, got {type(result)}"), e2e_perf]
 
-        # Check PCC for both Q and K outputs
-        pcc_q = check_with_pcc(torch_output_q, output_tensor_q, 0.999)
-        pcc_k = check_with_pcc(torch_output_k, output_tensor_k, 0.999)
+    e2e_perf = stop_measuring_time(start_time)
 
-        # Both must pass for the test to pass
-        if pcc_q[0] and pcc_k[0]:
-            pcc = (True, f"Q PCC: {pcc_q[1]}, K PCC: {pcc_k[1]}")
-        else:
-            pcc = (False, f"Q PCC: {pcc_q[1]}, K PCC: {pcc_k[1]}")
-    except Exception as e:
-        # Operation may not be fully implemented yet
-        print(f"Operation failed: {e}")
-        e2e_perf = stop_measuring_time(start_time)
-        pcc = (False, f"Operation failed: {str(e)}")
+    # Check PCC for both Q and K outputs
+    pcc_q = check_with_pcc(torch_output_q, output_tensor_q, 0.999)
+    pcc_k = check_with_pcc(torch_output_k, output_tensor_k, 0.999)
+
+    # Both must pass for the test to pass
+    if pcc_q[0] and pcc_k[0]:
+        pcc = (True, f"Q PCC: {pcc_q[1]}, K PCC: {pcc_k[1]}")
+    else:
+        pcc = (False, f"Q PCC: {pcc_q[1]}, K PCC: {pcc_k[1]}")
 
     return [pcc, e2e_perf]
