@@ -104,7 +104,6 @@ class TenstorrentSqrtOp(BasicOp):
 
         src = tensor_mapping["src"]
         dst = ttnn.sqrt(src)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

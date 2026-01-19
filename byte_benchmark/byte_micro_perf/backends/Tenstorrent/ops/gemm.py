@@ -62,11 +62,19 @@ class TenstorrentGemmOp(BasicOp):
         self.dtype = self.args_dict["dtype"]
         # ttnn supports bfloat16 and float32 for matmul
         # Skip unsupported dtypes
-        if self.dtype not in ["bfloat16", "float32"]:
+        if self.dtype not in ["bfloat8_b", "bfloat16", "float32"]:
             raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn matmul, only bfloat16/float32")
 
-        self.torch_dtype = getattr(torch, self.dtype)
-        self.ttnn_dtype = ttnn.bfloat16 if self.dtype == "bfloat16" else ttnn.float32
+        self.torch_dtype = torch.float32 if self.dtype == "float32" else torch.bfloat16
+        if self.dtype == "bfloat16":
+            self.dtype_size = 2
+            self.ttnn_dtype = ttnn.bfloat16
+        elif self.dtype == "float32":
+            self.ttnn_dtype = ttnn.float32
+            self.dtype_size = 4
+        elif self.dtype == "bfloat8_b":
+            self.dtype_size = 1
+            self.ttnn_dtype = ttnn.bfloat8_b
 
         if self.arg_type == "default":
             self.M = self.args_dict["M"]
@@ -97,10 +105,8 @@ class TenstorrentGemmOp(BasicOp):
             )
         }
 
-        # Size calculations for metrics (use original sizes for fair comparison)
-        dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
-        self.input_tensor_size = (self.M * self.K + self.K * self.N) * dtype_size
-        self.output_tensor_size = self.M * self.N * dtype_size
+        self.input_tensor_size = (self.M * self.K + self.K * self.N) * self.dtype_size
+        self.output_tensor_size = self.M * self.N * self.dtype_size
         self.tensor_size = self.input_tensor_size + self.output_tensor_size
 
         self.read_bytes = self.input_tensor_size
@@ -120,6 +126,20 @@ class TenstorrentGemmOp(BasicOp):
 
         all_tensor_list = []
         for _ in range(instance_num):
+            print(
+                "Creating ",
+                _,
+                " tensor(s) on Tenstorrent device shape = (",
+                self.M_padded,
+                ",",
+                self.K_padded,
+                "), (",
+                self.K_padded,
+                ",",
+                self.N_padded,
+                "), type = ",
+                self.ttnn_dtype,
+            )
             # Create torch tensors and convert to ttnn
             torch_a = torch.randn(1, 1, self.M_padded, self.K_padded, dtype=self.torch_dtype)
             torch_b = torch.randn(1, 1, self.K_padded, self.N_padded, dtype=self.torch_dtype)

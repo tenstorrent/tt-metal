@@ -200,9 +200,6 @@ class TenstorrentNativeAllToAllOp(BasicOp):
         # This is the hardware communication operation we're measuring
         output = ttnn.all_gather(src, dim=2)
 
-        # Synchronize to ensure operation completes before timing ends
-        ttnn.synchronize_device(self.mesh_device)
-
         return output
 
     def core_run(self, tensor_mapping):

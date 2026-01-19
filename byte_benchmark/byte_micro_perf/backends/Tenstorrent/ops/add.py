@@ -55,8 +55,16 @@ class TenstorrentAddOp(BasicOp):
         if self.dtype not in ["bfloat16", "float32", "bfloat8_b"]:
             raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn")
 
-        self.torch_dtype = getattr(torch, self.dtype)
-        self.ttnn_dtype = ttnn.bfloat16 if self.dtype == "bfloat16" else ttnn.float32
+        self.torch_dtype = torch.float32 if self.dtype == "float32" else torch.bfloat16
+        if self.dtype == "bfloat16":
+            self.dtype_size = 2
+            self.ttnn_dtype = ttnn.bfloat16
+        elif self.dtype == "float32":
+            self.ttnn_dtype = ttnn.float32
+            self.dtype_size = 4
+        elif self.dtype == "bfloat8_b":
+            self.dtype_size = 1
+            self.ttnn_dtype = ttnn.bfloat8_b
 
         if self.arg_type == "default":
             self.batch_size = self.args_dict["batch_size"]
@@ -83,12 +91,11 @@ class TenstorrentAddOp(BasicOp):
             )
         }
 
-        dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
         print(
-            f"Tenstorrent Add Op: batch_size={self.batch_size}, dim_size={self.dim_size}, height={self.height}, width={self.width}, dtype={self.dtype}, size = {dtype_size} bytes"
+            f"Tenstorrent Add Op: batch_size={self.batch_size}, dim_size={self.dim_size}, height={self.height}, width={self.width}, dtype={self.dtype}, size = {self.dtype_size} bytes"
         )
-        self.input_tensor_size = 2 * self.height * self.width * dtype_size
-        self.output_tensor_size = self.height * self.width * dtype_size
+        self.input_tensor_size = 2 * self.height * self.width * self.dtype_size
+        self.output_tensor_size = self.height * self.width * self.dtype_size
         self.tensor_size = self.input_tensor_size + self.output_tensor_size
 
         self.read_bytes = self.input_tensor_size

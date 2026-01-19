@@ -132,7 +132,6 @@ class TenstorrentEmbeddingOp(BasicOp):
         index = tensor_mapping["index"]
         # Use ttnn.embedding for lookup
         dst = ttnn.embedding(index, src)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

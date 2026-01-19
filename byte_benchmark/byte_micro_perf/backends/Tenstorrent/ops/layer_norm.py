@@ -130,7 +130,6 @@ class TenstorrentLayerNormOp(BasicOp):
         weight = tensor_mapping["weight"]
         bias = tensor_mapping["bias"]
         dst = ttnn.layer_norm(src, weight=weight, bias=bias)
-        ttnn.synchronize_device(self.device)
         return dst
 
     def core_run(self, tensor_mapping):

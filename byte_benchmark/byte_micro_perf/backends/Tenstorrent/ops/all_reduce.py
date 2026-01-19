@@ -210,10 +210,6 @@ class TenstorrentNativeAllReduceOp(BasicOp):
         # Perform native ttnn all_reduce - THIS IS THE ONLY MEASURED OPERATION
         output = ttnn.all_reduce(src)
 
-        # Synchronize to ensure operation completes before timing ends
-        # This is critical for accurate latency measurement
-        ttnn.synchronize_device(self.mesh_device)
-
         return output
 
     def core_run(self, tensor_mapping):
