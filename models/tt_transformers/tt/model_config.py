@@ -1676,10 +1676,13 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
-        if self.model_name == "Ministral-8B-Instruct-2410":
+        if self.sliding_window is not None and self.rope_theta_local is None:
             self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
@@ -1691,9 +1694,6 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
-        # Sliding window attention
-        self.sliding_window = text_config.get("sliding_window", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
