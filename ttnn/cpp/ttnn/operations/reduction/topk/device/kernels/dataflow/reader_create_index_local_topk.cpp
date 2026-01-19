@@ -6,21 +6,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-#include <stdint.h>
+#include <cstdint>
 
-/**
- * TopK Multicore Reader Kernel - Local Core Input Data and Index Generation
- *
- * This kernel runs on each local processing core and is responsible for:
- * 1. Reading the assigned width chunk of input tensor data from DRAM
- * 2. Generating corresponding index tiles to track element positions
- * 3. Streaming data to the local compute kernel for bitonic sorting
- *
- * Memory Organization:
- * - Double-buffered input to support continuous data flow to compute kernel
- * - Each local core processes Wt_local consecutive width tiles
- * - Index generation happens on-demand to minimize DRAM access
- */
 void kernel_main() {
     // Runtime arguments
     const uint32_t src_addr = get_arg_val<uint32_t>(0);        // DRAM address of input tensor
@@ -51,21 +38,12 @@ void kernel_main() {
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
 #endif  // not GENERATE_INDICES
 
-    // MAIN DATA STREAMING LOOP
-    // Process each height row sequentially, streaming this core's assigned width chunk
-    // to the compute kernel. The double-buffered circular buffers allow compute operations
-    // to proceed while the next tile is being fetched from DRAM.
-    //
-    // Memory Access Pattern:
-    // - Linear access within each height row for optimal DRAM bandwidth
-    // - Each core accesses a contiguous range [start_wt, start_wt + Wt_local)
-    // - Index generation eliminates need for separate DRAM reads
-    for (uint32_t i = start_ht; i < Ht; ++i) {                       // For each height row
-        for (uint32_t j = start_wt; j < start_wt + Wt_local; ++j) {  // For each width tile in chunk
+    for (uint32_t i = start_ht; i < Ht; ++i) {
+        for (uint32_t j = start_wt; j < start_wt + Wt_local; ++j) {
             // Stream input value tile from DRAM to local circular buffer
             cb_reserve_back(cb_id_in0, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(i * Wt + j, s, l1_write_addr);  // Read tile at (i,j) position
+            noc_async_read_tile(i * Wt + j, s, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
 #if GENERATE_INDICES

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,11 +59,11 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
-    ttnn::Shape input_shape = input_tensor.padded_shape();
+    const ttnn::Shape input_shape = input_tensor.padded_shape();
 
     // Check requirement #2: Output data type constraint
     // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
-    bool uint16_output = (input_shape[args.dim] < 65536);
+    const bool uint16_output = (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
 
     // Check requirement #1: Minimum dimension size for multi-core efficiency
     bool multicore_supported = (input_tensor.padded_shape()[args.dim] >= ttnn::prim::constants::multi_core_min_width);
@@ -222,7 +222,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Final check: ensure the operation can be executed with available resources
-    TT_FATAL(can_run, "Not enough cores or cache size available to run topk operation");
+    TT_FATAL(can_run, "Not enough cores or cache size available to run TopK operation");
 }
 
 TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_specs(
@@ -284,10 +284,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     const std::optional<Tensor>& indices_tensor,
     const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
     return ttnn::device_operation::launch<TopKDeviceOperation>(
-        TopkParams {
-            .k = k, .dim = dim, .largest = largest, .sorted = sorted, .output_memory_config = memory_config,
-            .sub_core_grids = sub_core_grids
-        },
+        TopkParams{
+            .k = k,
+            .dim = dim,
+            .largest = largest,
+            .sorted = sorted,
+            .output_memory_config = memory_config,
+            .sub_core_grids = sub_core_grids},
         TopkInputs{
             .input = input_tensor, .indices = indices_tensor, .preallocated_outputs = preallocated_output_tensors});
 }
