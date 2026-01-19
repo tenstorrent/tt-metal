@@ -7,6 +7,8 @@ Tests for full layernorm correctness against PyTorch reference.
 import pytest
 import torch
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_allclose
+from loguru import logger
 
 
 @pytest.fixture
@@ -30,12 +32,12 @@ def test_layernorm_basic(device):
     """Test basic layernorm with 32x32 tensor (1 tile)."""
     torch.manual_seed(42)
 
-    shape = (1, 1, 32, 32)
+    shape = (1, 1, 32, 128)
     W = shape[-1]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
-    gamma_torch = torch.ones(1, 1, 1, W, dtype=torch.bfloat16)
-    beta_torch = torch.zeros(1, 1, 1, W, dtype=torch.bfloat16)
+    gamma_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16)
+    beta_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16)
     eps = 1e-5
 
     # PyTorch reference
@@ -54,14 +56,17 @@ def test_layernorm_basic(device):
 
     # Compare with tolerance for bfloat16
     # bfloat16 limited precision + multiple ops (reduce, rsqrt, mul, add) compound numerical error
-    torch.testing.assert_close(output_torch, expected, rtol=0.2, atol=0.4)
+
+    passed, message = assert_with_pcc(output_torch, expected, pcc=0.99)
+    logger.info(message)
+    assert_allclose(output_torch, expected, rtol=0.2, atol=0.4)
 
 
 def test_layernorm_with_gamma_beta(device):
     """Test layernorm with non-trivial gamma and beta."""
     torch.manual_seed(123)
 
-    shape = (1, 1, 32, 32)
+    shape = (1, 1, 32, 1024)
     W = shape[-1]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
@@ -87,19 +92,25 @@ def test_layernorm_with_gamma_beta(device):
     # Compare with tolerance for bfloat16
     # bfloat16 has limited precision (7-bit mantissa), and LayerNorm involves
     # multiple ops (reduce, rsqrt, mul, add) which compound numerical error
-    torch.testing.assert_close(output_torch, expected, rtol=0.15, atol=0.7)
+
+    passed, message = assert_with_pcc(output_torch, expected, pcc=0.99)
+    logger.info(message)
+
+    assert_allclose(output_torch, expected, rtol=0.2, atol=0.4)
+
+    # torch.testing.assert_close(output_torch, expected, rtol=0.15, atol=0.7)
 
 
 def test_layernorm_multiple_rows(device):
     """Test layernorm with multiple tile rows (64x32)."""
     torch.manual_seed(456)
 
-    shape = (1, 1, 64, 32)  # 2 tile rows
+    shape = (1, 1, 64, 128)  # 2 tile rows
     W = shape[-1]
 
     input_torch = torch.randn(shape, dtype=torch.bfloat16)
-    gamma_torch = torch.ones(1, 1, 1, W, dtype=torch.bfloat16)
-    beta_torch = torch.zeros(1, 1, 1, W, dtype=torch.bfloat16)
+    gamma_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16)
+    beta_torch = torch.randn(1, 1, 1, W, dtype=torch.bfloat16)
     eps = 1e-5
 
     # PyTorch reference
@@ -118,4 +129,8 @@ def test_layernorm_multiple_rows(device):
 
     # Compare with tolerance for bfloat16
     # bfloat16 limited precision + multiple ops compound numerical error
-    torch.testing.assert_close(output_torch, expected, rtol=0.2, atol=0.4)
+    # torch.testing.assert_close(output_torch, expected, rtol=0.2, atol=0.4)
+
+    passed, message = assert_with_pcc(output_torch, expected, pcc=0.99)
+    assert_allclose(output_torch, expected, rtol=0.2, atol=0.4)
+    logger.info(message)

@@ -107,12 +107,13 @@ LayernormFusedRmProgramFactory::cached_program_t LayernormFusedRmProgramFactory:
             .set_page_size(cb_beta_tiled_idx, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_beta_tiled_config);
 
-    // CB c_16: Output RM sticks (32 sticks per tile row)
+    // CB c_16: Output RM sticks (Wt tile-sized pages to match untilize helper)
+    // Total capacity: Wt * tile_size = 32 * stick_size (same as before)
     uint32_t cb_out_rm_idx = tt::CBIndex::c_16;
-    uint32_t cb_out_rm_size = 32 * stick_size;  // 32 sticks per tile row
+    uint32_t cb_out_rm_size = Wt * tile_size;  // Wt tile-sized pages
     tt::tt_metal::CircularBufferConfig cb_out_rm_config =
         tt::tt_metal::CircularBufferConfig(cb_out_rm_size, {{cb_out_rm_idx, cb_data_format}})
-            .set_page_size(cb_out_rm_idx, stick_size);  // Page = one stick
+            .set_page_size(cb_out_rm_idx, tile_size);  // Page = tile_size (for untilize helper compatibility)
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_rm_config);
 
     // Intermediate CBs for layernorm compute
