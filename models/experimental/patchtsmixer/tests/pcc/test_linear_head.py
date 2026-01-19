@@ -26,7 +26,7 @@ def test_patchtsmixer_linear_head(device, head_aggregation):
         num_channels=C,
         num_patches=Np,
         num_targets=num_targets,
-        head_agregation=head_aggregation,
+        head_aggregation=head_aggregation,
         output_range=None,
         head_dropout=0.0,  # dropping out would introduce undeterministic results.
     ).eval()
@@ -55,13 +55,8 @@ def test_patchtsmixer_linear_head(device, head_aggregation):
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Get TTNN output
-    tt_output = tt_head(x_tt)  # Returns torch tensor (B, num_targets)
+    tt_output = tt_head(x_tt)
+    tt_torch_output = ttnn.to_torch(tt_output)
+    tt_torch_output = tt_torch_output.squeeze(dim=(0, 1))
 
-    # Compare outputs
-    print(f"\n=== LinearHead Test (aggregation={head_aggregation}) ===")
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {torch_output.shape}")
-    print(f"PyTorch output range: [{torch_output.min():.4f}, {torch_output.max():.4f}]")
-    print(f"TTNN output range: [{tt_output.min():.4f}, {tt_output.max():.4f}]")
-
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output, tt_torch_output, 0.99)

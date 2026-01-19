@@ -101,7 +101,8 @@ def test_patchtsmixer_model_for_forecasting(device, reset_seeds, use_gated_attn)
     past_values = torch.randn(B, L, C)
     torch_out = torch_model(past_values)  # (B, H, C)
 
-    tt_out = tt_model(past_values, dtype=ttnn.bfloat16)  # (B, H, 1, C)
+    tt_past_values = ttnn.from_torch(past_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_model(tt_past_values, dtype=ttnn.bfloat16)  # (B, H, 1, C)
     tt_out_torch = ttnn.to_torch(tt_out).squeeze(2)  # (B, H, C)
 
     assert_with_pcc(torch_out, tt_out_torch, 0.99)
