@@ -25,8 +25,8 @@ namespace tt::tt_fabric {
     enum class ConnectionValidationMode;
     template <typename TargetNode, typename GlobalNode>
     MappingResult<TargetNode, GlobalNode> solve_topology_mapping(...);
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(...);
-    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_map_physical(...);
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(...);
+    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_graph_physical(...);
 }
 ```
 
@@ -220,11 +220,11 @@ auto result = solve_topology_mapping(
 ```cpp
 // Build logical graphs from MeshGraph
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> logical_graphs =
-    build_adjacency_map_logical(mesh_graph);
+    build_adjacency_graph_logical(mesh_graph);
 
 // Build physical graphs from PhysicalSystemDescriptor
 std::map<MeshId, AdjacencyGraph<AsicID>> physical_graphs =
-    build_adjacency_map_physical(psd, asic_id_to_mesh_rank);
+    build_adjacency_graph_physical(psd, asic_id_to_mesh_rank);
 ```
 
 ## Architecture
