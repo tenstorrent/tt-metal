@@ -10,9 +10,9 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("enable_sigmoid", [True])
-@pytest.mark.parametrize("seed", [42])
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("enable_sigmoid", [True, False])
+@pytest.mark.parametrize("seed", [42, 201, 512])
 def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     """Test TTNN Deepseek Moe Gate operation on a 16x16 tile"""
 
