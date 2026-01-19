@@ -51,6 +51,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
 }
 
 clean() {
@@ -85,18 +86,14 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
-# Requested handling for 20.04 -> 22.04 migration
-if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
-    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
-    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-fi
 
 configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
+enable_lto="OFF"
 
 declare -a cmake_args
 
@@ -136,6 +133,7 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+enable-lto
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -199,6 +197,8 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
+        --enable-lto)
+            enable_lto="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -246,14 +246,20 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
     exit 1
 fi
 
+# Disable unity builds for CodeCoverage builds to get accurate per-file coverage
+if [[ "$build_type" == "CodeCoverage" || "$build_type" == "ASanCoverage" ]]; then
+    unity_builds="OFF"
+fi
+
 # If build-dir is not specified
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    # Create and link the build directory
-    mkdir -p $build_dir
-    ln -nsf $build_dir build
 fi
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
 
 install_prefix_default=$build_dir
 cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
@@ -277,6 +283,7 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+echo "INFO: Enable LTO: $enable_lto"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -399,6 +406,10 @@ if [ "$enable_fake_kernels_target" = "ON" ]; then
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
 else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
+fi
+
+if [ "$enable_lto" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

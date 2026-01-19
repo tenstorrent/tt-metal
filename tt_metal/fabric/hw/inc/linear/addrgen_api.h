@@ -4,11 +4,12 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/tensor/tensor_accessor.h"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_config.h"
 
 namespace tt::tt_fabric {
 
@@ -69,19 +70,10 @@ FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, u
 
 }  // namespace addrgen_detail
 
-// Placeholder max page size for the addrgen until the page size is properly visible by the worker
-// https://github.com/tenstorrent/tt-metal/issues/25966
-static constexpr uint32_t max_fabric_addrgen_payload_size = 4532;
-
-FORCE_INLINE void validate_max_payload_size(uint32_t payload_size) {
-    ASSERT((payload_size <= max_fabric_addrgen_payload_size));
-    if ((payload_size > max_fabric_addrgen_payload_size)) {
-        WAYPOINT("HUNG");
-        // hang to prompt investigation
-        while (1) {
-        }
-    }
-}
+// Maximum fabric packet payload size (runtime configuration)
+// Used for packetization logic in fabric write functions
+// Note: This is now a function call that reads from L1 configuration
+#define FABRIC_MAX_PACKET_SIZE (tt::tt_fabric::get_fabric_max_packet_size())
 
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_unicast_write(
@@ -92,7 +84,6 @@ FORCE_INLINE void to_noc_unicast_write(
     uint32_t offset = 0) {
     auto noc_address = addrgen_detail::get_noc_address(d, id, offset);
     pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{noc_address}, packet_payload_size);
-    validate_max_payload_size(packet_payload_size);
 }
 
 template <typename AddrGenType>
@@ -116,8 +107,6 @@ FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader(
             noc_address, atomic_inc_spec.noc_address, atomic_inc_spec.val, atomic_inc_spec.flush),
         page_size);
-
-    validate_max_payload_size(page_size);
 }
 
 template <typename AddrGenType>
@@ -146,9 +135,7 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
     auto noc_address1 = addrgen_detail::get_noc_address(d, id1, offset1);
 
     pkt_hdr->to_noc_unicast_scatter_write(
-        NocUnicastScatterCommandHeader({{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)}), payload_size);
-
-    validate_max_payload_size(payload_size);
+        NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}), payload_size);
 }
 
 template <typename AddrGenType>

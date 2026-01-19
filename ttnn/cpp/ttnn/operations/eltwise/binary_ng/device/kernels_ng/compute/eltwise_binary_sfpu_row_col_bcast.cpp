@@ -80,7 +80,7 @@ ALWI void process_tile(
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
@@ -92,6 +92,9 @@ ALWI void process_tile(
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_right, i, i * 2 + 1);
 
+#if HAS_ACTIVATIONS(POST)
+            BINARY_SFPU_INIT
+#endif
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
@@ -130,7 +133,7 @@ void MAIN {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 

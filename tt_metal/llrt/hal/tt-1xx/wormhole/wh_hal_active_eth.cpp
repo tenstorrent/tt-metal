@@ -5,8 +5,8 @@
 #define HAL_BUILD tt::tt_metal::wormhole::active_eth
 #define COMPILE_FOR_ERISC
 
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
@@ -123,12 +123,14 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
             {"ER", "ERISC"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1};
 
     static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),

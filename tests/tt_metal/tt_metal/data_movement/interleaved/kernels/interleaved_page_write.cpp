@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
-// #include "debug/dprint.h"
-// #include "debug/dprint_pages.h"
+// #include "api/debug/dprint.h"
+// #include "api/debug/dprint_pages.h"
 
 template <uint32_t num_of_transactions, uint32_t num_pages, uint32_t page_size_bytes, typename AddrGen>
 FORCE_INLINE void noc_write_helper(const uint32_t l1_read_addr, const AddrGen& s) {

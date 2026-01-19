@@ -7,7 +7,7 @@
 #include <algorithm>
 #include "all_gather.hpp"
 #include "device/all_gather_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -26,6 +26,9 @@ ttnn::Tensor ExecuteAllGather::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
@@ -48,6 +51,9 @@ ttnn::Tensor ExecuteAllGather::invoke(
                     optional_output_tensor,
                     num_links,
                     topology,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel,
                     sub_core_grid);
             }
             return tensor;
@@ -74,6 +80,9 @@ ttnn::Tensor ExecuteAllGather::invoke(
         optional_output_tensor,
         num_links_,
         topology_,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
         sub_core_grid);
 }
 

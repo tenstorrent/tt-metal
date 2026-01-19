@@ -18,7 +18,7 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
+def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
         (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
@@ -42,7 +42,6 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
@@ -50,12 +49,6 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode=padding_mode,
-        groups=1,
         compute_with_storage_grid_size=grid_size,
     )
 

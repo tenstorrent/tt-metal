@@ -9,14 +9,13 @@
 #include <cstdint>
 
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/allocator/allocator.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct AllocatorConfig;
 
-class L1BankingAllocator : public Allocator {
+class L1BankingAllocator : public AllocatorImpl {
 public:
     explicit L1BankingAllocator(const AllocatorConfig& alloc_config);
     static AllocatorConfig generate_config(
@@ -28,6 +27,4 @@ public:
         BankMapping l1_bank_remap);
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

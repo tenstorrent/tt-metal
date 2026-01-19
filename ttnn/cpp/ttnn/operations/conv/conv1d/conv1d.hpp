@@ -9,7 +9,7 @@
 #include <tuple>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -22,7 +22,7 @@ using Result = std::variant<
     std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
     std::tuple<ttnn::Tensor, OutputLength, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
+using Conv1dConfig = ttnn::prim::Conv2dConfig;
 
 // Conv1dOperation is a wrapper around Conv2dOperation to handle 1D convolutions.
 // It uses the same logic as Conv2dOperation but with 1D-specific parameters.

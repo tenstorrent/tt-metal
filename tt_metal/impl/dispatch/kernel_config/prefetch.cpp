@@ -82,11 +82,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
+        bool is_mock =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
@@ -406,6 +408,19 @@ void PrefetchKernel::GenerateDependentConfigs() {
     }
 }
 
+void PrefetchKernel::InitializeRuntimeArgsValues() {
+    // Initialize runtime args offsets
+    int current_offset = 0;
+    static_config_.offsetof_my_dev_id = current_offset++;
+    static_config_.offsetof_to_dev_id = current_offset++;
+    static_config_.offsetof_router_direction = current_offset++;
+    // Initialize runtime args
+    runtime_args_.resize(current_offset);
+    runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
+}
+
 void PrefetchKernel::CreateKernel() {
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
     auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -495,11 +510,8 @@ void PrefetchKernel::CreateKernel() {
 
         {"NUM_HOPS", std::to_string(dependent_config_.num_hops.value())},
 
-        {"MY_DEV_ID", std::to_string(dependent_config_.my_dev_id.value_or(0))},
         {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
-        {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
-        {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
@@ -510,6 +522,12 @@ void PrefetchKernel::CreateKernel() {
             defines["FABRIC_2D"] = "1";
         }
     }
+
+    // Runtime args offsets
+    defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
+    defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
+    defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
+
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(

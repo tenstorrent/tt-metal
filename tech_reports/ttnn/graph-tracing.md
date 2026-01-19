@@ -48,6 +48,7 @@ First, each node has these parameters
 * `node_type`: node type, available types are listed below
 * `params`: the map of parameters \[mapping a string string property name to a string value\]
 * `connections`: An array of connections to subsequent nodes.
+* `input_tensors`: An array of incoming nodes. Useful for determining the order of args.
 
 ### Node Connections
 Each node in the graph maintains a list of connections to other nodes. These connections represent the flow of data and control through the various operations and memory events during the execution of the network.
@@ -368,7 +369,7 @@ def test_graph_capture_with_hang_device_operation(device):
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
     try:
-        ttnn.prim.test_hang_device_operation(tt_input)
+        ttnn.test_hang_device_operation(tt_input)
         # this allows the device to throw the exception inside the try block
         ttnn._ttnn.device.synchronize_device(device)
     except Exception as e:
@@ -421,10 +422,8 @@ def process_allocations(graph):
                        i += 1
                    else:
                        break
-           name = v.params['name']
-           if name == "ttnn::prim::old_infra_device_operation":
-               name = "ttnn::prim::old_infra_op"
-           cur_op.append(name)
+          name = v.params['name']
+          cur_op.append(name)
        if v.node_type == 'circular_buffer_allocate':
            total_cb += int(v.params['size'])
        if v.node_type == 'circular_buffer_deallocate_all':
@@ -455,7 +454,7 @@ High level call stack here is:
 ```
 ttnn::add
 ttnn::repeat
-ttnn::prim::old_infra_device_operation (calling ttnn primitive operation)
+ttnn::prim::repeat (calling ttnn primitive operation)
 Device Operation (dispatching device operation)
 create_device_tensor (creates intermediate output for ttnn::repeat)
 ttnn::prim::binary (calling ttnn primitive operation)
@@ -628,7 +627,7 @@ Deallocate Device Buffer
         "name": "function_start",
         "params": {
             "inputs": "5",
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {
@@ -734,7 +733,7 @@ Deallocate Device Buffer
         "counter": 16,
         "name": "function_end",
         "params": {
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {
@@ -1253,12 +1252,6 @@ The `LevelizedGraph` is particularly useful for:
 
 ### Limitations
 
-1. **Argument Order**: Graph capture cannot always distinguish the order of arguments in operations like `subtract(%a, %b)` vs `subtract(%b, %a)`. While the `in_edges` array preserves the order tensors are used, this may not always match the exact call-site argument order, especially when multiple tensors are created in quick succession.
-
-2. **Incomplete Binary Ops**: In rare cases, graph capture might produce nodes for binary operations with only one input (e.g., when `digamma` is decomposed). This can sometimes be inferred as using the same tensor twice, but may lead to incorrect behavior.
-
-3. **Output Info Availability**: Complete `output_info` for operations without a consumer cannot be inferred from the graph trace. As a result, the return type and layout information of the top-level function may not always be available. Tensor vertices also have empty `output_info` since they don't produce outputs in the traditional sense.
-
-4. **Tensor Vertex Ordering**: The order of tensor vertices in the levelized graph is determined by when they are first used in the trace, not by their creation order or the order they appear as function parameters. This is a consequence of how the graph trace records tensor usage.
+1. **Output Info Availability**: Complete `output_info` for operations without a consumer cannot be inferred from the graph trace. As a result, the return type and layout information of the top-level function may not always be available. Tensor vertices also have empty `output_info` since they don't produce outputs in the traditional sense.
 
 We're working to fix these limitations soon.

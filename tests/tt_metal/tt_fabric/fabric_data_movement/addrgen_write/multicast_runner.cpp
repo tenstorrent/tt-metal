@@ -22,7 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_fabric::test {
 
@@ -32,17 +32,6 @@ using tt::tt_fabric::test::AddrgenTestParams;
 // ---------- helpers (validation / utilities) ----------
 
 namespace {
-
-// Lookup device by physical chip ID
-inline tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
-    auto devices = tt::DevicePool::instance().get_all_active_devices();
-    for (auto* d : devices) {
-        if (d->id() == phys_id) {
-            return d;
-        }
-    }
-    return nullptr;
-}
 
 // Validate workload
 inline bool validate_workload_or_fail(const AddrgenTestParams& p) {
@@ -97,8 +86,8 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = find_device_by_id(src_phys);
-    tt::tt_metal::IDevice* dst_dev = find_device_by_id(dst_phys);
+    tt::tt_metal::IDevice* src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
+    tt::tt_metal::IDevice* dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
     if (!src_dev || !dst_dev) {
         ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
         return;
@@ -117,7 +106,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto view = mesh->get_view();
     auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
         for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
-            if (view.get_device(c)->id() == phys) {
+            if (view.impl().get_device(c)->id() == phys) {
                 return c;
             }
         }
@@ -155,7 +144,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     for (uint32_t r = 0; r < M; ++r) {
         for (uint32_t c = 0; c < N; ++c) {
             Dist::MeshCoordinate mc{(int)r, (int)c};
-            auto* dev = view.get_device(mc);
+            auto* dev = view.impl().get_device(mc);
             if (!dev) {
                 continue;
             }
@@ -243,7 +232,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
     for (const auto& mc : dst_coords) {
-        auto* dev_i = view.get_device(mc);
+        auto* dev_i = view.impl().get_device(mc);
         auto xy_i = dev_i->worker_core_from_logical_core(p.receiver_core);
         if (xy_i != rx_xy) {
             ADD_FAILURE() << "Receiver worker XY mismatch across chips";
@@ -329,7 +318,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // === Per-direction fabric connections (W,E,N,S) ===
     auto coord_to_fabric_id = [&](Dist::MeshCoordinate mc) -> tt::tt_fabric::FabricNodeId {
-        auto* dev = view.get_device(mc);
+        auto* dev = view.impl().get_device(mc);
         TT_FATAL(dev != nullptr, "No device at mesh coord ({}, {})", (int)mc[0], (int)mc[1]);
         ChipId phys = dev->id();
         return cp.get_fabric_node_id_from_physical_chip_id(phys);

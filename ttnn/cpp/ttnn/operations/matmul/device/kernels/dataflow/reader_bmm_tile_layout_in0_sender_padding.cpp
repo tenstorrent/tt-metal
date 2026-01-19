@@ -4,10 +4,10 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-#include "pad_tile.hpp"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 

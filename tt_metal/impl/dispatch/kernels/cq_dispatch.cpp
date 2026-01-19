@@ -10,10 +10,10 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
@@ -85,11 +85,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
@@ -132,6 +129,10 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
 static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 using RelayClientType =
     CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>;
 
@@ -489,9 +490,26 @@ void process_write_linear(uint32_t num_mcast_dests) {
 
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
+#if defined(FABRIC_RELAY)
+        uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
+        bool hit_boundary = false;
+        if (available_data == 0) {
+            available_data = dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
+                hit_boundary = true;
+            });
+        }
+        uint32_t xfer_size = length > available_data ? available_data : length;
+        if (hit_boundary) {
+            if (multicast) {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+            } else {
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
+            }
+        }
+#else
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
-
+#endif
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
@@ -1223,6 +1241,10 @@ void kernel_main() {
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1272,14 +1294,11 @@ void kernel_main() {
             fabric_worker_buffer_index_sem,
             fabric_mux_status_address,
             my_fabric_sync_status_addr,
-            my_dev_id,
-            to_dev_id,
             to_mesh_id,
             ew_dim,
-            router_direction,
             fabric_header_rb_base,
             num_hops,
-            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #endif
     }
     bool done = false;

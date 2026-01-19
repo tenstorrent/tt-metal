@@ -4,10 +4,9 @@
 
 #include "layernorm_pre_all_gather.hpp"
 
-#include "device/layernorm_pre_all_gather_op.hpp"
+#include "device/layernorm_pre_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
-namespace operation = tt::tt_metal::operation;
 
 namespace ttnn::operations::normalization {
 
@@ -16,8 +15,7 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
     const DataType dtype,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const LayerNormProgramConfig>& program_config,
-    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
     const std::optional<MemoryConfig>& memory_config) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
@@ -31,22 +29,19 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
             std::nullopt,           // bias
             residual_input_tensor,  // residual_input_tensor
             memory_config.value_or(input_tensor.memory_config()),
-            program_config.value_or(LayerNormDefaultProgramConfig{}),
+            program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
             kernel_config_val,
             std::nullopt,  // dtype
-            LayerNormType::LAYERNORM,
-            DistributedLayerNormStage::PRE_ALL_GATHER);
-    } else {
-        return operation::run(
-                   LayerNormPreAllGather{
-                       .norm_type = LayerNormDistributedType::LAYERNORM,
-                       .dtype = dtype,
-                       .compute_kernel_config = kernel_config_val,
-                       .use_2d_core_grid = std::nullopt,
-                       .program_config = distributed_program_config},
-                   {input_tensor})
-            .at(0);
+            ttnn::prim::LayerNormType::LAYERNORM,
+            ttnn::prim::DistributedLayerNormStage::PRE_ALL_GATHER);
     }
+    return ttnn::prim::layer_norm_pre_all_gather(
+        input_tensor,
+        ttnn::prim::LayerNormDistributedType::LAYERNORM,
+        dtype,
+        kernel_config_val,
+        program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
+        std::nullopt);  // use_2d_core_grid
 }
 
 }  // namespace ttnn::operations::normalization

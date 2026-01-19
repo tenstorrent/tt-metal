@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_bmm_8bank for reuse

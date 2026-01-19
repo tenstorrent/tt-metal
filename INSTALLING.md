@@ -38,9 +38,9 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.17 \
-  --fw-version=18.3.0 \
-  --kmd-version=1.34 \
+  --smi-version=v3.0.38 \
+  --fw-version=19.2.0 \
+  --kmd-version=2.5.0 \
   --no-install-podman \
   --no-install-metalium-container
 ```

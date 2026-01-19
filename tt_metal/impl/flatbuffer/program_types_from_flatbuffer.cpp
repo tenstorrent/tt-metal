@@ -122,7 +122,7 @@ std::vector<std::vector<uint32_t>> from_flatbuffer(
 
 CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* fb_core_coord) {
     TT_FATAL(fb_core_coord, "Invalid CoreCoord data from flatbuffer.");
-    return CoreCoord{fb_core_coord->x(), fb_core_coord->y()};
+    return CoreCoord{static_cast<std::size_t>(fb_core_coord->x()), static_cast<std::size_t>(fb_core_coord->y())};
 }
 
 CoreRange from_flatbuffer(const flatbuffer::CoreRange* fb_core_range) {

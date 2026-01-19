@@ -15,8 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn {
-namespace operations::reduction {
+namespace ttnn::operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -41,11 +40,11 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
     const auto& input_shape = input_tensor_arg.logical_shape();
     int rank = input_shape.size();
-    for (int i = 0; i < dim.size(); i++) {
-        if (dim[i] >= (rank - 2)) {
-            height_width_dims.push_back(dim[i]);
+    for (int d : dim) {
+        if (d >= (rank - 2)) {
+            height_width_dims.push_back(d);
         } else {
-            non_height_width_dims.push_back(dim[i]);
+            non_height_width_dims.push_back(d);
         }
     }
     return {non_height_width_dims, height_width_dims};
@@ -503,5 +502,4 @@ template struct Reduce<ReduceType::Max>;
 template struct Reduce<ReduceType::Min>;
 template struct Reduce<ReduceType::Std>;
 template struct Reduce<ReduceType::Var>;
-}  // namespace operations::reduction
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction

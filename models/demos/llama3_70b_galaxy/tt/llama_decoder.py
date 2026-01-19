@@ -47,6 +47,7 @@ class TtTransformerBlock(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        self.unfuse_res_add = args.unfuse_res_add
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -87,7 +88,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -106,7 +106,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -150,7 +149,12 @@ class TtTransformerBlock(LightweightModule):
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            if self.unfuse_res_add:
+                h = ttnn.add(x, h)
+                attn_in_sharded, _ = self.attention_norm(h, None, mode)
+            else:
+                attn_in_sharded, _ = self.attention_norm(x, h, mode)
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -168,13 +172,17 @@ class TtTransformerBlock(LightweightModule):
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
-            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+            if self.unfuse_res_add:
+                h = ttnn.add(attn_out, h)
+                ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            else:
+                ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # bfloat8_b if prefill, bfloat16 if decode
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":

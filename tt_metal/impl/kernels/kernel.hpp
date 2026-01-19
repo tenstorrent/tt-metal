@@ -34,8 +34,8 @@ struct KernelSource {
     std::string name() const {
         std::string name;
         if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind("/") + 1;
-            const std::size_t pos_of_dot = this->source_.rfind(".");
+            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
+            const std::size_t pos_of_dot = this->source_.rfind('.');
             name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
         } else {
             name = "Kernel_Source_Code";
@@ -78,7 +78,7 @@ public:
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-    uint32_t dispatch_class() { return this->dispatch_class_; }
+    uint32_t dispatch_class() const { return this->dispatch_class_; }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -94,7 +94,7 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
 
     void validate_runtime_args_size(
-        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
+        size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
     void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
     void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 
@@ -153,11 +153,11 @@ protected:
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
-    uint32_t common_runtime_args_count_;
+    uint32_t common_runtime_args_count_{0};
     std::vector<uint32_t> common_runtime_args_;
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
-    std::size_t max_runtime_args_per_core_;  // For validation
+    std::size_t max_runtime_args_per_core_{0};  // For validation
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.

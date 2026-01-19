@@ -26,6 +26,7 @@ namespace distributed {
 class MeshDevice;
 class MeshEvent;
 class MeshCoordinateRangeSet;
+class ShardDataTransfer;
 }  // namespace distributed
 
 namespace experimental {
@@ -46,7 +47,14 @@ struct MemoryPinningParameters {
  */
 class PinnedMemory {
 public:
+    /**
+     * @brief NOC address and the MMIO device ID where it's usable from.
+     *
+     * This address may have a 64-bit offset, so it must be used with noc_wwrite_with_state and the variant of
+     * noc_read_with_state that takes src_noc_addr as an argument.
+     */
     struct NocAddr {
+        uint32_t pcie_xy_enc;
         uint64_t addr;
         ChipId device_id;
     };
@@ -184,6 +192,14 @@ private:
  * @return Memory pinning parameters
  */
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer);
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory);
+
+const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(
+    const distributed::ShardDataTransfer& shard_data_transfer);
+void ShardDataTransferSetPinnedMemory(
+    distributed::ShardDataTransfer& shard_data_transfer, std::shared_ptr<PinnedMemory> pinned_memory);
 
 }  // namespace experimental
 

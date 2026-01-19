@@ -86,7 +86,7 @@ struct LlamaReduceScatterDeviceOperation {
             const tensor_args_t& tensor_args,
             LlamaReduceScatterDeviceOperation::tensor_return_value_t& tensor_return_value);
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -113,25 +113,23 @@ struct LlamaReduceScatterDeviceOperation {
     static std::tuple<CoreRangeSet, CoreRangeSet> get_rs_core_grids(
         const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
         const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& intermediate_packet_buffer,
-        int32_t dim,
-        const GlobalSemaphore& semaphore,
-        tt::tt_metal::SubDeviceId subdevice_id,
-        uint32_t cluster_axis,
-        uint32_t ring_devices,
-        uint32_t num_links,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
-        bool use_noc1_only = false);
 };
+
 }  // namespace ttnn::operations::experimental::ccl
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto llama_reduce_scatter = ttnn::register_operation<
-    "ttnn::prim::llama_reduce_scatter",
-    ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation>();
+
+ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation::tensor_return_value_t llama_reduce_scatter(
+    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& intermediate_packet_buffer,
+    int32_t dim,
+    const GlobalSemaphore& semaphore,
+    tt::tt_metal::SubDeviceId subdevice_id,
+    uint32_t cluster_axis,
+    uint32_t ring_devices,
+    uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+    bool use_noc1_only = false);
+
 }  // namespace ttnn::prim

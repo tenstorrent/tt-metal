@@ -107,6 +107,11 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder if envs.VLLM_USE_V1 else DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)
@@ -176,8 +181,17 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
-        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1
+        enable_trace,
+        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1,
     ):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or all(
+            x == 0 for x in start_pos
+        ), f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
+        # Must add this so that vLLM can call without errors
+        enable_trace = False
+        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
+
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
         padded_seq_len = tokens.shape[-1]

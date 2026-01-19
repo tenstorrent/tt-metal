@@ -18,7 +18,7 @@ The comprehensive guide includes:
 - Complete 15-step checklist for verification
 - File structure guidance
 - Building and testing instructions
-- Reference examples (Dropout operation)
+- Reference examples (Dropout operation and send_async operation)
 
 See the comprehensive guide for detailed examples and the complete 15-step checklist.
 
@@ -35,5 +35,9 @@ See the comprehensive guide for detailed examples and the complete 15-step check
 See the Dropout operation migration for a complete example:
 - Location: `ttnn/cpp/ttnn/operations/experimental/dropout`
 - PRs: https://github.com/tenstorrent/tt-metal/pull/11793, https://github.com/tenstorrent/tt-metal/pull/11956
+
+See send_async operation migration for a CCL example:
+- Location: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async`
+- PR: https://github.com/tenstorrent/tt-metal/pull/33005
 
 For detailed file structure, building, and testing instructions, see the comprehensive guide.

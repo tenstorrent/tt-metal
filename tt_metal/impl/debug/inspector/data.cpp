@@ -4,13 +4,13 @@
 
 #include "data.hpp"
 #include <stdexcept>
-#include "impl/debug/inspector/rpc_server_controller.hpp"
-#include "impl/debug/inspector/logger.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rpc_server_controller.hpp"
+#include "logger.hpp"
+#include "context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "device/device_manager.hpp"
 #include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -31,6 +31,8 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(
+                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
@@ -128,6 +130,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
+        mesh_workload.setName(mesh_workload_data.name);
+        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -157,9 +161,19 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     }
 }
 
+void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
+    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
+    for (size_t i = 0; i < runtime_ids.size(); ++i) {
+        auto entry = all_runtime_ids[i];
+        entry.setWorkloadId(runtime_ids[i].workload_id);
+        entry.setRuntimeId(runtime_ids[i].runtime_id);
+    }
+}
+
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
     // Get all active device ids
-    auto device_ids = DevicePool::instance().get_all_active_device_ids();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
@@ -223,8 +237,14 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Fast dispatch is not enabled, no dispatch core info to return
+        results.initCoresByCategory(0);
+        return;
+    }
     // This returns a map of command queue id to event id for all active devices
-    auto cq_to_event_by_device = DevicePool::instance().get_all_command_queue_event_infos();
+    auto cq_to_event_by_device =
+        tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
     // In a single lock, get the number of non-empty categories and initialize the results
     std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
 

@@ -10,9 +10,9 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 L1 memory is allocated on multiple Tensix cores: one master core (sender) and multiple subordinate cores (receivers). Data is written into the L1 memory on the master core. The master core issues NOC transactions (either unicast or multicast) to transfer its data to L1 memory on all subordinate cores. Once data is transferred to all subordinate cores, hardware barriers ensure data validity and completion of the transaction.
 
-Test attributes such as transaction sizes, number of transactions, and grid configurations as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes, number of transactions, and grid configurations as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

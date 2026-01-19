@@ -11,16 +11,16 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn::operations::transformer::sdpa_decode {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct SdpaDecodeParams {
     bool is_causal = false;
     bool paged_attention = false;
     std::vector<uint32_t> cur_pos;
     std::optional<float> scale = std::nullopt;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<SDPAProgramConfig> program_config = std::nullopt;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config = std::nullopt;
     DeviceComputeKernelConfig compute_kernel_config;
     uint32_t k_chunk_size = 0;
     // Share cache is only meaningful for some unpaged configurations; default is false.
@@ -30,7 +30,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> head_dim_v = std::nullopt;
 };
 
-struct tensor_args_t {
+struct SdpaDecodeInputs {
     // Mandatory tensors
     Tensor q;
     Tensor k;
@@ -45,7 +45,4 @@ struct tensor_args_t {
     std::optional<Tensor> attention_sink;
 };
 
-using spec_return_value_t = ttnn::TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
-
-}  // namespace ttnn::operations::transformer::sdpa_decode
+}  // namespace ttnn::prim

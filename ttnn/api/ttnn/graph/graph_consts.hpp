@@ -11,6 +11,7 @@ constexpr auto kCounter = "counter";
 constexpr auto kConnections = "connections";
 constexpr auto kParams = "params";
 constexpr auto kArguments = "arguments";
+constexpr auto kInputTensors = "input_tensors";
 // params keys
 constexpr auto kName = "name";
 constexpr auto kInputs = "inputs";

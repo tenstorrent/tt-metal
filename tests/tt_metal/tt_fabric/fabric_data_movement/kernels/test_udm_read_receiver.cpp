@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_utils.hpp"
@@ -19,10 +19,8 @@ constexpr uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_compile
 constexpr uint32_t num_packets = get_compile_time_arg_val(6);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(7);
 constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
-constexpr uint32_t noc_x_start = get_compile_time_arg_val(9);
-constexpr uint32_t noc_y_start = get_compile_time_arg_val(10);
-constexpr uint32_t dst_dev_id = get_compile_time_arg_val(11);
-constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(12);
+constexpr uint32_t dst_dev_id = get_compile_time_arg_val(9);
+constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(10);
 
 /*
  * This test kernel is a kernel to test the functionality that will be implemented in a fabric relay kernel.
@@ -30,8 +28,10 @@ constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(12);
  * blocks can be tested without requiring full integration/deployment into fabric
  */
 void kernel_main() {
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
+    // Per-core sender coordinates from runtime args
+    uint32_t arg_index = 0;
+    uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
+    uint32_t noc_y_start = get_arg_val<uint32_t>(arg_index);
 
     uint32_t time_seed = time_seed_init;
 
@@ -65,9 +65,6 @@ void kernel_main() {
         remote_notification_dest_addr,
         time_seed_init,
         req_notification_size_bytes);
-
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;

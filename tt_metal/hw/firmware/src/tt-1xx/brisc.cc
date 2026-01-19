@@ -17,24 +17,25 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dev_msgs.h"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
-#include "circular_buffer_init.h"
-#include "dataflow_api.h"
+#include "hostdev/dev_msgs.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
+#include "internal/circular_buffer_init.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
 
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/watcher_common.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 
 // clang-format on
 
+// Global so triage can see these values.
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -44,6 +45,7 @@ constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 c_tensix_core core;
 
@@ -76,6 +78,7 @@ uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
@@ -256,7 +259,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
+    subordinate_sync->all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -264,14 +267,14 @@ inline void deassert_ncrisc_trisc() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+    while (subordinate_sync->trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
 
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0))) {
-        mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
-        mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -281,7 +284,7 @@ inline void start_ncrisc_kernel_run_early(uint32_t enables) {
     // CBs before we wait on it.
 #if !defined(ARCH_WORMHOLE)
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
@@ -291,8 +294,8 @@ inline void start_ncrisc_kernel_run(uint32_t enables) {
     if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
-        while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        while (subordinate_sync->dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
         assert_just_ncrisc_reset();
@@ -307,7 +310,7 @@ inline void start_ncrisc_kernel_run(uint32_t enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
 #if defined(ARCH_WORMHOLE)
         // Avoid hammering L1 while other cores are trying to work. Seems not to
         // be needed on Blackhole, probably because invalidate_l1_cache takes
@@ -319,13 +322,22 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTD");
 }
 
-inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
+inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t noc_mode, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
     // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
     if (end_cb_index != NUM_CIRCULAR_BUFFERS) {
-        noc_async_atomic_barrier(noc_index);
+        WAYPOINT("NABW");
+        if (noc_mode == DM_DYNAMIC_NOC) {
+            do {
+                invalidate_l1_cache();
+            } while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+        } else {
+            while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+        }
+        invalidate_l1_cache();
+        WAYPOINT("NABD");
     }
 #endif
 }
@@ -358,10 +370,8 @@ int main() {
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
-    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
     DeviceProfilerInit();
@@ -418,7 +428,7 @@ int main() {
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables &
                 (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-                mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                subordinate_sync->dm1 = RUN_SYNC_MSG_LOAD;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base =
@@ -470,7 +480,7 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -492,7 +502,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -503,7 +513,7 @@ int main() {
 
             trigger_sync_register_init();
 
-            if constexpr (WATCHER_ASSERT_ENABLED) {
+            if constexpr (ASSERT_ENABLED) {
                 if (noc_mode == DM_DYNAMIC_NOC) {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed

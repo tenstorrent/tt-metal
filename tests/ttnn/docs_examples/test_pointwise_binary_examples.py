@@ -399,14 +399,13 @@ def test_atan2(device):
     logger.info(f"Atan2 result: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_gcd(device):
     # Create two integer tensors for greatest common divisor
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Compute greatest common divisor for each pair of elements
@@ -414,14 +413,13 @@ def test_gcd(device):
     logger.info(f"Greatest common divisor result: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_lcm(device):
     # Create two integer tensors for least common multiple
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     # Compute least common multiple for each pair of elements
@@ -485,7 +483,7 @@ def test_div(device):
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    output = ttnn.div(tensor1, tensor2, accurate_mode=False, round_mode=None)
+    output = ttnn.div(tensor1, tensor2, fast_and_approximate_mode=True, rounding_mode=None)
     logger.info(f"Division result: {output}")
 
     # Create tensor and scalar for division
@@ -493,7 +491,7 @@ def test_div(device):
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
     scalar = 3
-    output = ttnn.div(tensor, scalar, round_mode="floor")
+    output = ttnn.div(tensor, scalar, rounding_mode="floor")
     logger.info(f"Division (tensor-scalar) result: {output}")
 
 
@@ -961,7 +959,7 @@ def test_div_bw(device):
     tensor2 = ttnn.from_torch(
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
     )
-    output = ttnn.div_bw(grad_tensor, tensor1, tensor2, round_mode=None)
+    output = ttnn.div_bw(grad_tensor, tensor1, tensor2, rounding_mode=None)
     logger.info(f"Division backward result: {output}")
 
     # Create gradient and input tensors for division backward with tensor-scalar
@@ -972,7 +970,7 @@ def test_div_bw(device):
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
     )
     scalar = 2
-    output = ttnn.div_bw(grad_tensor, tensor, scalar, round_mode=None)
+    output = ttnn.div_bw(grad_tensor, tensor, scalar, rounding_mode=None)
     logger.info(f"Division backward with tensor-scalar result: {output}")
 
 

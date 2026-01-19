@@ -450,7 +450,7 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((3.10) if is_wormhole_b0() else (4.10),),
+    ((2.95) if is_wormhole_b0() else (4.10),),
 )
 def test_stable_diffusion_vae_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion_vae"

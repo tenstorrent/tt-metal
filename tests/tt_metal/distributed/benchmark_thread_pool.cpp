@@ -13,7 +13,7 @@ static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thre
 
     auto thread_pool = create_thread_pool(num_threads);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         uint64_t NUM_ITERS = state.range(0);
 
         auto work = []() { std::this_thread::sleep_for(std::chrono::microseconds(20)); };

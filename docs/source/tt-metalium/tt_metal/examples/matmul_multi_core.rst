@@ -270,7 +270,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
                 cb_wait_front(cb_in0, 1);
                 cb_wait_front(cb_in1, 1);
 
-                matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+                matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
                 cb_pop_front(cb_in0, 1);
                 cb_pop_front(cb_in1, 1);

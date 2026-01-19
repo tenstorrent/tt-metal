@@ -121,6 +121,42 @@ def print_operation_configs(
             # New format: show source information
             source = config.get("source", "unknown")
             print(f"📝 Source: {source}")
+
+            # Show machine info if available
+            machine_info = config.get("machine_info")
+            if machine_info:
+                if isinstance(machine_info, list):
+                    # New format: list of machine info entries
+                    print(f"🖥️  Machines:")
+                    for idx, info in enumerate(machine_info):
+                        board_type = info.get("board_type", "unknown")
+                        device_series = info.get("device_series", "unknown")
+                        card_count = info.get("card_count")
+
+                        # Handle device_series as list or single value
+                        if isinstance(device_series, list):
+                            device_series_str = ", ".join(device_series)
+                        else:
+                            device_series_str = device_series
+
+                        # Format with card count if available
+                        if card_count is not None:
+                            card_str = "card" if card_count == 1 else "cards"
+                            print(f"     [{idx+1}] {board_type}: {device_series_str} ({card_count} {card_str})")
+                        else:
+                            print(f"     [{idx+1}] {board_type}: {device_series_str}")
+                else:
+                    # Legacy format: single dict
+                    board_type = machine_info.get("board_type", "unknown")
+                    device_series = machine_info.get("device_series", "unknown")
+                    card_count = machine_info.get("card_count")
+
+                    if card_count is not None:
+                        card_str = "card" if card_count == 1 else "cards"
+                        print(f"🖥️  Machine: {board_type} {device_series} ({card_count} {card_str})")
+                    else:
+                        print(f"🖥️  Machine: {board_type} {device_series}")
+
             config_args = config["arguments"]
         elif isinstance(config, list):
             # Old format: no source info

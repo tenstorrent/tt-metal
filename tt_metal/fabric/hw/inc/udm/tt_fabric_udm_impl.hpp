@@ -17,6 +17,29 @@
 
 namespace tt::tt_fabric::udm {
 
+// Verify that connection object fits in reserved L1 storage
+static_assert(
+    sizeof(tt::tt_fabric::WorkerToFabricEdmSender) <= tt::tt_fabric::FABRIC_CONNECTION_OBJECT_SIZE,
+    "WorkerToFabricEdmSender is too large for reserved L1 storage");
+
+// Acquire lock using atomic exchange - spin until we get it
+// On Wormhole, this is a no-op
+FORCE_INLINE void acquire_lock(volatile uint32_t* lock) {
+#ifndef ARCH_WORMHOLE
+    while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {
+        // Spin waiting for lock to become available
+    }
+#endif  // ARCH_WORMHOLE
+}
+
+// Release lock using atomic store
+// On Wormhole, this is a no-op
+FORCE_INLINE void release_lock(volatile uint32_t* lock) {
+#ifndef ARCH_WORMHOLE
+    __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
+#endif  // ARCH_WORMHOLE
+}
+
 /**
  * @brief Enum for UDM control fields
  */
@@ -300,42 +323,121 @@ FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_pt
     }
 }
 
+WorkerToFabricEdmSender build_from_reserved_l1_info() {
+    constexpr bool is_persistent_fabric = true;
+    const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
+
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    constexpr uint32_t eth_channel = 0;  // always use channel 0 for UDM mode
+    const auto conn = &connection_info->read_only[eth_channel];
+    const auto aligned_conn = &connection_info->read_write[eth_channel];
+    uint8_t direction = conn->edm_direction;
+    uint8_t edm_worker_x = conn->edm_noc_x;
+    uint8_t edm_worker_y = conn->edm_noc_y;
+    uint32_t edm_buffer_base_addr = conn->edm_buffer_base_addr;
+    uint8_t num_buffers_per_channel = conn->num_buffers_per_channel;
+    uint32_t edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+    uint32_t edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
+    uint16_t buffer_size_bytes = conn->buffer_size_bytes;
+    uint32_t edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
+    volatile uint32_t* writer_send_sem_addr =
+        reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
+    uint32_t worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
+
+    // Use second region for worker_teardown_sem_addr
+    constexpr uint32_t eth_channel_teardown = 1;
+    static_assert(
+        eth_channel_teardown < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_teardown out of bounds");
+    const auto aligned_conn_teardown = &connection_info->read_write[eth_channel_teardown];
+    volatile uint32_t* worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t*>(
+        reinterpret_cast<uintptr_t>(&aligned_conn_teardown->worker_flow_control_semaphore));
+
+    // Use third region for worker_buffer_index_semaphore_addr
+    constexpr uint32_t eth_channel_buffer_index = 2;
+    static_assert(
+        eth_channel_buffer_index < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_buffer_index out of bounds");
+    const auto aligned_conn_buffer_index = &connection_info->read_write[eth_channel_buffer_index];
+    uint32_t worker_buffer_index_semaphore_addr =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_conn_buffer_index->worker_flow_control_semaphore));
+
+    return WorkerToFabricEdmSender(
+        is_persistent_fabric,
+        edm_worker_x,
+        edm_worker_y,
+        edm_buffer_base_addr,
+        num_buffers_per_channel,
+        edm_connection_handshake_l1_addr,
+        edm_worker_location_info_addr,
+        buffer_size_bytes,
+        edm_copy_of_wr_counter_addr,
+        writer_send_sem_addr,
+        worker_teardown_sem_addr,
+        worker_buffer_index_semaphore_addr,
+        worker_free_slots_stream_id,
+        my_fc_stream_channel_id);
+}
+
+/**
+ * @brief Get the sync region for fabric connection state
+ *
+ * Uses dedicated MEM_FABRIC_CONNECTION_LOCK_BASE address in L1.
+ * The region contains a spinlock and initialized flag.
+ *
+ * @return Pointer to the sync region in L1
+ */
+FORCE_INLINE volatile tt::tt_fabric::fabric_connection_sync_t* get_fabric_connection_sync() {
+    return reinterpret_cast<volatile tt::tt_fabric::fabric_connection_sync_t*>(MEM_FABRIC_CONNECTION_LOCK_BASE);
+}
+
 /**
  * @brief Get or create a singleton fabric connection for the current worker
  *
  * This function manages a static connection instance that persists across calls.
  * The connection is initialized on first use and reused for subsequent operations.
+ * On non-Wormhole, uses atomic spinlock to synchronize access across BRISC and NCRISC.
+ * The lock is acquired on EVERY call and must be released via release_fabric_connection() after each use.
+ * The initialized flag is stored in L1 (shared across RISCs on multi-RISC architectures).
  *
- * @return Reference to the fabric connection and initialized flag
+ * @return Reference to the fabric connection
  */
-FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
-    static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
-    static bool initialized = false;
+FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_or_open_fabric_connection() {
+    // Get sync region pointer (just address calculation, no memory read)
+    auto* sync = get_fabric_connection_sync();
 
-    if (!initialized) {
-        // Build connection from runtime args on first use
-        // This assumes the runtime args are set up properly by the host
-        // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
-        // addresses.
-        size_t rt_args_idx = 0;
-        static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        conn.open();
-        connection = &conn;
-        initialized = true;
+#ifndef ARCH_WORMHOLE
+    // Lock must be acquired BEFORE checking initialized to ensure mutual exclusion
+    acquire_lock(&sync->lock);
+#endif
+
+    // Get connection pointer from L1 storage (at fixed offset after sync struct)
+    auto* connection = reinterpret_cast<tt::tt_fabric::WorkerToFabricEdmSender*>(
+        MEM_FABRIC_CONNECTION_LOCK_BASE + tt::tt_fabric::FABRIC_CONNECTION_OBJECT_OFFSET);
+
+    if (!sync->initialized) {
+        // Build connection in L1 storage using placement new
+        new (connection) tt::tt_fabric::WorkerToFabricEdmSender(build_from_reserved_l1_info());
+        connection->open();
+        sync->initialized = 1;
     }
 
-    return {*connection, initialized};
+    return *connection;
 }
 
 /**
- * @brief Close a singleton fabric connection for the current worker
+ * @brief Release the fabric connection lock
+ *
+ * MUST be called after EVERY call to get_or_open_fabric_connection() to release the lock.
+ * Failure to call this will cause deadlocks on subsequent calls.
+ * On Wormhole, this is a no-op.
  */
-FORCE_INLINE void close_fabric_connection() {
-    auto [connection, initialized] = get_or_open_fabric_connection();
-    if (initialized) {
-        connection.close();
-    }
+FORCE_INLINE void release_fabric_connection() {
+#ifndef ARCH_WORMHOLE
+    auto* sync = get_fabric_connection_sync();
+    release_lock(&sync->lock);
+#endif
 }
 
 /**

@@ -15,6 +15,9 @@
 namespace ttml::optimizers {
 class MockOptimizer : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "MockOptimizer";
+    }
     explicit MockOptimizer(float lr) : OptimizerBase(ttml::serialization::NamedParameters{}), m_lr(lr) {
     }
 

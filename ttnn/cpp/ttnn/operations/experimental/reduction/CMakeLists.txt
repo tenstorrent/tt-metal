@@ -13,6 +13,9 @@ target_sources(
         integral_image/device/intimg_device_operation.cpp
         integral_image/device/intimg_program_factory.cpp
         integral_image/intimg.cpp
+        deepseek_grouped_gate/deepseek_grouped_gate.cpp
+        deepseek_grouped_gate/device/deepseek_grouped_gate_device_operation.cpp
+        deepseek_grouped_gate/device/deepseek_grouped_gate_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_reduction PRIVATE ${FixmeOpIncDirs})

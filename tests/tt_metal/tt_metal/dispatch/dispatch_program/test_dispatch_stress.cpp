@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -27,11 +27,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -68,7 +66,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
             return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
         };
-    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
                              CoreCoord& core,
                              uint32_t multiplier) { return (uint32_t)core.y * 100 * multiplier; };
 

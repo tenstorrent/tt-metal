@@ -4,80 +4,55 @@
 
 #pragma once
 
-#include <algorithm>
+#include <cstdint>
+#include <unordered_map>
+#include <map>
+#include <vector>
+#include <set>
 #include <unordered_set>
+#include <mutex>
 
-#include "core_coord.hpp"
-#include "profiler.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
+#include "profiler.hpp"
 
 namespace tt {
 
+namespace llrt {
+class RunTimeOptions;
+}
+
 namespace tt_metal {
+
+namespace detail {
+void ReadDeviceProfilerResultsInternal(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    ProfilerReadState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata);
+}  // namespace detail
+
+void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
+uint32_t get_profiler_dram_bank_size_per_risc_bytes();
+uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions);
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager() : do_sync_on_close(true) {};
+    ProfilerStateManager();
 
     ~ProfilerStateManager() = default;
 
-    void cleanup_device_profilers() {
-        std::vector<std::thread> threads(this->device_profiler_map.size());
+    void cleanup_device_profilers();
+    void start_debug_dump_thread(
+        std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map);
+    uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const;
 
-        uint32_t i = 0;
-        for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
-            threads[i] = std::thread([it]() {
-                DeviceProfiler& profiler = it->second;
-                profiler.dumpDeviceResults();
-                profiler.destroyTracyContexts();
-            });
-            i++;
-        }
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
-
-        this->device_profiler_map.clear();
-    }
-
-    uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const {
-        const uint32_t num_threads_available = std::thread::hardware_concurrency();
-
-        if (num_threads_available == 0 || this->device_profiler_map.size() > num_threads_available) {
-            // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
-            // number of device profilers is greater than the max number of threads, return 2
-            return 2;
-        } else {
-            // Otherwise, return min(8, number of threads available / number of device profilers)
-            // Empirically, 8 threads per device profiler seems to result in optimal performance
-            return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
-        }
-    }
-
-    void mark_trace_begin(ChipId device_id, uint32_t trace_id) {
-        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
-        device_profiler.markTraceBegin(trace_id);
-    }
-
-    void mark_trace_end(ChipId device_id, uint32_t trace_id) {
-        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
-        device_profiler.markTraceEnd(trace_id);
-    }
-
-    void mark_trace_replay(ChipId device_id, uint32_t trace_id) {
-        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
-        device_profiler.markTraceReplay(trace_id);
-    }
-
-    void add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id) {
-        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
-        device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
-    }
+    void mark_trace_begin(ChipId device_id, uint32_t trace_id);
+    void mark_trace_end(ChipId device_id, uint32_t trace_id);
+    void mark_trace_replay(ChipId device_id, uint32_t trace_id);
+    void add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id);
 
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
@@ -87,6 +62,7 @@ public:
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
+    mutable std::recursive_mutex device_profiler_map_mutex;
 
     std::map<ChipId, std::vector<std::set<experimental::ProgramAnalysisData>>> device_programs_perf_analyses_map;
 
@@ -101,6 +77,11 @@ public:
 
     std::mutex log_file_write_mutex;
     std::mutex programs_perf_report_write_mutex;
+
+    std::thread debug_dump_thread;
+    std::mutex debug_dump_thread_mutex;
+    std::atomic<bool> stop_debug_dump_thread = false;
+    std::condition_variable stop_debug_dump_thread_cv;
 };
 
 }  // namespace tt_metal

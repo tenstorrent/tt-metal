@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "blackhole/noc/noc_parameters.h"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr std::uint32_t iteration = get_compile_time_arg_val(0);

@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperation::SingleCore::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -124,7 +124,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
 
 void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

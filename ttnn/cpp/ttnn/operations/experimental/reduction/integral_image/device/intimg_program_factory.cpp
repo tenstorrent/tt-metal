@@ -60,7 +60,7 @@ KernelHandle create_kernel(
 
 }  // namespace
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
 // it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
 // expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
@@ -68,17 +68,15 @@ constexpr uint32_t CORES_X = 2;
 constexpr uint32_t CORES_Y = 4;
 
 IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const IntImgParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor{tensor_args.input_tensor};
+    const auto& input_tensor{tensor_args};
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    constexpr uint32_t BLOCK_DEPTH = 32;
+    constexpr uint32_t BLOCK_DEPTH = 48;
 
     Program program{};
 
@@ -92,19 +90,22 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    // if input dtype is 16bit, use 48 tiles per cb to preload tiles
-    // if 32bit, there's enough space for as may as 32 tiles per cb that the kernels expect as the minimum
-    const uint32_t tiles_num_per_cb = (dst_cb_data_format == DataFormat::Float32) ? 32 : 48;
+    const uint32_t tiles_num_per_full_block_depth_cb = BLOCK_DEPTH;
+    const uint32_t tiles_num_per_small_cb = 2;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_small_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_full_block_depth_cb);
     // create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, tiles_num_per_cb);
 
     std::vector<uint32_t> compute_compile_time_args{
@@ -154,14 +155,14 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
 void IntImgProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const IntImgParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
+    auto input_buffer_address = tensor_args.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
     for (uint32_t x = 0; x < CORES_X; ++x) {
         for (uint32_t y = 0; y < CORES_Y; ++y) {
@@ -175,4 +176,4 @@ void IntImgProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim

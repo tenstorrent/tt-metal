@@ -59,6 +59,7 @@ public:
     virtual void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
@@ -70,14 +71,22 @@ public:
     // Add connection to local tensix (relay in UDM mode)
     virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
 
+    // Get the number of downstream EDMs connected for a specific VC
+    virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
+
+    // Get the connection mask for a specific VC
+    virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
 private:
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_x = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_y = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_registration_address = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_location_info_address = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels> downstream_edm_vcs_noc_x = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels> downstream_edm_vcs_noc_y = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels>
+        downstream_edm_vcs_worker_registration_address = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels>
+        downstream_edm_vcs_worker_location_info_address = {};
 };
 
 /*
@@ -94,6 +103,7 @@ public:
     void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
@@ -108,6 +118,16 @@ public:
 
     uint32_t get_downstream_edms_connected() const;
 
+    // Get the number of downstream EDMs connected for a specific VC
+    uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx).size();
+    }
+
+    // Get the connection mask for a specific VC
+    uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc_mask.at(vc_idx);
+    }
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
@@ -117,8 +137,9 @@ private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
     uint32_t encode_noc_ord_for_2d(
-        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>&
-            downstream_edms_connected_by_vc,
+        const std::array<
+            std::vector<std::pair<eth_chan_directions, CoreCoord>>,
+            builder_config::num_max_receiver_channels>& downstream_edms_connected_by_vc,
         uint32_t vc_idx,
         const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
 
@@ -127,35 +148,36 @@ private:
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>
+    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>
         downstream_edms_connected_by_vc = {};
 
     // holds the number of buffer slots per downstream sender channel
-    std::array<std::optional<size_t>, builder_config::num_sender_channels> sender_channels_num_buffers = {};
+    std::array<std::optional<size_t>, builder_config::num_max_sender_channels> sender_channels_num_buffers = {};
 
     // holds the number of buffer slots per downstream VC. i.e. if forwarding to VC 0, use index 0 in the
     // array, if forwarding to VC 1, use index 1 in the array
-    std::array<size_t, builder_config::num_receiver_channels> downstream_sender_channels_num_buffers = {};
+    std::array<size_t, builder_config::num_max_receiver_channels> downstream_sender_channels_num_buffers = {};
 
     // For VC0: holds base addresses for up to 3 downstream EDMs (indexed by compact index)
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_buffer_base_addresses = {};
 
-    uint32_t downstream_edms_connected = 0;
+    // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
+    std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_worker_registration_addresses = {};
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_worker_location_info_addresses = {};
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_buffer_index_semaphore_addresses = {};
 
     bool is_2D_routing = false;

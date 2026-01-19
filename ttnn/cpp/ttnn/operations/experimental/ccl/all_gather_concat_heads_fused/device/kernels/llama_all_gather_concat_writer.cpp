@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -123,9 +123,8 @@ void kernel_main() {
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
         if constexpr (dynamic_alternate) {
-            std::swap(
-                pkt_hdr_forward->routing_fields.value,
-                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+            // Alternate the packet header distance for better balancing
+            std::swap(pkt_hdr_forward, pkt_hdr_backward);
         }
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-from models.demos.gemma3.tt.model_config import parse_optimizations
+from models.tt_transformers.tt.model_config import parse_optimizations
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.

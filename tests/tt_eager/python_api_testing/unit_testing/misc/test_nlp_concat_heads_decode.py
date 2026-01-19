@@ -49,16 +49,15 @@ def run_test_concat_head(
 
     # If the provided input sub core grids has enough cores, use that one for compute otherwise
     # we expect a compute sub core grid which must have at least n_local_heads cores to be provided
-    if input_sub_core_grids is not None and input_sub_core_grids.num_cores() >= n_local_heads:
-        # Use the input sub core grids for compute
+
+    if shard_grid.num_cores() >= n_local_heads:
         sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            input_sub_core_grids.bounding_box().start, n_local_heads, input_sub_core_grids, row_wise=True
+            shard_grid.bounding_box().start, n_local_heads, shard_grid, row_wise=True
         )
     else:
-        # Use the compute sub core grids for compute
         assert (
             compute_sub_core_grids is not None
-        ), "compute_sub_core_grids must be provided if input_sub_core_grids has less than n_local_heads cores"
+        ), "compute_sub_core_grids must be provided if shard_grid has less than n_local_heads cores"
         sub_core_grids = compute_sub_core_grids
         assert (
             sub_core_grids.num_cores() >= n_local_heads
@@ -82,6 +81,7 @@ def run_test_concat_head(
     concat_head_input_tt = torch2tt_tensor(concat_head_input, tt_device=None).to(
         device=device, mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG
     )
+
     concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,

@@ -14,32 +14,32 @@
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
-#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/debug/inspector/inspector.hpp"
+#include "context/metal_context.hpp"
+#include "debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "tt_metal/api/tt-metalium/device_pool.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "device/device_manager.hpp"
+#include <dispatch/dispatch_query_manager.hpp>
+#include <dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
 DispatchSKernel::DispatchSKernel(
     int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
     FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-    this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
-        device_id, channel, cq_id_);
+    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    this->logical_core_ =
+        MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_id, channel, cq_id_);
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log dispatch_s core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    tt::tt_metal::Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
+    Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {
@@ -62,7 +62,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
     // used by dispatch_s to sync with prefetch
-    static_config_.my_dispatch_cb_sem_id = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     static_config_.dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     // used by dispatch_d to signal that dispatch_s can send go signal
@@ -103,7 +103,8 @@ void DispatchSKernel::CreateKernel() {
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    uint32_t num_virtual_active_eth_cores =
+        MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
             .get_control_plane()

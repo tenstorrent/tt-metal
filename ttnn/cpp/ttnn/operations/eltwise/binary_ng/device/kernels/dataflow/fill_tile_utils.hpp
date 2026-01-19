@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32

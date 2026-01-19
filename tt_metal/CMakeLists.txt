@@ -32,7 +32,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
     api/tt-metalium/bfloat8.hpp
-    api/tt-metalium/blockfloat_common.hpp
     api/tt-metalium/buffer.hpp
     api/tt-metalium/buffer_distribution_spec.hpp
     api/tt-metalium/buffer_page_mapping.hpp
@@ -46,13 +45,13 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
-    api/tt-metalium/device_pool.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
+    api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
@@ -65,9 +64,10 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/kernel_types.hpp
-    api/tt-metalium/lightmetal_binary.hpp
-    api/tt-metalium/lightmetal_capture_utils.hpp
-    api/tt-metalium/lightmetal_replay.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
+    api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
     api/tt-metalium/memory_pin.hpp
@@ -81,11 +81,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
-    api/tt-metalium/mesh_socket.hpp
+    api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
-    api/tt-metalium/metal_soc_descriptor.h
-    api/tt-metalium/persistent_kernel_cache.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp
@@ -303,6 +301,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
+add_subdirectory(experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

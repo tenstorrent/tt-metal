@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -134,7 +134,7 @@ void write_data(
 
             pkt_hdr->to_noc_unicast_scatter_write(
                 NocUnicastScatterCommandHeader(
-                    {{noc_address0, noc_address1}, static_cast<uint16_t>(payload_size_bytes0)}),
+                    {noc_address0, noc_address1}, {static_cast<uint16_t>(payload_size_bytes0)}),
                 payload_size);
             perform_payload_send(
                 select_connection(fabric_connection, device_offset), l1_read_addr, payload_size, pkt_hdr);

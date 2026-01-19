@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto input_addr = get_arg_val<uint32_t>(i++);
     auto target_addr = get_arg_val<uint32_t>(i++);
@@ -24,6 +25,8 @@ void kernel_main() {
     constexpr uint32_t cb_target = tt::CBIndex::c_1;
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
@@ -63,7 +66,7 @@ void kernel_main() {
     cb_reserve_back(cb_weight, weight_num_tile);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);

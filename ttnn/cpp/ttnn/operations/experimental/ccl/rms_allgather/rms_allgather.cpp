@@ -6,12 +6,12 @@
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp"
 
 #include <ttnn/device.hpp>
-namespace ttnn {
-namespace operations::fused::normalization {
+
+namespace ttnn::operations::fused::normalization {
 
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -47,6 +47,4 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
         use_noc1_only);
 }
 
-}  // namespace operations::fused::normalization
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::fused::normalization

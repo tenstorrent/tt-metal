@@ -22,7 +22,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -73,7 +73,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -198,7 +205,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
@@ -247,7 +254,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -374,7 +388,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& divisor,
     const Tensor& output,
-    const std::string& reduction,
+    const std::string& /*reduction*/,
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
@@ -434,7 +448,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                             // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -578,7 +599,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
     if (rank == 2) {
         return moreh_nll_loss_step2_impl_2d(
             input, target, weight, divisor, output, reduction, ignore_index, compute_kernel_config);
-    } else if (rank == 3) {
+    }
+    if (rank == 3) {
         return moreh_nll_loss_step2_impl_3d(
             input, target, weight, divisor, output, reduction, ignore_index, compute_kernel_config);
     }

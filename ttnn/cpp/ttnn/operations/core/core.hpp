@@ -19,8 +19,7 @@
 
 namespace ttnn {
 
-namespace operations {
-namespace core {
+namespace operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
@@ -39,8 +38,7 @@ void deallocate(Tensor& tensor, bool force = true);
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 
-}  // namespace core
-}  // namespace operations
+}  // namespace operations::core
 
 using operations::core::deallocate;
 using operations::core::from_device;

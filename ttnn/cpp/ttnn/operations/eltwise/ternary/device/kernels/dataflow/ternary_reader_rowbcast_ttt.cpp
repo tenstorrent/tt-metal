@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -58,9 +58,11 @@ void kernel_main() {
     constexpr auto cb_id_src_c = get_compile_time_arg_val(2);  // false tensor CB
 
     // TensorAccessorArgs start at index 3 (after CB IDs) - unified layout
-    constexpr auto src0_args = TensorAccessorArgs<3>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+    constexpr auto src2_args =
+        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 #if SRC_SHARDED_A
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);

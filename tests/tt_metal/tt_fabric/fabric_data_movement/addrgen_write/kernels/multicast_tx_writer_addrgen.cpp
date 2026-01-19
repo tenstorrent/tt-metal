@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 #include "kernel_common.hpp"
 
 using namespace tt;

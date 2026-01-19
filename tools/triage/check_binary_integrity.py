@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Checking that code binaries are the way they were uploaded to the device (both firmware and kernel).
+
+Owner:
+    tt-vjovanovic
 """
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -28,7 +31,7 @@ script_config = ScriptConfig(
 def check_binary_integrity(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ):
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
     log_check_risc(
