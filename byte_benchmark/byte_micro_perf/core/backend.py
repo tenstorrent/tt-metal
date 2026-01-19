@@ -151,7 +151,7 @@ class Backend(ABC):
 
         # preset return values
         latency_us = 0.0
-
+        is_tenstorrent = "Tenstorrent" in self.get_device_name()
         try:
             min_test_iters = 32 if not op_instance.is_concurrent else 10
             sleep_time = 0.2
@@ -169,8 +169,8 @@ class Backend(ABC):
                         math.floor(max(assume_avail_bytes, assume_cache_size) / tensor_size),
                         math.floor(assume_cache_size / tensor_size),
                     )
-            print("Max data count = ", max_data_cnt)
-            max_data_cnt = min(max_data_cnt, 4)
+            if is_tenstorrent and profiling:
+                max_data_cnt = 1
             tensor_list = op_instance.create_tensors(max_data_cnt)
             random.shuffle(tensor_list)
 

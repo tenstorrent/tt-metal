@@ -41,6 +41,12 @@ class Scheduler:
         self.profiling = not args.disable_profiling
         self.report_dir = args.report_dir
 
+        if self.profiling and self.backend_type == "Tenstorrent":
+            os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+            os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+            os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+            os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
+
         # create backend instance
         self.backend = create_backend_instance(self.backend_type)
 

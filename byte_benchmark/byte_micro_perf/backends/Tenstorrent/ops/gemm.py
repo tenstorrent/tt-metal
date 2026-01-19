@@ -50,6 +50,19 @@ class TenstorrentGemmOp(BasicOp):
             print(f"Opened ttnn device 0")
         return cls._device
 
+    @classmethod
+    def _close_device(cls):
+        """Close cached device."""
+        if cls._device is not None:
+            import ttnn
+
+            ttnn.close_device(cls._device)
+            cls._device = None
+
+    # Destructor
+    def __del__(self):
+        self._close_device()
+
     def prepare(self):
         import ttnn
 
