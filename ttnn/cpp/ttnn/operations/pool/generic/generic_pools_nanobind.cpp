@@ -73,7 +73,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout) -> nb::object {
+               const Layout output_layout,
+               bool config_tensor_in_dram) -> nb::object {
                 auto result = self(
                     input_tensor,
                     batch_size,
@@ -92,14 +93,14 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                     reallocate_halo_output,
                     return_indices,
                     dtype,
-                    output_layout);
+                    output_layout,
+                    config_tensor_in_dram);
 
                 // Return single tensor or tuple based on vector size
                 if (result.size() == 1) {
                     return nb::cast(std::move(result[0]));
-                } else {
-                    return nb::cast(std::move(result));
                 }
+                return nb::cast(std::move(result));
             },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
@@ -119,7 +120,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             nb::arg("reallocate_halo_output") = true,
             nb::arg("return_indices") = false,
             nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR)});
+            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+            nb::arg("config_tensor_in_dram") = false});
 }
 
 void bind_avg_pool2d_operation(nb::module_& mod) {
@@ -176,7 +178,8 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                bool deallocate_input,
                bool reallocate_halo_output,
                const DataType dtype,
-               const Layout output_layout) -> ttnn::Tensor {
+               const Layout output_layout,
+               bool config_tensor_in_dram) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     batch_size,
@@ -196,7 +199,8 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                     deallocate_input,
                     reallocate_halo_output,
                     dtype,
-                    output_layout);
+                    output_layout,
+                    config_tensor_in_dram);
             },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
@@ -217,7 +221,8 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,
             nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR)});
+            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+            nb::arg("config_tensor_in_dram") = false});
 }
 
 void py_module(nb::module_& mod) {

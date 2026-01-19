@@ -153,6 +153,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
+        std::nullopt,
         aggregated_output_tensor);
     // Quiesce parent mesh after reduce scatter
     mesh_device_->quiesce_devices();

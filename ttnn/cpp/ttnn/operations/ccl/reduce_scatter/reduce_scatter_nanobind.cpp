@@ -30,9 +30,13 @@ void bind_reduce_scatter(nb::module_& mod) {
             cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            intermediate_memory_config (ttnn.MemoryConfig, optional): Memory configuration for intermediate buffer used within the operation.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
             num_links (int, optional): The number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            chunks_per_sync (int, optional): Hyperparameter.
+            num_workers_per_link (int, optional): Hyperparameter.
+            num_buffers_per_channel (int, optional): Hyperparameter.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -57,18 +61,26 @@ void bind_reduce_scatter(nb::module_& mod) {
                const std::optional<uint32_t> cluster_axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_fabric::Topology> topology,
+               const std::optional<uint32_t> chunks_per_sync,
+               const std::optional<uint32_t> num_workers_per_link,
+               const std::optional<uint32_t> num_buffers_per_channel) {
                 return self(
                     input_tensor,
                     dim,
                     cluster_axis,
                     subdevice_id,
                     memory_config,
+                    intermediate_memory_config,
                     optional_output_tensor,
                     num_links,
-                    topology);
+                    topology,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
@@ -76,9 +88,13 @@ void bind_reduce_scatter(nb::module_& mod) {
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("intermediate_memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("num_links") = nb::none(),
             nb::arg("topology").noconvert() = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none(),
         });
 }
 

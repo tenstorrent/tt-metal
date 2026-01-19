@@ -41,9 +41,8 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
 
     TT_ASSERT(ntiles % (ncores) == 0);
@@ -179,7 +178,7 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
 
 void UntilizeMultiCoreSubCoreGridsProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
+    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

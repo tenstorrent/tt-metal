@@ -763,10 +763,10 @@ def _golden_function_frac(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 
-def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwargs):
+def _golden_function_rdiv(input_tensor_a, value, *args, rounding_mode=None, **kwargs):
     import torch
 
-    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=round_mode)
+    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=rounding_mode)
 
 
 ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)

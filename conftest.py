@@ -714,14 +714,6 @@ def ensure_devices_tg():
     assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 
-@pytest.fixture()
-def clear_compile_cache():
-    yield
-    import ttnn
-
-    ttnn.device.DisablePersistentKernelCache()
-
-
 @pytest.fixture(autouse=True)
 def reset_default_device(request):
     import ttnn
@@ -730,7 +722,12 @@ def reset_default_device(request):
     if "no_reset_default_device" in request.keywords:
         yield
         return
-    device = ttnn.GetDefaultDevice()
+
+    try:
+        device = ttnn.GetDefaultDevice()
+    except Exception:
+        logger.warning("Device handle is stale/crashed - setting saved device to None")
+        device = None
 
     yield
 

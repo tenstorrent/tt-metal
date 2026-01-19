@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,7 +42,7 @@ struct CoreBidirectionalConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBidirectionalConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     /* ================ SETUP ================ */
 
     // Program
@@ -180,14 +181,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
         device, test_config.master_core_coord, l1_base_read_address, bytes_per_transaction, packed_requestor_output);
 
     // Compare output with golden vector
-    bool pcc;
-    pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_sender_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-    pcc &= is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_requestor_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal;
+    is_equal = (packed_sender_output == packed_golden);
+    is_equal &= (packed_requestor_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(tt::LogTest, "Sender output vector");
@@ -197,7 +196,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
         return false;
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -254,7 +253,7 @@ void packet_sizes_test(
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction =
         device->arch() == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB

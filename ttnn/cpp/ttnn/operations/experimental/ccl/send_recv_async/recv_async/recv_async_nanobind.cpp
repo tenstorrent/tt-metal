@@ -11,7 +11,7 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

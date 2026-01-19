@@ -15,9 +15,7 @@ using namespace tt::constants;
 namespace ttnn::operations::reduction::generic::program {
 
 ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const GenericParams& operation_attributes, const GenericInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     const auto& a = tensor_args.input_tensor;
@@ -95,7 +93,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -127,9 +125,9 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
 void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const GenericParams& /*operation_attributes*/,
+    const GenericInputs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     auto* src_dram_buffer = tensor_args.input_tensor.buffer();

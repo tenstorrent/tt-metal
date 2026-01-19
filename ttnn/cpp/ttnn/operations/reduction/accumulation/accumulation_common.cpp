@@ -46,9 +46,8 @@ Tensor preprocess_input_tensor(
         permutation[final_cum_axis] = accumulation_axis;
 
         return ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
-    } else {
-        accumulation_axis = cum_axis;
     }
+    accumulation_axis = cum_axis;
 
     return processed_tensor;
 }

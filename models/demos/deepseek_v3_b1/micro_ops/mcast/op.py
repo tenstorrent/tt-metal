@@ -4,6 +4,10 @@
 
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 
 class McastSingleCore:
@@ -11,6 +15,8 @@ class McastSingleCore:
     Single-core multicast implementation using ttnn.generic_op.
 
     This class implements multicast from a single core to multiple cores.
+    Uses the unified kernel pattern with a single kernel file that compiles
+    for NCRISC (receiver), BRISC (sender), and TRISC (no-op).
     """
 
     @staticmethod
@@ -77,80 +83,120 @@ class McastSingleCore:
 
         # Determine if sender is part of receiver grid
         is_part_of_receiver_grid = output_core_grid.contains(mcast_core)
-        loopback = is_part_of_receiver_grid
 
-        # All cores (input + output) for semaphore allocation
+        # All cores (input + output) for semaphore allocation and kernel execution
         all_cores = output_core_grid.merge(input_core_grid)
 
         # Calculate number of output cores
         num_output_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
+        # Semaphore IDs for mcast synchronization
+        mcast_data_sender_semaphore_id = 0
+        mcast_data_receiver_semaphore_id = 1
+
         # Create semaphores
         sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=0,
+            id=mcast_data_sender_semaphore_id,
             core_ranges=all_cores,
             initial_value=0,
         )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=1,
+            id=mcast_data_receiver_semaphore_id,
             core_ranges=all_cores,
             initial_value=0,
         )
 
-        # Sender kernel
-        sender_named_compile_args = [
-            # MCAST: DEFINE_PERSISTENT_MCAST_SENDER_VARS
+        # CB indices (using input/output tensors as sharded buffers)
+        src_cb = 0
+        dst_cb = 1
+
+        # Calculate page counts based on shard shape
+        # For sharded tensors, num_pages typically = shard_height (one page per row)
+        src_num_pages = shard_height
+        dst_num_pages = shard_height
+
+        # ========================================================================
+        # Named compile-time args for each RISC processor
+        # ========================================================================
+
+        # NCRISC (Receiver) named compile-time args
+        mcast_receiver_named_compile_time_args = [
+            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_dst_cb", dst_cb),
+            ("mcast_dst_num_pages", dst_num_pages),
+            # Sender core also needs src_cb info for NCRISC to setup sharded buffer
+            ("mcast_src_cb", src_cb),
+            ("mcast_src_num_pages", src_num_pages),
+        ]
+
+        # BRISC (Sender) named compile-time args
+        mcast_sender_named_compile_time_args = [
             ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
             ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
             ("mcast_num_cores", num_output_cores),
-            ("mcast_loopback", 1 if loopback else 0),
-            ("mcast_is_part_of_receiver_grid", 1 if is_part_of_receiver_grid else 0),
-            ("mcast_data_sender_semaphore", sender_semaphore_descriptor.id),
-            ("mcast_data_receiver_semaphore", receiver_semaphore_descriptor.id),
-            # MCAST0: DEFINE_MCAST_SENDER_VARS
-            ("mcast0_num_cores", num_output_cores),
-            ("mcast0_data_size_bytes", total_size),
+            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
+            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_size_bytes", total_size),
+            ("mcast_src_cb", src_cb),
+            ("mcast_src_num_pages", src_num_pages),
         ]
 
-        # Runtime args: [input_data_addr, mcast_receiver_data_addr]
-        sender_rt_args = [
-            input_tensor.buffer_address(),
-            output_tensor.buffer_address(),
-        ]
+        # Get the output tensor's buffer address for mcast destination (runtime arg)
+        # This is the L1 address where receivers will store the data
+        # The dst cb may not exist on the sender core if it's not a receiver core, so we can't directly get it from the cb write ptr
+        mcast_receiver_data_addr = output_tensor.buffer_address()
 
-        sender_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/mcast/kernels/mcast_sender.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=input_core_grid,
-            named_compile_time_args=sender_named_compile_args,
-            common_runtime_args=sender_rt_args,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0,
-                noc=noc,
-            ),
-        )
+        # TRISC has no mcast-specific compile-time args (no-op)
+        mcast_trisc_named_compile_time_args = []
 
-        # Receiver kernel - use opposite NOC
-        receiver_noc = ttnn.NOC.NOC_0 if noc == ttnn.NOC.NOC_1 else ttnn.NOC.NOC_1
-        receiver_compile_time_args = [receiver_semaphore_descriptor.id]
+        # ========================================================================
+        # Circular buffer descriptors
+        # ========================================================================
 
-        receiver_kernel_descriptor = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/mcast/kernels/mcast_receiver.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=output_core_grid,
-            compile_time_args=receiver_compile_time_args,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1,
-                noc=receiver_noc,
-            ),
+        # CB 0: Source (input tensor, on sender core)
+        src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(src_cb, input_tensor)
+
+        # CB 1: Destination (output tensor, on receiver cores)
+        dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(dst_cb, output_tensor)
+
+        # ========================================================================
+        # Unified kernel descriptor
+        # ========================================================================
+        unified_kernel = UnifiedKernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/mcast/kernels/mcast_kernel.cpp",
+            core_ranges=all_cores,
+            # NCRISC named compile-time args: mcast receiver
+            ncrisc_named_compile_time_args=mcast_receiver_named_compile_time_args,
+            # BRISC named compile-time args: mcast sender
+            brisc_named_compile_time_args=mcast_sender_named_compile_time_args,
+            # TRISC named compile-time args: empty (no-op)
+            trisc_named_compile_time_args=mcast_trisc_named_compile_time_args,
+            # BRISC runtime args: mcast_receiver_data_addr (output tensor buffer address)
+            brisc_common_runtime_args=[mcast_receiver_data_addr],
+            # Per-core compile-time role differentiation
+            unified_compile_time_core_descriptors=[
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_sender_core",
+                    core_range=mcast_core,  # Sender core is the input core
+                    value=1,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_receiver_core",
+                    core_range=output_core_grid,  # Receiver cores are the output grid
+                    value=1,
+                    other_value=0,
+                ),
+            ],
         )
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=[sender_kernel_descriptor, receiver_kernel_descriptor],
+            kernels=unified_kernel.get_kernel_descriptors(),
+            cbs=[src_cb_descriptor, dst_cb_descriptor],
             semaphores=[sender_semaphore_descriptor, receiver_semaphore_descriptor],
         )
 

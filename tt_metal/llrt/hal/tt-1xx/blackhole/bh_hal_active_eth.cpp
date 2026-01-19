@@ -98,6 +98,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = MEM_CORR_CW_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = MEM_UNCORR_CW_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
@@ -151,12 +153,15 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
+    std::vector<uint8_t> processor_classes_num_fw_binaries;
     if (enable_2_erisc_mode) {
         processor_classes = configure_for_2erisc();
         processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 2};
     } else {
         processor_classes = configure_for_1erisc();
         processor_classes_names = {{{"ER", "ERISC"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 1};
     }
 
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
@@ -164,6 +169,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),

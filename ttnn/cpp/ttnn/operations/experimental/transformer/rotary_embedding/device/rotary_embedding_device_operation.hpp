@@ -11,8 +11,8 @@
 namespace ttnn::operations::experimental::transformer::rotary_embedding {
 
 struct RotaryEmbeddingDeviceOperation {
-    using operation_attributes_t = rotary_embedding::operation_attributes_t;
-    using tensor_args_t = rotary_embedding::tensor_args_t;
+    using operation_attributes_t = RotaryEmbeddingParams;
+    using tensor_args_t = RotaryEmbeddingInputs;
     using spec_return_value_t = rotary_embedding::spec_return_value_t;
     using tensor_return_value_t = rotary_embedding::tensor_return_value_t;
     using program_factory_t = std::variant<rotary_embedding::program::RotaryEmbeddingProgramFactory>;

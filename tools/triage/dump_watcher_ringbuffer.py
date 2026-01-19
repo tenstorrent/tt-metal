@@ -8,7 +8,8 @@ Usage:
     dump_watcher_ringbuffer
 
 Description:
-    Dump watcher ring buffer contents for all cores, skipping cores with empty buffers.
+    Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
+    into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
 
 Owner:
     jbaumanTT

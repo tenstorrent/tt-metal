@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -52,7 +53,7 @@ struct AllFromAllConfig {
 /// @return Status of the test execution (e.g., success or failure).
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFromAllConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     /* ================ SETUP ================ */
 
     // Program
@@ -177,25 +178,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
 
     vector<uint32_t> packed_output;
 
-    bool pcc = false;
+    bool is_equal = false;
 
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
         detail::ReadFromDeviceL1(device, mst_logical_core, mst_l1_base_address, bytes_per_transaction, packed_output);
 
         // Results comparison
-        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-        if (!pcc) {
-            log_error(LogTest, "PCC Check failed");  // TO-DO: Print the failed core's coordinates here
+        is_equal = (packed_output == packed_golden);
+        if (!is_equal) {
+            log_error(LogTest, "Equality Check failed");  // TO-DO: Print the failed core's coordinates here
             log_info(LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
             log_info(LogTest, "Output vector");
             print_vector<uint32_t>(packed_output);
-            return pcc;
+            return is_equal;
         }
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -253,8 +253,9 @@ void packet_sizes_test(
     /* Running the Test */
 
     uint32_t max_transactions_per_subordinate = 256;
-    uint32_t max_reservable_pages_per_transaction =
-        mesh_device->get_device(0)->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+    uint32_t max_reservable_pages_per_transaction = mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
+                                                        ? 1024
+                                                        : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions_per_subordinate = 1;
          num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
@@ -292,7 +293,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -395,7 +396,7 @@ TO-DO:
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -414,7 +415,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     uint32_t test_case_id = 311;
 
@@ -518,7 +519,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     uint32_t test_case_id = 318;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};
