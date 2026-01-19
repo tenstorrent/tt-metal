@@ -767,25 +767,20 @@ TEST_F(GeluBwPolyTest, DerivativeAtZero) {
 }
 
 TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
-    // Implementation covers:
+    // Implementation covers (after Session 34 optimization):
     // - Core region [-3, 3.1719]: degree 16 polynomial
     // - Left region [-5, -3]: degree 8 shifted polynomial (t = x + 4)
-    // - Far left 1 [-7, -5]: degree 8 shifted polynomial (t = x + 6)
-    // - Far left 2 [-9, -7]: degree 8 shifted polynomial (t = x + 8)
-    // - Deep negative [-12.4, -9]: exp()-based asymptotic formula
-    // - Saturation: x < -12.4 saturates to 0, x > 3.1719 saturates to 1
+    // - Exp-based region (-13.375, -5]: fused x*exp(t) with Mills ratio correction
+    // - Saturation: x <= -13.375 saturates to 0, x >= 3.1719 saturates to 1
 
-    // Polynomial region tests - expect excellent accuracy (Max ULP = 1-2)
+    // Polynomial region tests - expect excellent accuracy (Max ULP = 1)
     std::vector<std::pair<float, int32_t>> poly_tests = {
         {-0.5f, 2},  // Core polynomial region
         {-1.0f, 2},
         {-2.0f, 2},
-        {-3.0f, 2},   // Boundary between core and left polynomial
-        {-4.0f, 2},   // Left polynomial region (shifted, t = x + 4)
-        {-5.0f, 2},   // Edge of left polynomial
-        {-6.0f, 2},   // Far left 1 polynomial region (shifted, t = x + 6)
-        {-7.0f, 2},   // Boundary between FL1 and FL2 polynomials
-        {-8.0f, 30},  // Far left 2 polynomial region (shifted, t = x + 8) - 18% relative error
+        {-3.0f, 2},  // Boundary between core and left polynomial
+        {-4.0f, 2},  // Left polynomial region (shifted, t = x + 4)
+        {-5.0f, 2},  // Edge of left polynomial / start of exp-based
     };
 
     std::cout << "\n[POLY] Polynomial region tests (should have low ULP):\n";
@@ -800,14 +795,19 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
         EXPECT_LE(ulp, max_expected_ulp) << "POLY GELU'(" << input_val << ") polynomial region ULP too high";
     }
 
-    // Exp-based region tests [-12.4, -9] - uses asymptotic formula with _sfpu_exp_f32_accurate_
+    // Exp-based region tests (-13.375, -5] - fused x*exp(t) with Mills ratio correction
+    // After Session 34: extended from (-13.375, -9) to (-13.375, -5], Max ULP = 1
     std::vector<std::pair<float, int32_t>> exp_tests = {
-        {-10.0f, 10},  // Exp-based region - excellent accuracy
-        {-11.0f, 10},
-        {-12.0f, 10},
+        {-6.0f, 2},   // Exp-based region (was FL1 polynomial)
+        {-7.0f, 2},   // Exp-based region (was FL1/FL2 boundary)
+        {-8.0f, 2},   // Exp-based region (was FL2 polynomial)
+        {-10.0f, 2},  // Exp-based region - excellent accuracy
+        {-11.0f, 2},
+        {-12.0f, 2},
+        {-13.0f, 2},  // Near saturation boundary
     };
 
-    std::cout << "\n[EXP] Exp-based region tests (x in [-12.4, -9], should have low ULP):\n";
+    std::cout << "\n[EXP] Exp-based region tests (x in (-13.375, -5], should have low ULP):\n";
     for (const auto& [input_val, max_expected_ulp] : exp_tests) {
         float actual = run_gelu_bw_poly_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
@@ -819,10 +819,10 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
         EXPECT_LE(ulp, max_expected_ulp) << "EXP GELU'(" << input_val << ") exp-based region ULP too high";
     }
 
-    // Saturation region tests (x < -12.4) - expect saturation to 0
-    std::vector<float> saturation_tests = {-13.0f, -13.375f};
+    // Saturation region tests (x <= -13.375) - expect saturation to 0
+    std::vector<float> saturation_tests = {-13.375f, -14.0f, -20.0f};
 
-    std::cout << "\n[SAT] Saturation region tests (x < -12.4, saturates to 0):\n";
+    std::cout << "\n[SAT] Saturation region tests (x <= -13.375, saturates to 0):\n";
     for (float input_val : saturation_tests) {
         float actual = run_gelu_bw_poly_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
@@ -1088,16 +1088,21 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
         int ulp_le_1 = 0;
     };
 
-    // Segment boundaries based on implementation:
-    // - x <= -13.375: BF16 natural saturation (true GELU'(x) rounds to 0 in BF16)
-    // - (-13.375, -9): exp()-based asymptotic formula with Mills ratio correction
-    // - Polynomial regions for [-9, 3.1719)
-    // - x >= 3.1719: Saturation to 1
+    // Segment boundaries based on implementation (Session 34: extended exp-based to -5):
+    // Kernel uses: v_if(x >= 3.1719) / v_elseif(x >= -3) / v_elseif(x >= -5) / v_elseif(x > -13.375)
+    // Note: x > -13.375 (strict) means x = -13.375 falls through to saturation (result = 0)
+    //
+    // Using half-open intervals [x_min, x_max) to match kernel boundaries:
+    // - x <= -13.375: BF16 natural saturation (kernel: falls through to default result = 0)
+    // - (-13.375, -5): fused x*exp(t) (kernel: x > -13.375f, caught before x >= -5.0f)
+    // - [-5, -3): LEFT polynomial (kernel: x >= -5.0f)
+    // - [-3, 3.1719): CORE polynomial (kernel: x >= -3.0f)
+    // - x >= 3.1719: Saturation to 1 (kernel: x >= 3.1719f)
+    //
+    // BF16 values at boundary: -13.375 (0xc156) saturates, -13.3125 (0xc155) is first exp-based
     std::vector<SegmentStats> segments = {
-        {"x <= -13.375 (BF16 natural 0)", -1e38f, -13.375f},
-        {"(-13.375, -9) exp-based", -13.375f, -9.0f},
-        {"[-9, -7) FL2 polynomial", -9.0f, -7.0f},
-        {"[-7, -5) FL1 polynomial", -7.0f, -5.0f},
+        {"x <= -13.375 (BF16 natural 0)", -1e38f, -13.3125f},  // Use -13.3125 to include -13.375
+        {"(-13.375, -5] exp-based", -13.3125f, -5.0f},         // First exp-based value is -13.3125
         {"[-5, -3) LEFT polynomial", -5.0f, -3.0f},
         {"[-3, 3.1719) CORE polynomial", -3.0f, 3.1719f},
         {"x >= 3.1719 (saturation to 1)", 3.1719f, 1e38f},

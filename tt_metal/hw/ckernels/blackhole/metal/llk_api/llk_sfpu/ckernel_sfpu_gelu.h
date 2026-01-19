@@ -12,32 +12,26 @@ namespace ckernel {
 namespace sfpu {
 
 // =============================================================================
-// Specialized inline exp() for GELU deep negative tail
+// Fused x * exp(t) for GELU negative tail - avoids intermediate underflow
 // =============================================================================
-// Input range: t ∈ [-89.5, -40.5] (from t = -x²/2 where x ∈ [-13.375, -9])
-// Output range: exp(t) ∈ [~1e-39, ~2.6e-18]
+// Computes x * exp(t) where t = -x²/2 for x in the negative region (-13.375, -5].
+// Input range: t ∈ [-89.5, -12.5] (from t = -x²/2 where x ∈ [-13.375, -5])
+// Output range: x * exp(t) ∈ [~-4e-38, ~-1.4e-6]
 //
-// This is the inline specialized exp recommended by consolidated research
-// (negative_tail_final_consolicated_opinions.md). Key advantages over
-// _sfpu_exp_f32_accurate_():
+// This function combines specialized inline exp() with a key insight to avoid
+// intermediate underflow. Advantages over _sfpu_exp_f32_accurate_():
 // 1. No overflow check (never happens for negative t)
 // 2. No NaN check (input is computed from valid x)
 // 3. Simpler FTZ handling via exponent field check
 // 4. Uses degree-5 Taylor (vs degree-7 in accurate version)
 // 5. ~15-18 ops vs ~25-30 for general-purpose exp
+// 6. Fused multiply avoids intermediate underflow (see below)
 //
 // Method:
 // 1. Range reduction: t = k·ln(2) + r, where k = round(t/ln2), |r| < 0.5
 // 2. Polynomial: exp(r) via degree-5 Taylor series
-// 3. Scaling: exp(t) = 2^k · exp(r) via exponent bit manipulation (FREE)
-//
-// Performance: ~15-18 operations, no external function calls
-// Accuracy: < 1 ULP for exp(t) in target range
-// =============================================================================
-// =============================================================================
-// Fused x * exp(t) for GELU deep negative tail - avoids intermediate underflow
-// =============================================================================
-// Computes x * exp(t) where t = -x²/2 for x in deep negative region.
+// 3. Fused multiply: x * poly BEFORE 2^k scaling
+// 4. Scaling: (x * poly) * 2^k via exponent bit manipulation (FREE)
 //
 // KEY INSIGHT: exp(t) alone may underflow (e.g., exp(-88.6) ≈ 3e-39 < BF16 min normal),
 // but x * exp(t) may NOT underflow (e.g., -13.3 * 3e-39 = -4e-38 > BF16 min normal).
@@ -46,14 +40,17 @@ namespace sfpu {
 //   exp(t) = 2^k * poly(r)
 //   x * exp(t) = x * 2^k * poly = (x * poly) * 2^k
 //
-// Since |x| ≈ 13 and poly ≈ 0.7, x * poly ≈ -9, which has a much larger exponent
-// than poly alone. When we then shift by 2^k, we're less likely to underflow.
+// Since |x| ≈ 5-13 and poly ≈ 0.7-1.0, x * poly has a larger exponent than poly alone.
+// When we then shift by 2^k, we're less likely to underflow.
 //
 // Example for x = -13.3125, t = -88.62:
 //   OLD: poly=0.67, k=-128 → exp = 0.67 * 2^(-128) ≈ 2e-39 → FTZ to 0!
 //   NEW: x*poly=-8.9, k=-128 → x*exp = -8.9 * 2^(-128) ≈ -2.6e-38 → representable!
+//
+// Performance: ~15-18 operations, no external function calls
+// Accuracy: Max ULP ≤ 1 across entire (-13.375, -5] range
 // =============================================================================
-sfpi_inline sfpi::vFloat x_times_exp_deep_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
+sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat t) {
     // Cody-Waite constants for extended precision range reduction
     constexpr float INV_LN2 = 1.4426950408889634f;  // 1/ln(2)
     constexpr float LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
@@ -333,7 +330,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         // exp(t) alone can underflow (e.g., exp(-88.6) ≈ 3e-39 < BF16 min normal),
         // but x * exp(t) stays representable (e.g., -13.3 * 3e-39 = -4e-38 > min normal).
         // The fused function multiplies x by poly BEFORE the 2^k exponent shift.
-        sfpi::vFloat x_exp = x_times_exp_deep_negative_tail(x, t);
+        sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
 
         if constexpr (APPROXIMATION_MODE) {
             // Fast mode: leading term only, ~1% relative error at x=-9
