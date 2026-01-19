@@ -404,7 +404,7 @@ CPMAddPackage(
         libtorch_aten.patch
 )
 if(libtorch_ADDED)
-    add_library(libtorch INTERFACE IMPORTED)
+    add_library(libtorch INTERFACE)
     add_library(torch::torch ALIAS libtorch)
     target_include_directories(libtorch SYSTEM INTERFACE
         ${libtorch_SOURCE_DIR}/include
