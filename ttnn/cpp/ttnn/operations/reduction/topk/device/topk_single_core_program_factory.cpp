@@ -70,10 +70,6 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
 
     // Pipeline Flow:
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel
-    // Buffer sizing strategy:
-    // - Double buffering for input to prevent stalls during data streaming
-    // - Intermediate buffers sized for processing efficiency
-    // - Output buffers sized exactly for K-element results
     const uint32_t num_cb_unit = 2;                         // Base unit for double buffering
     const uint32_t cb_in_units = 2 * num_cb_unit;           // 4 units total for input double buffering
     const uint32_t input_cb_tile_count = cb_in_units;       // Input stream buffer size
