@@ -37,7 +37,7 @@ inline void custom_mm_configure_addrmod(
     addr_mod_t{
         .srca = {.incr = 16, .clr = 0, .cr = 0},
         .srcb = {.incr = 16, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
+        .dest = {.incr = -16, .clr = 0, .cr = 0},  // Negative increment: 16 - 16 = 0
     }
         .set(ADDR_MOD_1);
 
@@ -58,25 +58,19 @@ inline void custom_mm_configure_mop(
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face = false) {
+    // With negative dest incr in ADDR_MOD_1, dest cycles: 0->16->0->16
+    // This allows MVMULs 3&4 to accumulate directly into same locations as MVMULs 1&2
+    // No need for MOVD2A/MOVD2B/ELWADD finalization
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        14,
+        4,
         // Lambda function to load reply buffer
         [] {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
-            TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
-            TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
-            TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 32);
-            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 48);
-            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-            TTI_ELWADD(3, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // dest=0,  srcA=0,  srcB=0   -> after: dest=16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // dest=16, srcA=16, srcB=0   -> after: dest=0 (16-16)
+            TTI_MVMUL(
+                p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);      // dest=0 (accumulates!), srcA=32, srcB=16 -> after: dest=16
+            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);  // dest=16 (accumulates!), srcA=48, srcB=16, clear
         });
 }
 
@@ -100,27 +94,18 @@ inline void _llk_math_custom_mm_init_(
 }
 
 // Simplified implementation: NUM_FIDELITY_PHASES = 0 (no high fidelity mode)
+// With dest cr=1 wrapping, face accumulation happens automatically during MVMULs
 // Template parameter partial_acc:
-//   false (default): Full custom_mm - MVMULs for all K tiles + finalization
-//   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
+//   false (default): Full custom_mm - MVMULs for all K tiles (faces auto-accumulated)
+//   true: Partial K accumulation - MVMULs only, results persist for next K subblock
 template <bool partial_acc = false>
 inline void _llk_math_custom_mm_(
     uint dst_index, [[maybe_unused]] const bool transpose = false, [[maybe_unused]] const std::uint32_t kt_dim = 1) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    if constexpr (partial_acc) {
-        // Partial K accumulation: run all kt_dim iterations with CLR_AB (instructions 0-3)
-        // MVMUL accumulates into dest, results persist for next K subblock
-        // NO finalization - skip instructions 4-13
-        for (uint32_t i = 0; i < kt_dim; i++) {
-            lltt::replay(ckernel::math::replay_buf_offset, 4);
-        }
-    } else {
-        // Full accumulation with finalization
-        for (uint32_t i = 0; i < kt_dim - 1; i++) {
-            lltt::replay(ckernel::math::replay_buf_offset, 4);
-        }
-        // Final K tile + finalization (MOVD2A/MOVD2B/ELWADD)
-        lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
+    // All iterations use the same 4 MVMULs - face accumulation happens automatically
+    // via dest address cycling (negative incr in ADDR_MOD_1: 0->16->0->16)
+    for (uint32_t i = 0; i < kt_dim; i++) {
+        lltt::replay(ckernel::math::replay_buf_offset, 4);
     }
 }
