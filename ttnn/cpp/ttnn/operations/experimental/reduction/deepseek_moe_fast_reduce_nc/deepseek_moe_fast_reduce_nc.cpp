@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
+
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::reduction {
@@ -14,7 +17,7 @@ namespace ttnn::operations::experimental::reduction {
 ttnn::Tensor DeepseekMoEFastReduceNCOperation::invoke(
     const ttnn::Tensor& input,
     tt::stl::Span<const int32_t> dims,
-    const std::optional<const Tensor>& output,
+    const std::optional<const ttnn::Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(

@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::reduction {
@@ -14,7 +17,7 @@ struct DeepseekMoEFastReduceNCOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> dims,
-        const std::optional<const Tensor>& output,
+        const std::optional<const ttnn::Tensor>& output,
         const ttnn::MemoryConfig& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
@@ -28,5 +31,4 @@ constexpr auto deepseek_moe_fast_reduce_nc = ttnn::register_operation<
     ttnn::operations::experimental::reduction::DeepseekMoEFastReduceNCOperation>();
 
 }  // namespace experimental::reduction
-
 }  // namespace ttnn

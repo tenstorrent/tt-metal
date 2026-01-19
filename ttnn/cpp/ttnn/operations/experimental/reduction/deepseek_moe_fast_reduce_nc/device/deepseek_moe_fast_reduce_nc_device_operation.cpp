@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
+#include <cstdint>
+#include <optional>
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {

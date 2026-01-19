@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
 #include "deepseek_moe_fast_reduce_nc_program_factory.hpp"
+
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
@@ -36,10 +39,10 @@ namespace ttnn::prim {
 ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::DeepseekMoEFastReduceNCDeviceOperation::
     tensor_return_value_t
     deepseek_moe_fast_reduce_nc(
-        const Tensor& input,
+        const ttnn::Tensor& input,
         const int32_t& dim,
-        const std::optional<const Tensor>& output,
-        const MemoryConfig& output_mem_config,
+        const std::optional<const ttnn::Tensor>& output,
+        const ttnn::MemoryConfig& output_mem_config,
         const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::prim

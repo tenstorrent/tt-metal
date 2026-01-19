@@ -2,18 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "deepseek_moe_fast_reduce_nc_nanobind.hpp"
-
 #include <cstdint>
 #include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "deepseek_moe_fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
+
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include "ttnn-nanobind/decorators.hpp"
-
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 

@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

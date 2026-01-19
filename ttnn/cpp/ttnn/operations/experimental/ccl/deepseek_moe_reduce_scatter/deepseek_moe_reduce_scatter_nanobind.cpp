@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "deepseek_moe_reduce_scatter_nanobind.hpp"
-
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -12,9 +10,11 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
+#include "deepseek_moe_reduce_scatter_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.hpp"
+
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

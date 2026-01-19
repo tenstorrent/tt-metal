@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"

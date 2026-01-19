@@ -14,7 +14,6 @@
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-// Shared struct for program artifacts - used for caching kernel handles and core info
 struct DeepseekReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
