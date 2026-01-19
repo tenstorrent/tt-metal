@@ -282,7 +282,6 @@ class TestCustomOperationsWithDevice:
 
         # Check gradient was accumulated
         assert input_tensor.is_grad_initialized()
-        grad = input_tensor.get_grad()
         # Gradient should be 2.0 everywhere (since d/dx(2x) = 2)
 
     def test_multiple_inputs(self):

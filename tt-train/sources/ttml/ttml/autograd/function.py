@@ -9,7 +9,7 @@ custom TTML operations in Python with both forward and backward passes,
 integrating with the existing C++ autograd system.
 """
 
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 # Import C++ bindings lazily to avoid circular import issues
 _cpp_bindings = None
@@ -206,51 +206,54 @@ class Function:
             # Extract links from input tensors (for graph dependencies)
             links = get_links(input_tensors)
 
-            # Capture variables explicitly for the closure
-            captured_ctx = ctx
-            captured_outputs = outputs_tuple
-            captured_inputs = input_tensors
-            captured_cls = cls
+            # Create closure factory to properly capture variables
+            def make_backward_closure(bwd_ctx, bwd_outputs, bwd_inputs, bwd_cls):
+                def backward_closure():
+                    try:
+                        # Get gradients from output tensors
+                        grad_outputs = []
+                        for out in bwd_outputs:
+                            if out is not None and out.is_grad_initialized():
+                                grad_outputs.append(out.get_grad())
+                            else:
+                                raise RuntimeError(
+                                    f"Output tensor gradient not initialized in "
+                                    f"{bwd_cls.__name__}.backward()"
+                                )
+                        grad_outputs = tuple(grad_outputs)
 
-            # Create closure for backward pass
-            def backward_closure(
-                _ctx=captured_ctx,
-                _outputs=captured_outputs,
-                _inputs=captured_inputs,
-                _cls=captured_cls,
-            ):
-                # Get gradients from output tensors
-                grad_outputs = []
-                for out in _outputs:
-                    if out is not None and out.is_grad_initialized():
-                        grad_outputs.append(out.get_grad())
-                    else:
-                        grad_outputs.append(None)
-                grad_outputs = tuple(grad_outputs)
-
-                # Call user's backward - returns gradients
-                if len(grad_outputs) == 1:
-                    grad_inputs = _cls.backward(_ctx, grad_outputs[0])
-                else:
-                    grad_inputs = _cls.backward(_ctx, *grad_outputs)
-
-                # Normalize to tuple
-                if grad_inputs is None:
-                    grad_inputs = (None,) * len(_inputs)
-                elif not isinstance(grad_inputs, tuple):
-                    grad_inputs = (grad_inputs,)
-
-                # Accumulate gradients to input tensors
-                for tensor, grad in zip(_inputs, grad_inputs):
-                    if grad is not None and tensor.get_requires_grad():
-                        # Handle both Tensor wrapper and raw tt::tt_metal::Tensor
-                        if hasattr(grad, "get_value"):
-                            tensor.add_grad(grad.get_value())
+                        # Call user's backward - returns gradients
+                        if len(grad_outputs) == 1:
+                            grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
                         else:
-                            tensor.add_grad(grad)
+                            grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
+
+                        # Normalize to tuple
+                        if grad_inputs is None:
+                            grad_inputs = (None,) * len(bwd_inputs)
+                        elif not isinstance(grad_inputs, tuple):
+                            grad_inputs = (grad_inputs,)
+
+                        # Accumulate gradients to input tensors
+                        for tensor, grad in zip(bwd_inputs, grad_inputs):
+                            if grad is not None and tensor.get_requires_grad():
+                                # Handle both Tensor wrapper and raw tt::tt_metal::Tensor
+                                if hasattr(grad, "get_value"):
+                                    tensor.add_grad(grad.get_value())
+                                else:
+                                    tensor.add_grad(grad)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Error in backward of {bwd_cls.__name__}: {e}"
+                        ) from e
+
+                return backward_closure
+
+            # Create the backward closure with captured variables
+            backward_fn = make_backward_closure(ctx, outputs_tuple, input_tensors, cls)
 
             # Register the backward node
-            node_id = auto_context.add_backward_node(backward_closure, links)
+            node_id = auto_context.add_backward_node(backward_fn, links)
 
             # Set the node on all output tensors
             if node_id is not None:
