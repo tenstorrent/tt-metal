@@ -9,6 +9,7 @@
 #include "reduce_scatter_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -23,7 +24,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto input_tensor = tensor_args.input_tensor;
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::reduce_scatter_common_validates(
+    ttnn::experimental::prim::reduce_scatter_common_validates(
         input_tensor,
         operation_attributes.topology,
         operation_attributes.dim,

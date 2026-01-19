@@ -8,8 +8,9 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import is_grayskull
+from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 
 def run_copy_test(N, C, H, W, layout, device):
@@ -227,7 +228,7 @@ def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, devi
 )
 @pytest.mark.parametrize(
     "N, C, H, W,",
-    ((1, 1, 32, 64),),
+    ((1, 1, 32, 64), (1, 1, 32, 32000)),
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_typecast(N, C, H, W, memory_config, input_dtype, output_dtype, device):
@@ -267,3 +268,175 @@ def test_typecast_community(device):
     y = ttnn.typecast(x, ttnn.types.bfloat16)
     assert y.dtype == ttnn.types.bfloat16
     assert_with_pcc(ttnn.to_torch(x), ttnn.to_torch(y), 0.99)
+
+
+def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype, device):
+    """Test typecast operation on row-major device tensors."""
+    torch.manual_seed(54321)
+    torch_dtype = torch.bfloat16
+    input = torch.randn(shape, dtype=torch_dtype)
+
+    # Create row-major tensor on device
+    input_tensor = ttnn.from_torch(input, input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Verify input is row-major
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input tensor should be in ROW_MAJOR_LAYOUT"
+
+    # Perform typecast
+    output_tensor = ttnn.typecast(input_tensor, dtype=output_dtype, memory_config=memory_config)
+
+    # Verify output properties
+    assert output_tensor.shape == input_tensor.shape, "Output shape should match input shape"
+    assert output_tensor.dtype == output_dtype, "Output dtype should match requested dtype"
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Output should maintain ROW_MAJOR_LAYOUT"
+    assert output_tensor.memory_config() == memory_config, "Output memory config should match"
+
+    # Convert original input to output dtype for comparison
+    torch_output = ttnn.to_torch(output_tensor)
+
+    # Map ttnn dtype to torch dtype for conversion
+    torch_output_dtype = get_ttnn_torch_dtype(output_dtype)
+
+    # Convert original input to match output dtype for comparison
+    torch_expected = input.to(torch_output_dtype)
+
+    if output_dtype == ttnn.int32:
+        # For integer types, use exact equality (typecast from float to int may have rounding)
+        assert torch.equal(
+            torch_expected, torch_output
+        ), f"Integer typecast mismatch: expected {torch_expected}, got {torch_output}"
+    else:
+        assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
+
+
+@pytest.mark.parametrize(
+    "input_dtype",
+    (
+        ttnn.bfloat16,
+        ttnn.float32,
+    ),
+    ids=[
+        "BFLOAT16",
+        "FLOAT32",
+    ],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    (
+        ttnn.int32,
+        ttnn.bfloat16,
+        ttnn.float32,
+    ),
+    ids=[
+        "INT32",
+        "BFLOAT16",
+        "FLOAT32",
+    ],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (32, 64),
+        (31, 1024 - 32),
+        (32, 1024),
+        (33, 1024 + 32),
+        (1, 2, 2048 - 32),
+        (7, 5, 3, 2048),
+        (7, 5, 65, 2048 + 32),
+        (1, 1, 320032),
+    ],
+    ids=[
+        "32x64",
+        "31x1024 - 32",
+        "32x1024",
+        "33x1024 + 32",
+        "1x2x2048 - 32",
+        "7x5x3x2048",
+        "7x5x65x2048 + 32",
+        "1x1x320032",
+    ],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_typecast_row_major(shape, memory_config, input_dtype, output_dtype, device):
+    """
+    Test that typecast works on row-major device tensors (fixes issue #16270).
+
+    This test verifies:
+    - Typecast works on row-major layout device tensors
+    - Output maintains row-major layout
+    - Various dtype conversions work correctly
+    """
+    if input_dtype == output_dtype:
+        pytest.skip("Input and output data types are the same")
+
+    run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype, device)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 32, 64),
+        (8, 2, 64, 32),
+        (9, 2, 64, 32),
+        (32, 32),
+    ],
+    ids=[
+        "1x32x64",
+        "8x2x64x32",
+        "9x2x64x32",
+        "32x32",
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype,output_dtype",
+    [
+        (ttnn.bfloat16, ttnn.int32),
+        (ttnn.bfloat16, ttnn.uint8),
+        (ttnn.uint8, ttnn.bfloat16),
+    ],
+    ids=[
+        "BFLOAT16_TO_INT32",
+        "BFLOAT16_TO_UINT8",
+        "UINT8_TO_BFLOAT16",
+    ],
+)
+def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, device):
+    """
+    Test that row-major typecast produces same results as tile layout typecast.
+    This ensures correctness of the row-major implementation.
+    """
+    torch.manual_seed(12345)
+
+    # Use appropriate torch dtype and generation method based on input_dtype
+    if input_dtype == ttnn.bfloat16:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    elif input_dtype == ttnn.uint8:
+        torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+    else:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    # Create row-major tensor
+    input_rm = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_rm = ttnn.typecast(input_rm, dtype=output_dtype)
+
+    # Create tile layout tensor
+    input_tile = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tile = ttnn.typecast(input_tile, dtype=output_dtype)
+
+    # Convert both to torch and compare
+    torch_output_rm = ttnn.to_torch(output_rm)
+    torch_output_tile = ttnn.to_torch(output_tile)
+
+    # Use appropriate assertion based on dtype
+    # ULP is only applicable for floating-point types, not integers
+    is_integer_type = output_dtype in (ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32)
+    if is_integer_type:
+        assert torch.equal(
+            torch_output_rm, torch_output_tile
+        ), "Row-major and tile layouts should produce identical integer results"
+    else:
+        assert_with_ulp(torch_output_rm, torch_output_tile, ulp_threshold=2)
+
+    # Verify layouts are preserved
+    assert output_rm.layout == ttnn.ROW_MAJOR_LAYOUT, "Row-major output should maintain ROW_MAJOR_LAYOUT"
+    assert output_tile.layout == ttnn.TILE_LAYOUT, "Tile output should maintain TILE_LAYOUT"

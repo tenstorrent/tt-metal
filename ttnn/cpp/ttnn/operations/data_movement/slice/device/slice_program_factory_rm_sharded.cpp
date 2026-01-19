@@ -186,7 +186,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 }  // namespace
 
-namespace slice::program {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
 
 SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
@@ -270,7 +272,7 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
         all_cores_unpadded,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    auto all_runtime_args = get_slice_runtime_args_rm_sharded(
+    auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
         input,
         output,
         args.slice_start,
@@ -305,6 +307,4 @@ void SliceRmShardedProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace slice::program
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

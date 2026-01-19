@@ -14,12 +14,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::fused_update::program::tiled {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
-namespace CMAKE_UNIQUE_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE_TILED {
 
 bool enable_fp32_dest_acc(
     const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
@@ -29,12 +29,12 @@ bool enable_fp32_dest_acc(
     return fp32_dest_acc_en;
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace CMAKE_UNIQUE_NAMESPACE_TILED
 
 PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdateCacheProgramFactory::create(
-    const FusedUpdateParams& operation_attributes,
-    const FusedUpdateInputs& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/) {
     Program program{};
 
     const auto& cache_tensor1 = tensor_args.cache_tensor1;
@@ -53,7 +53,7 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     bool fp32_dest_acc_en =
-        CMAKE_UNIQUE_NAMESPACE::enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
+        CMAKE_UNIQUE_NAMESPACE_TILED::enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
@@ -441,9 +441,9 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
 
 void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const FusedUpdateParams& operation_attributes,
-    const FusedUpdateInputs& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& /*tensor_return_value*/) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -525,10 +525,10 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
 
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t
 PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
-    const FusedUpdateParams& operation_attributes,
+    const PagedFusedUpdateCacheParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const FusedUpdateInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value) {
     log_debug(tt::LogOp, "PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
     log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
 
@@ -573,9 +573,9 @@ PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
 
 void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const FusedUpdateParams& operation_attributes,
-    const FusedUpdateInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PagedFusedUpdateCacheParams& operation_attributes,
+    const PagedFusedUpdateCacheInputs& tensor_args,
+    PagedFusedUpdateCacheResult& tensor_return_value) {
     PagedTiledFusedUpdateCacheProgramFactory program_factory;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
@@ -592,4 +592,4 @@ void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::tiled
+}  // namespace ttnn::experimental::prim

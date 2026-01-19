@@ -8,39 +8,35 @@
 #include "interleaved_to_sharded_partial_op_types.hpp"
 #include "interleaved_to_sharded_partial_program_factory.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct InterleavedToShardedPartialDeviceOperation {
-    using operation_attributes_t = interleaved_to_sharded_partial::operation_attributes_t;
-    using tensor_args_t = interleaved_to_sharded_partial::tensor_args_t;
-    using spec_return_value_t = interleaved_to_sharded_partial::spec_return_value_t;
-    using tensor_return_value_t = interleaved_to_sharded_partial::tensor_return_value_t;
-    using program_factory_t = std::variant<detail::InterleavedToShardedPartialProgramFactory>;
+    using operation_attributes_t = InterleavedToShardedPartialParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<InterleavedToShardedPartialProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
     static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
     static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+        const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation::tensor_return_value_t
-interleaved_to_sharded_partial(
+Tensor interleaved_to_sharded_partial(
     const Tensor& input_tensor,
     const CoreCoord& grid_size,
     const tt::tt_metal::ShardSpec& shard_spec,
