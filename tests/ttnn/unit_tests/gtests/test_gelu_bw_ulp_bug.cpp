@@ -1088,16 +1088,14 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
         int ulp_le_1 = 0;
     };
 
-    // Segment boundaries based on SaturationThresholdResearch findings:
+    // Segment boundaries based on implementation:
     // - x <= -13.375: BF16 natural saturation (true GELU'(x) rounds to 0 in BF16)
-    // - (-13.375, -12.4]: Implementation saturation (true value tiny, we return 0)
-    // - [-12.4, -9): exp()-based asymptotic formula
+    // - (-13.375, -9): exp()-based asymptotic formula with Mills ratio correction
     // - Polynomial regions for [-9, 3.1719)
     // - x >= 3.1719: Saturation to 1
     std::vector<SegmentStats> segments = {
         {"x <= -13.375 (BF16 natural 0)", -1e38f, -13.375f},
-        {"(-13.375, -12.4] (impl sat)", -13.375f, -12.4f},
-        {"[-12.4, -9) exp-based", -12.4f, -9.0f},
+        {"(-13.375, -9) exp-based", -13.375f, -9.0f},
         {"[-9, -7) FL2 polynomial", -9.0f, -7.0f},
         {"[-7, -5) FL1 polynomial", -7.0f, -5.0f},
         {"[-5, -3) LEFT polynomial", -5.0f, -3.0f},
