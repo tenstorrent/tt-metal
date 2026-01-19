@@ -20,6 +20,10 @@
 
 namespace tt::tt_fabric::detail {
 
+// Progress logging interval mask: log every 2^18 (262144) DFS calls
+// Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
+constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
+
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
     const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph)
@@ -736,7 +740,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
     state_.dfs_calls++;
-    if ((state_.dfs_calls & ((1u << 18) - 1)) == 0) {
+    if ((state_.dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
         size_t assigned = 0;
         for (auto v : state_.mapping) {
             assigned += (v != -1);
