@@ -25,6 +25,14 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 1260, 2
 
 
 @pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
+@pytest.mark.parametrize(
     "device_params, use_cfg_parallel",
     [
         (
@@ -91,6 +99,7 @@ def test_accuracy_sdxl_inpaint(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     num_inference_steps,
     vae_on_device,
     capture_trace,
@@ -111,6 +120,7 @@ def test_accuracy_sdxl_inpaint(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompts,
         negative_prompt,
         num_inference_steps,
