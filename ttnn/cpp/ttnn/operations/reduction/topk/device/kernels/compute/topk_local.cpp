@@ -93,6 +93,7 @@ namespace NAMESPACE {
  */
 
 void MAIN {
+    // Compiletime args
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -108,6 +109,7 @@ void MAIN {
     constexpr uint32_t largest = get_compile_time_arg_val(12);
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
 
+    // Runtime args
     uint32_t direction_init = get_arg_val<uint32_t>(0);
 
     // dest indices for where to unpack the tiles for the llk

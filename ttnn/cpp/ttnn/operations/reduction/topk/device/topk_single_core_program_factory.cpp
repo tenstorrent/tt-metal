@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,56 +83,56 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
 
     // Circular Buffer Creations:
     const uint32_t input_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig input_cb_config =
+    const tt::tt_metal::CircularBufferConfig input_cb_config =
         tt::tt_metal::CircularBufferConfig(
             input_cb_tile_count * value_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
 
     constexpr uint32_t index_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
+    const tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
         tt::tt_metal::CircularBufferConfig(
             input_cb_tile_count * index_tile_size, {{index_cb_index, output_ind_cb_data_format}})
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, index_input_intermed0_config);
 
     constexpr uint32_t transposed_val_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig transposed_val_cb_config =
+    const tt::tt_metal::CircularBufferConfig transposed_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
             transposed_cb_tile_count * value_tile_size, {{transposed_val_cb_index, input_cb_data_format}})
             .set_page_size(transposed_val_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_val_cb_config);
 
     constexpr uint32_t transposed_ind_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig transposed_ind_cb_config =
+    const tt::tt_metal::CircularBufferConfig transposed_ind_cb_config =
         tt::tt_metal::CircularBufferConfig(
             transposed_cb_tile_count * index_tile_size, {{transposed_ind_cb_index, output_ind_cb_data_format}})
             .set_page_size(transposed_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_ind_cb_config);
 
     constexpr uint32_t result_prep_val_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig result_prep_val_cb_config =
+    const tt::tt_metal::CircularBufferConfig result_prep_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
             result_prep_cb_tile_count * value_tile_size, {{result_prep_val_cb_index, input_cb_data_format}})
             .set_page_size(result_prep_val_cb_index, input_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_val_cb_config);
 
     constexpr uint32_t result_prep_ind_cb_index = tt::CBIndex::c_5;
-    tt::tt_metal::CircularBufferConfig result_prep_ind_cb_config =
+    const tt::tt_metal::CircularBufferConfig result_prep_ind_cb_config =
         tt::tt_metal::CircularBufferConfig(
             result_prep_cb_tile_count * index_tile_size, {{result_prep_ind_cb_index, output_ind_cb_data_format}})
             .set_page_size(result_prep_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_ind_cb_config);
 
     constexpr uint32_t output_val_cb_index = tt::CBIndex::c_6;
-    tt::tt_metal::CircularBufferConfig output_val_cb_config =
+    const tt::tt_metal::CircularBufferConfig output_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
             output_cb_tile_count * value_tile_size, {{output_val_cb_index, output_val_cb_data_format}})
             .set_page_size(output_val_cb_index, value_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, output_val_cb_config);
 
     constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_7;
-    tt::tt_metal::CircularBufferConfig output_ind_cb_config =
+    const tt::tt_metal::CircularBufferConfig output_ind_cb_config =
         tt::tt_metal::CircularBufferConfig(
             output_cb_tile_count * index_tile_size, {{output_ind_cb_index, output_ind_cb_data_format}})
             .set_page_size(output_ind_cb_index, index_tile_size);
@@ -140,8 +140,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
 
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,                       // CB0: Input values
-        index_cb_index,                       // CB1: Generated indices
+        input_cb_index,                       // Input values
+        index_cb_index,                       // Generated indices
         Ht,                                   // Height in tiles
         Wt,                                   // Width in tiles
         total_number_of_cores,                // Total number of cores
@@ -176,14 +176,14 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {
-        input_cb_index,                            // CB0: Input values
-        index_cb_index,                            // CB1: Input indices
-        transposed_val_cb_index,                   // CB2: Transposed values
-        transposed_ind_cb_index,                   // CB3: Transposed indices
-        result_prep_val_cb_index,                  // CB4: Result prep values
-        result_prep_ind_cb_index,                  // CB5: Result prep indices
-        output_val_cb_index,                       // CB6: Output values
-        output_ind_cb_index,                       // CB7: Output indices
+        input_cb_index,                            // Input values
+        index_cb_index,                            // Input indices
+        transposed_val_cb_index,                   // Transposed values
+        transposed_ind_cb_index,                   // Transposed indices
+        result_prep_val_cb_index,                  // Result prep values
+        result_prep_ind_cb_index,                  // Result prep indices
+        output_val_cb_index,                       // Output values
+        output_ind_cb_index,                       // Output indices
         Ht,                                        // Height in tiles
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
@@ -215,8 +215,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
                     binary_writer_kernel_id,
                     core,
                     {
-                        values_buffer->address(),  // DRAM address for output values
-                        index_buffer->address(),   // DRAM address for output indices
+                        values_buffer->address(),
+                        index_buffer->address(),
                         id,
                         work_per_core,
                     });
