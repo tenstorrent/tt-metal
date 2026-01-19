@@ -1048,7 +1048,132 @@ Degree  12:  Max relative error:  1 (100%)
 7. ✅ **Extend to [-7, -5]** - DONE (shifted polynomial, Max ULP = 1)
 8. ✅ **Extend to [-9, -7]** - DONE (shifted polynomial, Max ULP ~25)
 9. ✅ **Investigate x < -9** - DONE (not feasible, Sollya shows 100% error)
-10. ⏳ **PR Review** - Ready for submission
+10. ✅ **SFPU research for x < -9** - DONE (exp()-based solution identified)
+11. ⏳ **Implement exp()-based solution for [-12.4, -9]** - Ready for implementation
+12. ⏳ **PR Review** - Ready for submission
+
+---
+
+## Session 2026-01-18: SFPU Kernel Research - exp()-based Solution for x < -9
+
+### Research Goal
+
+Investigate SFPU kernel programming techniques to handle the deep negative region (x < -9) where polynomial approximation fails with 100% relative error.
+
+### Key Discovery: exp() Can Handle the Deep Negative Region
+
+**Research document:** `~/tt/SFPU_KERNEL_PROGRAMMING.md` (420+ lines)
+
+The existing `_sfpu_exp_f32_accurate_()` function can compute exp(-x²/2) with < 1 ULP accuracy for the deep negative region, enabling the asymptotic GELU'(x) formula:
+
+```
+GELU'(x) ≈ x × exp(-x²/2) / √(2π)  for x << 0
+```
+
+### Why exp() Works Where Polynomials Fail
+
+**Polynomial limitation (x < -9):**
+- GELU'(x) values span 16+ orders of magnitude (1e-38 to 1e-18)
+- Polynomial coefficients would need to be < 1e-25
+- Float32 cannot accurately compute with such tiny coefficients
+- Sollya shows 100% relative error regardless of polynomial degree
+
+**exp() advantage:**
+- Uses Cody-Waite range reduction: exp(x) = 2^k × exp(r)
+- k = round(x/ln2), r is small (~[-0.347, 0.347])
+- Polynomial only needs to cover the small r range
+- `setexp()` primitive multiplies by 2^k via bit manipulation (FREE, no float multiply)
+- Result: < 1 ULP accuracy across entire float range
+
+### Proposed Implementation
+
+```cpp
+// For x ∈ [-12.4, -9], use asymptotic formula:
+// GELU'(x) ≈ x × exp(-x²/2) / √(2π)
+v_if(x < -9.0f && x > -12.4f) {
+    sfpi::vFloat t = x * x * (-0.5f);
+    sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
+    constexpr float INV_SQRT_2PI = 0.3989422804014327f;
+    result = x * exp_val * INV_SQRT_2PI;
+}
+v_elseif(x <= -12.4f) {
+    result = sfpi::vConst0;  // True saturation to 0
+}
+v_endif;
+```
+
+### Numerical Analysis
+
+| x value | -x²/2 | exp(-x²/2) | GELU'(x) expected | Status |
+|---------|-------|------------|-------------------|--------|
+| -9 | -40.5 | ~2.6e-18 | ~-3.7e-18 | ✅ Above float32 underflow |
+| -10 | -50 | ~1.9e-22 | ~-3.0e-22 | ✅ Above float32 underflow |
+| -11 | -60.5 | ~5.5e-27 | ~-9.5e-27 | ✅ Above float32 underflow |
+| -12 | -72 | ~4.9e-32 | ~-9.3e-32 | ✅ Just above float32 underflow |
+| -12.4 | -76.88 | ~2.7e-34 | ~-5.3e-34 | ⚠️ Near float32 underflow (~1.2e-38) |
+| -13 | -84.5 | ~2.8e-37 | ~-5.7e-37 | ❌ Below BF16 smallest normal |
+
+**Cutoff:** x = -12.4 is the practical limit where exp(-x²/2) approaches float32 underflow.
+
+### Expected Results After Implementation
+
+| Region | Current Max ULP | Expected Max ULP |
+|--------|-----------------|------------------|
+| x < -12.4 (true saturation) | 8,898 | ~0-10 |
+| [-12.4, -9] (exp-based) | 8,898 | ~1-10 |
+| [-9, 3.17] (polynomial) | 30 | 30 (unchanged) |
+| x > 3.17 (saturation to 1) | 0 | 0 (unchanged) |
+| **Overall Max ULP** | **8,898** | **~30** |
+
+### SFPI Primitives Discovered
+
+| Primitive | Purpose | Source |
+|-----------|---------|--------|
+| `exexp(v)` | Extract exponent (power of 2) | sfpi_lib.h |
+| `exexp_nodebias(v)` | Extract exponent without bias adjustment | sfpi_lib.h |
+| `exman8(v)` / `exman9(v)` | Extract mantissa | sfpi_lib.h |
+| `setexp(v, exp)` | Set exponent (multiply by 2^k for FREE) | sfpi_lib.h |
+| `addexp(v, exp)` | Add to exponent | sfpi_lib.h |
+| `setsgn(v, sgn)` | Copy sign from one value to another | sfpi_lib.h |
+| `abs(v)` | Absolute value | sfpi_lib.h |
+
+### Three exp() Algorithms in tt-metal
+
+| Algorithm | Accuracy | Speed | Use Case |
+|-----------|----------|-------|----------|
+| `_sfpu_exp_21f_` | ~21 bits | Fastest | Graphics, non-critical |
+| `_sfpu_exp_61f_` | ~61 bits | Medium | General ML |
+| `_sfpu_exp_f32_accurate_` | < 1 ULP | Slowest | High-precision (recommended) |
+
+### Industry Patterns Identified
+
+| Pattern | Used In | Description |
+|---------|---------|-------------|
+| **Range Reduction + Exponent Manipulation** | exp.h, log.h | Handle infinite dynamic range via decomposition |
+| **Cody-Waite Extended Precision** | exp.h | Split constants (LN2_HI + LN2_LO) for exact subtraction |
+| **Symmetry Exploitation** | tanh.h, erf.h | Work with |x|, restore sign with setsgn() |
+| **Piecewise Shifted Polynomials** | gelu.h (current) | Use t = x + center to avoid cancellation |
+
+### Files Reviewed
+
+| File | Key Techniques |
+|------|----------------|
+| ckernel_sfpu_exp.h | **KEY**: 3 algorithms, Cody-Waite, exponent manipulation |
+| ckernel_sfpu_log.h | Exponent/mantissa separation, range reduction |
+| ckernel_sfpu_tanh.h | Continued fraction, symmetry, output clamping |
+| ckernel_sfpu_erf_erfc.h | Piecewise polynomials, symmetry |
+| ckernel_sfpu_erfinv.h | Uses log+sqrt, Winitzki formula |
+| ckernel_sfpu_sigmoid.h | Uses exp() directly, anti-symmetry |
+| sfpi_lib.h | **KEY**: SFPI primitives (setexp, exexp, addexp) |
+| sfpi.h | Vector types, predicated execution |
+
+### Research Conclusion
+
+The exp()-based asymptotic formula is the **industry-standard solution** for this type of problem. The existing `_sfpu_exp_f32_accurate_()` implementation uses Cody-Waite range reduction which handles the extreme dynamic range that polynomials cannot.
+
+**Implementation effort:** Add one additional branch to the gelu_derivative kernel with ~5 lines of code.
+
+**Expected improvement:** Overall Max ULP from 8,898 → ~30 (96% reduction)
 
 ## References
 

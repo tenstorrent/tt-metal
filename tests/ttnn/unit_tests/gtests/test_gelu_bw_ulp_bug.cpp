@@ -1025,6 +1025,41 @@ TEST_F(GeluBwPolyTest, CompareWithStandard) {
 }
 
 // =============================================================================
+// Deep Negative Region Analysis: Why polynomial coverage stops at x = -9
+// =============================================================================
+// This test documents why extending polynomial coverage below x = -9 is impractical:
+// 1. Function values span 8 orders of magnitude (1e-18 to 1e-26)
+// 2. Polynomial coefficients would be < 1e-18, causing numerical instability
+// 3. Tested FL3 polynomial: produced Max ULP = 15448 (WORSE than saturation's 8898)
+//
+// Saturation to 0 for x < -9 is acceptable because values are < 9e-18 (irrelevant for ML)
+
+TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
+    std::cout << "\n============================================================\n";
+    std::cout << "DEEP NEGATIVE REGION ANALYSIS: Why coverage stops at x = -9\n";
+    std::cout << "============================================================\n";
+    std::cout << "\nFunction values in [-13.375, -9] span 8 orders of magnitude:\n";
+    std::cout << std::setw(10) << "x" << std::setw(20) << "GELU'(x) [fp64]\n";
+    std::cout << std::string(30, '-') << "\n";
+
+    std::vector<float> test_points = {-9.0f, -10.0f, -11.0f, -12.0f, -13.0f, -13.375f};
+    for (float x : test_points) {
+        double exact = bf16_ulp_bw::gelu_derivative_exact(x);
+        std::cout << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(20) << std::scientific
+                  << std::setprecision(6) << exact << "\n";
+    }
+
+    std::cout << "\nPolynomial coverage is impractical because:\n";
+    std::cout << "  - Coefficients would need to be < 1e-18 for accurate fit\n";
+    std::cout << "  - Float32 Horner evaluation loses precision with such tiny coefficients\n";
+    std::cout << "  - Tested FL3 polynomial (numpy polyfit): Max ULP = 15448 (worse than saturation!)\n";
+    std::cout << "\nCurrent implementation: saturate to 0 for x < -9\n";
+    std::cout << "  - Max ULP at saturation boundary: 8898 (at x = -9.062)\n";
+    std::cout << "  - This is acceptable: values < 9e-18 are irrelevant for ML training\n";
+    std::cout << "============================================================\n";
+}
+
+// =============================================================================
 // GELU Derivative Saturation Threshold Research
 // =============================================================================
 // This test scans all BF16 values to find exact saturation thresholds:
