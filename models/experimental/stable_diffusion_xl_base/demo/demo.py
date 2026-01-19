@@ -81,7 +81,7 @@ def run_demo_inference(
     )
 
     # ------------------- DEBUG -------------------
-    debug_hidden_states_dimension = False
+    debug_hidden_states_dimension = True
     if debug_hidden_states_dimension:
         with torch.no_grad():
             image = pipeline(

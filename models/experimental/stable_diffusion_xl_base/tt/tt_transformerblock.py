@@ -82,6 +82,9 @@ class TtBasicTransformerBlock(LightweightModule):
         self.ln_program_config = model_config.get_layernorm_config(module_path)
         self.legacy_program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
 
+        # Debug
+        self.module_path = module_path
+
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
         N, C, H, W = list(input_tensor.shape)
         attn_hidden_states = ttnn.layer_norm(

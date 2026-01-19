@@ -36,6 +36,9 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.proj.split")
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
+        # Debug
+        self.module_path = module_path
+
     def forward(self, input_tensor):
         hidden_states = ttnn.linear(
             input_tensor,

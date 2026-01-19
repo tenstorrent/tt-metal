@@ -402,7 +402,7 @@ class ModelOptimisations512x512:
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=5,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=1,
                     out_subblock_w=4,
