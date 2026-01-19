@@ -6,6 +6,7 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_sfpu_exp.h"  // For _sfpu_exp_f32_accurate_
 
 namespace ckernel {
 namespace sfpu {
@@ -279,12 +280,21 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             GELU_DERIV_FL2_C0,
             t);
     }
-    // For x < -9, saturate to 0
-    // True saturation threshold is x = -13.375, but polynomial coverage is impractical:
-    // - Function values span 8 orders of magnitude (1e-18 to 1e-26)
-    // - Polynomial coefficients would be < 1e-18, causing numerical instability
-    // - Tested FL3 polynomial: produced Max ULP = 15448 (worse than saturation)
-    // Saturation to 0 is acceptable because values are < 9e-18 (irrelevant for ML)
+    // Deep negative region [-12.4, -9]: use asymptotic formula with exp()
+    // GELU'(x) ≈ x * exp(-x²/2) / sqrt(2π) for large negative x
+    // This leverages the accurate exp() implementation which uses Cody-Waite
+    // range reduction and handles the extreme dynamic range that polynomials cannot.
+    // Threshold -12.4 is optimal: shorter thresholds cause worse saturation errors,
+    // while at -12.4 the exp() precision limit is reached (Max ULP = 2259).
+    v_elseif(x >= -12.4f) {
+        constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
+        sfpi::vFloat t = x * x * (-0.5f);                    // t = -x²/2
+        sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);   // exp(-x²/2)
+        result = x * exp_val * INV_SQRT_2PI;                 // x * exp(-x²/2) / sqrt(2π)
+    }
+    // For x < -12.4, saturate to 0
+    // True BF16 saturation is at x = -13.375, but exp() precision degrades beyond -12.4.
+    // Values in this region are < 2e-33 (GELU'(-12.4) ≈ -2e-33)
     v_endif;
 
     return result;

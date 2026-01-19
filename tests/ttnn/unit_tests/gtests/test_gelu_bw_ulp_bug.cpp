@@ -767,12 +767,15 @@ TEST_F(GeluBwPolyTest, DerivativeAtZero) {
 }
 
 TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
-    // Polynomial implementation covers:
+    // Implementation covers:
     // - Core region [-3, 3.1719]: degree 16 polynomial
     // - Left region [-5, -3]: degree 8 shifted polynomial (t = x + 4)
-    // Outside this range, it saturates to 0 or 1
+    // - Far left 1 [-7, -5]: degree 8 shifted polynomial (t = x + 6)
+    // - Far left 2 [-9, -7]: degree 8 shifted polynomial (t = x + 8)
+    // - Deep negative [-12.4, -9]: exp()-based asymptotic formula
+    // - Saturation: x < -12.4 saturates to 0, x > 3.1719 saturates to 1
 
-    // Polynomial region tests - expect excellent accuracy (Max ULP = 1)
+    // Polynomial region tests - expect excellent accuracy (Max ULP = 1-2)
     std::vector<std::pair<float, int32_t>> poly_tests = {
         {-0.5f, 2},  // Core polynomial region
         {-1.0f, 2},
@@ -797,21 +800,39 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
         EXPECT_LE(ulp, max_expected_ulp) << "POLY GELU'(" << input_val << ") polynomial region ULP too high";
     }
 
-    // Outside polynomial region tests - expect saturation to 0 (high ULP but acceptable)
-    // Values for x < -9 are extremely small (< 6e-18), so ULP error doesn't matter for practical use
-    std::vector<float> saturation_tests = {-10.0f, -12.0f};
+    // Exp-based region tests [-12.4, -9] - uses asymptotic formula with _sfpu_exp_f32_accurate_
+    std::vector<std::pair<float, int32_t>> exp_tests = {
+        {-10.0f, 10},  // Exp-based region - excellent accuracy
+        {-11.0f, 10},
+        {-12.0f, 10},
+    };
 
-    std::cout << "\n[POLY] Saturation region tests (x < -9, saturates to 0):\n";
+    std::cout << "\n[EXP] Exp-based region tests (x in [-12.4, -9], should have low ULP):\n";
+    for (const auto& [input_val, max_expected_ulp] : exp_tests) {
+        float actual = run_gelu_bw_poly_single(*device_, input_val);
+        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
+        int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
+
+        std::cout << "[EXP] x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
+                  << std::endl;
+
+        EXPECT_LE(ulp, max_expected_ulp) << "EXP GELU'(" << input_val << ") exp-based region ULP too high";
+    }
+
+    // Saturation region tests (x < -12.4) - expect saturation to 0
+    std::vector<float> saturation_tests = {-13.0f, -13.375f};
+
+    std::cout << "\n[SAT] Saturation region tests (x < -12.4, saturates to 0):\n";
     for (float input_val : saturation_tests) {
         float actual = run_gelu_bw_poly_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "[POLY] x=" << input_val << ": expected=" << expected << ", actual=" << actual
+        std::cout << "[SAT] x=" << input_val << ": expected=" << expected << ", actual=" << actual
                   << " (saturated to 0), ULP=" << ulp << std::endl;
 
         // Just verify it returns 0 (saturation)
-        EXPECT_EQ(actual, 0.0f) << "POLY GELU'(" << input_val << ") should saturate to 0";
+        EXPECT_EQ(actual, 0.0f) << "SAT GELU'(" << input_val << ") should saturate to 0";
     }
 }
 
@@ -996,6 +1017,162 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     }
     std::cout << "\nNote: Outside core region [-3, 3.5], polynomial saturates to 0 or 1.\n";
     std::cout << "      This is acceptable because GELU'(x) is very small (< 0.012) for x < -3.\n";
+}
+
+TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
+    // Detailed per-segment ULP analysis matching exact implementation regions:
+    // - x < -12.4: Saturation to 0
+    // - [-12.4, -9): exp()-based asymptotic formula
+    // - [-9, -7): FL2 polynomial (shifted, t = x + 8)
+    // - [-7, -5): FL1 polynomial (shifted, t = x + 6)
+    // - [-5, -3): LEFT polynomial (shifted, t = x + 4)
+    // - [-3, 3.1719): CORE polynomial (degree 16)
+    // - x >= 3.1719: Saturation to 1
+
+    std::vector<float> input_values;
+    input_values.reserve(70000);
+
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
+            continue;  // NaN
+        }
+        if (bf16_bits == 0x7F80 || bf16_bits == 0xFF80) {
+            continue;  // Inf
+        }
+        if (bf16_ulp_bw::is_bf16_denormal(bf16_bits)) {
+            continue;  // Denormal
+        }
+
+        float val = bf16_ulp_bw::bf16_bits_to_float(bf16_bits);
+        input_values.push_back(val);
+    }
+
+    const size_t valid_count = input_values.size();
+    const size_t tile_size = 32 * 32;
+    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
+    input_values.resize(padded_size, 0.0f);
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+
+    std::vector<::bfloat16> bf16_inputs, bf16_grads;
+    bf16_inputs.reserve(padded_size);
+    bf16_grads.reserve(padded_size);
+
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+        bf16_grads.push_back(::bfloat16(1.0f));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto grad_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
+
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "poly");
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Define segments matching implementation
+    struct SegmentStats {
+        std::string name;
+        float x_min, x_max;
+        int count = 0;
+        double ulp_sum = 0;
+        int max_ulp = 0;
+        float worst_x = 0;
+        int ulp_le_1 = 0;
+    };
+
+    // Segment boundaries based on SaturationThresholdResearch findings:
+    // - x <= -13.375: BF16 natural saturation (true GELU'(x) rounds to 0 in BF16)
+    // - (-13.375, -12.4]: Implementation saturation (true value tiny, we return 0)
+    // - [-12.4, -9): exp()-based asymptotic formula
+    // - Polynomial regions for [-9, 3.1719)
+    // - x >= 3.1719: Saturation to 1
+    std::vector<SegmentStats> segments = {
+        {"x <= -13.375 (BF16 natural 0)", -1e38f, -13.375f},
+        {"(-13.375, -12.4] (impl sat)", -13.375f, -12.4f},
+        {"[-12.4, -9) exp-based", -12.4f, -9.0f},
+        {"[-9, -7) FL2 polynomial", -9.0f, -7.0f},
+        {"[-7, -5) FL1 polynomial", -7.0f, -5.0f},
+        {"[-5, -3) LEFT polynomial", -5.0f, -3.0f},
+        {"[-3, 3.1719) CORE polynomial", -3.0f, 3.1719f},
+        {"x >= 3.1719 (saturation to 1)", 3.1719f, 1e38f},
+    };
+
+    for (size_t i = 0; i < valid_count; ++i) {
+        float x = bf16_ulp_bw::bf16_bits_to_float(bf16_ulp_bw::float_to_bf16_bits(input_values[i]));
+        float actual = static_cast<float>(output_vec[i]);
+        float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp_bw::ulp_distance_bf16_daz(actual, expected);
+
+        if (ulp < 0) {
+            continue;
+        }
+
+        for (auto& seg : segments) {
+            if (x >= seg.x_min && x < seg.x_max) {
+                seg.count++;
+                seg.ulp_sum += ulp;
+                if (ulp <= 1) {
+                    seg.ulp_le_1++;
+                }
+                if (ulp > seg.max_ulp) {
+                    seg.max_ulp = ulp;
+                    seg.worst_x = x;
+                }
+                break;
+            }
+        }
+    }
+
+    std::cout << "\n";
+    std::cout << "================================================================================\n";
+    std::cout << "DETAILED PER-SEGMENT ULP ANALYSIS - GELU BACKWARD IMPLEMENTATION\n";
+    std::cout << "================================================================================\n";
+    std::cout << std::setw(35) << "Segment" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
+              << "Max ULP" << std::setw(12) << "%<=1 ULP" << std::setw(15) << "Worst x\n";
+    std::cout << std::string(96, '-') << "\n";
+
+    int total_count = 0;
+    double total_ulp_sum = 0;
+    int overall_max_ulp = 0;
+    float overall_worst_x = 0;
+
+    for (const auto& seg : segments) {
+        if (seg.count == 0) {
+            std::cout << std::setw(35) << seg.name << std::setw(10) << 0 << std::setw(12) << "-" << std::setw(12) << "-"
+                      << std::setw(12) << "-" << std::setw(15) << "-\n";
+            continue;
+        }
+
+        double mean_ulp = seg.ulp_sum / seg.count;
+        double pct_le_1 = 100.0 * seg.ulp_le_1 / seg.count;
+
+        std::cout << std::setw(35) << seg.name << std::setw(10) << seg.count << std::setw(12) << std::fixed
+                  << std::setprecision(2) << mean_ulp << std::setw(12) << seg.max_ulp << std::setw(11)
+                  << std::setprecision(1) << pct_le_1 << "%" << std::setw(15) << std::scientific << std::setprecision(3)
+                  << seg.worst_x << "\n";
+
+        total_count += seg.count;
+        total_ulp_sum += seg.ulp_sum;
+        if (seg.max_ulp > overall_max_ulp) {
+            overall_max_ulp = seg.max_ulp;
+            overall_worst_x = seg.worst_x;
+        }
+    }
+
+    std::cout << std::string(96, '-') << "\n";
+    std::cout << std::setw(35) << "TOTAL" << std::setw(10) << total_count << std::setw(12) << std::fixed
+              << std::setprecision(2) << (total_ulp_sum / total_count) << std::setw(12) << overall_max_ulp
+              << std::setw(12) << "-" << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x
+              << "\n";
+    std::cout << "================================================================================\n";
 }
 
 TEST_F(GeluBwPolyTest, CompareWithStandard) {
