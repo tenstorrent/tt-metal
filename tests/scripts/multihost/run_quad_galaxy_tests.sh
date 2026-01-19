@@ -10,8 +10,6 @@ fi
 run_quad_galaxy_unit_tests() {
   fail=0
 
-  source python_env/bin/activate
-
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
