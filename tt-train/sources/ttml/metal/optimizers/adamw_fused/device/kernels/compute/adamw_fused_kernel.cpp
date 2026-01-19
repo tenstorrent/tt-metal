@@ -75,14 +75,11 @@ void MAIN {
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
         copy_tile_init(cb_grad_idx);
         binop_with_scalar_tile_init();
-        // (1 - beta_1) * g_t
+        // add_binary_tile_init();
+        // beta_1 * m_{t-1} + (1 - beta_1) * g
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
             mul_unary_tile(block_size + block_idx, one_minus_beta1);
-        }
-        // beta_1 * m_{t-1} + (1 - beta_1) * g_t
-        add_binary_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             add_binary_tile(block_idx, block_size + block_idx, block_idx);
         }
         tile_regs_commit();
@@ -103,28 +100,19 @@ void MAIN {
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
         copy_tile_init(cb_grad_idx);
         square_tile_init();
-        // g_t^2
+        // binop_with_scalar_tile_init(); this and square_tile_init() are the same
+        // add_binary_tile_init(); same with this init
+        // beta_2 * v_t + (1 - beta_2) * g_t^2
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
             square_tile(block_size + block_idx);
-        }
-        cb_pop_front(cb_grad_idx, block_size);
-
-        // mul_unary_tile and add_binary_tile probably can be merged
-        // (1 - beta_2) * g_t^2
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_size + block_idx, one_minus_beta2);
-        }
-        // beta_2 * v_t + (1 - beta_2) * g_t^2
-        add_binary_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             add_binary_tile(block_idx, block_size + block_idx, block_idx);
         }
+        cb_pop_front(cb_grad_idx, block_size);
         tile_regs_commit();
         pack_and_push_two_blocks(cb_v_t, cb_exp_avg_sq_out_idx, block_size);
 
-        // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
         cb_wait_front(cb_v_t, block_size);
         copy_tile_to_dst_init_short(cb_v_t);
         reconfig_data_format(cb_v_t, cb_v_t);
@@ -139,6 +127,7 @@ void MAIN {
         copy_tile_init(cb_max_exp_avg_sq_in_idx);
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
         binary_max_tile_init();
+        // v_t = max(v_max_t, v_t)
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
             // This part used max_tile API previously that's why it's the every second block
@@ -171,12 +160,11 @@ void MAIN {
         }
         cb_pop_front(cb_max_exp_avg_sq_idx, block_size);
 #endif
-        sqrt_tile_init();
+        sqrt_tile_init();  // sets extra constants
+        // binop_with_scalar_tile_init();
+        // sqrt(v_t) * inv_sqrt_bc2 + epsilon)
         for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
             sqrt_tile(block_idx);
-        }
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
             mul_unary_tile(block_idx, inv_sqrt_bc2);
             add_unary_tile(block_idx, epsilon);
         }
@@ -184,6 +172,7 @@ void MAIN {
         copy_tile_to_dst_init_short(cb_m_t);
         div_binary_tile_init();
         uint32_t reg_ite = 0;
+        // m_t / (sqrt(v_hat_t) + epsilon)
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_m_t, cb_tile_idx, block_idx + 1);
             div_binary_tile(block_idx + 1, block_idx, reg_ite);
@@ -206,7 +195,7 @@ void MAIN {
         }
         binop_with_scalar_tile_init();
         sub_binary_tile_init();
-        // theta_t = theta_t - step_size * update
+        // theta_t = theta_t - step_size * update, where step_size = learning_rate / bias_correction1
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_idx, step_size);
             sub_binary_tile(block_size + block_idx, block_idx, block_idx);
