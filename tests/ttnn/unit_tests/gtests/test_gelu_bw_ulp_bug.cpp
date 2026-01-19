@@ -777,12 +777,15 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
         {-0.5f, 2},  // Core polynomial region
         {-1.0f, 2},
         {-2.0f, 2},
-        {-3.0f, 2},  // Boundary between core and left polynomial
-        {-4.0f, 2},  // Left polynomial region (shifted)
-        {-5.0f, 2},  // Edge of left polynomial
+        {-3.0f, 2},   // Boundary between core and left polynomial
+        {-4.0f, 2},   // Left polynomial region (shifted, t = x + 4)
+        {-5.0f, 2},   // Edge of left polynomial
+        {-6.0f, 2},   // Far left 1 polynomial region (shifted, t = x + 6)
+        {-7.0f, 2},   // Boundary between FL1 and FL2 polynomials
+        {-8.0f, 30},  // Far left 2 polynomial region (shifted, t = x + 8) - 18% relative error
     };
 
-    std::cout << "\n[POLY] Polynomial region tests (should have Max ULP = 1):\n";
+    std::cout << "\n[POLY] Polynomial region tests (should have low ULP):\n";
     for (const auto& [input_val, max_expected_ulp] : poly_tests) {
         float actual = run_gelu_bw_poly_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
@@ -795,10 +798,10 @@ TEST_F(GeluBwPolyTest, DerivativeAtNegativeValues) {
     }
 
     // Outside polynomial region tests - expect saturation to 0 (high ULP but acceptable)
-    // Values for x < -5 are very small (< 10^-5), so ULP error doesn't matter for practical use
-    std::vector<float> saturation_tests = {-6.0f, -8.0f};
+    // Values for x < -9 are extremely small (< 6e-18), so ULP error doesn't matter for practical use
+    std::vector<float> saturation_tests = {-10.0f, -12.0f};
 
-    std::cout << "\n[POLY] Saturation region tests (x < -5, saturates to 0):\n";
+    std::cout << "\n[POLY] Saturation region tests (x < -9, saturates to 0):\n";
     for (float input_val : saturation_tests) {
         float actual = run_gelu_bw_poly_single(*device_, input_val);
         float expected = bf16_ulp_bw::gelu_derivative_expected_bf16_daz(input_val);
