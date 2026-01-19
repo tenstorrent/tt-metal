@@ -280,21 +280,41 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
             GELU_DERIV_FL2_C0,
             t);
     }
-    // Deep negative region [-12.4, -9]: use asymptotic formula with exp()
-    // GELU'(x) ≈ x * exp(-x²/2) / sqrt(2π) for large negative x
-    // This leverages the accurate exp() implementation which uses Cody-Waite
-    // range reduction and handles the extreme dynamic range that polynomials cannot.
-    // Threshold -12.4 is optimal: shorter thresholds cause worse saturation errors,
-    // while at -12.4 the exp() precision limit is reached (Max ULP = 2259).
-    v_elseif(x >= -12.4f) {
+    // Deep negative region (-13.375, -9]: use asymptotic formula with accurate exp
+    // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
+    // Uses _sfpu_exp_f32_accurate_ for proper underflow handling near BF16 limits.
+    // Covers the full range down to BF16 natural saturation threshold (-13.375).
+    //
+    // Implementation based on consolidated research (negative_tail_final_consolicated_opinions.md):
+    // - Mills ratio correction (x - 1/x + 1/x³) reduces boundary error at x=-9
+    // - For APPROXIMATION_MODE=true: use simple x*φ(x) (~1% relative error)
+    // - For APPROXIMATION_MODE=false: use correction terms (<0.01% relative error)
+    v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
-        sfpi::vFloat t = x * x * (-0.5f);                    // t = -x²/2
-        sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);   // exp(-x²/2)
-        result = x * exp_val * INV_SQRT_2PI;                 // x * exp(-x²/2) / sqrt(2π)
+
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
+
+        // Use accurate exp with proper underflow handling
+        sfpi::vFloat exp_val = _sfpu_exp_f32_accurate_(t);
+
+        // Gaussian PDF: φ(x) = exp(-x²/2) / sqrt(2π)
+        sfpi::vFloat phi = exp_val * INV_SQRT_2PI;
+
+        if constexpr (APPROXIMATION_MODE) {
+            // Fast mode: leading term only, ~1% relative error at x=-9
+            result = x * phi;
+        } else {
+            // Accurate mode: Mills ratio correction for <0.01% relative error
+            // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) = x * φ(x) * (1 - 1/x² + 1/x⁴)
+            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
+            sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
+            sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
+            result = x * phi * correction;
+        }
     }
-    // For x < -12.4, saturate to 0
-    // True BF16 saturation is at x = -13.375, but exp() precision degrades beyond -12.4.
-    // Values in this region are < 2e-33 (GELU'(-12.4) ≈ -2e-33)
+    // For x <= -13.375, saturate to 0
+    // This is the BF16 natural saturation threshold where GELU'(x) rounds to 0.
     v_endif;
 
     return result;
