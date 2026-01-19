@@ -1,5 +1,3 @@
-import torch
-
 import ttnn
 
 
@@ -102,9 +100,6 @@ class TtPatchTSMixerLayerNorm:
 class TtPatchTSMixerLayerNormDispatcher:
     """
     dispatcher that reuses the already-implemented LN/BN TT modules.
-
-    Matches Pytorch semantics:
-        - decides in __init__ based on norm_type
     """
 
     def __init__(self, device, base_address: str, parameters: dict, norm_type: str = "LayerNorm", eps: float = 1e-5):
@@ -457,7 +452,7 @@ class TtPatchTSMixerForecastHead:
     TTNN equivalent of PatchTSMixerForecastHead.
 
     Input:  (B, C, Np, D)  rank-4
-    Output: (B, H, C) we will return rank-3 torch-like after to_torch, but internally keep rank-4.
+    Output: (B, H, C).
     """
 
     def __init__(self, device, base_address: str, parameters: dict, *, prediction_length: int):
@@ -476,7 +471,6 @@ class TtPatchTSMixerForecastHead:
         x = ttnn.reshape(x, (B, C, 1, Np * D))
 
         # linear over last dim -> (B, C, 1, H)
-        # Depending on how preprocess_linear formats weights, you may need transpose_b=True/False.
         y = ttnn.linear(x, self.weight, bias=self.bias)
 
         # (B, C, 1, H) -> (B, H, C)
@@ -489,8 +483,8 @@ class TtPatchTSMixerLinearHead:
     """
     TTNN equivalent of PatchTSMixerLinearHead for Classification and Regression.
 
-    Input:  (B, C, Np, D)  rank-4
-    Output: (B, num_targets) rank-2 (after to_torch)
+    Input:  (B, C, Np, D)
+    Output: (B, num_targets)
     """
 
     def __init__(
@@ -522,7 +516,7 @@ class TtPatchTSMixerLinearHead:
             x: TTNN tensor (B, C, Np, D)
 
         Returns:
-            torch.Tensor (B, num_targets)
+            ttnn.Tensor (B, num_targets)
         """
         B, C, Np, D = x.shape
 
@@ -557,19 +551,11 @@ class TtPatchTSMixerLinearHead:
         # Linear projection: (B, features) -> (B, num_targets)
         x = ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
 
-        # Convert to torch for final processing
-        x = ttnn.to_torch(x)  # May have shape (1, 1, B, num_targets) or similar
-
-        # Squeeze extra dimensions from ttnn.to_torch
-        while x.dim() > 2:
-            x = x.squeeze(0)
-
         # Optional: Apply sigmoid + range scaling
         if self.output_range is not None:
-            import torch
-
             min_val, max_val = self.output_range
-            x = torch.sigmoid(x) * (max_val - min_val) + min_val
+            x = ttnn.sigmoid(x, vector_mode=4, fast_and_approximate_mode=True)
+            x = x * (max_val - min_val) + min_val
 
         return x  # (B, num_targets)
 
@@ -580,8 +566,8 @@ class TtPatchTSMixerPretrainHead:
 
     Projects from d_model back to patch_length to reconstruct masked patches.
 
-    Input:  (B, C, Np, D)  rank-4
-    Output: (B, C, Np, patch_length) rank-4 (as torch tensor)
+    Input:  (B, C, Np, D)
+    Output: (B, C, Np, patch_length)
     """
 
     def __init__(
@@ -603,30 +589,16 @@ class TtPatchTSMixerPretrainHead:
     def __call__(self, x):
         """
         x: TTNN tensor (B, C, Np, D)
-        returns: torch tensor (B, C, Np, patch_length)
+        returns: ttnn tensor (B, C, Np, patch_length)
         """
         # Linear projection: (B, C, Np, D) @ (D, patch_length) -> (B, C, Np, patch_length)
-        x = ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
-
-        # Convert to torch
-        x = ttnn.to_torch(x)
-
-        # Remove extra dimensions if present
-        while x.dim() > 4:
-            x = x.squeeze(0)
-
-        return x
+        return ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
 
 
 class TtPatchTSMixerPatchify:
     """
-    Bring-up version:
-      - patchify/unfold done on host (torch)
-      - output moved to device as a TTNN tensor
 
-    Later do a full port to TTNN.
-
-    Input torch shape expected: (B, L, C)  (HF-style)
+    Input tensor shape expected: (B, L, C)  (HF-style)
     Output TTNN tensor: (B, C, N_patches, patch_length)
     """
 
@@ -699,7 +671,7 @@ class TtPatchTSMixerEmbedding:
     """
     TTNN equivalent of PatchTSMixerEmbedding.
 
-    Input torch:  past_values already transposed to (B, C, L) in the model.
+    Input tensor:  past_values already transposed to (B, C, L) in the model.
     Output TTNN:  (B, C, Np, d_model)
     """
 
@@ -724,19 +696,17 @@ class TtPatchTSMixerEmbedding:
         self.weight = parameters[f"{self.base}.proj.weight"]
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
 
-    def __call__(self, x_torch: torch.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, x: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
-        x_torch: (B, C, L) torch tensor (host)
+        x: (B, C, L) ttnn tensor (host)
         returns: TTNN tensor (B, C, Np, d_model)
         """
-        # (B,C,L) -> (B,L,C) for patchify logic
-        x_lc = x_torch.transpose(1, 2).contiguous()
 
-        # Convert to TTNN tensor on device
-        x_tt = ttnn.from_torch(x_lc, device=self.device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        # (B,C,L) -> (B,L,C) for patchify logic
+        x_lc = ttnn.permute(x, (0, 2, 1))
 
         # patchify: (B,L,C) -> (B,C,Np,patch_len)
-        patches_tt = self.patchify(x_tt)
+        patches_tt = self.patchify(x_lc)
 
         # linear over last dim patch_len -> d_model
         # reshape to rank-4 already, so we can call ttnn.linear directly:
@@ -829,17 +799,17 @@ class TtPatchTSMixerModelForForecasting:
             prediction_length=prediction_length,
         )
 
-    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
-        past_values: torch tensor (B, L, C)
-        returns: TTNN tensor (B, H, 1, C)  (squeeze dim=2 in torch)
+        past_values: ttnn tensor (B, L, C)
+        returns: TTNN tensor (B, H, 1, C)
         """
         B, L, C = past_values.shape
         assert L == self.context_length
         assert C == self.num_channels
 
-        # match PyTorch: (B, L, C) -> (B, C, L) for embedding
-        x_bcl = past_values.transpose(1, 2).contiguous()
+        # Transpose: (B, L, C) -> (B, C, L)
+        x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
         # 1) embedding: returns TT (B, C, Np, D)
         x = self.patch_embed(x_bcl, dtype=dtype)
@@ -957,17 +927,17 @@ class TtPatchTSMixerForRegression:
             output_range=output_range,
         )
 
-    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
-        past_values: torch tensor (B, L, C)
-        returns: torch tensor (B, num_targets)
+        past_values: ttnn tensor (B, L, C)
+        returns: ttnn tensor (B, num_targets)
         """
         B, L, C = past_values.shape
         assert L == self.context_length
         assert C == self.num_channels
 
         # match PyTorch: (B, L, C) -> (B, C, L) for embedding
-        x_bcl = past_values.transpose(1, 2).contiguous()
+        x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
         # 1) embedding: returns TT (B, C, Np, D)
         x = self.patch_embed(x_bcl, dtype=dtype)
@@ -978,7 +948,7 @@ class TtPatchTSMixerForRegression:
         # 3) encoder
         x, _ = self.encoder(x, output_hidden_states=False)
 
-        # 4) head: returns torch (B, num_targets)
+        # 4) head: returns ttnn Tensor (B, num_targets)
         predictions = self.head(x)
 
         return predictions
@@ -1083,17 +1053,17 @@ class TtPatchTSMixerForTimeSeriesClassification:
             output_range=None,  # No output range for classification
         )
 
-    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
-        past_values: torch tensor (B, L, C)
-        returns: torch tensor (B, num_classes)
+        past_values: ttnn tensor (B, L, C)
+        returns: ttnn tensor (B, num_classes)
         """
         B, L, C = past_values.shape
         assert L == self.context_length
         assert C == self.num_channels
 
         # match PyTorch: (B, L, C) -> (B, C, L) for embedding
-        x_bcl = past_values.transpose(1, 2).contiguous()
+        x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
         # 1) embedding: returns TT (B, C, Np, D)
         x = self.patch_embed(x_bcl, dtype=dtype)
@@ -1104,7 +1074,7 @@ class TtPatchTSMixerForTimeSeriesClassification:
         # 3) encoder
         x, _ = self.encoder(x, output_hidden_states=False)
 
-        # 4) head: returns torch (B, num_classes)
+        # 4) head: returns (B, num_classes)
         logits = self.head(x)
 
         return logits
@@ -1203,17 +1173,17 @@ class TtPatchTSMixerForPretraining:
             patch_length=patch_length,
         )
 
-    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
-        past_values: torch tensor (B, L, C)
-        returns: torch tensor (B, C, Np, patch_length)
+        past_values: ttnn tensor (B, L, C)
+        returns: ttnn tensor (B, C, Np, patch_length)
         """
         B, L, C = past_values.shape
         assert L == self.context_length
         assert C == self.num_channels
 
         # match PyTorch: (B, L, C) -> (B, C, L) for embedding
-        x_bcl = past_values.transpose(1, 2).contiguous()
+        x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
         # 1) embedding: returns TT (B, C, Np, D)
         x = self.patch_embed(x_bcl, dtype=dtype)
@@ -1224,7 +1194,7 @@ class TtPatchTSMixerForPretraining:
         # 3) encoder
         x, _ = self.encoder(x, output_hidden_states=False)
 
-        # 4) head: returns torch (B, C, Np, patch_length)
+        # 4) head: returns tensor (B, C, Np, patch_length)
         reconstructed = self.head(x)
 
         return reconstructed
