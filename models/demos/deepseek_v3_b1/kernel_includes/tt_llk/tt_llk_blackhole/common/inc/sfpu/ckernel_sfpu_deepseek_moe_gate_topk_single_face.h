@@ -137,7 +137,7 @@ inline void bitonic_topk_store8_even_cols_single_face() {
 
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_store8_even_cols_split_indices_single_face() {
-    static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be true");
+    static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be false");
     // Store 8 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, bias_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);

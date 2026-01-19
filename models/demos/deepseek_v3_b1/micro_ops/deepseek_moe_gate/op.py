@@ -94,7 +94,7 @@ class DeepseekMoeGateSingleCore:
         assert input_indices_shape == input_shape, "Input indices and input tensors must have the same shape"
         assert output_indices_shape == output_shape, "Output indices and output tensors must have the same shape"
 
-        # Get core grid from input tensor (single core)
+        # Get core grid from input tensor
         input_shard_spec = input_tensor.memory_config().shard_spec
         output_shard_spec = output_tensor.memory_config().shard_spec
         all_cores = input_shard_spec.grid
@@ -119,9 +119,6 @@ class DeepseekMoeGateSingleCore:
         assert input_tile_width == expected_input_tile_size[1]
         assert output_tile_height == expected_output_tile_size[0]
         assert output_tile_width == expected_output_tile_size[1]
-        assert input_shard_spec == bias_tensor.memory_config().shard_spec
-        assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
-        assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
         assert input_shard_spec.shape[0] == expected_input_tile_size[0]
         assert input_shard_spec.shape[1] == expected_input_tile_size[1]
         assert output_shard_spec.shape[0] == expected_output_tile_size[0]
