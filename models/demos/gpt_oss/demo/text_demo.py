@@ -30,7 +30,6 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
-from models.demos.gpt_oss.tt.generator import GPTOSSRowShardedGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
@@ -404,8 +403,7 @@ def test_gpt_oss_demo(
     )
 
     # Create generator (match tt-transformers pattern)
-    generator_class = GPTOSSRowShardedGenerator if users_row_sharded else Generator
-    generator = generator_class(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 
@@ -442,6 +440,7 @@ def test_gpt_oss_demo(
         # Randomize prompt order per row to help debug bad output patterns
         # This ensures each row gets the same prompts but in different order
         import random
+
         random.seed(42)  # Fixed seed for reproducibility
         input_prompts = []
         num_prompts = len(real_prompts)

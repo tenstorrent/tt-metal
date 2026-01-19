@@ -281,8 +281,7 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        # self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -294,11 +293,14 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
+        # For row-sharded users, use max_local_batch_size (users per row) for group_user_id
+        local_batch_size = getattr(self.model_args[0], "max_local_batch_size", max_batch_size_per_model)
+
         out_list = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            group_user_id = user_id % local_batch_size if page_table is None else 0
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
