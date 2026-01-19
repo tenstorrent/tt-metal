@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <utility>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -179,7 +180,7 @@ static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) ==
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 // Ensure local_cb_mask size matches CB_MASK_WIDTH
-static_assert(sizeof(((kernel_config_msg_t*)0)->local_cb_mask) * 8 == CB_MASK_WIDTH);
+static_assert(sizeof(decltype(std::declval<kernel_config_msg_t&>().local_cb_mask)) * 8 == CB_MASK_WIDTH);
 
 struct go_msg_t {
     union {

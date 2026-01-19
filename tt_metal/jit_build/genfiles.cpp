@@ -413,8 +413,8 @@ void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH a
 
 std::string array_to_string(std::span<const uint32_t> arr) {
     std::string formats_string;
-    for (int i = 0; i < arr.size(); i++) {
-        formats_string += to_string((int)arr[i]) + ",";
+    for (const auto& value : arr) {
+        formats_string += std::to_string(value) + ",";
     }
     return formats_string;
 }
