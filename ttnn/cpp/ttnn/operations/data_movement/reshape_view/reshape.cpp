@@ -59,7 +59,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
             const auto& input_shard_spec = memory_config.shard_spec().value();
             const auto& output_shape = temp_tensor2.tensor_spec();
 
-            // Upate specs for output tensor
+            // Update specs for output tensor
             if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto core_range = input_shard_spec.grid.bounding_box();
                 auto orientation = input_shard_spec.orientation;
@@ -246,7 +246,7 @@ ttnn::Tensor reshape_tiled(
             const auto& input_shard_spec = memory_config.shard_spec().value();
             const auto& output_shape = output_tensor_3d.tensor_spec();
 
-            // Upate specs for output tensor
+            // Update specs for output tensor
             if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 auto core_range = input_shard_spec.grid.bounding_box();
                 auto orientation = input_shard_spec.orientation;
