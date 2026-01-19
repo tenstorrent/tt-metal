@@ -711,7 +711,9 @@ size_t ConsistencyChecker::count_reachable_unused(
 template <typename TargetNode, typename GlobalNode>
 uint64_t DFSSearchEngine<TargetNode, GlobalNode>::hash_state(const std::vector<int>& mapping) const {
     // FNV-1a hash function
+    // Standard 64-bit FNV-1a offset basis from the FNV specification.
     const uint64_t fnv_offset = 1469598103934665603ull;
+    // Standard 64-bit FNV-1a prime from the FNV specification.
     const uint64_t fnv_prime = 1099511628211ull;
     uint64_t h = fnv_offset;
 
