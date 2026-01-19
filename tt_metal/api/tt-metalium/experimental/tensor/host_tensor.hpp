@@ -66,7 +66,7 @@ public:
 
     // TODO: Original Tensor has three overloads
     // TODO-ask alex: Original Tensor takes HostBuffer as value, is that a must?
-    explicit HostTensor(const HostBuffer&, TensorSpec spec);
+    explicit HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * From original Tensor:
@@ -118,7 +118,7 @@ public:
     std::string write_to_string() const;
 
     // TODO: parity with DistributedHostBuffer
-    const HostBuffer& get_host_buffer() const;
+    HostBuffer get_host_buffer() const;
 
     // TODO(River): understand what is sharding better
     bool is_sharded() const;
@@ -153,8 +153,8 @@ public:
     // From original Tensor:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     // TODO: Is there a way to express this "either or"?
-    const std::optional<ShardSpec> shard_spec() const;
-    const std::optional<NdShardSpec> nd_shard_spec() const;
+    const std::optional<ShardSpec>& shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // "Extra helper functions"
     // Shape is a weird class to return, isn't a vector sufficient?
