@@ -63,25 +63,21 @@ void MAIN {
         cb_wait_front(cb_exp_avg_idx, block_size);
         reconfig_data_format(cb_exp_avg_idx, cb_exp_avg_idx);
         copy_tile_init(cb_exp_avg_idx);
+        binop_with_scalar_tile_init();
         tile_regs_acquire();
+        // beta_1 * m_{t-1}
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_exp_avg_idx, block_idx, block_idx);
-        }
-        cb_pop_front(cb_exp_avg_idx, block_size);
-        // beta_1 * m_{t-1}
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_idx, beta1);
         }
+        cb_pop_front(cb_exp_avg_idx, block_size);
         cb_wait_front(cb_grad_idx, block_size);
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
         copy_tile_init(cb_grad_idx);
+        binop_with_scalar_tile_init();
+        // (1 - beta_1) * g_t
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
-        }
-        // (1 - beta_1) * g_t
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_size + block_idx, one_minus_beta1);
         }
         // beta_1 * m_{t-1} + (1 - beta_1) * g_t
@@ -96,27 +92,25 @@ void MAIN {
         cb_wait_front(cb_exp_avg_sq_idx, block_size);
         reconfig_data_format(cb_exp_avg_sq_idx, cb_exp_avg_sq_idx);
         copy_tile_init(cb_exp_avg_sq_idx);
+        binop_with_scalar_tile_init();
         tile_regs_acquire();
+        // beta_2 * v_{t-1}
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_exp_avg_sq_idx, block_idx, block_idx);
-        }
-        cb_pop_front(cb_exp_avg_sq_idx, block_size);
-        // beta_2 * v_{t-1}
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_idx, beta2);
         }
+        cb_pop_front(cb_exp_avg_sq_idx, block_size);
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
         copy_tile_init(cb_grad_idx);
+        square_tile_init();
+        // g_t^2
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
+            square_tile(block_size + block_idx);
         }
         cb_pop_front(cb_grad_idx, block_size);
 
-        square_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            square_tile(block_size + block_idx);
-        }
+        // mul_unary_tile and add_binary_tile probably can be merged
         // (1 - beta_2) * g_t^2
         binop_with_scalar_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -141,7 +135,6 @@ void MAIN {
         cb_pop_front(cb_v_t, block_size);
 
 #if AMSGRAD
-        // TODO: I think this can be merged, check
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
         copy_tile_init(cb_max_exp_avg_sq_in_idx);
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
@@ -189,22 +182,15 @@ void MAIN {
         }
         cb_wait_front(cb_m_t, block_size);
         copy_tile_to_dst_init_short(cb_m_t);
-        reconfig_data_format(cb_m_t, cb_m_t);
-        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_m_t, cb_tile_idx, block_idx + 1);
-        }
-        cb_pop_front(cb_m_t, block_size);
-
         div_binary_tile_init();
         uint32_t reg_ite = 0;
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
+            copy_tile(cb_m_t, cb_tile_idx, block_idx + 1);
             div_binary_tile(block_idx + 1, block_idx, reg_ite);
             reg_ite++;
         }
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_unary_tile(block_idx, step_size);
-        }
+        cb_pop_front(cb_m_t, block_size);
+
         cb_wait_front(cb_param_idx, block_size);
         reconfig_data_format(cb_param_idx, cb_param_idx);
         copy_tile_init(cb_param_idx);
@@ -213,12 +199,16 @@ void MAIN {
         }
         if (decay_factor != fp32_one) {
             binop_with_scalar_tile_init();
+            // theta_t = decay_factory * theta_{t - 1} = (1 - weight_decay * learning_rate) * theta{t - 1}
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_unary_tile(block_size + block_idx, decay_factor);
             }
         }
+        binop_with_scalar_tile_init();
         sub_binary_tile_init();
+        // theta_t = theta_t - step_size * update
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_unary_tile(block_idx, step_size);
             sub_binary_tile(block_size + block_idx, block_idx, block_idx);
         }
 #if STOCH_ROUND
