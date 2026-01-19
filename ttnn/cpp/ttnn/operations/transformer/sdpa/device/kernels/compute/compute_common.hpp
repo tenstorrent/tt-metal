@@ -624,11 +624,14 @@ void calculate_exponential_first_column() {
             sfpi::dst_reg += 2;
         }
     } else {
-        if constexpr (DST_ACCUM_MODE) {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 4, true, scale_bf16>();
-        } else {
-            calculate_exponential_polynomial<true, ITERATIONS_HALF_FACE, false, 2, false, scale_bf16>();
-        }
+        constexpr int polynomial_degree = DST_ACCUM_MODE ? 4 : 2;
+        calculate_exponential_polynomial<
+            true,
+            ITERATIONS_HALF_FACE,
+            false,
+            polynomial_degree,
+            DST_ACCUM_MODE,
+            scale_bf16>();
     }
 }
 
