@@ -225,7 +225,15 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_map_logical(mesh_graph);
 
     // Build logical multi-mesh adjacency graph
-    LogicalMultiMeshGraph::AdjacencyMap logical_multi_mesh_adjacency_map;
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+
+    // Store mesh adjacency graphs once (no duplication)
+    for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
+        logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
+    }
+
+    // Build mesh-level adjacency map using MeshIds (lightweight)
+    ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
     // Get requested inter-mesh connections (relaxed mode) and ports (strict mode)
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
@@ -236,19 +244,17 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     if (!requested_intermesh_ports.empty()) {
         for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_ports) {
             MeshId src_mesh_id(src_mesh_id_val);
-            LogicalMeshNode src_mesh_node = LogicalMeshNode(src_mesh_id, mesh_adjacency_graphs[src_mesh_id]);
 
             for (const auto& [dst_mesh_id_val, port_list] : dst_mesh_map) {
                 MeshId dst_mesh_id(dst_mesh_id_val);
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
-                    LogicalMeshNode dst_mesh_node = LogicalMeshNode(dst_mesh_id, mesh_adjacency_graphs[dst_mesh_id]);
                     // Add connections based on num_channels from each port entry
                     // Each tuple is (src_device, dst_device, num_channels)
                     for (const auto& port_entry : port_list) {
                         uint32_t num_channels = std::get<2>(port_entry);
                         for (uint32_t i = 0; i < num_channels; ++i) {
-                            logical_multi_mesh_adjacency_map[src_mesh_node].push_back(dst_mesh_node);
+                            mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
                         }
                     }
                 }
@@ -261,23 +267,24 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     if (!requested_intermesh_connections.empty()) {
         for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_connections) {
             MeshId src_mesh_id(src_mesh_id_val);
-            LogicalMeshNode src_mesh_node = LogicalMeshNode(src_mesh_id, mesh_adjacency_graphs[src_mesh_id]);
 
             for (const auto& [dst_mesh_id_val, num_channels] : dst_mesh_map) {
                 MeshId dst_mesh_id(dst_mesh_id_val);
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
-                    LogicalMeshNode dst_mesh_node = LogicalMeshNode(dst_mesh_id, mesh_adjacency_graphs[dst_mesh_id]);
                     // Add connections based on num_channels (multiple connections between same meshes)
                     for (uint32_t i = 0; i < num_channels; ++i) {
-                        logical_multi_mesh_adjacency_map[src_mesh_node].push_back(dst_mesh_node);
+                        mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
                     }
                 }
             }
         }
     }
 
-    return LogicalMultiMeshGraph(logical_multi_mesh_adjacency_map);
+    // Build mesh-level graph from adjacency map
+    logical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
+
+    return logical_multi_mesh_graph;
 }
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
@@ -296,25 +303,33 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         ::tt::tt_fabric::build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Build physical multi-mesh adjacency graph
-    PhysicalMultiMeshGraph::AdjacencyMap physical_multi_mesh_adjacency_map;
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+
+    // Store mesh adjacency graphs once (no duplication)
+    for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
+        physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
+    }
+
+    // Build mesh-level adjacency map using MeshIds (lightweight)
+    ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
     // NOTE: can't make assumption that all cross mesh connections are cross host yet, since we do implement some
     // multi-mesh per host
 
+    // NOTE: asic_topology currently includes host to host connections, so
+    // the following host to host connection logic is commented out. Need to check if this is a bug
     // Go through all host to host connections first
-    for (const auto& [_, host_connections] : physical_system_descriptor.get_host_topology()) {
-        for (const auto& [_, exit_node_connections] : host_connections) {
-            for (const auto& connection : exit_node_connections) {
-                auto src_mesh_id = asic_id_to_mesh_id[connection.src_exit_node];
-                auto dst_mesh_id = asic_id_to_mesh_id[connection.dst_exit_node];
-                if (src_mesh_id != dst_mesh_id) {
-                    PhysicalMeshNode src_mesh_node = PhysicalMeshNode(src_mesh_id, mesh_adjacency_graphs[src_mesh_id]);
-                    PhysicalMeshNode dst_mesh_node = PhysicalMeshNode(dst_mesh_id, mesh_adjacency_graphs[dst_mesh_id]);
-                    physical_multi_mesh_adjacency_map[src_mesh_node].push_back(dst_mesh_node);
-                }
-            }
-        }
-    }
+    // for (const auto& [_, host_connections] : physical_system_descriptor.get_host_topology()) {
+    //    for (const auto& [_, exit_node_connections] : host_connections) {
+    //        for (const auto& connection : exit_node_connections) {
+    //            auto src_mesh_id = asic_id_to_mesh_id[connection.src_exit_node];
+    //            auto dst_mesh_id = asic_id_to_mesh_id[connection.dst_exit_node];
+    //            if (src_mesh_id != dst_mesh_id) {
+    //                mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
+    //            }
+    //        }
+    //    }
+    //}
 
     // Go through all local connections
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
@@ -324,15 +339,20 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                 auto src_mesh_id = asic_id_to_mesh_id[src_asic_id];
                 auto dst_mesh_id = asic_id_to_mesh_id[dst_asic_id];
                 if (src_mesh_id != dst_mesh_id) {
-                    PhysicalMeshNode src_mesh_node = PhysicalMeshNode(src_mesh_id, mesh_adjacency_graphs[src_mesh_id]);
-                    PhysicalMeshNode dst_mesh_node = PhysicalMeshNode(dst_mesh_id, mesh_adjacency_graphs[dst_mesh_id]);
-                    physical_multi_mesh_adjacency_map[src_mesh_node].push_back(dst_mesh_node);
+                    const auto& eth_connections = asic_connection.second;
+                    // Add one entry per channel (EthConnection) in this edge
+                    for ([[maybe_unused]] const auto& eth_conn : eth_connections) {
+                        mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
+                    }
                 }
             }
         }
     }
 
-    return PhysicalMultiMeshGraph(physical_multi_mesh_adjacency_map);
+    // Build mesh-level graph from adjacency map
+    physical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
+
+    return physical_multi_mesh_graph;
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
