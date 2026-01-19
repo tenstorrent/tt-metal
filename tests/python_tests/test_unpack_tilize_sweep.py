@@ -149,6 +149,7 @@ def test_unpack_tilize_comprehensive(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            write_full_tiles=True,  # Tilize tests need full tiles in L1
         ),
         unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
         dest_acc=dest_acc,

@@ -210,17 +210,10 @@ def unpack_res_tiles(
     # Calculate tile size and determine elements per tile needed
     tile_size = format_tile_sizes[output_format]  # Full tile size in bytes
 
-    if face_r_dim == 16:
-        # Backward compatibility: calculate face size in bytes (original logic)
-        face_size = tile_size // 4  # Each face is 1/4 of a tile in bytes
-        elements_per_tile_needed = face_size * num_faces  # In bytes
-    else:
-        # Variable face dimensions: calculate in elements, convert to bytes
-        face_c_dim = 16
-        elements_per_face = face_r_dim * face_c_dim
-        elements_per_tile_needed = (
-            elements_per_face * num_faces * output_format.size
-        )  # Convert to bytes
+    elements_per_tile_needed = output_format.num_bytes_per_tile(
+        num_faces * face_r_dim * 16
+    )
+
     total_elements_needed = tile_count * elements_per_tile_needed
     if total_elements_needed > len(packed_list):
         raise IndexError("Buffer access out of bounds")

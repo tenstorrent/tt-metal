@@ -404,6 +404,20 @@ class TestConfig:
             for field_name, value in self.__dict__.items()
             if field_name not in NON_COMPILATION_ARGUMENTS
         ]
+
+        # Include stimuli address-related fields in hash since they affect compiled code
+        # The buffer addresses are compiled into the binary as constexpr values
+        if self.variant_stimuli is not None:
+            stimuli_hash_fields = [
+                str(self.variant_stimuli.tile_count_A),
+                str(self.variant_stimuli.tile_count_B),
+                str(self.variant_stimuli.tile_count_res),
+                str(self.variant_stimuli.buf_a_addr),
+                str(self.variant_stimuli.buf_b_addr),
+                str(self.variant_stimuli.buf_res_addr),
+            ]
+            temp_str.extend(stimuli_hash_fields)
+
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
 
     def resolve_compile_options(self) -> tuple[str, str, str]:

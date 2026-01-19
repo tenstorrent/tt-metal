@@ -191,36 +191,23 @@ def generate_stimuli(
     num_faces=4,  # Add num_faces parameter for partial faces
     negative_values=False,
     output_format=None,  # Optional output format to consider for range constraints (MX)
+    sequential_A=False,  # Generate sequential values (1, 2, 3, ...) for src_A
+    sequential_B=False,  # Generate sequential values (1, 2, 3, ...) for src_B
 ):
+    """
+    Generate stimuli data for testing.
 
-    srcA = []
-    srcB = []
+    Args:
+        sequential_A: If True, generates sequential values starting from 1 for src_A.
+                     src_A will have values 1, 2, 3, ...
+        sequential_B: If True, generates sequential values starting from 1 for src_B.
+                     src_B will have values 1, 2, 3, ...
+        output_format: Optional output format to consider for range constraints (MX formats)
+    """
 
     tile_cnt_A, tile_cnt_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions_A, input_dimensions_B, face_r_dim, num_faces
     )
-
-    for _ in range(faces_to_generate * tile_cnt_A):
-        face_a = generate_random_face(
-            stimuli_format=stimuli_format_A,
-            const_value=const_value_A,
-            const_face=const_face,
-            sfpu=sfpu,
-            face_r_dim=face_r_dim,
-            negative_values=negative_values,
-        )
-        srcA.extend(face_a.tolist())
-
-    for _ in range(faces_to_generate * tile_cnt_B):
-        face_b = generate_random_face(
-            stimuli_format=stimuli_format_B,
-            const_value=const_value_B,
-            const_face=const_face,
-            sfpu=sfpu,
-            face_r_dim=face_r_dim,
-            negative_values=negative_values,
-        )
-        srcB.extend(face_b.tolist())
 
     dtype_A = (
         format_dict[stimuli_format_A]
@@ -233,12 +220,42 @@ def generate_stimuli(
         else torch.bfloat16
     )
 
-    srcA_tensor = torch.tensor(
-        srcA[: input_dimensions_A[0] * input_dimensions_A[1]], dtype=dtype_A
-    )
-    srcB_tensor = torch.tensor(
-        srcB[: input_dimensions_B[0] * input_dimensions_B[1]], dtype=dtype_B
-    )
+    num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
+    num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
+
+    # Generate src_A
+    if sequential_A:
+        srcA_tensor = torch.arange(1, num_elements_A + 1, dtype=dtype_A)
+    else:
+        srcA = []
+        for _ in range(faces_to_generate * tile_cnt_A):
+            face_a = generate_random_face(
+                stimuli_format=stimuli_format_A,
+                const_value=const_value_A,
+                const_face=const_face,
+                sfpu=sfpu,
+                face_r_dim=face_r_dim,
+                negative_values=negative_values,
+            )
+            srcA.extend(face_a.tolist())
+        srcA_tensor = torch.tensor(srcA[:num_elements_A], dtype=dtype_A)
+
+    # Generate src_B
+    if sequential_B:
+        srcB_tensor = torch.arange(1, num_elements_B + 1, dtype=dtype_B)
+    else:
+        srcB = []
+        for _ in range(faces_to_generate * tile_cnt_B):
+            face_b = generate_random_face(
+                stimuli_format=stimuli_format_B,
+                const_value=const_value_B,
+                const_face=const_face,
+                sfpu=sfpu,
+                face_r_dim=face_r_dim,
+                negative_values=negative_values,
+            )
+            srcB.extend(face_b.tolist())
+        srcB_tensor = torch.tensor(srcB[:num_elements_B], dtype=dtype_B)
 
     # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
     if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():

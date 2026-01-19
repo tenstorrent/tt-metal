@@ -452,6 +452,28 @@ class CRK_TILE_DIMM(RuntimeParameter):
 
 
 @dataclass
+class NUM_TILES_IN_BLOCK(RuntimeParameter):
+    num_tiles_in_block: int = 1
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr int NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"int NUM_TILES_IN_BLOCK;", "i"
+
+
+@dataclass
+class NUM_BLOCKS(RuntimeParameter):
+    num_blocks: int = 1
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr int NUM_BLOCKS = {self.num_blocks};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"int NUM_BLOCKS;", "i"
+
+
+@dataclass
 class NUM_FACES(RuntimeParameter):
     num_faces: int = 4  # Number of active faces for result matrix
     num_faces_A: int = 4  # Number of active faces for matrix A
