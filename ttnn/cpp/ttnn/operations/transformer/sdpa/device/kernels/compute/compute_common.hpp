@@ -427,6 +427,11 @@ ALWI void INSERT_SFPNOP() {
 #endif
 }
 
+template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
+constexpr bool can_preload_ln2_constants() {
+    return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
+}
+
 /**
  * Computes exp(x) using polynomial approximation after range reduction.
  *
@@ -456,6 +461,9 @@ void calculate_exponential_polynomial() {
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_7);
+
+    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
+    constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
     if (!USE_SFPARECIP_INSTR) {
         ASSERT(
@@ -500,6 +508,13 @@ void calculate_exponential_polynomial() {
         }
     }
 
+    if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(M_LN2));
+    }
+
     for (int d = 0; d < ITERATIONS; d++) {
         // Load the input.
         constexpr uint8_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
@@ -512,10 +527,13 @@ void calculate_exponential_polynomial() {
         }
 
         // Multiply by 1/ln(2) and round.
-        constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
-        TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        } else {
+            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
+            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        }
         INSERT_SFPNOP();
         TTI_SFP_STOCH_RND(
             0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);  // Clamp to [-127,+127].
@@ -535,11 +553,13 @@ void calculate_exponential_polynomial() {
             ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
 #endif
         } else {
-            constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
-            TTI_SFPLOADI(p_sfpu::LREG0, 0xA, lo16(M_LN2));
-            TTI_SFPLOADI(p_sfpu::LREG0, 0x8, hi16(M_LN2));
-
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            } else {
+                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, lo16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, hi16(M_LN2));
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            }
             INSERT_SFPNOP();
 
             // Calculate polynomial.
