@@ -298,9 +298,24 @@ def run_reference_with_attention(
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
     mask = None
 
-    # For sequences longer than 8192 tokens, use chunked processing
-    CHUNK_SIZE = 8192
-    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
+    # For sequences longer than the chunk size, use chunked processing.
+    # Auto-cap chunk size so the causal mask stays within a safe memory budget.
+    base_chunk_size = 8192
+    bytes_per_elem = torch.tensor([], dtype=torch.bfloat16).element_size()
+    target_mask_bytes = 128 * 1024**2
+    mask_denominator = batch_size * max_position_id_or_seq_len * bytes_per_elem
+    if mask_denominator > 0:
+        max_chunk_size = target_mask_bytes // mask_denominator
+        chunk_size = max(1, min(base_chunk_size, int(max_chunk_size)))
+    else:
+        max_chunk_size = base_chunk_size
+        chunk_size = base_chunk_size
+    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > chunk_size
+    if mode == "prefill":
+        logger.info(
+            f"Reference attention config: seq_len={max_position_id_or_seq_len} "
+            f"chunk_size={chunk_size} use_chunked_processing={use_chunked_processing}"
+        )
 
     if mode == "prefill":
         max_seq_len = position_ids_or_seq_lens.max().item()
@@ -373,15 +388,15 @@ def run_reference_with_attention(
 
     if use_chunked_processing:
         device = activation.device
-        num_chunks = (max_position_id_or_seq_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        num_chunks = (max_position_id_or_seq_len + chunk_size - 1) // chunk_size
 
         output_chunks = []
         current_cache = deepcopy(deepcopied_cache)
 
         with torch.no_grad():
             for chunk_idx in range(num_chunks):
-                start_idx = chunk_idx * CHUNK_SIZE
-                end_idx = min(start_idx + CHUNK_SIZE, max_position_id_or_seq_len)
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, max_position_id_or_seq_len)
                 chunk_size_actual = end_idx - start_idx
 
                 # Extract chunk from activation and position_ids
@@ -401,6 +416,11 @@ def run_reference_with_attention(
                     current_cache_length = first_layer_cache.shape[2] if first_layer_cache.numel() > 0 else 0
 
                 kv_seq_len = current_cache_length + chunk_size_actual
+                mask_bytes = batch_size * chunk_size_actual * kv_seq_len * bytes_per_elem
+                logger.info(
+                    f"Reference chunk {chunk_idx + 1}/{num_chunks}: start={start_idx} end={end_idx} "
+                    f"kv_seq_len={kv_seq_len} mask_mb={mask_bytes / (1024 ** 2):.1f}"
+                )
 
                 # Create causal mask for this chunk
                 # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
@@ -416,8 +436,6 @@ def run_reference_with_attention(
                         :, :, i, current_cache_length : current_cache_length + i + 1
                     ] = 0.0  # Causal mask within chunk
 
-                chunk_cache = deepcopy(current_cache)
-
                 # Set output_attentions=False to avoid storing attention weights that scale quadratically with sequence length
                 chunk_output = reference_model(
                     activation_chunk,
@@ -425,7 +443,7 @@ def run_reference_with_attention(
                     position_ids=position_ids_chunk,
                     output_attentions=False,
                     use_cache=True,
-                    **{kv_arg_name: chunk_cache},
+                    **{kv_arg_name: current_cache},
                 )
 
                 chunk_out, current_cache = extract_output_and_cache(chunk_output)
@@ -433,7 +451,7 @@ def run_reference_with_attention(
                 output_chunks.append(chunk_out)
 
                 # Free intermediate tensors to reduce memory usage
-                del activation_chunk, position_ids_chunk, mask_chunk, chunk_cache, chunk_output
+                del activation_chunk, position_ids_chunk, mask_chunk, chunk_output
 
             # Concatenate all chunk outputs
             model_output_tensor = torch.cat(output_chunks, dim=1)
