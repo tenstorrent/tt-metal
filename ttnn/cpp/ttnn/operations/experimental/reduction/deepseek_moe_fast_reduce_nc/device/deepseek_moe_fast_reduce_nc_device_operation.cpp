@@ -2,33 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_device_operation.hpp"
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
-FastReduceNCDeviceOperation::program_factory_t FastReduceNCDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::FastReduceNCProgramFactory{};
+DeepseekMoEFastReduceNCDeviceOperation::program_factory_t
+DeepseekMoEFastReduceNCDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+    return DeepseekMoEFastReduceNCProgramFactory{};
 }
 
-void FastReduceNCDeviceOperation::validate_on_program_cache_hit(
+void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
+void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& preallocated_output = tensor_args.preallocated_output;
 
     // validate tensor
-    check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(input, "DeepseekMoEFastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
     if (preallocated_output.has_value()) {
-        check_tensor(preallocated_output.value(), "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+        check_tensor(
+            preallocated_output.value(),
+            "DeepseekMoEFastReduceNC",
+            "output",
+            {DataType::BFLOAT16, DataType::BFLOAT8_B});
     }
 
     // validate input dim
@@ -40,7 +44,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
+spec_return_value_t DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -56,7 +60,7 @@ spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_mem_config));
 }
 
-tensor_return_value_t FastReduceNCDeviceOperation::create_output_tensors(
+tensor_return_value_t DeepseekMoEFastReduceNCDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -65,17 +69,20 @@ tensor_return_value_t FastReduceNCDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation::tensor_return_value_t fast_reduce_nc(
-    const Tensor& input,
-    const int32_t& dim,
-    const std::optional<const Tensor>& output,
-    const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
-    using OperationType = ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation;
+ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::DeepseekMoEFastReduceNCDeviceOperation::
+    tensor_return_value_t
+    deepseek_moe_fast_reduce_nc(
+        const Tensor& input,
+        const int32_t& dim,
+        const std::optional<const Tensor>& output,
+        const MemoryConfig& output_mem_config,
+        const DeviceComputeKernelConfig& compute_kernel_config) {
+    using OperationType = ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::
+        DeepseekMoEFastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};

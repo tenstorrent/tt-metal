@@ -10,7 +10,7 @@
 namespace ttnn {
 namespace operations::experimental::reduction {
 
-struct FastReduceNCOperation {
+struct DeepseekMoEFastReduceNCOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> dims,
@@ -23,9 +23,9 @@ struct FastReduceNCOperation {
 
 namespace experimental::reduction {
 
-constexpr auto fast_reduce_nc = ttnn::register_operation<
-    "ttnn::experimental::fast_reduce_nc",
-    ttnn::operations::experimental::reduction::FastReduceNCOperation>();
+constexpr auto deepseek_moe_fast_reduce_nc = ttnn::register_operation<
+    "ttnn::experimental::deepseek_moe_fast_reduce_nc",
+    ttnn::operations::experimental::reduction::DeepseekMoEFastReduceNCOperation>();
 
 }  // namespace experimental::reduction
 

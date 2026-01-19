@@ -10,5 +10,5 @@ namespace ttnn::operations::experimental::reduction::detail {
 
 namespace nb = nanobind;
 
-void bind_fast_reduce_nc(nb::module_& mod);
+void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod);
 }  // namespace ttnn::operations::experimental::reduction::detail

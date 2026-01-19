@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
 using namespace tt;
 using namespace tt::constants;
@@ -49,7 +49,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 }  // namespace
 
-FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
+DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -174,9 +174,11 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/"
+        "deepseek_moe_fast_reduce_nc_reader.cpp";
     const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/"
+        "deepseek_moe_fast_reduce_nc_writer.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program, reader_kernel_file, all_cores, tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -194,7 +196,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/"
+        "deepseek_moe_fast_reduce_nc_reduce.cpp";
     tt_metal::CreateKernel(
         program,
         compute_kernel_file,
@@ -291,7 +294,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
          /* num_cores_x = */ num_cores_x}};
 }
 
-void FastReduceNCProgramFactory::override_runtime_arguments(
+void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t&,
     const tensor_args_t& tensor_args,
@@ -315,4 +318,4 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail

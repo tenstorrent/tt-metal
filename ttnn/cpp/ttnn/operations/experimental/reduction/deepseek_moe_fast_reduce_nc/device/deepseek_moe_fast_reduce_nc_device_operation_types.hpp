@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
 struct operation_attributes_t {
     const int32_t dim;
@@ -21,7 +21,6 @@ struct tensor_args_t {
 };
 
 using tensor_return_value_t = Tensor;
-
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fast_reduce_nc_nanobind.hpp"
+#include "deepseek_moe_fast_reduce_nc_nanobind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -13,15 +13,15 @@
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include "ttnn-nanobind/decorators.hpp"
 
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-void bind_fast_reduce_nc(nb::module_& mod) {
-    using OperationType = decltype(ttnn::experimental::reduction::fast_reduce_nc);
+void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
+    using OperationType = decltype(ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc);
     ttnn::bind_registered_operation(
         mod,
-        ttnn::experimental::reduction::fast_reduce_nc,
+        ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc,
         R"doc(
               Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.
         )doc",

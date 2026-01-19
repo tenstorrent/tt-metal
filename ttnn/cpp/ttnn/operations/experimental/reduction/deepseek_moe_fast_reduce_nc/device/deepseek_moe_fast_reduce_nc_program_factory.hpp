@@ -4,12 +4,13 @@
 
 #pragma once
 
-#include "fast_reduce_nc_device_operation_types.hpp"
+#include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
+
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
-struct FastReduceNCProgramFactory {
+struct DeepseekMoEFastReduceNCProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
@@ -31,4 +32,4 @@ struct FastReduceNCProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail
