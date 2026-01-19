@@ -295,7 +295,7 @@ def test_qwen_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0])
+        tt_out_tok, _ = tt_sampling(tt_out[0])
 
         # Update the idxs
         ttnn.plus_one(

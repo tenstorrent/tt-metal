@@ -82,6 +82,7 @@ def test_llama_decoder_inference(
         mesh_device,
         n_tensors=5,
         n_layers=model_args.n_layers,
+        is_qwen=True,
     )
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
