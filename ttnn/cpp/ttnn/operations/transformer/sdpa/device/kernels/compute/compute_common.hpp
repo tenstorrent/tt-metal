@@ -597,10 +597,9 @@ void calculate_exponential_polynomial() {
         INSERT_SFPNOP();
 
         // Handle underflow: if k == 0, exp(x) = 0 (fixes -inf case).
-        TTI_SFPENCC(1, 0, 0, 2);               // Enable conditional execution.
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 6);  // Set LaneFlags = (LREG1 == 0).
-        TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);     // LREG2 = 0 for lanes where LREG1 == 0.
-        TTI_SFPENCC(0, 0, 0, 10);              // Disable conditional execution and clear LaneFlags.
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 6);  // Set LaneFlags = (LREG1 == 0) and enable CC.
+        TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);     // LREG2 = 0 ONLY for lanes where LREG1 == 0.
+        TTI_SFPENCC(0, 0, 0, 0);               // Disable CC and clear LaneFlags - ALL lanes active again.
 
         // Store the result.
         if constexpr (!IS_FP32_DEST_ACC_EN) {
