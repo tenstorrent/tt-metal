@@ -36,7 +36,6 @@ constexpr auto cb_max_exp_avg_sq_idx = tt::CBIndex::c_26;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t twice_block_size = 2 * block_size;
 
 void MAIN {
     // multiple kernels use this, can be moved to compute_utils.hpp
@@ -117,8 +116,8 @@ void MAIN {
         copy_tile_to_dst_init_short(cb_v_t);
         reconfig_data_format(cb_v_t, cb_v_t);
         tile_regs_acquire();
-        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_v_t, cb_tile_idx, block_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_v_t, block_idx, block_idx);
         }
         cb_pop_front(cb_v_t, block_size);
 
@@ -128,42 +127,27 @@ void MAIN {
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
         binary_max_tile_init();
         // v_t = max(v_max_t, v_t)
-        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
-            // This part used max_tile API previously that's why it's the every second block
-            binary_max_tile(block_idx, block_idx + 1, block_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_max_exp_avg_sq_in_idx, block_idx, block_size + block_idx);
+            binary_max_tile(block_idx, block_size + block_idx, block_idx);
         }
         cb_pop_front(cb_max_exp_avg_sq_in_idx, block_size);
         tile_regs_commit();
-        // push every second block to max_exp_avg_sq_out
-        cb_reserve_back(cb_max_exp_avg_sq_out_idx, block_size);
-        cb_reserve_back(cb_max_exp_avg_sq_idx, block_size);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_max_exp_avg_sq_out_idx);
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
-            pack_tile(block_idx, cb_max_exp_avg_sq_out_idx);
-        }
-        pack_reconfig_data_format(cb_max_exp_avg_sq_idx);
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
-            pack_tile(block_idx, cb_max_exp_avg_sq_idx);
-        }
-        tile_regs_release();
-        cb_push_back(cb_max_exp_avg_sq_out_idx, block_size);
-        cb_push_back(cb_max_exp_avg_sq_idx, block_size);
+        pack_and_push_two_blocks(cb_max_exp_avg_sq_out_idx, cb_max_exp_avg_sq_idx, block_size);
 
         cb_wait_front(cb_max_exp_avg_sq_idx, block_size);
         copy_tile_to_dst_init_short(cb_max_exp_avg_sq_idx);
         reconfig_data_format(cb_max_exp_avg_sq_idx, cb_max_exp_avg_sq_idx);
         tile_regs_acquire();
-        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_max_exp_avg_sq_idx, cb_tile_idx, block_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_max_exp_avg_sq_idx, block_idx, block_idx);
         }
         cb_pop_front(cb_max_exp_avg_sq_idx, block_size);
 #endif
         sqrt_tile_init();  // sets extra constants
         // binop_with_scalar_tile_init();
         // sqrt(v_t) * inv_sqrt_bc2 + epsilon)
-        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_idx);
             mul_unary_tile(block_idx, inv_sqrt_bc2);
             add_unary_tile(block_idx, epsilon);
@@ -171,12 +155,10 @@ void MAIN {
         cb_wait_front(cb_m_t, block_size);
         copy_tile_to_dst_init_short(cb_m_t);
         div_binary_tile_init();
-        uint32_t reg_ite = 0;
         // m_t / (sqrt(v_hat_t) + epsilon)
-        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_m_t, cb_tile_idx, block_idx + 1);
-            div_binary_tile(block_idx + 1, block_idx, reg_ite);
-            reg_ite++;
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_m_t, block_idx, block_size + block_idx);
+            div_binary_tile(block_size + block_idx, block_idx, block_idx);
         }
         cb_pop_front(cb_m_t, block_size);
 
