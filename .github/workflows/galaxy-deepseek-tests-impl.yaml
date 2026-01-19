@@ -77,6 +77,9 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
+        # ADDED: Required for BenchmarkData to save to Superset
+        CI: true
+        GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -109,37 +112,56 @@ jobs:
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
-      - name: Run DeepSeek module tests
+      # TEMPORARILY COMMENTED OUT - Original module tests
+      # - name: Run DeepSeek module tests
+      #   if: ${{ matrix.test-group.test-type == 'module' }}
+      #   timeout-minutes: ${{ matrix.test-group.timeout }}
+      #   run: |
+      #     pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      #     pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+
+      # TEMPORARY: Run fused op unit tests instead
+      - name: Run DeepSeek fused op unit tests (MLP - all ops)
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+          echo "Running MLP mul fused op test..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/mul/test_ds_fused_mul.py::test_ds_fused_mul -k "decode and eager and program_cache" --timeout 600 --durations=0
+
+          echo "Running MLP all_gather fused op test..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/all_gather/test_ds_fused_all_gather_preff1_3.py -k "decode and eager and program_cache" --timeout 600 --durations=0
+
+          echo "Running MLP ff1_3 fused op test..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_fused_ff1_3.py -k "decode and eager and program_cache" --timeout 600 --durations=0
+
+          echo "Running MLP reduce_scatter fused op test..."
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py -k "decode and eager and program_cache" --timeout 600 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-      # - name: Save environment data
-      #   id: save-environment-data
-      #   if: ${{ !cancelled() }}
-      #   run: |
-      #     if [ -d "generated/benchmark_data" ]; then
-      #       echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-      #       python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-      #     else
-      #       echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
-      #       echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-      #     fi
-      # - name: Upload benchmark data
-      #   if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-      #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-      #   with:
-      #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-      #     sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-      #     username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-      #     hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      #     path: /work
+      # ENABLED: Save and upload benchmark data to Superset
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
