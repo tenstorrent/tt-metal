@@ -23,7 +23,8 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(output_cb_id);
         uint64_t dst_noc_addr = get_noc_addr(i, s);
         noc_async_write(l1_read_addr, dst_noc_addr, output_cb_page_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(output_cb_id, onetile);
     }
+    noc_async_write_barrier();
 }

@@ -64,10 +64,11 @@ void kernel_main() {
 
             const uint32_t l1_write_addr_output = get_read_ptr(output_tensor_cb_index);
             noc_async_write_tile(h * Wt_index + current_index_tile_id, output_tensor_dram, l1_write_addr_output);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(output_tensor_cb_index, one_tile);
 
             current_index_tile_id += total_number_of_cores;
         }  // core_loop_count loop
     }  // h loop
+    noc_async_write_barrier();
 }

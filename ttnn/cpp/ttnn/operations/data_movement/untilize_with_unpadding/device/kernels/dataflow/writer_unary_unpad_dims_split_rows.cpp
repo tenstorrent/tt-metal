@@ -59,10 +59,9 @@ void kernel_main() {
 
             l1_read_addr += block_row_size;
             curr_stick_id++;
-
-            // Block write
-            noc_async_write_barrier();
         }
+        // Block write
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out0, num_tiles_block_c);
     };
 
@@ -99,4 +98,5 @@ void kernel_main() {
         pop_blocks(padded_Z_diff_blocks);
     }
     pop_blocks(padded_W_diff_blocks);
+    noc_async_write_barrier();
 }

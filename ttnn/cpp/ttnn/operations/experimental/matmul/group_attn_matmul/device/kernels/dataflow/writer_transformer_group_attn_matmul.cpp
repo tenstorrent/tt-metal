@@ -141,7 +141,7 @@ void kernel_main() {
                 l1_read_addr_out += out_tile_bytes;
                 out_tensor_id++;
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_out, out_num_tiles);
 #endif
         }  // Mt loop
@@ -150,6 +150,10 @@ void kernel_main() {
         in0_batch += MtKt;
 #endif
     }  // B loop
+
+#ifndef OUT_SHARDED
+    noc_async_write_barrier();
+#endif
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, out_num_tiles);

@@ -54,7 +54,7 @@ void kernel_main() {
                     cb_wait_front(cb_id_out0, 1);
                     uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_out0);
                     noc_async_write_tile(dst_tile_id, s1, src_buffer_l1_addr);
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_id_out0, 1);
                     dst_tile_id++;
                 }
@@ -65,4 +65,5 @@ void kernel_main() {
         pad_tiles(num_padded_Zt);
     }
     pad_tiles(num_padded_Wt);
+    noc_async_write_barrier();
 }

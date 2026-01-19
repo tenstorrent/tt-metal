@@ -23,7 +23,7 @@ void kernel_main() {
         cb_wait_front(cb_output, onetile);
         uint32_t output_l1_write_addr = get_read_ptr(cb_output);
         noc_async_write_tile(i, output_addrg, output_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_output, onetile);
     }
 }

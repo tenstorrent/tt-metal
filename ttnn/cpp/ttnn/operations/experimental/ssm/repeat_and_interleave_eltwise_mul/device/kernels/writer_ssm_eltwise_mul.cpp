@@ -25,8 +25,9 @@ void kernel_main() {
             cb_wait_front(cb_id_out, onetile);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
             noc_async_write_tile((block_h_id * out_total_blocks_w) + i, s, l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_out, onetile);
         }
     }
+    noc_async_write_barrier();
 }

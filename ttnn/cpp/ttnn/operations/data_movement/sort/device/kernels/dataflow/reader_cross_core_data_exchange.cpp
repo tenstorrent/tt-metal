@@ -142,10 +142,11 @@ void kernel_main() {
             const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
             noc_async_write_tile(tile_offset, index_tensor_output_accessor, l1_write_addr_index);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(index_tensor_output_cb_index, one_tile);
         }  // Wt loop
 
     }  // h loop
+    noc_async_write_barrier();
     cb_push_back(physical_core_lookup_table_cb_index, one_tile);
 }

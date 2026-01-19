@@ -125,7 +125,7 @@ void kernel_main() {
                     }
                     dst_stick_id++;
 
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_output_id, 1);
                 }
             } else {
@@ -146,7 +146,7 @@ void kernel_main() {
                     }
                     dst_stick_id++;
 
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                 }
                 cb_pop_front(cb_output_id, 1);
             }
@@ -187,7 +187,7 @@ void kernel_main() {
 
                     dst_stick_id++;
 
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_output_id, 1);
                 }
             }

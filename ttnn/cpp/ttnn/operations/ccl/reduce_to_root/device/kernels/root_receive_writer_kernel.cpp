@@ -21,6 +21,7 @@ inline void write_data(
     uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, input_num_tiles * page_bytes);
+    noc_async_writes_flushed();
     cb_pop_front(cb_int_cb_l, input_num_tiles);
 
     //  for tensor s
@@ -28,6 +29,7 @@ inline void write_data(
     l1_read_addr = get_read_ptr(cb_int_cb_s);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_s, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
+    noc_async_writes_flushed();
     cb_pop_front(cb_int_cb_s, onetile);
 
     // for tensor m
@@ -35,7 +37,7 @@ inline void write_data(
     l1_read_addr = get_read_ptr(cb_int_cb_m);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_m, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     cb_pop_front(cb_int_cb_m, onetile);
 }
 void kernel_main() {
@@ -65,4 +67,5 @@ void kernel_main() {
         cb_int_cb_m,
         onetile,
         input_num_tiles);
+    noc_async_write_barrier();
 }

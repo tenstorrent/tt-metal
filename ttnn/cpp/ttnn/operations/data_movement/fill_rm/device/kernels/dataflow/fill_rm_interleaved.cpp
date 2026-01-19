@@ -63,8 +63,8 @@ void kernel_main() {
             } else {
                 noc_async_write(l1_zeros_addr, dst_noc_addr, (W << 1));  // TODO(AP): segment this write
             }
-            noc_async_write_barrier();
             nch_dst++;
         }  // h<paddedH
     }  // nc
+    noc_async_write_barrier();
 }

@@ -19,7 +19,8 @@ void kernel_main() {
         cb_wait_front(dst_cb_id, 1);
         uint32_t dst_cb_read_addr = get_read_ptr(dst_cb_id);
         noc_async_write_tile(i, s, dst_cb_read_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(dst_cb_id, 1);
     }
+    noc_async_write_barrier();
 }

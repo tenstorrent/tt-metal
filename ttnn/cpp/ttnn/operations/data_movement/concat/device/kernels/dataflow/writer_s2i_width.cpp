@@ -28,10 +28,11 @@ void kernel_main() {
         for (uint32_t page_id_input = 0; page_id_input < num_pages_per_tensor; page_id_input++) {
             uint32_t input_page_id = page_id + num_pages_per_core * core_id * num_tensors + tensor_id;
             noc_async_write_tile(input_page_id, s, l1_read_addr);
-            noc_async_write_barrier();
             l1_read_addr += stick_size;
             page_id += num_tensors;
         }
+        noc_async_writes_flushed();
         cb_pop_front(input_shard_cb, num_pages_per_tensor);
     }
+    noc_async_write_barrier();
 }

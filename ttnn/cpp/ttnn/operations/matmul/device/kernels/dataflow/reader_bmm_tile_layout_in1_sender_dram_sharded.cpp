@@ -171,6 +171,6 @@ void kernel_main() {
 
         index_offset += 3;
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 #endif
 }

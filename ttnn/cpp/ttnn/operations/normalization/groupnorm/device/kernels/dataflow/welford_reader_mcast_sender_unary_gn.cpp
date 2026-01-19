@@ -324,7 +324,7 @@ void kernel_main() {
                         num_mcast_cores_last_group,
                         false);
                 }
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
             }
 
             local_means_ptr += local_stride_per_group;

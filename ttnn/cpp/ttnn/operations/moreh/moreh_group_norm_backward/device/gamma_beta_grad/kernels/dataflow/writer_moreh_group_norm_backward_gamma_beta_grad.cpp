@@ -63,7 +63,7 @@ void kernel_main() {
                 gamma_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
                 gamma_grad_noc_addr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
                 gamma_grad_dtype_bytes);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_gamma_grad, onetile);
         }
 
@@ -80,10 +80,11 @@ void kernel_main() {
                 beta_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
                 beta_grad_noc_addr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
                 beta_grad_dtype_bytes);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_beta_grad, onetile);
         }
 
     }  // outer_idx loop
 
+    noc_async_write_barrier();
 }  // void kernel_main()

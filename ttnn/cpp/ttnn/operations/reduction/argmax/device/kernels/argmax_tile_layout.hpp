@@ -296,7 +296,7 @@ void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
         collected_count -= output_page_elements;
         output_page_id++;
 
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     }
 
     output_ctx.collected_count = 0;

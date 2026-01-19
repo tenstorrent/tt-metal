@@ -13,7 +13,7 @@ FORCE_INLINE void write_to_dram(
 
     uint32_t l1_read_addr{get_read_ptr(cb)};
     noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }
 
 template <typename addr_gen_type>

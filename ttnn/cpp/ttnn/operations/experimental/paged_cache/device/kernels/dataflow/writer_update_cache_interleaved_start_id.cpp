@@ -112,7 +112,7 @@ void kernel_main() {
 
         if (!skip_update) {
             // Delay syncing the writes to maximize perf.
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
         }
 
         // read from next head

@@ -38,10 +38,11 @@ void kernel_main() {
                 uint32_t l1_addr = get_read_ptr(cb_id);
                 uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
                 ++dst_stick_id;
                 cb_pop_front(cb_id, 1);
             }
         }
     }
+    noc_async_write_barrier();
 }

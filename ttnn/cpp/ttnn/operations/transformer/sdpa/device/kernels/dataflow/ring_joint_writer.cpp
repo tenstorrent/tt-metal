@@ -200,6 +200,6 @@ void kernel_main() {
             noc_async_writes_flushed();
             cb_pop_front(cb_lse_out, Sq_chunk_t);
         }
-        noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
+        noc_async_writes_flushed();  // Ensure writes of output and LSE complete before next iteration
     }
 }

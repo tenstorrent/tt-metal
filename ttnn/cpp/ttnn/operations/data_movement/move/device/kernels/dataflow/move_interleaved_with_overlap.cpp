@@ -85,8 +85,9 @@ void kernel_main() {
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc_async_write_tile(i, dst_addrgen, l1_read_addr);
-        noc_async_write_barrier();
         l1_read_addr += tile_bytes;
     }
+    noc_async_writes_flushed();
     cb_pop_front(cb_id, num_tiles);
+    noc_async_write_barrier();
 }

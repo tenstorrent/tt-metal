@@ -466,7 +466,7 @@ void kernel_main() {
                                     num_mcast_cores_last_group,
                                     false);
                             }
-                            noc_async_write_barrier();
+                            noc_async_writes_flushed();
                             cb_pop_front(cb_mcast, 1);
                         }
                     }

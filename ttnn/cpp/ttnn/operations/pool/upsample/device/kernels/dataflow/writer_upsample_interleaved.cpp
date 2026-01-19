@@ -65,7 +65,7 @@ void kernel_main() {
             }
             current_stick++;
         }
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out0, num_tiles_per_block_row);
     }
 }

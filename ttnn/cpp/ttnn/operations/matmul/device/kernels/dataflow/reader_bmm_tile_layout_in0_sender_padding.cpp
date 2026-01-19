@@ -337,7 +337,7 @@ void kernel_main() {
             in0_tensor_start_tile_id += MtKt;
         }
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     // For completeness, we empty the sparsity CB if it was reserved earlier
     if constexpr (batchB > 0) {
         cb_push_back(cb_id_sparsity, 1);

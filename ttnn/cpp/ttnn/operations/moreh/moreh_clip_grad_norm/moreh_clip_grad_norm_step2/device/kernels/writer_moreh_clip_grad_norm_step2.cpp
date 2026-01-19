@@ -20,7 +20,8 @@ void kernel_main() {
     const auto output_l1_read_addr = get_read_ptr(cb_id_output);
     cb_wait_front(cb_id_output, onetile);
     noc_async_write_tile(0, s, output_l1_read_addr);
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     cb_pop_front(cb_id_output, onetile);
+    noc_async_write_barrier();
 
 }  // void kernel_main()

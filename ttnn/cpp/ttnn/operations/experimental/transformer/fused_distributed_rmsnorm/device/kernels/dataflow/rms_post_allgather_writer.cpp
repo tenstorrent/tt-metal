@@ -51,5 +51,5 @@ void kernel_main() {
             cb_pop_front(output_cb, block_size);
         }
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }

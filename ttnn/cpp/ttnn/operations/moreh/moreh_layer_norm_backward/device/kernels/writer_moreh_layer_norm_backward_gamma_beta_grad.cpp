@@ -37,7 +37,7 @@ void kernel_main() {
             // gamma_grad (1, 1, 1, W)
             cb_wait_front(cb_id_gamma_grad, onetile);
             noc_async_write_tile(w_idx + start_tile_idx, gamma_grad_addrg, gamma_grad_l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_gamma_grad, onetile);
         }  // gamma_grad_has_value
 
@@ -45,9 +45,10 @@ void kernel_main() {
             // beta_grad (1, 1, 1, W)
             cb_wait_front(cb_id_beta_grad, onetile);
             noc_async_write_tile(w_idx + start_tile_idx, beta_grad_addrg, beta_grad_l1_read_addr);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_id_beta_grad, onetile);
         }  // beta_grad_has_value
 
     }  // num_cols_per_core loop
+    noc_async_write_barrier();
 }  // void kernel_main()

@@ -72,8 +72,9 @@ void kernel_main() {
             cb_wait_front(output_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_output = get_read_ptr(output_tensor_cb_index);
             noc_async_write_tile(h * Wt_index + w, output_tensor_dram, l1_write_addr_output);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(output_tensor_cb_index, one_tile);
         }  // Wt_index loop
     }  // core_loop_count loop
+    noc_async_write_barrier();
 }

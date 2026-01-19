@@ -18,9 +18,10 @@ void kernel_main() {
         uint32_t dst_cb_read_addr = get_read_ptr(dst_cb_id);
 
         noc_async_write(dst_cb_read_addr, local_l1_write_addr, tile_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
 
         cb_pop_front(dst_cb_id, 1);
         local_l1_write_addr += tile_size;
     }
+    noc_async_write_barrier();
 }

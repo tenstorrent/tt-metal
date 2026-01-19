@@ -267,7 +267,7 @@ void kernel_main() {
 
                                 // Write barrier needed to make sure we finish sending mcast flag before we modify
                                 // locally
-                                noc_async_write_barrier();
+                                noc_async_writes_flushed();
                             } else if (in1_sender_in_receiver_grid) {
                                 // MCAST RECEIVER: receive all kv_heads in one user batch
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption
@@ -313,4 +313,5 @@ void kernel_main() {
         in1_batch += in1_CKtNt_mul_32;  // different depending on transpose_hw
 #endif
     }  // B loop
+    noc_async_write_barrier();
 }

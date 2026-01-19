@@ -46,7 +46,7 @@ void kernel_main() {
                     cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     noc_async_write_tile(tile_id + out_tensor_tile_id, s0, l1_read_addr);
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_id_out0, onetile);
                 }
                 y_stride_cum += y_stride;
@@ -64,7 +64,7 @@ void kernel_main() {
                     cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     noc_async_write_tile(tile_id + out_tensor_tile_id, s1, l1_read_addr);
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_id_out0, onetile);
                 }
                 y_stride_cum += y_stride;
@@ -72,4 +72,5 @@ void kernel_main() {
             z_stride_cum += z_stride;
         }
     }
+    noc_async_write_barrier();
 }

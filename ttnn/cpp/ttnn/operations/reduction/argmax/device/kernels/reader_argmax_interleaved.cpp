@@ -79,7 +79,7 @@ void kernel_main() {
         if constexpr (not reduce_all) {
             uint64_t dst_noc_addr = get_noc_addr(k, s_dst);
             noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
         }
     }
 
@@ -88,6 +88,6 @@ void kernel_main() {
         out_idxs[0] = max_idx;
         const uint64_t dst_noc_addr = get_noc_addr(0, s_dst);
         noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
     }
 }

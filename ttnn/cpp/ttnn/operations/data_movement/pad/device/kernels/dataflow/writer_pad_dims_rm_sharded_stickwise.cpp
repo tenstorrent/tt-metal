@@ -51,10 +51,11 @@ void kernel_main() {
     uint64_t output_stick_noc_addr = get_noc_addr(output_shard_base_addr);
     for (uint32_t h = 0; h < padded_shard_height; h++) {
         noc_async_write(padding_value_base_addr, output_stick_noc_addr, padded_stick_bytes);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
 
         cb_push_back(output_shard_cb, 1);
 
         output_stick_noc_addr += padded_stick_bytes;
     }
+    noc_async_write_barrier();
 }

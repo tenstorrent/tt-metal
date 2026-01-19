@@ -25,7 +25,7 @@ void kernel_main() {
         cb_wait_front(cb_input_grad, onetile);
         uint32_t input_grad_l1_write_addr = get_read_ptr(cb_input_grad);
         noc_async_write_tile(i, input_grad_addrg, input_grad_l1_write_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_input_grad, onetile);
     }
 }

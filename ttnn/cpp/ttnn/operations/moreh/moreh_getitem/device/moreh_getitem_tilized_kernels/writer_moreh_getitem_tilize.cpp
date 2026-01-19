@@ -56,7 +56,8 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(noc_id, s0, noc_offset);
 
         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, 1);
     }
+    noc_async_write_barrier();
 }

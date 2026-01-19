@@ -27,7 +27,7 @@ void kernel_main() {
     for (uint32_t idx = 0; idx < num_output_tiles_per_core; ++idx) {
         cb_wait_front(cb_id_output, 1);
         noc_async_write_tile(output_tile_idx, s, output_l1_read_addr);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_output, 1);
         output_tile_idx++;
     }

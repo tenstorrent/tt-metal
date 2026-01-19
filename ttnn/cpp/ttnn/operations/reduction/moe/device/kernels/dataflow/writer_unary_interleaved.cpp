@@ -37,6 +37,6 @@ void kernel_main() {
             tile_id++;
         }
     }
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
     cb_pop_front(out_cb_index, Ht * Kt);
 }

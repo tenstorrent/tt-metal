@@ -369,7 +369,7 @@ void kernel_main() {
                         tiles_read++;
                     }
 
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();
                     cb_pop_front(cb_output_id, tile_granularity);
 
                     // Skip the tiles going the other direction

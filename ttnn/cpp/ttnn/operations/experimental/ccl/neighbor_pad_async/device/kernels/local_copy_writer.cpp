@@ -43,7 +43,7 @@ void kernel_main() {
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             dst_stick_id++;
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             cb_pop_front(cb_output_id, 1);
         }
     }

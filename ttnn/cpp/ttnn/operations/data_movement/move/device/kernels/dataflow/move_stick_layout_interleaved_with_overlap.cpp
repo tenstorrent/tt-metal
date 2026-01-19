@@ -85,8 +85,9 @@ void kernel_main() {
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         uint64_t dst_noc_addr = get_noc_addr(i, dst_addrgen);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-        noc_async_write_barrier();
         l1_read_addr += aligned_page_size;
     }
+    noc_async_writes_flushed();
     cb_pop_front(cb_id, num_pages);
+    noc_async_write_barrier();
 }
