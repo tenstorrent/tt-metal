@@ -233,7 +233,7 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/local-syseng-manual:/data/local-syseng-manual -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
         mpirun_segments+=("bash -c '$docker_cmd'")
@@ -306,7 +306,7 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/local-syseng-manual:/data/local-syseng-manual -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
             mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
