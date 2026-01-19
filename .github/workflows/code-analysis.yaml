@@ -242,7 +242,8 @@ jobs:
       - name: Install CodeChecker
         run: |
           # Pre-install CodeChecker in the container's venv using uv.
-          uv pip install codechecker
+          # Pin to a specific version for reproducibility.
+          uv pip install codechecker==6.27.1
 
       - name: 🔬 Analyze with CodeChecker
         uses: blozano-tt/codechecker-analysis-action@v1.0.5-tt
