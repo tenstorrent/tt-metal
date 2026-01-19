@@ -99,8 +99,17 @@ void kernel_main() {
     const uint32_t mm_N_blocks_per_slice = 1;
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
+    const int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+    uint32_t actual_slice_idx;
+    if (direction) {
+        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+    } else {
+        actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+    }
     DPRINT << "The reader kernel running its loop." << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+    DPRINT << "slice_idx: " << slice_idx << ENDL();
+    DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
     DPRINT << "slice_Wt: " << slice_Wt << ENDL();
     DPRINT << "slice_Ht: " << slice_Ht << ENDL();
     DPRINT << "slice_C (must be 1): " << slice_C << ENDL();
@@ -113,12 +122,17 @@ void kernel_main() {
     DPRINT << " start_row_offset: " << start_row_offset << ENDL();
 
     for (uint32_t b = 0; b < batch_size; b++) {
+        const uint32_t batch_offset = input_batch_num_pages * b;
+
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 for (uint32_t i = 0; i < ring_size; i++) {
+                    const bool do_reduce = i != 0;
+                    uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        const bool do_reduce = i != 0;
-                        DPRINT << "batch_size: " << b << " m_block_iter: " << m_block_iter << " i: " << i
+                        DPRINT << "batch_size: " << b << " batch_offset:" << batch_offset << " "
+                               << " m_block_iter: " << m_block_iter << " i: " << i
                                << " do_reduce: " << (uint32_t)do_reduce << ENDL();
                         DPRINT << "chunk_idx: " << chunk_idx << " chunk_piece_idx: " << chunk_piece_idx << ENDL();
                         DPRINT << "--------------------------------" << ENDL();
