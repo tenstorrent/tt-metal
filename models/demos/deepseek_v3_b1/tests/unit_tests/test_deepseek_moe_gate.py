@@ -10,15 +10,17 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
+@pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_deepseek_moe_gate(device, enable_sigmoid, seed):
+def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     """Test TTNN Deepseek Moe Gate operation on a 16x16 tile"""
 
     # Tensor dimensions - full 32x32 tile
-    input_shape = (8, 32)
-    reshaped_input_shape = (16, 16)
-    tile = ttnn.Tile([16, 16])
+    input_shape = (batch_size, 8, 32)
+    reshaped_input_shape = (batch_size, 16, 16)
+    shard_shape = (16, 16)
+    tile = ttnn.Tile(shard_shape)
 
     logger.info(f"Testing Deepseek Moe Gate with input shape {input_shape}")
     logger.info(f"Tile size: {tile.tile_shape}")
@@ -37,10 +39,15 @@ def test_deepseek_moe_gate(device, enable_sigmoid, seed):
         torch_input, torch_bias, eps, scaling_factor, enable_sigmoid
     )
 
+    grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.num_cores_to_corerangeset(
+        batch_size,
+        ttnn.CoreCoord(grid.x, grid.y),
+        row_wise=True,
+    )
     # Shard spec: single core
-    shard_shape = reshaped_input_shape
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        core_grid,
         shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -57,7 +64,7 @@ def test_deepseek_moe_gate(device, enable_sigmoid, seed):
         tile=tile,
     )
 
-    reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), 0, 1)
+    reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
     ttnn_bias = ttnn.from_torch(
         reshaped_bias,
         dtype=ttnn.bfloat16,
@@ -67,10 +74,10 @@ def test_deepseek_moe_gate(device, enable_sigmoid, seed):
         tile=tile,
     )
 
-    torch_input_indices = torch.arange(reshaped_input_shape[0] * reshaped_input_shape[1], dtype=torch.int32)
+    torch_input_indices = torch.arange(reshaped_input_shape[1] * reshaped_input_shape[2], dtype=torch.int32)
+    torch_input_indices = torch_input_indices.unsqueeze(0).expand(reshaped_input_shape[0], -1)
     torch_input_indices = torch_input_indices.reshape(reshaped_input_shape)
-    torch_input_indices = torch.transpose(torch_input_indices, 0, 1).to(torch.uint16)
-
+    torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
     ttnn_input_indices = ttnn.from_torch(
         torch_input_indices,
         dtype=ttnn.uint16,
@@ -120,14 +127,14 @@ def test_deepseek_moe_gate(device, enable_sigmoid, seed):
     output_torch = ttnn.to_torch(ttnn_result)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices)
 
-    output_torch = output_torch[0, :8]
-    output_indices_torch = output_indices_torch[0, :8]
+    output_torch = output_torch[:, 0, :8]
+    output_indices_torch = output_indices_torch[:, 0, :8]
 
     sorted_output_indices_torch, i = torch.sort(output_indices_torch, dim=-1)
-    sorted_output_torch = output_torch[i]
+    sorted_output_torch = torch.gather(output_torch, dim=-1, index=i)
 
     top8_indices, i = torch.sort(top8_indices, dim=-1)
-    top8_scores = top8_scores[i]
+    top8_scores = torch.gather(top8_scores, dim=-1, index=i)
 
     assert torch.equal(sorted_output_indices_torch, top8_indices), "Output indices do not match"
     assert torch.allclose(sorted_output_torch, top8_scores, atol=1e-2, rtol=1e-4), "Output scores do not match"
