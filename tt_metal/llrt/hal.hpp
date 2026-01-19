@@ -267,6 +267,7 @@ public:
     // implementation of build, to avoid breaking users / tools.
     // We can migrate build to use arch-independent target names, and then this can be removed.
     virtual std::string target_name(const Params& params) const = 0;
+    virtual std::string weakened_firmware_target_name(const Params& params) const = 0;
 };
 
 class Hal {
