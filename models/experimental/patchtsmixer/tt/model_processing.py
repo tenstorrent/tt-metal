@@ -348,3 +348,55 @@ def preprocess_embedding_proj(state_dict, path: str, device):
         f"{path}.proj.weight": w_tt,
         f"{path}.proj.bias": b_tt,
     }
+
+
+def preprocess_linear_head(state_dict, path: str, device):
+    """
+    Preprocess PatchTSMixerLinearHead for classification/regression.
+
+    Expects:
+        state_dict["projection.weight"]: (num_targets, in_features)
+        state_dict["projection.bias"]: (num_targets,)
+    """
+    w = state_dict["projection.weight"]  # (num_targets, in_features)
+    b = state_dict["projection.bias"]  # (num_targets,)
+
+    # Transpose to (in_features, num_targets) for ttnn.linear
+    w = w.transpose(0, 1).contiguous()
+
+    # Convert to TTNN: (1, 1, in_features, num_targets)
+    w_tt = ttnn.from_torch(w.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Bias: (1, 1, 1, num_targets)
+    b_tt = ttnn.from_torch(b.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    return {
+        f"{path}.projection.weight": w_tt,
+        f"{path}.projection.bias": b_tt,
+    }
+
+
+def preprocess_pretrain_head(state_dict, path: str, device):
+    """
+    Preprocess PatchTSMixerPretrainHead for pre-training.
+
+    Expects:
+        state_dict["projection.weight"]: (patch_length, d_model)
+        state_dict["projection.bias"]: (patch_length,)
+    """
+    w = state_dict["projection.weight"]  # (patch_length, d_model)
+    b = state_dict["projection.bias"]  # (patch_length,)
+
+    # Transpose to (d_model, patch_length) for ttnn.linear
+    w = w.transpose(0, 1).contiguous()
+
+    # Convert to TTNN: (1, 1, d_model, patch_length)
+    w_tt = ttnn.from_torch(w.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Bias: (1, 1, 1, patch_length)
+    b_tt = ttnn.from_torch(b.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    return {
+        f"{path}.projection.weight": w_tt,
+        f"{path}.projection.bias": b_tt,
+    }
