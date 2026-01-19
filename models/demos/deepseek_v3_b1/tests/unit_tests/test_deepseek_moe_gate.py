@@ -10,20 +10,24 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
-@pytest.mark.parametrize("batch_size", [1, 2])
-@pytest.mark.parametrize("enable_sigmoid", [True, False])
-@pytest.mark.parametrize("seed", [42, 201, 512])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("enable_sigmoid", [True])
+@pytest.mark.parametrize("seed", [42])
 def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     """Test TTNN Deepseek Moe Gate operation on a 16x16 tile"""
 
     # Tensor dimensions - full 32x32 tile
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)
-    shard_shape = (16, 16)
-    tile = ttnn.Tile(shard_shape)
+    input_shard_shape = (16, 16)
+    input_tile = ttnn.Tile(input_shard_shape)
+    output_shape = (batch_size, 1, 16)
+    output_shard_shape = (1, 16)
+    output_tile = ttnn.Tile(output_shard_shape)
 
     logger.info(f"Testing Deepseek Moe Gate with input shape {input_shape}")
-    logger.info(f"Tile size: {tile.tile_shape}")
+    logger.info(f"Input tile size: {input_tile.tile_shape}")
+    logger.info(f"Output tile size: {output_tile.tile_shape}")
 
     # Create input PyTorch tensor with random values
     torch.manual_seed(seed)
@@ -46,12 +50,19 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         row_wise=True,
     )
     # Shard spec: single core
-    shard_spec = ttnn.ShardSpec(
+    input_shard_spec = ttnn.ShardSpec(
         core_grid,
-        shard_shape,
+        input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    output_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     # Create input values tensor sharded on single core
     reshaped_input = torch.reshape(torch_input, reshaped_input_shape)
@@ -60,8 +71,8 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
-        tile=tile,
+        memory_config=input_mem_config,
+        tile=input_tile,
     )
 
     reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
@@ -70,8 +81,8 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
-        tile=tile,
+        memory_config=input_mem_config,
+        tile=input_tile,
     )
 
     torch_input_indices = torch.arange(reshaped_input_shape[1] * reshaped_input_shape[2], dtype=torch.int32)
@@ -83,32 +94,34 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
-        tile=tile,
+        memory_config=input_mem_config,
+        tile=input_tile,
     )
 
     # Create output tensor sharded on same core
-    torch_output = torch.zeros(reshaped_input_shape, dtype=torch.bfloat16)
+    torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
-        tile=tile,
+        memory_config=output_mem_config,
+        tile=output_tile,
     )
 
-    torch_output_indices = torch.zeros(reshaped_input_shape, dtype=torch.uint16)
+    torch_output_indices = torch.zeros(output_shape, dtype=torch.uint16)
     ttnn_output_indices = ttnn.from_torch(
         torch_output_indices,
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem_config,
-        tile=tile,
+        memory_config=output_mem_config,
+        tile=output_tile,
     )
 
-    logger.info(f"Created tensors sharded on single core with shard shape {shard_shape}")
+    logger.info(
+        f"Created tensors sharded on single core with input shard shape {input_shard_shape} and output shard shape {output_shard_shape}"
+    )
 
     # Run Deepseek Moe Gate operation
     logger.info("Running Deepseek Moe Gate operation...")

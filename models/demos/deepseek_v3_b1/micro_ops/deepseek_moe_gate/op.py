@@ -90,44 +90,46 @@ class DeepseekMoeGateSingleCore:
         input_indices_shape = input_indices_tensor.shape
         output_indices_shape = output_indices_tensor.shape
 
-        assert input_shape == output_shape, "Input and output tensors must have the same shape"
         assert bias_shape == input_shape, "Bias and input tensors must have the same shape"
         assert input_indices_shape == input_shape, "Input indices and input tensors must have the same shape"
-        assert output_indices_shape == input_shape, "Output indices and input tensors must have the same shape"
+        assert output_indices_shape == output_shape, "Output indices and output tensors must have the same shape"
 
         # Get core grid from input tensor (single core)
         input_shard_spec = input_tensor.memory_config().shard_spec
+        output_shard_spec = output_tensor.memory_config().shard_spec
         all_cores = input_shard_spec.grid
         assert input_shard_spec == bias_tensor.memory_config().shard_spec
-        assert input_shard_spec == output_tensor.memory_config().shard_spec
         assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
-        assert input_shard_spec == output_indices_tensor.memory_config().shard_spec
+        assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
+        assert all_cores == output_shard_spec.grid
 
         # Get tile info from input tensor
         input_tile = input_tensor.tile
         input_tile_height, input_tile_width = input_tile.tile_shape
         input_tile_size = input_tile.get_tile_size(input_tensor.dtype)
-        expected_tile_size = (16, 16)
+        expected_input_tile_size = (16, 16)
+        output_tile = output_tensor.tile
+        output_tile_height, output_tile_width = output_tile.tile_shape
+        output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
+        expected_output_tile_size = (1, 16)
         assert input_tile == bias_tensor.tile
-        assert input_tile == output_tensor.tile
         assert input_tile == input_indices_tensor.tile
-        assert input_tile == output_indices_tensor.tile
-        assert input_tile_height == expected_tile_size[0]
-        assert input_tile_width == expected_tile_size[1]
+        assert output_tile == output_indices_tensor.tile
+        assert input_tile_height == expected_input_tile_size[0]
+        assert input_tile_width == expected_input_tile_size[1]
+        assert output_tile_height == expected_output_tile_size[0]
+        assert output_tile_width == expected_output_tile_size[1]
         assert input_shard_spec == bias_tensor.memory_config().shard_spec
-        assert input_shard_spec == output_tensor.memory_config().shard_spec
         assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
-        assert input_shard_spec == output_indices_tensor.memory_config().shard_spec
-        assert input_shard_spec.shape[0] == expected_tile_size[0]
-        assert input_shard_spec.shape[1] == expected_tile_size[1]
+        assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
+        assert input_shard_spec.shape[0] == expected_input_tile_size[0]
+        assert input_shard_spec.shape[1] == expected_input_tile_size[1]
+        assert output_shard_spec.shape[0] == expected_output_tile_size[0]
+        assert output_shard_spec.shape[1] == expected_output_tile_size[1]
 
         # Get tile info from bias tensor
         bias_tile = bias_tensor.tile
         bias_tile_size = bias_tile.get_tile_size(bias_tensor.dtype)
-
-        # Get tile info from output tensor
-        output_tile = output_tensor.tile
-        output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
 
         # Get tile info from input indices tensor
         input_indices_tile = input_indices_tensor.tile
