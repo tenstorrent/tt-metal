@@ -435,9 +435,10 @@ constexpr bool can_preload_ln2_constants() {
 /**
  * Computes exp(x) using polynomial approximation after range reduction.
  *
- * Clamps input to >= -88.5, scales by configured factor, then reduces to exp(r) * 2^k
+ * Scales by configured factor, then reduces to exp(r) * 2^k
  * where r = x - k*ln(2). Uses either SFPARECIP instruction or multi-term polynomial (degree 1-4)
- * to compute exp(r), then reconstructs full result via exponent manipulation.
+ * to compute exp(r), then reconstructs full result via exponent manipulation,
+ * clamping the exponent to handle large positive or negative inputs.
  *
  * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false). Only
  * supported on Blackhole.
