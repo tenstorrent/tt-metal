@@ -53,6 +53,9 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
+    // Flag set by dispatch_s BRISC when terminate command is received
+    // Used to signal dispatch TRISC to exit its main loop
+    DISPATCH_TRISC_TERMINATE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,

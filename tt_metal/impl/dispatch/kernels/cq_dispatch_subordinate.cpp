@@ -15,6 +15,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -205,6 +206,10 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
 }
 
+// Pointer to profiler control buffer for signaling dispatch TRISC to terminate
+volatile tt_l1_ptr uint32_t* dispatch_profiler_control_buffer =
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
+
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     DeviceZoneScopedN("KERNEL-TOT");
@@ -370,7 +375,11 @@ void kernel_main() {
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
-            case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                // Signal dispatch TRISC to terminate
+                dispatch_profiler_control_buffer[kernel_profiler::DISPATCH_TRISC_TERMINATE] = 1;
+                done = true;
+                break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
