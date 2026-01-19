@@ -20,12 +20,12 @@ run_quad_galaxy_unit_tests() {
 
   mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "uv run pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
   #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "uv run pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -53,18 +53,18 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="DUAL"
 
-    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests"
+    local TEST_CASE="uv run pytest -svvv models/demos/deepseek_v3/tests"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
-        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
     # Run test_demo_dual test on DUAL galaxy setup
-    local TEST_DEMO_DUAL="pytest -svvv models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
+    local TEST_DEMO_DUAL="uv run pytest -svvv models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
-        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_DUAL" ; fail+=$?
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_DUAL" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
