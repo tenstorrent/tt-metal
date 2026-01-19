@@ -91,17 +91,16 @@ def test_run_prefetcher(
 
 
 @pytest.mark.parametrize(
-    "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers, batch_weights",
+    "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
-        (2, 2, [(128, 128), (128, 128)], [ttnn.bfloat4_b] * 2, 2, True),
-        (2, 2, [(256, 1024), (256, 1024)], [ttnn.bfloat4_b] * 2, 5, True),
+        (2, 2, [(128, 128), (128, 128)], [ttnn.bfloat4_b] * 2, 2),
+        (2, 2, [(256, 1024), (256, 1024)], [ttnn.bfloat4_b] * 2, 5),
         (
             12,
             5,
             [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)],
             [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b],
             5,
-            True,
         ),  # qkv + do + ff1 + ff3 + ff2
         # Takes really long to set up
         (
@@ -110,7 +109,6 @@ def test_run_prefetcher(
             [(2048, 1280), (1280, 2048), (2048, 3584), (2048, 3584), (3584, 2048)],
             [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b],
             80,
-            True,
         ),  # qkv + do + ff1 + ff3 + ff2
     ],
 )
