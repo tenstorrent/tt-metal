@@ -201,9 +201,16 @@ void jit_build_genfiles_triscs_src(
     //   - SOURCE_CODE: the source directly
     string unpack_src, math_src, pack_src;
     if (simplified) {
-        unpack_src = simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_unpack", "unpack_main");
-        math_src = simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_math", "math_main");
-        pack_src = simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_pack", "pack_main");
+        // For FILE_PATH sources, add #line directive to preserve original file's line numbers
+        // in compiler diagnostics and __LINE__ macro. This ensures error messages reference
+        // the original kernel file, not the generated file.
+        string line_directive;
+        if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
+            line_directive = "#line 1 \"" + kernel_src.path_.string() + "\"\n";
+        }
+        unpack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_unpack", "unpack_main");
+        math_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_math", "math_main");
+        pack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_pack", "pack_main");
     } else {
         // Legacy: use existing helper that handles FILE_PATH vs SOURCE_CODE appropriately
         const string src = get_kernel_source_to_include(kernel_src);
