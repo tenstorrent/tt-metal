@@ -18,7 +18,7 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
-class ParallelizationContext {
+class ParallelismContext {
 public:
     // Configure from device config flags
     // For TP+DP: dp_axis=0, tp_axis=1
@@ -107,7 +107,7 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
-    [[nodiscard]] ParallelizationContext& get_parallelization_context();
+    [[nodiscard]] ParallelismContext& get_parallelism_context();
 
 private:
     AutoContext();
@@ -127,7 +127,7 @@ private:
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
-    ParallelizationContext m_parallelization_context;
+    ParallelismContext m_parallelism_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

@@ -55,20 +55,17 @@ ttml::serialization::NamedParameters get_model_parameters(Model &model) {
 }
 
 uint64_t get_number_of_parameters(Model &model, bool tp) {
-    auto *device = &ttml::autograd::ctx().get_device();
-    auto num_devices = static_cast<uint32_t>(device->num_devices());
-
     auto contains = [](const std::string &str, const std::string &substr) {
         return str.find(substr) != std::string::npos;
     };
-
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
         auto tensor = tensor_ptr->get_value();
         auto params_in_tensor = tensor.logical_volume();
-        if (tp && (contains(name, "fc") || contains(name, "linear"))) {
-            num_params += params_in_tensor * num_devices;
+        if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
+            auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
+            num_params += params_in_tensor * tp_size;
         } else {
             num_params += params_in_tensor;
         }
@@ -292,7 +289,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_llama8b_tp_dp_galaxy.yaml";
+        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -432,8 +429,7 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
 
     // Configure parallelization context from device config
-    ttml::autograd::ctx().get_parallelization_context().configure(
-        device, device_config.enable_dp, device_config.enable_tp);
+    ttml::autograd::ctx().get_parallelism_context().configure(device, device_config.enable_dp, device_config.enable_tp);
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -472,12 +468,12 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                auto &pctx = ttml::autograd::ctx().get_parallelization_context();
+                auto &pctx = ttml::autograd::ctx().get_parallelism_context();
 
                 if (pctx.is_dp_enabled()) {
                     // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
-                    const auto mapper =
-                        ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/0, pctx.get_dp_axis());
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_dp_axis());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -522,7 +518,10 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(arg.vocab_size, (device_config.enable_tp ? num_devices : 1U) * 32U);
+                const auto coef =
+                    (device_config.enable_tp ? ttml::autograd::ctx().get_parallelism_context().get_tp_size() : 1U) *
+                    32U;
+                arg.vocab_size = (arg.vocab_size + coef - 1) / coef * coef;
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -646,12 +645,12 @@ int main(int argc, char **argv) {
     }
 
     if (device_config.enable_dp) {
-        auto num_devices = static_cast<uint32_t>(device->num_devices());
-        if (training_config.batch_size % num_devices != 0) {
+        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_dp_size();
+        if (training_config.batch_size % dp_size != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
                 training_config.batch_size,
-                num_devices));
+                dp_size));
         }
     }
 
@@ -716,7 +715,7 @@ int main(int argc, char **argv) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
                 if (device_config.enable_dp && !is_three_tier_training(multihost_config)) {
-                    ttml::core::distributed::synchronize_parameters(parameters);
+                    ttml::core::distributed::synchronize_gradients(parameters);
                 }
 
                 if (training_config.use_clip_grad_norm) {
