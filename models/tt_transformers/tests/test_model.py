@@ -122,7 +122,7 @@ def test_model_inference(
     # Setup prefetcher
     # num_tensors is 5 because we are prefetching qkv + do + ff1 + ff3 + ff2
     num_tensors = 5 if use_prefetcher else 0
-    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=32) if use_prefetcher else None
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
     if use_prefetcher:
         prefetcher.init(mode="decode")
 
@@ -144,6 +144,8 @@ def test_model_inference(
         pcc = 0.94 if mode_accuracy else 0.86
 
     model_name = model_args.base_model_name
+    prefetcher.num_layers = model_args.n_layers
+
     if layers == 1:  # quick mode has tight PCC checks for known models
         model_name = model_args.base_model_name
 

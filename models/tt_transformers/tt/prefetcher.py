@@ -271,7 +271,7 @@ class Prefetcher(LightweightModule):
 
     def init(self, mode: str = "decode") -> None:
         """
-        Initializes the prefetcher
+        Initializes the prefetcher sub devices
         Args:
             mode: The mode to run the prefetcher in, either "decode" or "prefill"
         """

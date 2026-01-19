@@ -104,9 +104,9 @@ def create_weight_tensors(
         # WO: [n_heads*head_dim, dim] -> TP on n_heads*head_dim (K-sharded)
         ("wo", n_heads * head_dim, dim, ttnn.bfloat8_b, (3, 2), "K"),
         # FF1: [dim, hidden_dim] -> TP on hidden_dim (N-sharded)
-        ("ff1", dim, hidden_dim, ttnn.bfloat4_b, (2, 3), "N"),
+        ("ff1", dim, hidden_dim, ttnn.bfloat8_b, (2, 3), "N"),
         # FF3: [dim, hidden_dim] -> TP on hidden_dim (N-sharded)
-        ("ff3", dim, hidden_dim, ttnn.bfloat4_b, (2, 3), "N"),
+        ("ff3", dim, hidden_dim, ttnn.bfloat8_b, (2, 3), "N"),
         # FF2: [hidden_dim, dim] -> TP on hidden_dim (K-sharded)
         ("ff2", hidden_dim, dim, ttnn.bfloat8_b, (3, 2), "K"),
     ]
@@ -642,7 +642,7 @@ def test_prefetcher_ring_matmul_BH(
 
     run_prefetcher_all_matmuls(
         mesh_device=mesh_device,
-        num_layers=1,
+        num_layers=32,
         model_dims=model_dims,
         enable_trace=False,
     )

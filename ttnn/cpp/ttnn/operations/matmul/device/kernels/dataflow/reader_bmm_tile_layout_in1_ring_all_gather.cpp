@@ -148,6 +148,25 @@ void kernel_main() {
 
         DPRINT << "Waiting to push sync_cb2" << ENDL();  // 32
         DPRINT << "Reader in1: num_blocks: " << num_blocks << ENDL();
+
+
+// #ifdef ENABLE_GLOBAL_CB
+//         // Debug: Get counter state at START of this matmul (after setup_remote_cb_interfaces runs)
+//         {
+//             RemoteReceiverCBInterface& cb = get_remote_receiver_cb_interface(remote_cb_id);
+//             volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+//                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_acked_ptr);
+//             volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+//                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_acked_ptr - L1_ALIGNMENT);
+//             DPRINT << "Receiver START batch=" << b
+//                 << " pages_sent=" << *pages_sent_ptr
+//                 << " pages_acked=" << *pages_acked_ptr
+//                 << " fifo_rd_ptr=" << cb.fifo_rd_ptr
+//                 << " fifo_page_size=" << cb.fifo_page_size
+//                 << " fifo_limit=" << cb.fifo_limit_page_aligned << ENDL();
+//         }
+// #endif
+
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
         DPRINT << "Reader in1: Received in1 block in reader in1" << ENDL();
@@ -212,6 +231,20 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         cb_wait_front(sync_cb, 1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
+
+        // Debug: Get counter state AFTER pop_front
+        {
+            RemoteReceiverCBInterface& cb = get_remote_receiver_cb_interface(remote_cb_id);
+            volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_acked_ptr);
+            volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_acked_ptr - L1_ALIGNMENT);
+            DPRINT << "Receiver AFTER POP batch=" << b
+                << " pages_sent=" << *pages_sent_ptr
+                << " pages_acked=" << *pages_acked_ptr
+                << " fifo_rd_ptr=" << cb.fifo_rd_ptr << ENDL();
+        }
+
         cb_pop_front(sync_cb, 1);
 #endif
         // Signal Here
