@@ -72,6 +72,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -160,17 +161,16 @@ void kernel_main() {
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         DPRINT << "direction_offset: " << direction_offset << ENDL();
 
-                        // cb_reserve_back(cb_in0, tile_granularity);
-                        // uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                        cb_reserve_back(cb_in0, tile_granularity);
+                        uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                             uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset;
                             DPRINT << "input_tile_id: " << input_tile_id << ENDL();
-                            // uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                            // noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                            // l1_write_addr += page_size;
+                            uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                            l1_write_addr += page_size;
                             DPRINT << "--------------------------------" << ENDL();
                         }
-                        // tiles_read += tiles_to_read_in_current_direction;
                     }
 
                     // Next slice idx
