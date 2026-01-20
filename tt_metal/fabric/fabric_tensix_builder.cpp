@@ -507,8 +507,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     size_t l1_alignment = hal.get_alignment(tt_metal::HalMemType::L1);
 
     // Reserve space for both core types with proper alignment
-    space_per_risc_ = l1_size / num_used_riscs_per_tensix_;             // Split between MUX and RELAY
-    space_per_risc_ = (space_per_risc_ / l1_alignment) * l1_alignment;  // Align down to L1 alignment
+    if (num_used_riscs_per_tensix_ > 0) {
+        space_per_risc_ = l1_size / num_used_riscs_per_tensix_;             // Split between MUX and RELAY
+        space_per_risc_ = (space_per_risc_ / l1_alignment) * l1_alignment;  // Align down to L1 alignment
+    } else {
+        space_per_risc_ = 0;
+    }
 
     // Determine num_channels_for_mux and build channel type maps based on mode
     // The helper function handles both UDM and Legacy modes internally
