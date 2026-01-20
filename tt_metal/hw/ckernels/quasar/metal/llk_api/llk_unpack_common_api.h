@@ -12,7 +12,6 @@
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
-#include "llk_param_structs.h"
 #include "llk_unpack_common.h"
 
 /*************************************************************************

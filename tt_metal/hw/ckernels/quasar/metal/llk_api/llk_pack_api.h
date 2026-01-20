@@ -14,7 +14,6 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#include "llk_param_structs.h"
 
 /*************************************************************************
  * LLK PACK
@@ -93,6 +92,60 @@ inline void llk_pack(
 }
 
 /*************************************************************************
+ * LLK PACK UNTILIZE
+ *************************************************************************/
+
+/**
+ *
+ * @brief Initializes the packer to pack untilize a tile row by full 32x32 tiles
+ *
+ * @param pack_output: The output circular buffer identifier
+ * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is in row-major format.
+ * @param block_ct_dim: c_dim of tiles in each block
+ * @param c_dim_faces: Number of faces in c_dim per tile
+ *
+ * This function initializes pack untilize for a tile row by full 32x32 tiles,
+ * from the math destination register to the output circular buffer.
+ *
+ */
+inline void llk_pack_untilize_init(
+    const std::uint32_t pack_output,
+    const std::uint32_t full_ct_dim,
+    const std::uint32_t block_ct_dim,
+    const std::uint32_t c_dim_faces) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const TileShape output_tile_shape = {
+        .num_faces = get_output_num_faces(output_id),
+        .face_r_dim = get_output_face_r_dim(output_id),
+        .face_c_dim = FACE_C_DIM,
+        .narrow_tile = get_output_narrow_tile(output_id)};
+
+    _llk_pack_untilize_init_(output_id, output_tile_shape, full_ct_dim, block_ct_dim, c_dim_faces);
+}
+
+/**
+ *
+ * @brief Performs pack untilize on a tile row by full 32x32 tiles
+ *
+ * @param pack_output: The output circular buffer identifier
+ * @param tile_index: The L1 index in the output CB to write to
+ * @param dst_index: Tile index into the destination register
+ *
+ * This function packs and untilizes a tile row by full 32x32 tiles, from the math destination register to the output
+ * circular buffer.
+ *
+ */
+inline void llk_pack_untilize(std::uint32_t pack_output, std::uint32_t tile_index, std::uint32_t dst_index) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+
+    const std::uint32_t l1_tile_index = get_local_cb_interface(output_id).fifo_wr_tile_idx + tile_index;
+
+    WAYPOINT("UPTW");
+    _llk_pack_untilize_(dst_index, l1_tile_index);
+    WAYPOINT("UPTD");
+}
+
+/*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
 
@@ -137,3 +190,31 @@ template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
 inline void llk_pack_dest_dvalid_section_done() {
     _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
 }
+
+/**
+ *
+ * @brief Configures PACKER0 edge mask programming to support reduce operations
+ *
+ * @tparam reduce_dim: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ *
+ * This function configures the packer edge masks based on the reduce dimension:
+ * - REDUCE_ROW: Preserves only datum[0] in each row, masks datums[1:15] to 0 (keeps first column)
+ * - REDUCE_COL: Preserves all datums in row 0 only, masks all other rows to 0 (keeps first row)
+ * - REDUCE_SCALAR: Preserves only datum[0] in row 0 of face 0 (keeps single element)
+ *
+ **/
+template <ReduceDim reduce_dim>
+inline void llk_pack_reduce_mask_config() {
+    _llk_pack_reduce_mask_config_<reduce_dim>();
+}
+
+/**
+ *
+ * @brief Clears PACKER0 edge mask configuration to restore normal packing behavior after reduce operations
+ *
+ * This function disables the edge mask programming for PACKER0 by resetting all masks
+ * to preserve all datums in all faces. Should be called after reduce operations to restore
+ * normal packing behavior.
+ *
+ **/
+inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
