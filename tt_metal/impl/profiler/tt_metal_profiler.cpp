@@ -1114,15 +1114,6 @@ void ReadMeshDeviceProfilerResults(
         return;
     }
 
-    // Manual reading of device profiler results is not supported when there is already another thread reading the
-    // results. Signal the debug dump thread to do a read instead.
-    if (getDeviceDebugDumpEnabled()) {
-        if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
-            profiler_state_manager->signal_debug_dump_read();
-        }
-        return;
-    }
-
     TT_ASSERT(mesh_device.is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
@@ -1146,6 +1137,16 @@ void ReadMeshDeviceProfilerResults(
         for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
             mesh_device.mesh_command_queue(cq_id).finish();
         }
+    }
+
+    // At this point the kernels are done executing
+    // Manual reading of device profiler results is not supported when there is already another thread reading the
+    // results. Signal the debug dump thread to do a read instead.
+    if (getDeviceDebugDumpEnabled()) {
+        if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
+            profiler_state_manager->signal_debug_dump_read();
+        }
+        return;
     }
 
     for (IDevice* device : mesh_device.get_devices()) {

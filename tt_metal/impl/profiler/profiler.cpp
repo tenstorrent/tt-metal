@@ -1794,10 +1794,11 @@ void DeviceProfiler::readTsData16BMarkerData(
             total_data_size);
     }
 
-    auto trailer_metadata = EMD::LocalNocEventDstTrailer(trailer_data[0]);
-    meta_data["dst_addr"] = trailer_metadata.getDstAddr();
-    meta_data["src_addr"] = trailer_metadata.getSrcAddr();
-    meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer_metadata.counter_value);
+    EMD trailer_metadata(trailer_data[0]);
+    const auto& trailer = trailer_metadata.getLocalNocEventDstTrailer();
+    meta_data["dst_addr"] = trailer.getDstAddr();
+    meta_data["src_addr"] = trailer.getSrcAddr();
+    meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer.counter_value);
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
@@ -1839,7 +1840,7 @@ void DeviceProfiler::readTsData16BMarkerData(
             device_id,
             timestamp,
             get_processor_id(risc_type),
-            make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata));
+            make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
     }
 
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
