@@ -239,7 +239,8 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
     bool has_pinned_memory = false;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        has_pinned_memory = has_pinned_memory || experimental::ShardDataTransferGetPinnedMemory(shard_data_transfers[shard_idx]);
+        has_pinned_memory =
+            has_pinned_memory || experimental::ShardDataTransferGetPinnedMemory(shard_data_transfers[shard_idx]);
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->impl().is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(

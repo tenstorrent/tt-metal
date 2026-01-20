@@ -887,8 +887,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
         auto write_transfer = distributed::ShardDataTransfer{coord}
-                                 .host_data(static_cast<void*>(src->data()))
-                                 .region(BufferRegion(0, bytes_per_device));
+                                  .host_data(static_cast<void*>(src->data()))
+                                  .region(BufferRegion(0, bytes_per_device));
         tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
         mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
