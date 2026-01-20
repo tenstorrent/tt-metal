@@ -1061,7 +1061,14 @@ def save_cluster_descriptor(dest_path):
 
 def save_mesh_descriptor(dest_path):
     if not "TT_METAL_HOME" in os.environ:
+        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
         return
 
-    for path in glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml"):
+    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
+
+    if not mesh_descriptor_paths:
+        logger.warning("Mesh descriptor not found")
+        return
+
+    for path in mesh_descriptor_paths:
         shutil.copy(path, dest_path)
