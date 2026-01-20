@@ -1086,6 +1086,80 @@ def print_verbose(analyses: list[LogAnalysis]):
             print()
 
 
+def extract_unique_errors(analyses: list[LogAnalysis]) -> dict:
+    """Extract unique error messages from logs."""
+    error_pattern = re.compile(r"(TT_THROW|TT_FATAL|Error:|failed|exception|RuntimeError)", re.IGNORECASE)
+    unique_errors = defaultdict(list)  # message -> list of files
+
+    for a in analyses:
+        try:
+            with open(a.filepath, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception:
+            continue
+
+        file_errors = set()  # Track unique errors per file
+        for line in content.split("\n"):
+            # Skip stderr stack traces and MPI noise
+            if "<stderr>:" in line:
+                if "0x" in line and "[" in line:  # Stack traces
+                    continue
+                if "usually indicates" in line or "failure of the peer" in line:
+                    continue
+
+            clean = line.split("<stdout>:")[-1].strip() if "<stdout>:" in line else line.strip()
+            clean = clean.split("<stderr>:")[-1].strip() if "<stderr>:" in line else clean
+
+            if error_pattern.search(clean):
+                # Skip generic unhealthy message (we already track this)
+                if "Found Unhealthy Links" in clean:
+                    continue
+
+                # Normalize the error message
+                # Remove timestamps and log prefixes
+                msg = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s*\|[^|]+\|[^|]+\|\s*", "", clean)
+                msg = re.sub(r"\s*\([^)]+\.(cpp|hpp|h):\d+\)\s*$", "", msg)  # Remove file:line suffix
+                msg = re.sub(r"^\[\d+,\d+\]<\w+>:\s*", "", msg)  # Remove MPI rank prefix
+                msg = re.sub(r"^what\(\):\s*", "", msg)  # Remove what(): prefix
+                msg = msg.strip()
+
+                # Skip very short or duplicate messages
+                if msg and len(msg) > 15 and msg not in file_errors:
+                    file_errors.add(msg)
+                    if os.path.basename(a.filepath) not in unique_errors[msg]:
+                        unique_errors[msg].append(os.path.basename(a.filepath))
+
+    return unique_errors
+
+
+def print_unique_errors(analyses: list[LogAnalysis]):
+    """Print unique error messages from logs."""
+    errors = extract_unique_errors(analyses)
+
+    if not errors:
+        print("No error messages found.")
+        print()
+        return
+
+    print("=" * 50)
+    print("Unique Error Messages")
+    print("=" * 50)
+    print()
+
+    # Sort by frequency (most common first)
+    sorted_errors = sorted(errors.items(), key=lambda x: len(x[1]), reverse=True)
+
+    for msg, files in sorted_errors[:20]:  # Limit to top 20
+        count = len(files)
+        # Truncate long messages
+        display_msg = msg[:100] + "..." if len(msg) > 100 else msg
+        print(f"{Colors.RED}[{count}x]{Colors.NC} {display_msg}")
+
+    if len(sorted_errors) > 20:
+        print(f"\n... and {len(sorted_errors) - 20} more unique error types")
+    print()
+
+
 def print_timeline(analyses: list[LogAnalysis]):
     """Print visual timeline of iteration results."""
     if not analyses:
@@ -1263,6 +1337,11 @@ def main():
         action="store_true",
         help="Show iteration timeline with pass/fail status",
     )
+    parser.add_argument(
+        "--errors",
+        action="store_true",
+        help="Show unique error messages across all logs",
+    )
 
     args = parser.parse_args()
 
@@ -1305,6 +1384,9 @@ def main():
 
         if args.timeline or args.all:
             print_timeline(analyses)
+
+        if args.errors or args.all:
+            print_unique_errors(analyses)
 
         if args.verbose:
             print_verbose(analyses)
