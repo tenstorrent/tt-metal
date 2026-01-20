@@ -801,6 +801,9 @@ jobs:
             COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$CURRENT_BRANCH" 2>/dev/null || echo "0")
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
               echo "Found $COMMITS_AHEAD commit(s) on $CURRENT_BRANCH - pushing and creating PR"
+              # Configure git remote with token for push
+              REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+              git remote set-url origin "$REPO_URL"
               git push -u origin "$CURRENT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
               PR_URL=$(gh pr create \
@@ -831,6 +834,9 @@ jobs:
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
               echo "Found $COMMITS_AHEAD commit(s) on $COPILOT_BRANCH - pushing and creating PR"
               git checkout "$COPILOT_BRANCH"
+              # Configure git remote with token for push
+              REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+              git remote set-url origin "$REPO_URL"
               git push -u origin "$COPILOT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
               PR_URL=$(gh pr create \
@@ -867,6 +873,18 @@ jobs:
           git status --short
           git diff --stat
           echo ""
+
+          # Configure git remote to use the token for push
+          # This ensures we can push even if the checkout didn't set up credentials correctly
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git remote set-url origin "$REPO_URL"
+          echo "Configured git remote with token authentication"
+          echo "Repository: ${{ github.repository }}"
+          echo "Token length: ${#GH_TOKEN} characters"
+
+          # Verify token has push access by checking rate limit (shows authenticated user)
+          echo "Checking GitHub authentication:"
+          gh api user --jq '.login' 2>/dev/null || echo "Could not determine authenticated user"
 
           # Create a branch with timestamp
           BRANCH_NAME="copilot/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
