@@ -2,7 +2,7 @@
     "cases": [
         {
             "arg_type": "default",
-            "dtype": ["float32", "float16", "bfloat16"],
+            "dtype": ["float32", "bfloat8_b", "bfloat16"],
             "src_batch_size.dst_batch_size": [
                 [1024, 1024]
             ],
@@ -10,7 +10,7 @@
         },
         {
             "arg_type": "default",
-            "dtype": ["float32", "float16", "bfloat16"],
+            "dtype": ["float32", "bfloat8_b", "bfloat16"],
             "src_batch_size.dst_batch_size": [
                 [128, 128],
                 [256, 256],
