@@ -153,7 +153,58 @@ def get_router_mapping():
             tt_output = ttnn.reshape(tt_output, [-1] + [tt_output.shape[-1]])
             return tt_output
 
-    return {Glm4MoeTopkRouter: TTNNGlm4MoeTopkRouter}
+    class RewrittenGlm4MoeTopkRouter(nn.Module):
+        def __init__(self, old_layer: Glm4MoeTopkRouter):
+            super().__init__()
+            self.config = old_layer.config
+            self.top_k = old_layer.top_k
+            self.n_routed_experts = old_layer.n_routed_experts
+            self.routed_scaling_factor = old_layer.routed_scaling_factor
+            self.n_group = old_layer.n_group
+            self.topk_group = old_layer.topk_group
+            self.norm_topk_prob = old_layer.norm_topk_prob
+            self.linear = TTNNGlm4MoeTopkRouter.from_torch(old_layer)
+            self.linear.preprocess_weights()
+            self.e_score_correction_bias = old_layer.e_score_correction_bias
+
+        @classmethod
+        def from_torch(cls, router_layer: Glm4MoeTopkRouter) -> "RewrittenGlm4MoeTopkRouter":
+            """Create TTNNGlm4MoeTopkRouter from PyTorch Glm4MoeTopkRouter layer."""
+            new_router = cls(router_layer)
+            return new_router
+
+        @torch.no_grad()
+        def get_topk_indices(self, scores):
+            scores_for_choice = scores.view(-1, self.n_routed_experts) + self.e_score_correction_bias.unsqueeze(0)
+            group_scores = (
+                scores_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
+                .topk(2, dim=-1)[0]
+                .sum(dim=-1)
+            )
+            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
+            group_mask = torch.zeros_like(group_scores)
+            group_mask.scatter_(1, group_idx, 1)
+            score_mask = (
+                group_mask.unsqueeze(-1)
+                .expand(-1, self.n_group, self.n_routed_experts // self.n_group)
+                .reshape(-1, self.n_routed_experts)
+            )
+            scores_for_choice = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)
+            topk_indices = torch.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
+            return topk_indices
+
+        def forward(self, hidden_states):
+            router_logits = self.linear(hidden_states)
+            scores = router_logits.sigmoid()
+            topk_indices = self.get_topk_indices(scores)
+            topk_weights = scores.gather(1, topk_indices)
+            if self.norm_topk_prob:
+                denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
+                topk_weights /= denominator
+            topk_weights = topk_weights * self.routed_scaling_factor
+            return topk_indices, topk_weights
+
+    return {Glm4MoeTopkRouter: RewrittenGlm4MoeTopkRouter}
 
 
 def get_naive_moe_mapping():
