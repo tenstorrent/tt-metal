@@ -24,6 +24,15 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
+
+    // D2H socket configuration for realtime dispatch telemetry
+    std::optional<uint32_t> d2h_pcie_xy_enc;
+    std::optional<uint32_t> d2h_data_addr_lo;
+    std::optional<uint32_t> d2h_data_addr_hi;
+    std::optional<uint32_t> d2h_bytes_sent_addr_lo;
+    std::optional<uint32_t> d2h_bytes_sent_addr_hi;
+    std::optional<uint32_t> d2h_fifo_size;
+    std::optional<uint32_t> d2h_enabled;
 };
 
 struct dispatch_s_dependent_config_t {

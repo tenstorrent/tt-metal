@@ -45,6 +45,15 @@ constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
+// D2H socket configuration for realtime dispatch telemetry
+constexpr uint32_t d2h_socket_enabled = D2H_SOCKET_ENABLED;
+constexpr uint32_t d2h_pcie_xy_enc = D2H_PCIE_XY_ENC;
+constexpr uint32_t d2h_data_addr_lo = D2H_DATA_ADDR_LO;
+constexpr uint32_t d2h_data_addr_hi = D2H_DATA_ADDR_HI;
+constexpr uint32_t d2h_bytes_sent_addr_lo = D2H_BYTES_SENT_ADDR_LO;
+constexpr uint32_t d2h_bytes_sent_addr_hi = D2H_BYTES_SENT_ADDR_HI;
+constexpr uint32_t d2h_fifo_size = D2H_FIFO_SIZE;
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -55,6 +64,10 @@ constexpr uint32_t cb_end = cb_base + cb_size;
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
+
+// D2H socket state for realtime dispatch telemetry
+static uint32_t d2h_bytes_sent = 0;
+static uint32_t d2h_write_ptr = 0;  // Offset within the host FIFO
 
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
@@ -145,11 +158,59 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     return (diff << shift) > 0;
 }
 
+// Write wait_count and wait_stream to host pinned memory via D2H socket
+// Data format: [wait_count (4 bytes), wait_stream (4 bytes)]
+FORCE_INLINE
+void d2h_write_wait_info(uint32_t wait_count, uint32_t wait_stream) {
+    if constexpr (d2h_socket_enabled == 0) {
+        return;
+    }
+
+    // We need 8 bytes for wait_count + wait_stream
+    constexpr uint32_t payload_size = 8;
+
+    // Use a local L1 buffer to stage the data for PCIe write
+    // Using the cmd_ptr area which is guaranteed to be NOC-aligned
+    volatile uint32_t tt_l1_ptr* local_buffer = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cb_base);
+    local_buffer[0] = wait_count;
+    local_buffer[1] = wait_stream;
+
+    // Calculate PCIe destination address (with FIFO wrap-around)
+    uint32_t host_write_offset = d2h_write_ptr;
+    uint64_t pcie_dest_addr =
+        (static_cast<uint64_t>(d2h_data_addr_hi) << 32) | static_cast<uint64_t>(d2h_data_addr_lo + host_write_offset);
+
+    // Write data to host pinned memory via PCIe using 64-bit addressing
+    // Use cq_noc_async_wwrite_with_state which supports separate NOC encoding and 64-bit dest address
+    cq_noc_async_wwrite_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, DISPATCH_S_WR_REG_CMD_BUF>(
+        (uint32_t)local_buffer, d2h_pcie_xy_enc, pcie_dest_addr, payload_size, 1, my_noc_index);
+
+    // Update write pointer with wrap-around
+    d2h_write_ptr += payload_size;
+    if (d2h_write_ptr >= d2h_fifo_size) {
+        d2h_write_ptr = 0;
+    }
+    d2h_bytes_sent += payload_size;
+
+    // Store bytes_sent in local L1 for PCIe write
+    local_buffer[0] = d2h_bytes_sent;
+
+    // Notify host by updating bytes_sent in host pinned memory
+    uint64_t bytes_sent_pcie_addr =
+        (static_cast<uint64_t>(d2h_bytes_sent_addr_hi) << 32) | static_cast<uint64_t>(d2h_bytes_sent_addr_lo);
+    cq_noc_async_wwrite_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, DISPATCH_S_WR_REG_CMD_BUF>(
+        (uint32_t)local_buffer, d2h_pcie_xy_enc, bytes_sent_pcie_addr, 4, 1, my_noc_index);
+}
+
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
+
+    // Write wait info to host via D2H socket for realtime telemetry
+    d2h_write_wait_info(wait_count, wait_stream);
+
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     // DPRINT << wait_count << "," << wait_stream << ENDL();

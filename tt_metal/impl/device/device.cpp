@@ -260,6 +260,36 @@ void Device::init_command_queue_host() {
     );
 }
 
+Device::DispatchD2HSocketConfig Device::get_dispatch_d2h_socket_config() const {
+    DispatchD2HSocketConfig config;
+
+    if (!dispatch_d2h_data_pinned_memory_ || !dispatch_d2h_bytes_sent_pinned_memory_) {
+        config.valid = false;
+        return config;
+    }
+
+    auto data_noc_addr_opt = dispatch_d2h_data_pinned_memory_->get_noc_addr(id_);
+    auto bytes_sent_noc_addr_opt = dispatch_d2h_bytes_sent_pinned_memory_->get_noc_addr(id_);
+
+    if (!data_noc_addr_opt.has_value() || !bytes_sent_noc_addr_opt.has_value()) {
+        config.valid = false;
+        return config;
+    }
+
+    const auto& data_noc_addr = data_noc_addr_opt.value();
+    const auto& bytes_sent_noc_addr = bytes_sent_noc_addr_opt.value();
+
+    config.pcie_xy_enc = data_noc_addr.pcie_xy_enc;
+    config.data_addr_lo = static_cast<uint32_t>(data_noc_addr.addr & 0xFFFFFFFFull);
+    config.data_addr_hi = static_cast<uint32_t>(data_noc_addr.addr >> 32);
+    config.bytes_sent_addr_lo = static_cast<uint32_t>(bytes_sent_noc_addr.addr & 0xFFFFFFFFull);
+    config.bytes_sent_addr_hi = static_cast<uint32_t>(bytes_sent_noc_addr.addr >> 32);
+    config.fifo_size = kDispatchD2HFifoSize;
+    config.valid = true;
+
+    return config;
+}
+
 void Device::init_command_queue_device() {
     this->command_queue_programs_.push_back(get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);

@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
+#include "device/device_impl.hpp"
 #include "dispatch.hpp"
 #include "fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
@@ -79,6 +80,30 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+
+    // Get D2H socket configuration from the device
+    // Note: device_ is set by the time GenerateStaticConfigs is called
+    if (device_) {
+        auto* concrete_device = dynamic_cast<Device*>(device_);
+        if (concrete_device) {
+            auto d2h_config = concrete_device->get_dispatch_d2h_socket_config();
+            if (d2h_config.valid) {
+                static_config_.d2h_enabled = 1;
+                static_config_.d2h_pcie_xy_enc = d2h_config.pcie_xy_enc;
+                static_config_.d2h_data_addr_lo = d2h_config.data_addr_lo;
+                static_config_.d2h_data_addr_hi = d2h_config.data_addr_hi;
+                static_config_.d2h_bytes_sent_addr_lo = d2h_config.bytes_sent_addr_lo;
+                static_config_.d2h_bytes_sent_addr_hi = d2h_config.bytes_sent_addr_hi;
+                static_config_.d2h_fifo_size = d2h_config.fifo_size;
+            } else {
+                static_config_.d2h_enabled = 0;
+            }
+        } else {
+            static_config_.d2h_enabled = 0;
+        }
+    } else {
+        static_config_.d2h_enabled = 0;
+    }
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
@@ -163,6 +188,14 @@ void DispatchSKernel::CreateKernel() {
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
+        // D2H socket configuration for realtime dispatch telemetry
+        {"D2H_SOCKET_ENABLED", std::to_string(static_config_.d2h_enabled.value())},
+        {"D2H_PCIE_XY_ENC", std::to_string(static_config_.d2h_pcie_xy_enc.value_or(0))},
+        {"D2H_DATA_ADDR_LO", std::to_string(static_config_.d2h_data_addr_lo.value_or(0))},
+        {"D2H_DATA_ADDR_HI", std::to_string(static_config_.d2h_data_addr_hi.value_or(0))},
+        {"D2H_BYTES_SENT_ADDR_LO", std::to_string(static_config_.d2h_bytes_sent_addr_lo.value_or(0))},
+        {"D2H_BYTES_SENT_ADDR_HI", std::to_string(static_config_.d2h_bytes_sent_addr_hi.value_or(0))},
+        {"D2H_FIFO_SIZE", std::to_string(static_config_.d2h_fifo_size.value_or(0))},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
 

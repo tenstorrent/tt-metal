@@ -29,25 +29,25 @@ namespace NAMESPACE {
 void MAIN {
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
 
-    // Array to track last seen count for each stream
-    uint32_t last_counts[num_streams_to_monitor] = {0};
+    //// Array to track last seen count for each stream
+    // uint32_t last_counts[num_streams_to_monitor] = {0};
 
-    // Main loop: runs until dispatch_s BRISC signals terminate
-    while (kernel_profiler::profiler_control_buffer[kernel_profiler::DISPATCH_TRISC_TERMINATE] == 0) {
-        // Loop over all streams we're monitoring
-        for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
-            uint32_t stream_id = first_stream_index + i;
-            volatile uint32_t* stream_reg =
-                (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    //// Main loop: runs until dispatch_s BRISC signals terminate
+    // while (kernel_profiler::profiler_control_buffer[kernel_profiler::DISPATCH_TRISC_TERMINATE] == 0) {
+    //// Loop over all streams we're monitoring
+    // for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
+    // uint32_t stream_id = first_stream_index + i;
+    // volatile uint32_t* stream_reg =
+    //(volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
-            uint32_t current_count = *stream_reg;
-            if (current_count != last_counts[i]) {
-                DeviceZoneScopedN("Count_changed");
-                // Stream count changed - record the event
-                last_counts[i] = current_count;
-            }
-        }
-    }
+    // uint32_t current_count = *stream_reg;
+    // if (current_count != last_counts[i]) {
+    // DeviceZoneScopedN("Count_changed");
+    //// Stream count changed - record the event
+    // last_counts[i] = current_count;
+    //}
+    //}
+    //}
 
 #endif
 }

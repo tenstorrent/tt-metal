@@ -248,6 +248,20 @@ private:
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_data_pinned_memory_ = nullptr;
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_sent_pinned_memory_ = nullptr;
 
+public:
+    // D2H socket configuration for dispatch cores
+    struct DispatchD2HSocketConfig {
+        uint32_t pcie_xy_enc = 0;
+        uint32_t data_addr_lo = 0;
+        uint32_t data_addr_hi = 0;
+        uint32_t bytes_sent_addr_lo = 0;
+        uint32_t bytes_sent_addr_hi = 0;
+        uint32_t fifo_size = 0;
+        bool valid = false;
+    };
+    DispatchD2HSocketConfig get_dispatch_d2h_socket_config() const;
+
+private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
