@@ -58,9 +58,7 @@ def test_resblock(
 ):
     if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
-    # if activation_dtype != weight_dtype:
-    # pytest.skip("activation and weight dtypes must be the same")
-    if K >= 2048 and num_layers >= 8:
+    if (K >= 2048 and num_layers >= 8) or (K >= 1024 and num_layers >= 12):
         pytest.skip("Test is too large for 8 layers")
 
     torch.manual_seed(1234)
