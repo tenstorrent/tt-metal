@@ -713,7 +713,7 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
         return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
     });
     EXPECT_NE(add_op_it, levelized_graph.vertices().end());
-    auto vertex_2 = *add_op_it;
+    const auto& vertex_2 = *add_op_it;
 
     // Basic structure checks - both tensors should join into the operation
     EXPECT_TRUE(vertex_0.in_edges.empty());
