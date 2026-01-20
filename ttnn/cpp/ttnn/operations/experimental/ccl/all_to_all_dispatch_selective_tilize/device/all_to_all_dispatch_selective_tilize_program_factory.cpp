@@ -143,6 +143,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
     // for each expert to pass to the other kernels
     uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_8;
+    // BRISC's e_t buffer for parallel metadata processing (BRISC processes tokens/2 to tokens)
+    uint32_t brisc_e_t_buffer_id = tt::CBIndex::c_9;
+    // BRISC's per-expert token counts to communicate to NCRISC after parallel processing
+    uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_10;
+    // BRISC's expert activation buffer for parallel processing
+    uint32_t brisc_expert_activation_cb_id = tt::CBIndex::c_11;
+    // BRISC's activated token count (single uint32_t)
+    uint32_t brisc_activated_count_cb_id = tt::CBIndex::c_12;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size_st(input_tensor);
     log_debug(
@@ -250,12 +258,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Or we can determine the NOC here and swap if needed
     // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
 
+    // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
+    constexpr uint32_t e_t_entry_size = 16;  // 16B per token entry for NOC alignment
+
     tt::tt_metal::create_cb(
         e_t_buffer_id,
         program,
         selective_tilize_core_range_set,
-        tokens * sizeof(uint32_t),  // total tokens * sizeof(uint32_t)
-        experts_per_device,         // number of experts on the device
+        tokens * e_t_entry_size,  // total tokens * 16B per entry
+        experts_per_device,       // number of experts on the device
         tt::DataFormat::UInt32);
 
     // Assume indices tensor is sharded in L1
@@ -314,6 +325,49 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         experts_per_device,
         tt::DataFormat::UInt32);
 
+    // BRISC's e_t buffer for parallel metadata processing
+    // BRISC processes the second half of tokens (tokens/2 to tokens)
+    // Single page containing all experts' token lists, each with capacity tokens/2
+    // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
+    tt::tt_metal::create_cb(
+        brisc_e_t_buffer_id,
+        program,
+        selective_tilize_core_range_set,
+        (tokens / 2) * e_t_entry_size * experts_per_device,  // full buffer with 16B entries
+        1,
+        tt::DataFormat::UInt32);
+
+    // BRISC's per-expert token counts to communicate to NCRISC
+    // Single page containing counts for all experts
+    tt::tt_metal::create_cb(
+        brisc_expert_counts_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        sizeof(uint32_t) * experts_per_device,  // all counts in one page
+        1,
+        tt::DataFormat::UInt32);
+
+    // BRISC's expert activation buffer - same format as main expert_activation buffer
+    // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
+    // Single page containing all activation rows (max tokens/2)
+    uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
+    tt::tt_metal::create_cb(
+        brisc_expert_activation_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        brisc_activation_row_size * (tokens / 2),  // full buffer in one page
+        1,
+        tt::DataFormat::UInt32);
+
+    // BRISC's activated token count (single uint32_t to communicate to NCRISC)
+    tt::tt_metal::create_cb(
+        brisc_activated_count_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        sizeof(uint32_t),
+        1,
+        tt::DataFormat::UInt32);
+
     // CB for passing total_chunks from writer to compute kernel
     // Single page holding one uint32_t value
     tt::tt_metal::create_cb(
@@ -352,6 +406,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"e_t_buffer_id", e_t_buffer_id},
         {"expert_activation_cb_id", expert_activation_cb_id},
         {"per_expert_total_tokens_cb_id", per_expert_total_tokens_cb_id},
+        {"brisc_e_t_buffer_id", brisc_e_t_buffer_id},
+        {"brisc_expert_counts_cb_id", brisc_expert_counts_cb_id},
+        {"brisc_expert_activation_cb_id", brisc_expert_activation_cb_id},
+        {"brisc_activated_count_cb_id", brisc_activated_count_cb_id},
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
         {"mapping_pages", mapping_pages},
@@ -382,6 +440,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
         {"l1_alignment", l1_alignment},
         {"dram_alignment", dram_alignment},
+        {"e_t_entry_size", e_t_entry_size},
         {"linearized_mesh_coord", linearized_mesh_coord},
         {"cluster_axis", (uint32_t)operation_attributes.axis.value()},
 
