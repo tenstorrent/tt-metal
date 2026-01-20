@@ -71,14 +71,14 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, encoder_seq_len):
 
         k_cache_ttnn = ttnn.from_torch(
             k_cache,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # Use bfloat16 for better precision over long autoregressive sequences
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_cache_ttnn = ttnn.from_torch(
             v_cache,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # Use bfloat16 for better precision over long autoregressive sequences
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -228,7 +228,7 @@ class TTNNDecoderConfig:
     num_layers: int = 6
     num_heads: int = 12
     ffn_dim: int = 3072
-    dropout: float = 0.1
+    dropout: float = 0.0  # Disabled for inference - prevents error accumulation
     layer_norm_eps: float = 1e-5
     max_position_embeddings: int = 4000
 
@@ -237,7 +237,7 @@ class TTNNDecoderConfig:
     reduction_factor: int = 2
     speech_decoder_prenet_units: int = 256
     speech_decoder_prenet_layers: int = 2
-    speech_decoder_prenet_dropout: float = 0.5
+    speech_decoder_prenet_dropout: float = 0.0  # Disabled for inference - static masks cause noise accumulation
     speaker_embedding_dim: int = 512
 
 

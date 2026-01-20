@@ -16,6 +16,7 @@ Features:
 - Minimal torch ↔ ttnn conversions
 - Clean, production-ready code
 - Multi-device support (N150, N300, etc.)
+- Long text support via automatic chunking (texts > 300 chars are split at sentence boundaries)
 """
 
 import torch
@@ -24,8 +25,77 @@ import soundfile as sf
 import pytest
 import os
 import time
+import re
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
+
+
+# Default chunk size for long text processing (characters)
+DEFAULT_CHUNK_SIZE = 300
+
+
+def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE):
+    """
+    Split long text into smaller chunks at sentence/word boundaries.
+
+    Args:
+        text: Input text string
+        max_chunk_size: Maximum characters per chunk (default: 300)
+
+    Returns:
+        List of text chunks
+    """
+    # If text is short enough, return as single chunk
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    chunks = []
+    remaining = text.strip()
+
+    while remaining:
+        if len(remaining) <= max_chunk_size:
+            chunks.append(remaining)
+            break
+
+        # Try to find a sentence boundary within the chunk size
+        # Look for sentence-ending punctuation followed by space
+        chunk_candidate = remaining[:max_chunk_size]
+
+        # Find the last sentence boundary (. ! ?) within the chunk
+        sentence_end = -1
+        for match in re.finditer(r"[.!?]\s+", chunk_candidate):
+            sentence_end = match.end()
+
+        if sentence_end > max_chunk_size // 3:
+            # Found a good sentence boundary (at least 1/3 into the chunk)
+            chunk = remaining[:sentence_end].strip()
+            remaining = remaining[sentence_end:].strip()
+        else:
+            # No good sentence boundary, try comma or semicolon
+            clause_end = -1
+            for match in re.finditer(r"[,;]\s+", chunk_candidate):
+                clause_end = match.end()
+
+            if clause_end > max_chunk_size // 2:
+                # Found a clause boundary (at least halfway)
+                chunk = remaining[:clause_end].strip()
+                remaining = remaining[clause_end:].strip()
+            else:
+                # Fall back to word boundary
+                last_space = chunk_candidate.rfind(" ")
+                if last_space > max_chunk_size // 2:
+                    chunk = remaining[:last_space].strip()
+                    remaining = remaining[last_space:].strip()
+                else:
+                    # No good boundary, force split at max_chunk_size
+                    chunk = remaining[:max_chunk_size].strip()
+                    remaining = remaining[max_chunk_size:].strip()
+
+        if chunk:
+            chunks.append(chunk)
+
+    return chunks
+
 
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import (
     TTNNSpeechT5Encoder,
@@ -72,6 +142,7 @@ def generate_speech_ttnn(
     generator=None,
     use_kv_cache=False,
     decoder_config=None,
+    return_mel_only=False,
 ):
     """
     Generate speech using optimized TTNN SpeechT5 pipeline.
@@ -91,10 +162,12 @@ def generate_speech_ttnn(
         generator: SpeechT5Generator instance for trace support (enables trace when use_kv_cache=True)
         use_kv_cache: If True, use KV cache for faster autoregressive generation
         decoder_config: TTNNDecoderConfig (required if use_kv_cache=True)
+        return_mel_only: If True, return mel spectrogram instead of audio (for chunked processing)
 
     Returns:
-        torch.Tensor: Generated audio waveform (if return_stats=False)
-        tuple: (speech, stats_dict) if return_stats=True
+        torch.Tensor: Generated audio waveform (if return_stats=False and return_mel_only=False)
+        torch.Tensor: Mel spectrogram (if return_mel_only=True)
+        tuple: (speech/mel, stats_dict) if return_stats=True
     """
 
     # Process input text
@@ -423,6 +496,35 @@ def generate_speech_ttnn(
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
 
+    # If returning mel only (for chunked processing), skip vocoder
+    if return_mel_only:
+        # Cleanup TTNN tensors
+        ttnn.deallocate(ttnn_input_ids)
+        ttnn.deallocate(ttnn_speaker_embeddings)
+        ttnn.deallocate(encoder_output)
+        ttnn.deallocate(output_sequence_ttnn)
+        if spectrogram_ttnn is not None:
+            ttnn.deallocate(spectrogram_ttnn)
+
+        if return_stats:
+            if ttft is None:
+                ttft = encoder_time
+            avg_token_time = decoder_loop_time / max(steps_completed, 1) if steps_completed > 0 else 0
+            token_per_sec = 1.0 / avg_token_time if avg_token_time > 0 else 0
+            stats = {
+                "steps_completed": steps_completed,
+                "final_seq_len": current_seq_len,
+                "ttft": ttft,
+                "avg_token_time": avg_token_time,
+                "token_per_sec": token_per_sec,
+                "encoder_time": encoder_time,
+                "decoder_loop_time": decoder_loop_time,
+                "total_decoder_time": total_decoder_time,
+                "total_postnet_time": total_postnet_time,
+            }
+            return final_spectrogram, stats
+        return final_spectrogram
+
     # Generate audio (skip in warmup mode)
     if not warmup_mode:
         print("\n🎵 Generating final audio...")
@@ -463,6 +565,172 @@ def generate_speech_ttnn(
         return speech
 
 
+def generate_speech_long_text(
+    text,
+    speaker_embeddings,
+    processor,
+    vocoder,
+    ttnn_encoder,
+    ttnn_decoder,
+    ttnn_postnet,
+    device,
+    max_steps=100,
+    return_stats=False,
+    warmup_mode=False,
+    generator=None,
+    use_kv_cache=False,
+    decoder_config=None,
+    max_chunk_size=DEFAULT_CHUNK_SIZE,
+):
+    """
+    Generate speech for long text by chunking into smaller pieces.
+
+    This function handles texts longer than the embedding limit by:
+    1. Splitting text into chunks at sentence/word boundaries
+    2. Processing each chunk to generate mel spectrograms
+    3. Concatenating all mel spectrograms
+    4. Running vocoder once on the combined spectrogram
+
+    Args:
+        text: Input text string (can be arbitrarily long)
+        speaker_embeddings: Speaker embedding tensor
+        processor: SpeechT5Processor
+        vocoder: SpeechT5HifiGan
+        ttnn_encoder: TTNN encoder model
+        ttnn_decoder: TTNN decoder model
+        ttnn_postnet: TTNN postnet model
+        device: TTNN device
+        max_steps: Maximum number of generation steps per chunk (default: 100)
+        return_stats: If True, return statistics along with speech (default: False)
+        warmup_mode: If True, skip vocoder and detailed timing for faster warm-up (default: False)
+        generator: SpeechT5Generator instance for trace support
+        use_kv_cache: If True, use KV cache for faster autoregressive generation
+        decoder_config: TTNNDecoderConfig (required if use_kv_cache=True)
+        max_chunk_size: Maximum characters per chunk (default: 300)
+
+    Returns:
+        torch.Tensor: Generated audio waveform (if return_stats=False)
+        tuple: (speech, stats_dict) if return_stats=True
+    """
+    # Split text into chunks
+    chunks = chunk_text(text, max_chunk_size)
+    num_chunks = len(chunks)
+
+    if num_chunks == 1:
+        # Single chunk - use standard generation
+        return generate_speech_ttnn(
+            text=text,
+            speaker_embeddings=speaker_embeddings,
+            processor=processor,
+            vocoder=vocoder,
+            ttnn_encoder=ttnn_encoder,
+            ttnn_decoder=ttnn_decoder,
+            ttnn_postnet=ttnn_postnet,
+            device=device,
+            max_steps=max_steps,
+            return_stats=return_stats,
+            warmup_mode=warmup_mode,
+            generator=generator,
+            use_kv_cache=use_kv_cache,
+            decoder_config=decoder_config,
+        )
+
+    print(f"\n📝 Long text detected ({len(text)} chars). Splitting into {num_chunks} chunks...")
+
+    # Process each chunk and collect mel spectrograms
+    mel_spectrograms = []
+    total_stats = {
+        "steps_completed": 0,
+        "final_seq_len": 0,
+        "ttft": 0,
+        "encoder_time": 0,
+        "decoder_loop_time": 0,
+        "total_decoder_time": 0,
+        "total_postnet_time": 0,
+        "num_chunks": num_chunks,
+        "chunk_stats": [],
+    }
+
+    generation_start = time.time()
+
+    for i, chunk in enumerate(chunks):
+        print(f"\n   Chunk {i+1}/{num_chunks}: '{chunk[:50]}{'...' if len(chunk) > 50 else ''}'")
+
+        # Reset KV caches between chunks to start fresh
+        if generator is not None:
+            generator._reset_kv_caches()
+
+        # Generate mel spectrogram for this chunk
+        mel, chunk_stats = generate_speech_ttnn(
+            text=chunk,
+            speaker_embeddings=speaker_embeddings,
+            processor=processor,
+            vocoder=vocoder,
+            ttnn_encoder=ttnn_encoder,
+            ttnn_decoder=ttnn_decoder,
+            ttnn_postnet=ttnn_postnet,
+            device=device,
+            max_steps=max_steps,
+            return_stats=True,
+            warmup_mode=warmup_mode,
+            generator=generator,
+            use_kv_cache=use_kv_cache,
+            decoder_config=decoder_config,
+            return_mel_only=True,  # Return mel instead of audio
+        )
+
+        mel_spectrograms.append(mel)
+
+        # Accumulate stats
+        total_stats["steps_completed"] += chunk_stats.get("steps_completed", 0)
+        total_stats["final_seq_len"] += chunk_stats.get("final_seq_len", 0)
+        total_stats["encoder_time"] += chunk_stats.get("encoder_time", 0)
+        total_stats["decoder_loop_time"] += chunk_stats.get("decoder_loop_time", 0)
+        total_stats["total_decoder_time"] += chunk_stats.get("total_decoder_time", 0)
+        total_stats["total_postnet_time"] += chunk_stats.get("total_postnet_time", 0)
+
+        # TTFT is from first chunk only
+        if i == 0:
+            total_stats["ttft"] = chunk_stats.get("ttft", 0)
+
+        total_stats["chunk_stats"].append(
+            {
+                "chunk_index": i,
+                "chunk_text": chunk[:50],
+                "steps": chunk_stats.get("steps_completed", 0),
+                "mel_frames": mel.shape[1] if mel is not None else 0,
+            }
+        )
+
+    # Concatenate all mel spectrograms
+    print(f"\n🔗 Concatenating {num_chunks} mel spectrograms...")
+    combined_mel = torch.cat(mel_spectrograms, dim=1)
+    print(f"   Combined mel shape: {combined_mel.shape}")
+
+    # Generate audio from combined mel spectrogram
+    if not warmup_mode:
+        print("\n🎵 Generating final audio from combined spectrogram...")
+        speech = vocoder(combined_mel)
+    else:
+        speech = torch.zeros(1, 16000)
+
+    total_generation_time = time.time() - generation_start
+
+    # Calculate aggregate stats
+    total_stats["avg_token_time"] = (
+        total_stats["decoder_loop_time"] / max(total_stats["steps_completed"], 1)
+        if total_stats["steps_completed"] > 0
+        else 0
+    )
+    total_stats["token_per_sec"] = 1.0 / total_stats["avg_token_time"] if total_stats["avg_token_time"] > 0 else 0
+    total_stats["total_generation_time"] = total_generation_time
+
+    if return_stats:
+        return speech, total_stats
+    else:
+        return speech
+
+
 def run_demo(
     texts,
     output_dir=".",
@@ -471,8 +739,20 @@ def run_demo(
     speaker_id=0,
     mesh_device=None,
     model_location_generator=None,
+    max_chunk_size=DEFAULT_CHUNK_SIZE,
 ):
-    """Core demo function that can be called from pytest or main."""
+    """Core demo function that can be called from pytest or main.
+
+    Args:
+        texts: List of text strings to convert to speech
+        output_dir: Directory to save output audio files
+        max_steps: Maximum generation steps per chunk
+        use_kv_cache: Enable KV cache for faster generation
+        speaker_id: Speaker ID from CMU ARCTIC dataset
+        mesh_device: TTNN mesh device (optional)
+        model_location_generator: Model location generator for CIv2 (optional)
+        max_chunk_size: Maximum characters per chunk for long texts (default: 300)
+    """
 
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -650,8 +930,10 @@ def run_demo(
             print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
             print("   TTNN will optimize operations for the decoder, postnet, and memory management")
 
-        # Use the first input text for warm-up to ensure encoder processes the actual input
-        warmup_text = texts[0]
+        # Use the first chunk of the first input text for warm-up
+        # This ensures warm-up doesn't OOM on long texts while still compiling relevant kernels
+        warmup_chunks = chunk_text(texts[0], max_chunk_size)
+        warmup_text = warmup_chunks[0]  # Use only the first chunk for warm-up
         warmup_speech = generate_speech_ttnn(
             warmup_text,
             speaker_embeddings,
@@ -707,8 +989,9 @@ def run_demo(
             output_file = os.path.join(output_dir, f"speech_ttnn_{safe_text}.wav")
 
             # Time the generation
+            # Use generate_speech_long_text which handles chunking for long texts
             generation_start = time.time()
-            speech, generation_stats = generate_speech_ttnn(
+            speech, generation_stats = generate_speech_long_text(
                 text,
                 speaker_embeddings,
                 processor,
@@ -722,6 +1005,7 @@ def run_demo(
                 generator=generator,
                 use_kv_cache=use_kv_cache,
                 decoder_config=decoder_config,
+                max_chunk_size=max_chunk_size,
             )
             generation_time = time.time() - generation_start
 
@@ -746,6 +1030,8 @@ def run_demo(
                 "token_per_sec": generation_stats.get("token_per_sec", 0),
                 "encoder_time": generation_stats.get("encoder_time", 0),
                 "decoder_loop_time": generation_stats.get("decoder_loop_time", 0),
+                "num_chunks": generation_stats.get("num_chunks", 1),
+                "text_length": len(text),
             }
             results.append(result)
 
@@ -753,30 +1039,37 @@ def run_demo(
         print("\n" + "=" * 140)
         print("📊 INFERENCE SUMMARY")
         print("=" * 140)
-        print(f"{'#':<4} {'Text':<25} {'Tokens':<8} {'TTFT(ms)':<9} {'Token/s':<10} {'Time(s)':<10} {'Audio(s)':<8}")
-        print("-" * 114)
+        print(
+            f"{'#':<4} {'Text':<25} {'Chars':<7} {'Chunks':<7} {'Tokens':<8} {'TTFT(ms)':<9} {'Token/s':<10} {'Time(s)':<10} {'Audio(s)':<8}"
+        )
+        print("-" * 140)
 
         total_generation_time = 0
         total_tokens = 0
         total_audio_duration = 0
+        total_chunks = 0
 
         for i, result in enumerate(results, 1):
             truncated_text = result["text"][:20] + "..." if len(result["text"]) > 23 else result["text"]
+            num_chunks = result.get("num_chunks", 1)
+            text_length = result.get("text_length", len(result["text"]))
             print(
-                f"{i:<4} {truncated_text:<25} {result['tokens_generated']:<8} {result.get('ttft', 0)*1000:<8.0f} {result.get('token_per_sec', 0):<10.2f} {result['generation_time']:<10.3f} {result['audio_duration']:<8.1f}"
+                f"{i:<4} {truncated_text:<25} {text_length:<7} {num_chunks:<7} {result['tokens_generated']:<8} {result.get('ttft', 0)*1000:<8.0f} {result.get('token_per_sec', 0):<10.2f} {result['generation_time']:<10.3f} {result['audio_duration']:<8.1f}"
             )
             total_generation_time += result["generation_time"]
             total_tokens += result["tokens_generated"]
             total_audio_duration += result["audio_duration"]
+            total_chunks += num_chunks
 
-        print("-" * 114)
+        print("-" * 140)
         print(
-            f"{'TOTAL':<4} {'':<25} {total_tokens:<8} {'-':<9} {'-':<10} {total_generation_time:<10.3f} {total_audio_duration:<8.1f}"
+            f"{'TOTAL':<4} {'':<25} {'-':<7} {total_chunks:<7} {total_tokens:<8} {'-':<9} {'-':<10} {total_generation_time:<10.3f} {total_audio_duration:<8.1f}"
         )
 
         print(f"\n📈 Overall Statistics:")
         print(f"   • Total inference time: {total_generation_time:.3f}s")
         print(f"   • Total tokens generated: {total_tokens}")
+        print(f"   • Total chunks processed: {total_chunks}")
         print(f"   • Total audio duration: {total_audio_duration:.3f}s")
         print(f"   • Average tokens/sec: {total_tokens/total_generation_time:.2f} (across all texts)")
         print(f"   • Average audio duration: {total_audio_duration/len(results):.3f}s per text")
@@ -872,6 +1165,12 @@ def main(mesh_device=None):
         help="Disable KV cache (and trace)",
     )
     parser.add_argument("--speaker_id", type=int, default=0, help="Speaker ID from CMU ARCTIC dataset (0-7456)")
+    parser.add_argument(
+        "--max_chunk_size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE,
+        help=f"Maximum characters per chunk for long text processing (default: {DEFAULT_CHUNK_SIZE})",
+    )
 
     args = parser.parse_args()
 
@@ -887,6 +1186,7 @@ def main(mesh_device=None):
         max_steps=args.max_steps,
         use_kv_cache=use_kv_cache,  # KV cache enabled by default, also auto-enables trace
         speaker_id=args.speaker_id,
+        max_chunk_size=args.max_chunk_size,
         mesh_device=mesh_device,
         model_location_generator=None,
     )
