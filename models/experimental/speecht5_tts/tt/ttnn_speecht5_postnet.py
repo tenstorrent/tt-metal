@@ -177,11 +177,8 @@ class TtConv1d:
             else:
                 print(f"DEBUG: Conv input shape mismatch - TTNN: {x_torch.shape}, PyTorch: {pytorch_ref.shape}")
 
-        # PHASE 2: Apply conv2d with return_weights_and_bias=True to get prepared weights
-        # This prevents re-preparation during trace
-        # Reshape bias to [1, 1, 1, out_channels] for conv2d
-        bias_reshaped = ttnn.reshape(self.bias, [1, 1, 1, self.out_channels])
-
+        # PHASE 2: Apply conv2d with return_weights_and_bias=True to cache prepared weights
+        # Bias is pre-reshaped to [1, 1, 1, out_channels] in preprocessing (like stable_diffusion)
         result, _, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -194,8 +191,8 @@ class TtConv1d:
             kernel_size=(self.kernel_size, 1),
             stride=(1, 1),
             padding=(self.padding, 0),
-            bias_tensor=bias_reshaped,
-            conv_config=self.conv_config,  # Use ultra-high precision config with experimental features
+            bias_tensor=self.bias,  # Already reshaped in preprocessing
+            conv_config=self.conv_config,
             return_weights_and_bias=True,
             return_output_dim=True,
         )
@@ -563,21 +560,25 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
         # Fold BatchNorm into Conv weights and bias
         folded_weight, folded_bias = fold_batch_norm2d_into_conv2d(mock_conv, mock_bn)
 
-        # Store only folded conv parameters
+        # Store only folded conv parameters on HOST (no device=)
+        # Following stable_diffusion pattern: weights on host, conv2d prepares and moves to device
+        # on first call, return_weights_and_bias=True caches prepared weights for subsequent calls
+        out_channels = folded_weight.shape[0]
+        # Pre-reshape bias to [1, 1, 1, out_channels] like stable_diffusion
+        folded_bias_reshaped = torch.reshape(folded_bias, (1, 1, 1, out_channels))
+
         layer_params["conv"] = {
             "weight": ttnn.from_torch(
                 folded_weight,
                 dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32 for maximum accuracy
                 layout=ttnn.ROW_MAJOR_LAYOUT,  # TTNN conv2d requires ROW_MAJOR for weights
-                device=device,
-                memory_config=DRAM_MEMCFG,  # Weights in DRAM
+                # NO device= - keep on host like stable_diffusion
             ),
             "bias": ttnn.from_torch(
-                folded_bias,  # Use folded bias (not reshaped)
+                folded_bias_reshaped,  # Pre-reshaped to [1, 1, 1, out_channels]
                 dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32 for maximum accuracy
                 layout=ttnn.ROW_MAJOR_LAYOUT,  # BIAS MUST BE ROW_MAJOR for conv2d
-                device=device,
-                memory_config=DRAM_MEMCFG,  # Weights in DRAM
+                # NO device= - keep on host like stable_diffusion
             ),
         }
 
