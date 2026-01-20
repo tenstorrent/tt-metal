@@ -306,8 +306,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.outer": pointwise_binary.test_outer,
     "ttnn.pow": pointwise_binary.test_pow,
     "ttnn.polyval": pointwise_binary.test_polyval,
-    "ttnn.scatter": pointwise_binary.test_scatter,
-    "ttnn.scatter_add": pointwise_binary.test_scatter_add,
     "ttnn.atan2": pointwise_binary.test_atan2,
     # Pointwise Binary Backward
     "ttnn.add_bw": pointwise_binary.test_add_bw,
@@ -368,6 +366,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.pad": data_movement.test_pad,
     "ttnn.permute": data_movement.test_permute,
     "ttnn.reshape": data_movement.test_reshape,
+    "ttnn.scatter": data_movement.test_scatter,
+    "ttnn.scatter_add": data_movement.test_scatter_add,
     "ttnn.repeat": data_movement.test_repeat,
     "ttnn.repeat_interleave": data_movement.test_repeat_interleave,
     "ttnn.slice": data_movement.test_slice,
