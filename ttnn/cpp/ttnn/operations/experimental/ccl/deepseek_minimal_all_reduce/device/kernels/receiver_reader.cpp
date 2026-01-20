@@ -21,7 +21,6 @@ using namespace tt::tt_fabric::common::experimental;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
-    DPRINT << "start of receiver reader kernel\n";
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t receiver_cb = get_compile_time_arg_val(1);
     constexpr uint32_t alignment = get_compile_time_arg_val(2);
@@ -33,6 +32,11 @@ void kernel_main() {
     constexpr uint32_t data_noc_y = get_compile_time_arg_val(8);
     constexpr uint32_t remote_sender_noc_x = get_compile_time_arg_val(9);
     constexpr uint32_t remote_sender_noc_y = get_compile_time_arg_val(10);
+    constexpr uint32_t mcast_start_x = get_compile_time_arg_val(11);
+    constexpr uint32_t mcast_start_y = get_compile_time_arg_val(12);
+    constexpr uint32_t mcast_end_x = get_compile_time_arg_val(13);
+    constexpr uint32_t mcast_end_y = get_compile_time_arg_val(14);
+    constexpr uint32_t mcast_num_dests = get_compile_time_arg_val(15);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint8_t sender_num_hops = 1;
@@ -42,31 +46,11 @@ void kernel_main() {
     uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
     const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t compute_sync_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    DPRINT << "compile time args:\n";
-    DPRINT << " packet_header_cb_id: " << (uint32_t)packet_header_cb_id << "\n";
-    DPRINT << " receiver_cb: " << (uint32_t)receiver_cb << "\n";
-    DPRINT << " alignment: " << (uint32_t)alignment << "\n";
-    DPRINT << " cb_compute: " << (uint32_t)cb_compute << "\n";
-    DPRINT << " input_num_tiles: " << (uint32_t)input_num_tiles << "\n";
-    DPRINT << " page_size_bytes: " << (uint32_t)page_size_bytes << "\n";
-    DPRINT << " packet_size_bytes: " << (uint32_t)packet_size_bytes << "\n";
-    DPRINT << " data_noc_x: " << (uint32_t)data_noc_x << "\n";
-    DPRINT << " data_noc_y: " << (uint32_t)data_noc_y << "\n";
-    DPRINT << " remote_sender_noc_x: " << (uint32_t)remote_sender_noc_x << "\n";
-    DPRINT << " remote_sender_noc_y: " << (uint32_t)remote_sender_noc_y << "\n";
-
-    DPRINT << "arg vals:\n";
-    DPRINT << " tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << " intermediate_base_addr: " << (uint32_t)intermediate_base_addr << "\n";
-    DPRINT << " sender_semaphore_addr: " << (uint32_t)sender_semaphore_addr << "\n";
-    DPRINT << " num_connections: " << (uint32_t)num_connections << "\n";
-
-    DPRINT << "before building fabric connection\n";
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
 
-    DPRINT << "creating fabric connection\n";
     cb_reserve_back(packet_header_cb_id, 1);
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
@@ -81,26 +65,27 @@ void kernel_main() {
     connection.wait_for_empty_write_slot();
     connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
-    DPRINT << "before reading from local tensor\n";
-    // CB is backed by input_tensor, so data is already there
-    // Just reserve and push the tiles to make them available for compute
-    cb_reserve_back(cb_compute, input_num_tiles);
-
     // Wait for remote sender to signal data has been written to intermediate tensor
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    noc_semaphore_set(local_semaphore_ptr, 0);
-
-    // Now both local and remote data are ready, push to compute
-    cb_push_back(cb_compute, input_num_tiles);
-
-    DPRINT << "after semaphore wait\n";
+    noc_semaphore_set(local_semaphore_ptr, 0);  // Reset for next iteration
 
     close_connections(fabric_connection);
 
-    // CB is backed by intermediate_tensor, so data is already there after semaphore signals
-    // Just push the tiles to make them available for compute
-    cb_reserve_back(receiver_cb, input_num_tiles);
+    // Signal all non-data compute cores via NOC multicast semaphore set
+    // Each compute_reader will wait locally on its semaphore
+    if constexpr (mcast_num_dests > 0) {
+        // Set the source semaphore value to 1
+        auto compute_sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_sem_addr);
+        noc_semaphore_set(compute_sync_sem_ptr, 1);
+
+        // Multicast the semaphore value to all non-data compute cores
+        uint64_t mcast_sem_addr =
+            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, compute_sync_sem_addr);
+        noc_semaphore_set_multicast(compute_sync_sem_addr, mcast_sem_addr, mcast_num_dests);
+    }
+    // Now both local and remote data are ready, push to compute
+    cb_push_back(cb_compute, input_num_tiles);
+
     cb_push_back(receiver_cb, input_num_tiles);
-    DPRINT << "end of receiver reader kernel\n";
 }

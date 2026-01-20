@@ -20,7 +20,6 @@ using namespace tt::tt_fabric::common::experimental;
 using tt::data_movement::common::round_up;
 
 void kernel_main() {
-    DPRINT << "start of sender writer kernel\n";
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t alignment = get_compile_time_arg_val(2);
@@ -40,38 +39,16 @@ void kernel_main() {
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    DPRINT << "compile time args:\n";
-    DPRINT << " packet_header_cb_id: " << (uint32_t)packet_header_cb_id << "\n";
-    DPRINT << " packet_cb_id: " << (uint32_t)packet_cb_id << "\n";
-    DPRINT << " alignment: " << (uint32_t)alignment << "\n";
-    DPRINT << " input_num_tiles: " << (uint32_t)input_num_tiles << "\n";
-    DPRINT << " page_size_bytes: " << (uint32_t)page_size_bytes << "\n";
-    DPRINT << " payload_size_bytes: " << (uint32_t)payload_size_bytes << "\n";
-    DPRINT << " data_noc_x: " << (uint32_t)data_noc_x << "\n";
-    DPRINT << " data_noc_y: " << (uint32_t)data_noc_y << "\n";
-    DPRINT << " remote_receiver_noc_x: " << (uint32_t)remote_receiver_noc_x << "\n";
-    DPRINT << " remote_receiver_noc_y: " << (uint32_t)remote_receiver_noc_y << "\n";
-
-    DPRINT << "arg vals:\n";
-    DPRINT << " receiver_base_address: " << (uint32_t)receiver_base_address << "\n";
-    DPRINT << " receive_semaphore_addr: " << (uint32_t)receive_semaphore_addr << "\n";
-    DPRINT << " num_connections: " << (uint32_t)num_connections << "\n";
-
-    DPRINT << "before building fabric connection\n";
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
 
-    DPRINT << "creating fabric connection\n";
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    DPRINT << "setting up packet header\n";
-
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
-    DPRINT << "waiting for receiver semaphore\n";
     //  wait for receiver to signal it is ready
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
@@ -96,5 +73,4 @@ void kernel_main() {
     cb_pop_front(packet_cb_id, input_num_tiles);
 
     close_connections(fabric_connection);
-    DPRINT << "end of sender writer kernel\n";
 }

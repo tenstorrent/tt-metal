@@ -373,7 +373,7 @@ def test_deepseek_minimal_all_reduce(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 217872,
+            "trace_region_size": 573440,
         },
     ],
     indirect=["device_params"],
