@@ -148,11 +148,6 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
         ckernel::sfpu::FN<APPROXIMATE, FP32, ITER, LEGACY_COMPAT>, DST_IDX, MODE)
 
-// For unary ops with four template parameters (APPROXIMATE, fp32_dest_acc_en, FP32_FIRST, legacy_compat)
-#define SFPU_FOUR_PARAM_KERNEL_ITER_FIRST_FN(FN, APPROXIMATE, FP32, ITER, LEGACY_COMPAT, DST_IDX, MODE) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                  \
-        ckernel::sfpu::FN<APPROXIMATE, FP32, ITER, LEGACY_COMPAT>, DST_IDX, MODE)
-
 // For unary ops with five template parameters (APPROXIMATE, ITER, fp32_dest_acc_en, FAST_APPROX, legacy_compat)
 #define SFPU_FIVE_PARAM_KERNEL_ITER_FIRST_FN(FN, APPROXIMATE, ITER, FP32, FAST_APPROX, LEGACY_COMPAT, DST_IDX, MODE) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                               \
