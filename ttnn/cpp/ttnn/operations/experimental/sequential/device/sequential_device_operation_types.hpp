@@ -18,7 +18,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
-// Include parallel types to reuse BranchDescriptor infrastructure
 #include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::sequential {
@@ -93,24 +92,11 @@ struct Step {
 };
 
 // =============================================================================
-// Trait to detect if a factory supports add_to()
+// Reuse the supports_add_to trait from parallel namespace
 // =============================================================================
 
-template <typename Factory, typename OpAttrs, typename TensorArgs, typename TensorReturn, typename = void>
-struct supports_add_to : std::false_type {};
-
-template <typename Factory, typename OpAttrs, typename TensorArgs, typename TensorReturn>
-struct supports_add_to<
-    Factory,
-    OpAttrs,
-    TensorArgs,
-    TensorReturn,
-    std::void_t<decltype(Factory::add_to(
-        std::declval<tt::tt_metal::Program&>(),
-        std::declval<const OpAttrs&>(),
-        std::declval<const TensorArgs&>(),
-        std::declval<TensorReturn&>(),
-        std::declval<const std::optional<CoreRangeSet>&>()))>> : std::true_type {};
+// Bring the supports_add_to template into this namespace
+using parallel::supports_add_to;
 
 // =============================================================================
 // TypedStepDescriptor - Internal implementation
