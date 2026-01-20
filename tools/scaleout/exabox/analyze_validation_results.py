@@ -568,7 +568,7 @@ def print_host_summary(analyses: list[LogAnalysis]):
 
 
 def print_recommendations(analyses: list[LogAnalysis]):
-    """Print actionable recommendations."""
+    """Print actionable recommendations based on analysis."""
     cats = defaultdict(int)
     for a in analyses:
         for c in a.categories:
@@ -580,35 +580,129 @@ def print_recommendations(analyses: list[LogAnalysis]):
     print("=" * 50 + "\nRecommendations\n" + "=" * 50 + "\n")
     recs = []
 
+    # Timeout issues
     if cats["timeout"]:
-        recs.append(f"- {Colors.YELLOW}Timeout:{Colors.NC} Power cycle cluster. See {ts_link('tensix_stall')}")
-    if cats["missing_ports"] or cats["missing_channels"]:
         recs.append(
-            f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cables. See {ts_link('missing_connections')}"
+            f"- {Colors.YELLOW}Timeout issues:{Colors.NC} Power cycle the cluster. See {ts_link('tensix_stall')}"
         )
+
+    # Missing connections
+    if cats["missing_ports"] or cats["missing_channels"]:
+        port_count, chan_count = cats["missing_ports"], cats["missing_channels"]
+        if port_count and chan_count:
+            recs.append(
+                f"- {Colors.BLUE}Missing connections:{Colors.NC} Port ({port_count} logs) + "
+                f"Channel ({chan_count} logs). Check cables. See {ts_link('missing_connections')}"
+            )
+        else:
+            recs.append(
+                f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cable seating. "
+                f"Verify correct FSD. See {ts_link('missing_connections')}"
+            )
+
+    # PCIe errors
     if cats["pcie_error"]:
-        recs.append(f"- {Colors.RED}PCIe errors:{Colors.NC} Check dmesg. May need power cycle.")
+        recs.append(
+            f"- {Colors.RED}PCIe errors:{Colors.NC} Hardware issue. Machine may have rebooted. "
+            "Check dmesg/syslog. May need power cycle."
+        )
+
+    # ARC timeout
+    if cats["arc_timeout"]:
+        recs.append(f"- {Colors.YELLOW}ARC timeout:{Colors.NC} Try tt-smi reset. If persists, power cycle needed.")
+
+    # Link retrains
+    if cats["link_retrain"]:
+        recs.append(f"- {Colors.YELLOW}Link retrains:{Colors.NC} Some links unstable. Check cables on affected trays.")
+
+    # Workload timeout
     if cats["workload_timeout"]:
-        recs.append(f"- {Colors.RED}Workload timeout:{Colors.NC} Power cycle required.")
+        recs.append(
+            f"- {Colors.RED}Workload timeout:{Colors.NC} Cluster hung during traffic test. "
+            "Power cycle required. Check for GDDR/hardware issues."
+        )
+
+    # Device startup error
     if cats["device_error"]:
-        recs.append(f"- {Colors.RED}Device error:{Colors.NC} Try tt-smi reset.")
+        recs.append(
+            f"- {Colors.RED}Device startup error:{Colors.NC} Failed to initialize devices. "
+            "Try tt-smi reset. If persists, power cycle."
+        )
+
+    # Unrecoverable/validation failure
+    if cats["unrecoverable"] or cats["validation_failed"]:
+        recs.append(
+            f"- {Colors.RED}Unrecoverable/validation failure:{Colors.NC} "
+            "Cluster in bad state. Full power cycle required."
+        )
+
+    # Discovery failed
+    if cats["discovery_failed"]:
+        recs.append(
+            f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips. "
+            "Check PCIe connections, tt-smi status. May need reboot."
+        )
+
+    # CRC/uncorrected codeword errors
+    if cats["crc_error"] or cats["uncorrected_cw"]:
+        recs.append(
+            f"- {Colors.YELLOW}CRC/codeword errors:{Colors.NC} Link quality issues. "
+            "Check cable seating. For Wormhole: may indicate bad cable."
+        )
+
+    # DRAM failures
     if cats["dram_failure"]:
-        recs.append(f"- {Colors.RED}DRAM failure:{Colors.NC} Hardware issue. See {ts_link('gddr_issue')}")
+        recs.append(
+            f"- {Colors.RED}DRAM failures:{Colors.NC} Hardware issue. Contact syseng. See {ts_link('gddr_issue')}"
+        )
+
+    # Unhealthy links - check for repeat offenders
     if cats["unhealthy"]:
         link_stats, _ = aggregate_stats(analyses)
-        repeats = sum(1 for s in link_stats.values() if s["count"] >= 3)
+        repeats = [(k, v) for k, v in link_stats.items() if v["count"] >= 3]
         if repeats:
-            recs.append(f"- {Colors.RED}Repeated failures:{Colors.NC} {repeats} links failing 3+ times. Bad cable?")
+            recs.append(
+                f"- {Colors.RED}Repeated link failures:{Colors.NC} {len(repeats)} channel(s) failing 3+ times. "
+                "Likely bad cable. Check histogram."
+            )
         else:
-            recs.append(f"- {Colors.YELLOW}Scattered failures:{Colors.NC} Try power cycle.")
-    if cats["mpi_error"] or cats["ssh_error"]:
-        recs.append(f"- {Colors.RED}SSH/MPI error:{Colors.NC} Check agent forwarding. See {ts_link('ssh_agent')}")
+            recs.append(f"- {Colors.YELLOW}Scattered link failures:{Colors.NC} Try power cycle. Check cables.")
 
+    # Firmware mismatch
+    if cats["fw_mismatch"]:
+        recs.append(
+            f"- {Colors.MAGENTA}Firmware mismatch:{Colors.NC} UMD may ignore some links. See {ts_link('fw_mismatch')}"
+        )
+
+    # Stack trace/crash
+    if cats["stack_trace"]:
+        recs.append(
+            f"- {Colors.RED}Stack trace/crash:{Colors.NC} Review full log for root cause. "
+            "May indicate software bug or hardware issue."
+        )
+
+    # MPI/SSH errors
+    if cats["mpi_error"]:
+        recs.append(
+            f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. "
+            f"Check SSH agent and network. See {ts_link('ssh_agent')}"
+        )
+    if cats["ssh_error"]:
+        recs.append(
+            f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. "
+            f"Ensure ssh-agent running and keys added. See {ts_link('ssh_agent')}"
+        )
+
+    # Overall health assessment
     rate = cats["healthy"] / total * 100
-    if rate >= 90:
-        recs.append(f"- {Colors.GREEN}Cluster healthy.{Colors.NC}")
-    elif rate < 70:
-        recs.append(f"- {Colors.RED}Low success rate ({rate:.0f}%).{Colors.NC} Investigate before proceeding.")
+    if rate >= 100:
+        recs.append(f"- {Colors.GREEN}Cluster is healthy.{Colors.NC} Ready for workloads.")
+    elif rate >= 80:
+        recs.append(f"- {Colors.YELLOW}Cluster looks stable ({rate:.0f}%).{Colors.NC} Ready for workloads.")
+    elif rate > 0:
+        recs.append(
+            f"- {Colors.RED}Low success rate ({rate:.0f}%).{Colors.NC} Investigate failure patterns before proceeding."
+        )
 
     for r in recs:
         print(r)
