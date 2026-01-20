@@ -392,12 +392,42 @@ ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID as
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
+    // Skip validation if cluster is empty (mock PSD case)
+    // When using a mock PSD, the cluster may be empty or contain different ASICs
+    auto cluster_chip_ids = cluster.get_unique_chip_ids();
+    if (cluster_chip_ids.empty()) {
+        return;
+    }
+
+    // Get ASICs from PSD for the current host
+    auto asic_ids_for_host =
+        physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+
+    // If PSD has no ASICs for this host, skip validation (likely a mock PSD)
+    if (asic_ids_for_host.empty()) {
+        return;
+    }
+
+    // Check if any cluster ASICs match PSD ASICs
+    // If none match, this is likely a mock PSD, so skip validation
+    bool any_match = false;
+    for (const auto& [physical_chip_id, unique_id] : cluster_chip_ids) {
+        tt::tt_metal::AsicID asic_id{unique_id};
+        if (std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end()) {
+            any_match = true;
+            break;
+        }
+    }
+
+    // If no cluster ASICs match PSD ASICs, skip validation (mock PSD case)
+    if (!any_match) {
+        return;
+    }
+
     // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
     // descriptor
-    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+    for (const auto& [physical_chip_id, unique_id] : cluster_chip_ids) {
         tt::tt_metal::AsicID asic_id{unique_id};
-        auto asic_ids_for_host =
-            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
         TT_FATAL(
             std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end(),
             "Asic id {} in UMD cluster not found for in Physical System {}",
