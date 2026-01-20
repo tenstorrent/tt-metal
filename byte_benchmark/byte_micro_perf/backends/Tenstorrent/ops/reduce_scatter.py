@@ -74,9 +74,19 @@ class TenstorrentNativeReduceScatterOp(BasicOp):
         self.dtype = self.args_dict["dtype"]
         # ttnn supports bfloat16 and float32 for CCL operations
         # Skip unsupported dtypes (like float16 which ttnn doesn't have)
-        if self.dtype not in ["bfloat16", "float32"]:
-            raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn CCL, only bfloat16/float32")
-        self.torch_dtype = getattr(torch, self.dtype)
+        if self.dtype not in ["bfloat16", "float32", "bfloat8_b"]:
+            raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn CCL")
+
+        self.torch_dtype = torch.float32 if self.dtype == "float32" else torch.bfloat16
+        if self.dtype == "bfloat16":
+            self.dtype_size = 2
+            self.ttnn_dtype = ttnn.bfloat16
+        elif self.dtype == "float32":
+            self.ttnn_dtype = ttnn.float32
+            self.dtype_size = 4
+        elif self.dtype == "bfloat8_b":
+            self.dtype_size = 1
+            self.ttnn_dtype = ttnn.bfloat8_b
 
         # Get actual device count
         try:
@@ -140,9 +150,8 @@ class TenstorrentNativeReduceScatterOp(BasicOp):
         }
 
         # Size calculations
-        dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
-        self.input_tensor_size = self.input_total_elements * dtype_size
-        self.output_tensor_size = self.output_total_elements * dtype_size
+        self.input_tensor_size = self.input_total_elements * self.dtype_size
+        self.output_tensor_size = self.output_total_elements * self.dtype_size
         self.tensor_size = self.input_tensor_size + self.output_tensor_size
 
         self.read_bytes = self.input_tensor_size
@@ -163,9 +172,6 @@ class TenstorrentNativeReduceScatterOp(BasicOp):
         """Create tensors that are already on device."""
         import ttnn
 
-        # Map torch dtype to ttnn dtype
-        ttnn_dtype = ttnn.bfloat16 if self.torch_dtype == torch.bfloat16 else ttnn.float32
-
         all_tensor_list = []
         for _ in range(instance_num):
             # Create input tensor and replicate across devices
@@ -173,7 +179,7 @@ class TenstorrentNativeReduceScatterOp(BasicOp):
 
             ttnn_tensor = ttnn.from_torch(
                 torch_tensor,
-                dtype=ttnn_dtype,
+                dtype=self.ttnn_dtype,
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
