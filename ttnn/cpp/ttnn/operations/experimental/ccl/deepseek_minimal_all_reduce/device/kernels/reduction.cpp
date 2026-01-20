@@ -22,7 +22,7 @@ void MAIN {
     cb_wait_front(cb_in0, num_tiles);
     cb_wait_front(cb_in1, num_tiles);
     cb_reserve_back(cb_out0, num_tiles);
-    // Process tiles in batches of max_dst_tiles for efficiency
+    // Process tiles in batches of max_dst_tiles
     constexpr uint32_t max_dst_tiles = 4;
     constexpr uint32_t num_batches = (num_tiles + max_dst_tiles - 1) / max_dst_tiles;
 
