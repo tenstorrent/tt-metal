@@ -332,6 +332,16 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
+    // Extract graph topology policy from top-level graph instance (for inter-mesh connections)
+    const auto& top_level_instance = mgd.top_level();
+    if (top_level_instance.kind == NodeKind::Graph) {
+        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+        if (graph_desc && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+            this->inter_mesh_relaxed_policy_ =
+                (graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED);
+        }
+    }
+
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
     mesh_edge_ports_to_chip_id_.resize(all_meshes.size() + all_switches.size());
 
@@ -854,6 +864,8 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
     TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
     return it->second;
 }
+
+bool MeshGraph::is_inter_mesh_policy_relaxed() const { return inter_mesh_relaxed_policy_; }
 
 /**
  * Generate all possible mesh shapes that can be formed from a given number of chips.

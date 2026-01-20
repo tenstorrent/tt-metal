@@ -281,6 +281,14 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
         }
     }
 
+    // Ensure all meshes are represented as nodes in the mesh-level graph, even if they have no connections
+    // This is important for single-mesh scenarios where there are no inter-mesh connections
+    for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
+        if (mesh_level_adjacency_map.find(mesh_id) == mesh_level_adjacency_map.end()) {
+            mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
+        }
+    }
+
     // Build mesh-level graph from adjacency map
     logical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
@@ -349,10 +357,150 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         }
     }
 
+    // Ensure all meshes are represented as nodes in the mesh-level graph, even if they have no connections
+    // This is important for single-mesh scenarios where there are no inter-mesh connections
+    for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
+        if (mesh_level_adjacency_map.find(mesh_id) == mesh_level_adjacency_map.end()) {
+            mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
+        }
+    }
+
     // Build mesh-level graph from adjacency map
     physical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
     return physical_multi_mesh_graph;
+}
+
+std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const TopologyMappingConfig& config) {
+    using namespace ::tt::tt_fabric;
+
+    std::map<MeshId, TopologyMappingResult> results;
+
+    // Step 1: Run Mesh to Mesh mapping algorithm
+    auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
+    auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
+
+    // TODO: Remove this once rank bindings file is removed from multi-host systems
+    // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
+    MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+    for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
+        inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
+    }
+
+    // Determine inter-mesh validation mode from config
+    ConnectionValidationMode inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
+    if (config.inter_mesh_validation_mode.has_value()) {
+        inter_mesh_validation_mode = config.inter_mesh_validation_mode.value();
+    } else if (config.strict_mode) {
+        // Fallback for backward compatibility
+        inter_mesh_validation_mode = ConnectionValidationMode::STRICT;
+    }
+    auto solver_result = solve_topology_mapping(
+        mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode);
+
+    // If the solver fails, return error results for all meshes
+    if (!solver_result.success) {
+        for (const auto& mesh_id : mesh_logical_graph.get_nodes()) {
+            TopologyMappingResult result;
+            result.success = false;
+            result.error_message = fmt::format("Inter-mesh mapping failed: {}", solver_result.error_message);
+            results[mesh_id] = result;
+        }
+        return results;
+    }
+
+    // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
+    auto& mesh_mappings = solver_result.target_to_global;
+    for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
+        TopologyMappingResult result;
+
+        // Get the logical graph and the physical graph
+        const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
+        const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
+
+        // Build intra-mesh constraints
+        MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
+
+        // Build Rank bindings constraints
+        intra_mesh_constraints.add_required_trait_constraint(
+            fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id));
+
+        // Map of asic positions to asic ids (built from config.asic_positions)
+        std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
+        if (!config.asic_positions.empty()) {
+            for (const auto& asic_id : physical_graph.get_nodes()) {
+                auto pos_it = config.asic_positions.find(asic_id);
+                if (pos_it != config.asic_positions.end()) {
+                    asic_positions_to_asic_ids[pos_it->second].insert(asic_id);
+                }
+            }
+        }
+
+        // Build the pinning constraints from config.pinnings
+        // Group pinnings by fabric_node (since config.pinnings is position -> fabric_node)
+        std::map<FabricNodeId, std::vector<AsicPosition>> fabric_node_to_positions;
+        for (const auto& [position, fabric_node] : config.pinnings) {
+            // Only check the pinnings for the current mesh
+            if (fabric_node.mesh_id != logical_mesh_id) {
+                continue;
+            }
+            fabric_node_to_positions[fabric_node].push_back(position);
+        }
+
+        // Apply pinning constraints
+        for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
+            std::set<tt::tt_metal::AsicID> asic_ids;
+
+            // Convert the ASIC positions to ASIC IDs
+            for (const auto& position : positions) {
+                auto it = asic_positions_to_asic_ids.find(position);
+                if (it == asic_positions_to_asic_ids.end()) {
+                    continue;
+                }
+                asic_ids.insert(it->second.begin(), it->second.end());
+            }
+
+            if (!asic_ids.empty()) {
+                intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids);
+            }
+        }
+
+        // Do the sub mapping for the fabric node id to the asic id
+        // This should be called once per mesh, after all pinning constraints are added
+        // Determine validation mode from config
+        ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
+        auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
+        if (config_mode_it != config.mesh_validation_modes.end()) {
+            validation_mode = config_mode_it->second;
+        } else if (config.strict_mode) {
+            // Fallback for backward compatibility
+            validation_mode = ConnectionValidationMode::STRICT;
+        }
+        auto sub_mapping =
+            solve_topology_mapping(logical_graph, physical_graph, intra_mesh_constraints, validation_mode);
+
+        // Populate result
+        result.success = sub_mapping.success;
+        if (!sub_mapping.success) {
+            result.error_message = fmt::format(
+                "Intra-mesh mapping failed for logical mesh {}: {}", logical_mesh_id.get(), sub_mapping.error_message);
+        } else {
+            // Build bidirectional mappings
+            for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
+                result.fabric_node_to_asic.insert({fabric_node, asic});
+                result.asic_to_fabric_node.insert({asic, fabric_node});
+            }
+        }
+
+        results[logical_mesh_id] = result;
+    }
+
+    return results;
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ namespace tt::tt_metal::experimental::tt_fabric {
 
 // Import types from tt::tt_fabric for use in this API
 using ::tt::tt_fabric::AdjacencyGraph;
+using ::tt::tt_fabric::ConnectionValidationMode;
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
@@ -56,6 +58,14 @@ struct TopologyMappingConfig {
     // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
     // Used to validate pinning constraints against the physical topology.
     AsicPositionMap asic_positions;
+
+    // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).
+    // If empty, falls back to strict_mode for backward compatibility.
+    std::map<MeshId, ConnectionValidationMode> mesh_validation_modes;
+
+    // Validation mode for inter-mesh mapping (mesh to mesh).
+    // Defaults to RELAXED for backward compatibility if not set.
+    std::optional<ConnectionValidationMode> inter_mesh_validation_mode;
 };
 
 /**
@@ -248,5 +258,38 @@ struct PhysicalMultiMeshGraph {
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Map logical multi-mesh topology to physical multi-mesh topology
+ *
+ * This function performs a two-level mapping:
+ * 1. Inter-mesh mapping: Maps logical meshes to physical meshes
+ * 2. Intra-mesh mapping: For each mapped mesh pair, maps logical fabric nodes to physical ASICs
+ *
+ * The function respects:
+ * - Mesh host rank constraints (logical nodes map to ASICs on the correct host)
+ * - Optional pinning constraints that restrict which physical ASICs specific logical nodes can map to
+ * - Inter-mesh connectivity constraints
+ *
+ * @param adjacency_map_logical Logical multi-mesh adjacency graph
+ * @param adjacency_map_physical Physical multi-mesh adjacency graph
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+ * @param fabric_node_id_to_mesh_rank Mapping of mesh IDs to fabric node IDs to mesh host ranks
+ * @param config Configuration options including pinning constraints, ASIC positions, and validation modes.
+ *               config.mesh_validation_modes and config.inter_mesh_validation_mode should be set for proper
+ *               validation. If not set, defaults to RELAXED mode. If config.strict_mode is true, it will be
+ *               used as a fallback for backward compatibility.
+ *
+ * @return std::map<MeshId, TopologyMappingResult> Mapping result for each logical mesh
+ *
+ * @note If inter-mesh mapping fails, all mesh results will have success=false
+ * @note If intra-mesh mapping fails for a specific mesh, only that mesh's result will have success=false
+ */
+std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const TopologyMappingConfig& config);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

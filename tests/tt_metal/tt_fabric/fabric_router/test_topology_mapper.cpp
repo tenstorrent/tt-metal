@@ -942,4 +942,45 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     });
 }
 
+TEST_F(TopologyMapperTest, MockPSDGraphTopologyStrictPolicyTest) {
+    // Test that STRICT graph topology policy throws when channels are insufficient
+    // Note: This test uses a single mesh per host to avoid multi-mesh-per-host limitation
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_graph_topology_strict_mgd.textproto";
+
+    const std::filesystem::path psd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_graph_topology_insufficient_channels.textproto";
+
+    auto mesh_graph = MeshGraph(mgd_path.string());
+    tt::tt_metal::PhysicalSystemDescriptor mock_psd(psd_path.string());
+
+    // Create a local mesh binding for testing - only mesh 0 on this host
+    // The inter-mesh validation will still be tested via the graph topology policy
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {MeshId{0}};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    // With STRICT policy requiring 8 channels but only 2 channels available,
+    // TopologyMapper should throw an exception during inter-mesh mapping
+    EXPECT_THROW(TopologyMapper(mesh_graph, mock_psd, local_mesh_binding), std::exception)
+        << "TopologyMapper should throw when STRICT graph topology policy requires more channels than available";
+}
+
+TEST_F(TopologyMapperTest, MockPSDGraphTopologyRelaxedPolicyTest) {
+    // Test that RELAXED graph topology policy is correctly read from MGD
+    // Note: Full inter-mesh mapping requires multi-host setup, so we just verify the policy is read correctly
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_graph_topology_relaxed_mgd.textproto";
+
+    auto mesh_graph = MeshGraph(mgd_path.string());
+
+    // Verify that the RELAXED policy is correctly read from the graph topology
+    // The is_inter_mesh_policy_relaxed() method should return true for RELAXED policy
+    EXPECT_TRUE(mesh_graph.is_inter_mesh_policy_relaxed())
+        << "MeshGraph should correctly read RELAXED policy from graph_topology";
+}
+
 }  // namespace tt::tt_fabric
