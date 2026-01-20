@@ -97,7 +97,7 @@ def test_cross_attention_transformer_text_inference(
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
-    model_args.multiple_of = 1
+    # model_args.multiple_of = 1
     # reference_model = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
     # reference_model.setup_cache(model_args.max_batch_size, kv_cache_dtype)
     # reference_model.load_state_dict(partial_state_dict_meta,strict=False)
