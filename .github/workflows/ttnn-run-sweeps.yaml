@@ -12,6 +12,7 @@ on:
           - ALL SWEEPS (Nightly)
           - ALL SWEEPS (Comprehensive)
           - ALL SWEEPS (Model Traced)
+          - ALL SWEEPS (Lead Models)
           - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
@@ -612,9 +613,9 @@ on:
 
   schedule:
     - cron: "30 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
-    - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
-    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
+    - cron: "0 4 * * 3,6" # This cron schedule runs the workflow at 4:00 AM UTC on Wed/Sat (comprehensive run)
     - cron: "0 4 * * *" # This cron schedule runs the workflow at 4:00 AM UTC daily (model traced runs)
+    - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (lead model runs)
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
@@ -721,17 +722,24 @@ jobs:
           github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' &&
           github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' &&
           github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' &&
+          github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' &&
           matrix.generate_mode == 'all'
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
            (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')) &&
           matrix.generate_mode == 'all'
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced --dump-file --tag ci-main --explicit
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --tag ci-main
+      - name: Run ttnn sweeps generation (all sweeps - lead models)
+        if: |
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') ||
+           (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')) &&
+          matrix.generate_mode == 'all'
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
-          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *') ||
+          ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *' && github.event.schedule != '0 3 * * *') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
@@ -755,7 +763,7 @@ jobs:
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit $SKIP_MODULES_FLAG
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
@@ -764,8 +772,15 @@ jobs:
           retention-days: 1
   ttnn-compute-module-matrix:
     name: Compute module matrix
+    # This job creates the execution plan for parallel sweep runs by:
+    # 1. Downloading all generated vector JSON files from ttnn-generate-sweeps
+    # 2. Chunking them into batches based on run type (nightly=10, comprehensive/perf=3)
+    # 3. Separating CCL modules for dedicated multi-chip runners (n300-llmbox)
+    # 4. Determining test suite to execute (nightly, model_traced, comprehensive)
+    # 5. Generating a matrix of runner configurations ie (wh/bh, runs_on, module_selector, suite_name)
+    # The output matrix is consumed by ttnn-run-sweeps-batch to spawn parallel jobs
     needs: ttnn-generate-sweeps
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -787,112 +802,26 @@ jobs:
           mkdir -p /tmp/vectors
           # Move all JSON files from subdirectories to /tmp/vectors
           find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          clean: false
       - id: set-matrix
         shell: bash
+        env:
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          SWEEP_NAME: ${{ github.event.inputs.sweep_name }}
+          MEASURE_DEVICE_PERF: ${{ github.event.inputs.measure_device_perf }}
+          VECTORS_DIR: /tmp/vectors
         run: |
-          python - <<'PY' > /tmp/matrix.json
-          import os, json, sys
-          d = '/tmp/vectors'
-          modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-
-          # Helper for chunking modules into batches
-          def chunk_modules(items, size):
-              return [",".join(items[i:i+size]) for i in range(0, len(items), size)] if items else []
-
-          ccl_modules = [m for m in modules if m.startswith('ccl.')]
-
-          schedule_expr = "${{ github.event.schedule }}"
-          event_name = "${{ github.event_name }}"
-          sweep_name = "${{ github.event.inputs.sweep_name }}"
-          measure_device_perf = "${{ github.event.inputs.measure_device_perf }}"
-
-          # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
-          # Also use smaller batch size when device performance measurement is enabled to avoid timeouts
-          # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
-          device_perf_enabled = event_name == "schedule" or measure_device_perf == "true"
-          if schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
-              BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
-          else:
-              BATCH_SIZE = 10  # Larger batches for nightly runs
-
-          # Create batches for all modules
-          regular_batches = chunk_modules(modules, BATCH_SIZE)
-
-          # Maintain backwards-compatible batch list output
-          batches = list(regular_batches)
-
-          # Generate CCL-only batches for dedicated runners
-          ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
-
-          is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
-          is_model_traced = schedule_expr == "0 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
-          # For model_traced runs, use "model_traced" suite only
-          # For nightly runs, use "nightly" suite
-          # For comprehensive runs, don't override suite_name
-          if is_model_traced:
-              wormhole_suite_name = "model_traced"
-          elif is_comprehensive:
-              wormhole_suite_name = None
-          else:
-              wormhole_suite_name = "nightly"
-
-          include_entries = []
-
-          wormhole_template = {
-              "test_group_name": "wormhole-n150-sweeps",
-              "arch": "wormhole_b0",
-              "runs_on": "tt-ubuntu-2204-n150-stable",
-              "tt_smi_cmd": "tt-smi -r",
-          }
-
-          for batch in regular_batches:
-              include_entries.append({
-                  **wormhole_template,
-                  "module_selector": batch,
-                  "batch_display": batch,
-                  "suite_name": wormhole_suite_name,
-              })
-
-          if ccl_batches:
-              n300_template = {
-                  "test_group_name": "n300-llmbox-ccl",
-                  "arch": "wormhole_b0",
-                  "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
-                  "tt_smi_cmd": "tt-smi -r",
-              }
-              for batch in ccl_batches:
-                  include_entries.append({
-                      **n300_template,
-                      "module_selector": batch,
-                      "batch_display": f"ccl:{batch}",
-                      "suite_name": "generality_suite_fabric_1d",
-                  })
-
-          total_batches = len(batches)
-          if total_batches > 256:
-              print(f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. Please adjust BATCH_SIZE or reduce the number of modules.", file=sys.stderr)
-              sys.exit(1)
-
-          total_matrix_entries = len(include_entries)
-          if total_matrix_entries > 256:
-              print(f"Total matrix entry count ({total_matrix_entries}) exceeds GitHub Actions matrix limit of 256. Please adjust batching logic or reduce modules.", file=sys.stderr)
-              sys.exit(1)
-
-          result = {
-              "module": modules,
-              "batches": batches,
-              "ccl_batches": ccl_batches,
-              "include": include_entries,
-          }
-          print(json.dumps(result))
-          PY
-          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+          matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py)
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
   ttnn-run-single-sweep:
     name: Run single sweep
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1033,7 +962,7 @@ jobs:
       - ttnn-generate-sweeps
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1086,7 +1015,7 @@ jobs:
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
-          echo "│ Runner:               ${{ matrix.runs_on }}"
+          echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
           echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
           echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
@@ -1228,10 +1157,12 @@ jobs:
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ github.event.schedule }}" == "0 4 * * 3,6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
           elif [[ "${{ github.event.schedule }}" == "0 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"
+          elif [[ "${{ github.event.schedule }}" == "0 3 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+            RUN_TYPE="lead_models"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs

@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama::program {
+namespace ttnn::experimental::prim {
 
 RotaryEmbeddingLlamaMultiCoreSharded::cached_program_t RotaryEmbeddingLlamaMultiCoreSharded::create(
     const RotaryEmbeddingLlamaParams& operation_attributes,
@@ -192,4 +192,4 @@ void RotaryEmbeddingLlamaMultiCoreSharded::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama::program
+}  // namespace ttnn::experimental::prim

@@ -27,7 +27,7 @@ uint32_t get_cluster_axis_index(
 
 namespace {
 
-using SliceOp = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+using SliceOp = ttnn::prim::SliceDeviceOperation;
 
 // Helper function to compute slice parameters for a given mesh coordinate
 auto compute_slice_parameters(

@@ -6,20 +6,17 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ssm::repeat_mul {
-
-namespace {
-constexpr uint32_t HIDDEN_SIZE = 5120;
-}
+namespace ttnn::experimental::prim {
 
 RepeatAndInterleaveEltwiseMulDeviceOperation::program_factory_t
 RepeatAndInterleaveEltwiseMulDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::RepeatAndInterleaveEltwiseMulProgramFactory{};
+    return RepeatAndInterleaveEltwiseMulProgramFactory{};
 }
 
 void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_hit(
@@ -155,19 +152,18 @@ tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_prog
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::ssm::repeat_mul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ssm::repeat_mul::RepeatAndInterleaveEltwiseMulDeviceOperation::tensor_return_value_t
-repeat_and_interleave_eltwise_mul(
+Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
     std::optional<MathFidelity> math_fidelity,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::experimental::ssm::repeat_mul::RepeatAndInterleaveEltwiseMulDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RepeatAndInterleaveEltwiseMulDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),
