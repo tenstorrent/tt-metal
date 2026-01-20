@@ -429,7 +429,11 @@ ALWI void INSERT_SFPNOP() {
 
 template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
 constexpr bool can_preload_ln2_constants() {
+#ifdef ARCH_WORMHOLE
+    return false;
+#else
     return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
+#endif
 }
 
 /**
