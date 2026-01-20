@@ -5,7 +5,10 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/data_types.hpp"
 #include "api/tt-metalium/kernel_types.hpp"
@@ -41,6 +44,26 @@ struct KernelSource {
             name = "Kernel_Source_Code";
         }
         return name;
+    }
+
+    // Returns the actual source code (file content or source string)
+    std::string get_content() const {
+        switch (source_type_) {
+            case SourceType::FILE_PATH: {
+                std::ifstream file(path_);
+                if (!file.is_open()) {
+                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
+                }
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                if (file.fail() && !file.eof()) {
+                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
+                }
+                return buffer.str();
+            }
+            case SourceType::SOURCE_CODE: return source_;
+        }
+        ttsl::unreachable();
     }
 };
 
@@ -92,6 +115,7 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
