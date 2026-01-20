@@ -51,6 +51,7 @@ def run_test_linear_impl(
     cluster_axis,
     input_dtype,
     core_grid,
+    num_workers_per_link,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
@@ -122,12 +123,12 @@ def run_test_linear_impl(
         config=matmul_config,
         persistent_output_buffer=persistent_output_buffers[0],
         multi_device_global_semaphore=ccl_semaphore_handles[0],
-        num_links=1,
+        num_links=num_links,
         topology=topology,
         cluster_axis=cluster_axis,
         barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
         chunks_per_sync=1,
-        num_workers_per_link=4,
+        num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=2,
     )
 
@@ -162,6 +163,8 @@ def run_test_linear(
     subblock_w,
     topology,
     core_grid,
+    num_workers_per_link,
+    num_links,
     use_bias=False,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -212,16 +215,17 @@ def run_test_linear(
         core_grid=core_grid,
         input_dtype=dtype,
         num_devices=device.get_num_devices(),
-        num_links=1,
+        num_links=num_links,
         topology=topology,
         cluster_axis=1,
+        num_workers_per_link=num_workers_per_link,
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "M, K, N, core_grid_x, core_grid_y",
-    [(4096, 4096, 4096, 4, 4)],
+    "M, K, N, core_grid_x, core_grid_y, num_workers_per_link, num_links",
+    [(4096, 4096, 4096, 4, 4, 4, 1)],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
@@ -248,7 +252,10 @@ def test_linear(
     topology,
     core_grid_x,
     core_grid_y,
+    num_workers_per_link,
+    num_links,
 ):
+    assert (num_links * num_workers_per_link) == core_grid_y
     check_result = run_test_linear(
         mesh_device,
         M,
@@ -261,6 +268,8 @@ def test_linear(
         subblock_w,
         topology,
         core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
     )
     for i in range(mesh_device.get_num_devices()):
         assert check_result[i]["pcc"] > 0.999_500
