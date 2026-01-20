@@ -31,8 +31,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
             } else {
                 return a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT32 || a == UINT16);
             }
-            // return !fast_and_approximate_mode ||
-            //        (a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         case LOGADDEXP:
         case LOGADDEXP2:
@@ -538,10 +536,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
-    bool is_sfpu_op =
-        (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
-    // std::cout << "is_sfpu_op: " << is_sfpu_op << std::endl;
-    // std::cout << "fast_and_approximate_mode: " << fast_and_approximate_mode.value_or(true) << std::endl;
+    bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
+        binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
