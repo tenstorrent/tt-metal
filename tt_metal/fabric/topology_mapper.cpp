@@ -392,38 +392,6 @@ ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID as
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    // Skip validation if cluster is empty (mock PSD case)
-    // When using a mock PSD, the cluster may be empty or contain different ASICs
-    auto cluster_chip_ids = cluster.get_unique_chip_ids();
-    if (cluster_chip_ids.empty()) {
-        return;
-    }
-
-    // Get ASICs from PSD for the current host
-    auto asic_ids_for_host =
-        physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
-
-    // If PSD has no ASICs for this host, skip validation (likely a mock PSD)
-    if (asic_ids_for_host.empty()) {
-        return;
-    }
-
-    // Check if any cluster ASICs match PSD ASICs
-    // If none match, this is likely a mock PSD, so skip validation
-    bool any_match = false;
-    for (const auto& [physical_chip_id, unique_id] : cluster_chip_ids) {
-        tt::tt_metal::AsicID asic_id{unique_id};
-        if (std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end()) {
-            any_match = true;
-            break;
-        }
-    }
-
-    // If no cluster ASICs match PSD ASICs, skip validation (mock PSD case)
-    if (!any_match) {
-        return;
-    }
-
     // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
     // descriptor
     for (const auto& [physical_chip_id, unique_id] : cluster_chip_ids) {
@@ -498,10 +466,6 @@ void TopologyMapper::build_mapping() {
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ ||
         *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() == 0) {
-        auto adjacency_map_logical = ::tt::tt_fabric::build_adjacency_map_logical(mesh_graph_);
-        auto adjacency_map_physical =
-            ::tt::tt_fabric::build_adjacency_map_physical(physical_system_descriptor_, asic_id_to_mesh_rank);
-
         // Build logical and physical adjacency maps
         auto adjacency_map_logical_multi_mesh =
             tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
