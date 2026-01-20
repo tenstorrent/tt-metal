@@ -170,4 +170,8 @@ if(flatbuffers_ADDED)
     # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
     target_compile_options(flatc PRIVATE -Wno-restrict)
     target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+    # Suppress deprecated std::get_temporary_buffer warnings for clang-20 compatibility
+    # See: https://github.com/tenstorrent/tt-metal/issues/36122
+    target_compile_options(flatc PRIVATE -Wno-deprecated-declarations)
+    target_compile_options(flatbuffers PRIVATE -Wno-deprecated-declarations)
 endif()
