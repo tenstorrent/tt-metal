@@ -34,14 +34,11 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input.device();
+        TT_ASSERT(
+            ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
     }
 
     uint32_t n = input.logical_shape()[0], c = input.logical_shape()[1], h = input.logical_shape()[2],
@@ -158,14 +155,11 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     const CoreRangeSet& grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = ttnn::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input.device();
+        TT_ASSERT(
+            ttnn::GetDefaultDevice() != nullptr, "Requires setting default device if no inputs to op are on device");
     }
 
     uint32_t n = input.logical_shape()[0], c = input.logical_shape()[1], h = input.logical_shape()[2],
