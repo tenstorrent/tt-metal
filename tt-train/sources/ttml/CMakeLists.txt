@@ -317,13 +317,19 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-NN)
 
     if(NOT TT-NN_FOUND)
-        # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
-        # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
-        set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
-        if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
-            message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
+        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
+        if(DEFINED ENV{TT_METAL_HOME})
+            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
+            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
         else()
-            message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
+            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
+            # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
+            set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
+            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
+                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
+            else()
+                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
+            endif()
         endif()
 
         set(METALIUM_INCLUDE_DIRS
