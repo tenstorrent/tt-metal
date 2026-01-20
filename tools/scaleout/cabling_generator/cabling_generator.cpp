@@ -170,7 +170,7 @@ void validate_inter_board_connections(
     const std::string& existing_source_file,
     const std::string& new_source_file) {
     for (const auto& [port_type, this_conns] : this_template.inter_board_connections) {
-        if (!other_template.inter_board_connections.count(port_type)) {
+        if (!other_template.inter_board_connections.contains(port_type)) {
             continue;  // Port type not in other template, skip
         }
         const auto& other_conns = other_template.inter_board_connections.at(port_type);
