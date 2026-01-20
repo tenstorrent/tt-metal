@@ -274,13 +274,72 @@ jobs:
           config: /work/.codechecker.json
           version: ignore # Already installed in our Docker container
 
-      - name: Upload CodeChecker reports
+      - name: Upload CodeChecker HTML reports
         uses: actions/upload-artifact@v4
         if: always()
         timeout-minutes: 10
         with:
           name: CodeChecker-Static-Analysis-Reports
           path: ${{ steps.codechecker.outputs.result-html-dir }}
+
+      - name: Find and upload raw CodeChecker reports
+        id: find-raw-reports
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "=== Searching for CodeChecker plist reports ==="
+
+          # CodeChecker-Action typically stores reports in various locations
+          # Try to find the directory containing plist files
+          POSSIBLE_DIRS=(
+            "/work/.codechecker_reports"
+            "/work/codechecker_reports"
+            "/tmp/codechecker_reports"
+            "${{ steps.codechecker.outputs.result-html-dir }}/../reports"
+            "${{ steps.codechecker.outputs.result-html-dir }}/reports"
+          )
+
+          RAW_REPORTS_DIR=""
+
+          # First check the possible directories
+          for dir in "${POSSIBLE_DIRS[@]}"; do
+            if [ -d "$dir" ]; then
+              echo "Found directory: $dir"
+              if find "$dir" -name "*.plist" -type f 2>/dev/null | head -1 | grep -q .; then
+                RAW_REPORTS_DIR="$dir"
+                echo "Found plist files in: $dir"
+                break
+              fi
+            fi
+          done
+
+          # If not found, search more broadly
+          if [ -z "$RAW_REPORTS_DIR" ]; then
+            echo "Searching for plist files in /work and /tmp..."
+            PLIST_FILE=$(find /work /tmp -name "*.plist" -type f 2>/dev/null | head -1 || true)
+            if [ -n "$PLIST_FILE" ]; then
+              RAW_REPORTS_DIR=$(dirname "$PLIST_FILE")
+              echo "Found plist files in: $RAW_REPORTS_DIR"
+            fi
+          fi
+
+          if [ -n "$RAW_REPORTS_DIR" ] && [ -d "$RAW_REPORTS_DIR" ]; then
+            echo "raw-reports-dir=$RAW_REPORTS_DIR" >> "$GITHUB_OUTPUT"
+            echo "has-raw-reports=true" >> "$GITHUB_OUTPUT"
+            PLIST_COUNT=$(find "$RAW_REPORTS_DIR" -name "*.plist" -type f | wc -l)
+            echo "Found $PLIST_COUNT plist files"
+          else
+            echo "No raw reports directory found"
+            echo "has-raw-reports=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload raw CodeChecker reports (plist)
+        uses: actions/upload-artifact@v4
+        if: always() && steps.find-raw-reports.outputs.has-raw-reports == 'true'
+        timeout-minutes: 10
+        with:
+          name: CodeChecker-Raw-Reports
+          path: ${{ steps.find-raw-reports.outputs.raw-reports-dir }}
 
       - name: Extract CodeChecker issues to JSON
         id: extract-issues
@@ -361,73 +420,122 @@ jobs:
     outputs:
       has-issues: ${{ steps.extract-issues.outputs.has-issues }}
     steps:
+      # Download HTML reports (contains *.plist.html files with all issue info)
       - name: Download CodeChecker HTML Reports from previous run
         uses: actions/download-artifact@v4
         with:
           name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-reports
+          path: /tmp/previous-html
           run-id: ${{ inputs.previous-run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install CodeChecker for parsing
-        run: |
-          pip install codechecker==6.27.1
-
-      - name: Extract issues from CodeChecker reports
+      - name: Extract issues from HTML reports
         id: extract-issues
         run: |
           set -euo pipefail
-          REPORT_DIR="/tmp/previous-reports"
+          REPORT_DIR="/tmp/previous-html"
 
-          if [ ! -d "$REPORT_DIR" ]; then
-            echo "No CodeChecker reports found"
+          echo "=== Listing HTML report contents ==="
+          ls -la "$REPORT_DIR" | head -20
+
+          # Find all .plist.html files (each contains issues for one source file)
+          PLIST_HTML_FILES=$(find "$REPORT_DIR" -name "*.plist.html" -type f 2>/dev/null)
+          ISSUE_COUNT=$(echo "$PLIST_HTML_FILES" | grep -c . || echo "0")
+
+          echo "Found $ISSUE_COUNT plist.html files (each represents a file with issues)"
+
+          if [ "$ISSUE_COUNT" = "0" ]; then
+            echo "No issues found in CodeChecker HTML reports"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # CodeChecker stores reports in a specific structure
-          # Try to find the actual report directory (contains plist files)
-          REPORTS_BASE=""
+          echo "has-issues=true" >> "$GITHUB_OUTPUT"
+          echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
 
-          # Look for a reports subdirectory
-          if [ -d "$REPORT_DIR/reports" ]; then
-            REPORTS_BASE="$REPORT_DIR/reports"
-          # Look for plist files in the directory
-          elif find "$REPORT_DIR" -name "*.plist" -type f | head -1 | grep -q .; then
-            REPORTS_BASE="$REPORT_DIR"
-          else
-            # Last resort: try the directory itself
-            REPORTS_BASE="$REPORT_DIR"
-          fi
-
-          echo "Using report directory: $REPORTS_BASE"
-
-          # Export issues to JSON using CodeChecker parse
+          # Extract issue information from the HTML files
+          # Each .plist.html file contains issues for a specific source file
+          # Format: {source_file}_clangsa_{hash}.plist.html
           JSON_OUTPUT="/tmp/codechecker_issues.json"
-          if CodeChecker parse "$REPORTS_BASE" --export json > "$JSON_OUTPUT" 2>&1; then
-            # Check if we have any issues
-            if [ ! -s "$JSON_OUTPUT" ]; then
-              echo "Empty JSON output from CodeChecker"
-              echo "has-issues=false" >> "$GITHUB_OUTPUT"
-              exit 0
+          echo "[" > "$JSON_OUTPUT"
+
+          FIRST=true
+          while IFS= read -r html_file; do
+            [ -z "$html_file" ] && continue
+
+            # Extract source file name from the HTML filename
+            # Format: test_cleanup.cpp_clangsa_d8c936ee4957f9035b5c5ea49b7cc12b.plist.html
+            basename_file=$(basename "$html_file")
+            # Remove _clangsa_*.plist.html suffix to get source file
+            source_file=$(echo "$basename_file" | sed 's/_clangsa_[a-f0-9]*\.plist\.html$//')
+
+            # Parse HTML to extract issue details
+            # Look for bug report entries - they typically contain checker name, line number, message
+            # The HTML structure varies, so we'll extract what we can
+
+            # Try to extract checker name from HTML (usually in a span or div with class containing "checker")
+            checker=$(grep -oP '(?<=<span class="checker-name">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
+                      grep -oP 'clangsa\.[^<"]+' "$html_file" 2>/dev/null | head -1 || \
+                      echo "clangsa.unknown")
+
+            # Try to extract line number (usually in report-line or similar)
+            line=$(grep -oP '(?<=<span class="line">)[0-9]+' "$html_file" 2>/dev/null | head -1 || \
+                   grep -oP '(?<=line )[0-9]+' "$html_file" 2>/dev/null | head -1 || \
+                   grep -oP ':[0-9]+:' "$html_file" 2>/dev/null | head -1 | tr -d ':' || \
+                   echo "1")
+
+            # Try to extract message
+            message=$(grep -oP '(?<=<span class="message">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
+                      grep -oP '(?<=<div class="bug-message">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
+                      echo "Static analysis issue detected")
+
+            # Clean up extracted values
+            checker=$(echo "$checker" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 100)
+            line=$(echo "$line" | grep -oP '[0-9]+' | head -1)
+            [ -z "$line" ] && line="1"
+            message=$(echo "$message" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/"/\\"/g' | head -c 500)
+
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
+              echo "," >> "$JSON_OUTPUT"
             fi
 
-            # Try to parse as JSON array
-            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" 2>/dev/null || echo "0")
-            if [ "$ISSUE_COUNT" = "0" ]; then
-              echo "No issues found in CodeChecker reports"
-              echo "has-issues=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+            cat >> "$JSON_OUTPUT" << JSONEOF
+          {
+            "file": "$source_file",
+            "line": $line,
+            "checker": "$checker",
+            "message": "$message",
+            "html_report": "$basename_file"
+          }
+          JSONEOF
 
-            echo "Found $ISSUE_COUNT issues"
-            echo "has-issues=true" >> "$GITHUB_OUTPUT"
-            echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
-          else
-            echo "Failed to parse CodeChecker reports (this may be normal if no issues found)"
-            cat "$JSON_OUTPUT" || true
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          done <<< "$PLIST_HTML_FILES"
+
+          echo "]" >> "$JSON_OUTPUT"
+
+          echo "=== Generated JSON ==="
+          cat "$JSON_OUTPUT"
+
+          # Validate JSON
+          if ! jq empty "$JSON_OUTPUT" 2>/dev/null; then
+            echo "Warning: Generated invalid JSON, creating simple fallback"
+            # Create a simple fallback with just file names
+            echo "[" > "$JSON_OUTPUT"
+            FIRST=true
+            while IFS= read -r html_file; do
+              [ -z "$html_file" ] && continue
+              basename_file=$(basename "$html_file")
+              source_file=$(echo "$basename_file" | sed 's/_clangsa_[a-f0-9]*\.plist\.html$//')
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> "$JSON_OUTPUT"
+              fi
+              echo "{\"file\": \"$source_file\", \"line\": 1, \"checker\": \"clangsa\", \"message\": \"See HTML report\", \"html_report\": \"$basename_file\"}" >> "$JSON_OUTPUT"
+            done <<< "$PLIST_HTML_FILES"
+            echo "]" >> "$JSON_OUTPUT"
           fi
 
       - name: Upload extracted issues JSON
@@ -441,7 +549,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-reports
+          path: /tmp/previous-html
 
   copilot-fix-clangsa-issue:
     name: 🤖 Copilot Fix ClangSA Issue
@@ -641,6 +749,16 @@ jobs:
           echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.download-json.outcome }}" = "failure" ]; then
+            echo "**Note:** Could not download issue data." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "This could mean:" >> "$GITHUB_STEP_SUMMARY"
+            echo "- The previous run had no static analysis issues" >> "$GITHUB_STEP_SUMMARY"
+            echo "- The HTML report parsing failed to extract issues" >> "$GITHUB_STEP_SUMMARY"
+            echo "- The artifact has expired" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
   publish-clangsa-pages:
