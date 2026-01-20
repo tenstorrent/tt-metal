@@ -11,6 +11,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "rmsnorm.hpp"
 #include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
+#include "ttnn/operations/experimental/sequential/device/sequential_device_operation_types.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
@@ -166,6 +167,70 @@ void bind_normalization_rms_norm(nb::module_& mod) {
                 >>> branch_a = ttnn.rms_norm.branch(input_a, cores_a, epsilon=1e-5, weight=w_a)
                 >>> branch_b = ttnn.rms_norm.branch(input_b, cores_b, epsilon=1e-5, weight=w_b)
                 >>> results = ttnn.parallel([branch_a, branch_b])
+        )doc");
+
+    // Add step() method for sequential execution support
+    py_operation.def(
+        "step",
+        [](const std::decay_t<decltype(ttnn::rms_norm)>& /*self*/,
+           const ttnn::Tensor& input_tensor,
+           const tt::tt_metal::CoreRangeSet& cores,
+           float epsilon,
+           const std::optional<const ttnn::Tensor>& weight,
+           const std::optional<const ttnn::Tensor>& bias,
+           const std::optional<const ttnn::Tensor>& residual_input_tensor,
+           const std::optional<MemoryConfig>& memory_config,
+           const std::optional<const LayerNormProgramConfig>& program_config,
+           std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+            return ExecuteRMSNorm::step(
+                input_tensor,
+                cores,
+                epsilon,
+                weight,
+                bias,
+                residual_input_tensor,
+                memory_config,
+                program_config,
+                compute_kernel_config);
+        },
+        nb::arg("input_tensor"),
+        nb::arg("cores"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12f,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        R"doc(
+            Create a step descriptor for sequential execution with ttnn.sequential.
+
+            This allows chaining RMS norm as a step in a sequential pipeline. Each step
+            specifies the cores it should execute on, allowing sequential operations
+            to be composed with parallel operations.
+
+            Args:
+                input_tensor (ttnn.Tensor): Input tensor to normalize.
+                cores (ttnn.CoreRangeSet): Core range for this step to execute on.
+
+            Keyword Args:
+                epsilon (float): Small constant for numerical stability. Defaults to 1e-12.
+                weight (ttnn.Tensor, optional): Gamma scale tensor. Defaults to None.
+                bias (ttnn.Tensor, optional): Beta bias tensor. Defaults to None.
+                residual_input_tensor (ttnn.Tensor, optional): Residual tensor. Defaults to None.
+                memory_config (ttnn.MemoryConfig, optional): Output memory config. Defaults to None.
+                program_config (ttnn.ProgramConfig, optional): Program config. Defaults to None.
+                compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute config. Defaults to None.
+
+            Returns:
+                StepDescriptor: A step descriptor for use with ttnn.sequential().
+
+            Example:
+                >>> cores = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (3, 3))])
+                >>> step1 = ttnn.rms_norm.step(input1, cores, epsilon=1e-5, weight=w1)
+                >>> step2 = ttnn.layer_norm.step(input2, cores, epsilon=1e-6, weight=w2)
+                >>> results = ttnn.sequential([step1, step2])
         )doc");
 }
 

@@ -26,13 +26,23 @@ target_sources(
             sequential_nanobind.hpp
             device/sequential_device_operation.hpp
             device/sequential_device_operation_types.hpp
+            device/sequential_factory.hpp
+            device/sequential_branch_descriptor.hpp
     PRIVATE
         sequential.cpp
         device/sequential_device_operation.cpp
+        device/sequential_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_sequential PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_experimental_sequential PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_experimental_sequential
+    PUBLIC
+        TTNN::Core
+        TTNN::Ops::Experimental::Parallel
+    PRIVATE
+        TT::Metalium
+)
 
 install(TARGETS ttnn_op_experimental_sequential FILE_SET api COMPONENT ttnn-dev)
 install(TARGETS ttnn_op_experimental_sequential LIBRARY COMPONENT tar)

@@ -4,21 +4,70 @@
 
 #pragma once
 
-// Sequential operation for executing multiple operations in order.
-//
-// Current implementation: Python-based sequential execution.
-// Future: C++ fused execution with CB chaining for efficiency.
-//
-// Python usage:
-//   results = ttnn.sequential([
-//       (ttnn.rms_norm, input1, {"epsilon": 1e-5}),
-//       (ttnn.layer_norm, input2),
-//   ])
-
-#include "device/sequential_device_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "device/sequential_device_operation_types.hpp"
+#include "device/sequential_branch_descriptor.hpp"
 
 namespace ttnn::operations::experimental::sequential {
 
-// Reserved for future C++ sequential execution API.
+// =============================================================================
+// ExecuteSequential - The registered operation
+// =============================================================================
+
+struct ExecuteSequential {
+    // Execute a sequence of operations
+    // Each step carries its own core range specification
+    // Usage:
+    //   ttnn::sequential([step1, step2, ...])
+    static tensor_return_value_t invoke(std::vector<std::shared_ptr<StepDescriptor>> steps);
+
+    // Create a branch descriptor for use with ttnn::parallel
+    // The branch's core range is taken from the first step
+    // Usage:
+    //   auto seq_branch = ttnn::sequential.branch([step1, step2]);
+    //   ttnn::parallel([seq_branch, other_branch]);
+    static std::shared_ptr<parallel::BranchDescriptor> branch(std::vector<std::shared_ptr<StepDescriptor>> steps);
+};
 
 }  // namespace ttnn::operations::experimental::sequential
+
+namespace ttnn {
+
+// Re-export Step for user convenience
+template <typename DeviceOp>
+using step = ttnn::operations::experimental::sequential::Step<DeviceOp>;
+
+// The sequential operation
+constexpr auto sequential =
+    ttnn::register_operation<"ttnn::sequential", ttnn::operations::experimental::sequential::ExecuteSequential>();
+
+}  // namespace ttnn
+
+// =============================================================================
+// Usage Examples
+// =============================================================================
+//
+// Example 1: Sequential execution of RMS norm then LayerNorm
+//
+// ```cpp
+// using RMS = ttnn::operations::normalization::rms_norm::RMSNormDeviceOperation;
+// using LN = ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation;
+//
+// std::vector<std::shared_ptr<StepDescriptor>> steps;
+// steps.push_back(create_step<RMS>({.eps = 1e-5}, {.input = t1, .weight = g1}));
+// steps.push_back(create_step<LN>({.eps = 1e-6}, {.input = t2, .weight = g2}));
+//
+// auto results = ttnn::sequential(cores, steps);
+// auto& output = results[0];  // Output from last step
+// ```
+//
+// Example 2: Sequential as a branch in parallel
+//
+// ```cpp
+// auto seq_branch = ttnn::sequential.branch(cores_a, steps);
+// auto other_branch = ttnn::rms_norm.branch(input, cores_b, epsilon=1e-5);
+//
+// // Both branches execute in parallel, but seq_branch runs its steps sequentially
+// auto results = ttnn::parallel([seq_branch, other_branch]);
+// ```
+//

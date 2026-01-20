@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include "ttnn-nanobind/nanobind_fwd.hpp"
+#include <nanobind/nanobind.h>
 
 namespace ttnn::operations::experimental::sequential::detail {
 
-namespace nb = nanobind;
-
-void bind_sequential_operation(nb::module_& mod);
+void bind_sequential_operation(nanobind::module_& module);
 
 }  // namespace ttnn::operations::experimental::sequential::detail
