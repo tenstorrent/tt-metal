@@ -45,6 +45,7 @@ Include after Section 2 in your execution log:
 | tilize_helpers.hpp | YES/NO | YES/NO | {list or "N/A"} |
 | untilize_helpers.hpp | YES/NO | YES/NO | {list or "N/A"} |
 | reduce_helpers.hpp | YES/NO | YES/NO | {list or "N/A"} |
+| binary_op_helpers.hpp | YES/NO | YES/NO | {list or "N/A"} |
 | dest_helpers.hpp | YES/NO | YES/NO | {list or "N/A"} |
 
 ### Phase-to-Helper Mapping
