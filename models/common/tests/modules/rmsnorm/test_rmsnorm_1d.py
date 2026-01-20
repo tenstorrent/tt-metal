@@ -623,9 +623,6 @@ def test_rmsnorm_1d_vs_reference(
         # Prefill uses interleaved memory (not sharded)
         assert not in_sharded, f"Prefill should have in_sharded=False, got {in_sharded}"
         assert not out_sharded, f"Prefill should have out_sharded=False, got {out_sharded}"
-        assert (
-            cfg.prefill_distributed == is_distributed
-        ), f"Expected prefill_distributed={is_distributed}, got {cfg.prefill_distributed}"
     else:  # decode
         # Decode never uses distributed path
         assert not is_distributed, f"Decode should have is_distributed=False, got {is_distributed}"

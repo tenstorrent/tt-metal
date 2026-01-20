@@ -5,14 +5,15 @@
 RMSNorm1D: RMSNorm for 1D mesh topologies (single-chip, n150, n300, T3K row/column).
 
 Execution paths:
-  - Path 1: _decode_local - Local decode (sharded) - always for 1D decode
-  - Path 2: _prefill_local - Local prefill (interleaved) - dim <= 4096
-  - Path 3: _prefill_1d_distributed - 1D distributed prefill - dim > 4096, Ring topology
+  - Path 1: _decode_local - Local decode (sharded or interleaved) - always for 1D decode
+  - Path 2: _prefill_local - Local prefill (interleaved) - single-device or prefill_distributed=False
+  - Path 3: _prefill_1d_distributed - 1D distributed prefill - multi-device, Ring topology
 
 Key design:
   - decode_forward always uses local sharded path (no 1D distributed decode)
-  - prefill_forward switches between local and distributed based on dim
+  - prefill_forward switches between local and distributed based on prefill_distributed config
   - Config provides program_config/memory_config for sharded, None for interleaved
+  - from_model_args() sets prefill_distributed=True only when dim > 4096 for backward compatibility
 """
 
 import math
@@ -65,7 +66,7 @@ class RMSNorm1DConfig:
     eps: float = 1e-5
     add_unit_offset: bool = False
 
-    # Distributed control (None = auto-detect: True if dim > 4096)
+    # Distributed control (None = auto-detect: True for multi-device, False for single-device)
     prefill_distributed: bool | None = None
 
     # Batch size for decode
@@ -249,7 +250,7 @@ class RMSNorm1D(LightweightModule):
 
     def _prefill_local(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
-        Local prefill - interleaved RMSNorm for dim <= 4096.
+        Local prefill - interleaved RMSNorm when prefill_distributed=False.
 
         Execution: rms_norm(interleaved) without program_config
         """
@@ -272,7 +273,7 @@ class RMSNorm1D(LightweightModule):
 
     def _prefill_1d_distributed(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
-        1D distributed prefill - for dim > 4096.
+        1D distributed prefill - when prefill_distributed=True.
 
         Uses Ring topology, no cluster_axis.
 
@@ -403,6 +404,11 @@ class RMSNorm1D(LightweightModule):
             packer_l1_acc=False,
         )
 
+        # Determine prefill_distributed based on dim and num_devices
+        # This preserves backward compatibility with TTTv1's is_distributed_norm() logic
+        num_devices = mesh_device.get_num_devices()
+        prefill_distributed = num_devices > 1 and dim > 4096
+
         # Build config
         config = RMSNorm1DConfig(
             weight=lazy_weight,
@@ -411,6 +417,7 @@ class RMSNorm1D(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             max_batch_size=args.max_batch_size,
+            prefill_distributed=prefill_distributed,
             decode_program_config=sharded_program_config,
             decode_memory_config=sharded_output_config,
             compute_kernel_config=compute_kernel_config,
@@ -448,14 +455,19 @@ def _resolve_1d_config(config: RMSNorm1DConfig) -> RMSNorm1DConfig:
     num_devices = mesh_device.get_num_devices()
 
     # --- Phase 2: Auto-detect distributed prefill ---
+    # Weight shape is (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT), shard on dim 2
+    # Need at least num_devices tiles to shard across devices
+    num_weight_tiles = dim // SHARD_HEIGHT
+    can_shard_weights = num_weight_tiles >= num_devices
 
     if config.prefill_distributed is None:
         if num_devices == 1:
             to_set["prefill_distributed"] = False
-        elif dim > 4096:
-            to_set["prefill_distributed"] = True
-        else:
+        elif not can_shard_weights:
+            # Can't shard weight tiles across num_devices, use local prefill
             to_set["prefill_distributed"] = False
+        else:
+            to_set["prefill_distributed"] = True
 
     prefill_distributed = to_set.get("prefill_distributed", config.prefill_distributed)
 
