@@ -517,7 +517,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
     auto full_grid_size = device->compute_with_storage_grid_size();
     TT_FATAL(
-        !((transpose_core_grid ? full_grid_size.x : full_grid_size.y) % num_links),
+        !((transpose_core_grid ? grid_size.x : grid_size.y) % num_links),
         "The number of in0 rows must be a multiple of num_links");
     uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
     TT_FATAL(
