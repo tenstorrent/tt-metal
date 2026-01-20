@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,76 @@ from models.demos.deepseek_v3.utils.test_utils import (
 
 PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
+
+# Flag to control whether to use synthetic weights instead of downloaded weights
+USE_SYNTHETIC_WEIGHTS = os.getenv("USE_SYNTHETIC_WEIGHTS", "0") == "1"
+
+
+class SyntheticStateDict(dict):
+    """A simple wrapper around dict to provide compatibility with LazyStateDict interface"""
+
+    def clear_cache(self):
+        """No-op for synthetic state dict since we don't have a cache"""
+
+
+def generate_synthetic_state_dict(hf_config: PretrainedConfig, layer_idx: int, seed: int = 42) -> SyntheticStateDict:
+    """
+    Generate synthetic weights for DeepseekV3 MLA module.
+
+    Args:
+        hf_config: The model configuration
+        layer_idx: The layer index to generate weights for
+        seed: Random seed for reproducibility (default: 42)
+
+    Returns:
+        Dictionary containing synthetic weight tensors
+    """
+    torch.manual_seed(seed + layer_idx)  # Ensure different layers get different weights
+
+    state_dict = SyntheticStateDict()
+
+    # Generate weights for MLA components based on DeepseekV3Attention structure
+    hidden_size = hf_config.hidden_size
+    q_lora_rank = hf_config.q_lora_rank
+    kv_lora_rank = hf_config.kv_lora_rank
+    qk_rope_head_dim = hf_config.qk_rope_head_dim
+    qk_nope_head_dim = hf_config.qk_nope_head_dim
+    v_head_dim = hf_config.v_head_dim
+    num_heads = hf_config.num_attention_heads
+    num_key_value_heads = hf_config.num_key_value_heads
+
+    # Q projections
+    # q_a_proj: hidden_size -> q_lora_rank
+    state_dict["q_a_proj.weight"] = torch.randn(q_lora_rank, hidden_size, dtype=torch.bfloat16) * 0.02
+
+    # q_b_proj: q_lora_rank -> num_heads * (qk_nope_head_dim + qk_rope_head_dim)
+    # Note: q_b_proj outputs both nope and rope components
+    state_dict["q_b_proj.weight"] = (
+        torch.randn(num_heads * (qk_nope_head_dim + qk_rope_head_dim), q_lora_rank, dtype=torch.bfloat16) * 0.02
+    )
+
+    # q_a_layernorm
+    state_dict["q_a_layernorm.weight"] = torch.ones(q_lora_rank, dtype=torch.bfloat16)
+
+    # KV projections
+    # kv_a_proj_with_mqa: hidden_size -> kv_lora_rank + qk_rope_head_dim
+    state_dict["kv_a_proj_with_mqa.weight"] = (
+        torch.randn(kv_lora_rank + qk_rope_head_dim, hidden_size, dtype=torch.bfloat16) * 0.02
+    )
+
+    # kv_b_proj: kv_lora_rank -> num_key_value_heads * (qk_nope_head_dim + v_head_dim)
+    state_dict["kv_b_proj.weight"] = (
+        torch.randn(num_key_value_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank, dtype=torch.bfloat16) * 0.02
+    )
+
+    # kv_a_layernorm
+    state_dict["kv_a_layernorm.weight"] = torch.ones(kv_lora_rank, dtype=torch.bfloat16)
+
+    # Output projection
+    # o_proj: num_heads * v_head_dim -> hidden_size
+    state_dict["o_proj.weight"] = torch.randn(hidden_size, num_heads * v_head_dim, dtype=torch.bfloat16) * 0.02
+
+    return state_dict
 
 
 def expand_test_cases_with_position_ids_ranges(base_cases):
@@ -135,6 +206,7 @@ def generate_reference_io(
     mode: str,
     state_dict: dict[str, torch.Tensor],
     decode_position_id: int | None = None,
+    use_synthetic_weights: bool = USE_SYNTHETIC_WEIGHTS,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Generate reference input/output for testing.
@@ -143,18 +215,78 @@ def generate_reference_io(
         decode_position_id: Configuration for position_ids generation (only used in decode mode):
             - None: Generate random position_ids in range [0, max_seq_len - 1)
             - int: Use this specific position for all batches
+        use_synthetic_weights: Whether to use synthetic weights instead of downloaded weights
     """
-    if module_path is None:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+    reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
+
+    if use_synthetic_weights:
+        # Generate synthetic weights for this layer
+        synthetic_state_dict = generate_synthetic_state_dict(hf_config, layer_idx, seed=42)
+
+        if module_path is None:
+            # Load synthetic weights directly
+            reference_model.load_state_dict(synthetic_state_dict)
+            # For synthetic weights, bypass quantization but convert to float8_e4m3fn that TTNN expects
+            state_dict = {}
+            weight_names = ["q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj"]
+            for name, tensor in synthetic_state_dict.items():
+                if any(name.endswith(weight_name + ".weight") for weight_name in weight_names):
+                    # Clamp values to avoid overflow when converting to float8
+                    clamped_tensor = torch.clamp(tensor, min=-240.0, max=240.0)
+                    # Convert to float8_e4m3fn format that TTNN expects
+                    state_dict[name] = clamped_tensor.to(torch.float8_e4m3fn)
+                    # Add a scale_inv tensor with proper dimensions
+                    # Need to handle cases where dimensions are not perfect multiples of block_size
+                    block_size = hf_config.quantization_config["weight_block_size"]
+                    # Calculate scale shape - round up to ensure coverage
+                    import math
+
+                    scale_shape = [math.ceil(tensor.shape[i] / block_size[i]) for i in range(len(tensor.shape))]
+                    state_dict[name + "_scale_inv"] = torch.ones(scale_shape, dtype=torch.float32)
+                else:
+                    # Keep layernorm weights as-is
+                    state_dict[name] = tensor
+        else:
+            # For module_path case with synthetic weights, create properly formatted state dict
+            # Load synthetic weights into reference model
+            reference_model.load_state_dict(synthetic_state_dict)
+            # Create state dict with module path prefix and proper format for TTNN
+            prefixed_synthetic = {}
+            weight_names = ["q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj"]
+            for name, tensor in synthetic_state_dict.items():
+                full_name = f"{module_path}.{name}"
+                if any(name.endswith(weight_name + ".weight") for weight_name in weight_names):
+                    # Clamp values to avoid overflow when converting to float8
+                    clamped_tensor = torch.clamp(tensor, min=-240.0, max=240.0)
+                    # Convert to float8_e4m3fn format that TTNN expects
+                    prefixed_synthetic[full_name] = clamped_tensor.to(torch.float8_e4m3fn)
+                    # Add a scale_inv tensor with proper dimensions
+                    # Need to handle cases where dimensions are not perfect multiples of block_size
+                    block_size = hf_config.quantization_config["weight_block_size"]
+                    # Calculate scale shape - round up to ensure coverage
+                    import math
+
+                    scale_shape = [math.ceil(tensor.shape[i] / block_size[i]) for i in range(len(tensor.shape))]
+                    prefixed_synthetic[full_name + "_scale_inv"] = torch.ones(scale_shape, dtype=torch.float32)
+                else:
+                    # Keep layernorm weights as-is
+                    prefixed_synthetic[full_name] = tensor
+            # Add other required keys from original state_dict that might be needed
+            for key in state_dict.keys():
+                if key not in prefixed_synthetic and not key.startswith(module_path + "."):
+                    prefixed_synthetic[key] = state_dict[key]
+            state_dict = prefixed_synthetic
     else:
-        reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        state_dict = sub_state_dict(state_dict, module_path + ".")
-        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
-        reference_model.load_state_dict(dequantized_state_dict)
+        # Original code for downloaded weights
+        if module_path is None:
+            state_dict = add_inv_scale_to_state_dict(
+                reference_model.state_dict(),
+                block_shape=hf_config.quantization_config["weight_block_size"],
+            )
+        else:
+            state_dict = sub_state_dict(state_dict, module_path + ".")
+            dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+            reference_model.load_state_dict(dequantized_state_dict)
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None
@@ -288,6 +420,7 @@ def run_test_forward_pass_mla1d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights=USE_SYNTHETIC_WEIGHTS,
     )
 
     # Set up page config
@@ -430,6 +563,7 @@ def run_test_forward_pass_mla2d(
         mode,
         state_dict,
         decode_position_ids,
+        use_synthetic_weights=USE_SYNTHETIC_WEIGHTS,
     )
 
     # Set up page config
@@ -537,6 +671,17 @@ BASE_TEST_CASES = [
 # Expand ranges into individual position_ids for pytest
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+
+
+# Override state_dict fixture when using synthetic weights
+if USE_SYNTHETIC_WEIGHTS:
+
+    @pytest.fixture(scope="function")
+    def state_dict(hf_config_short):
+        """Generate synthetic state_dict for testing when USE_SYNTHETIC_WEIGHTS is True"""
+        logger.info("Using synthetic weights for testing")
+        layer_idx = 0  # Using layer 0 for testing
+        return generate_synthetic_state_dict(hf_config_short, layer_idx, seed=42)
 
 
 @pytest.mark.parametrize(
