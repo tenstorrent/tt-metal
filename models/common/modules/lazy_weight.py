@@ -144,6 +144,7 @@ class LazyWeight:
             memory_config=self.memory_config,
             mesh_mapper=mesh_mapper,
             is_replicated=is_replicated,
+            pad_value=self.pad_value,
             cache_file_name=cache_file_name,
         )
 
@@ -292,6 +293,7 @@ def _from_torch_and_dump(
     memory_config: Optional[ttnn.MemoryConfig],
     mesh_mapper: Optional[ttnn.CppTensorToMesh],
     is_replicated: bool,
+    pad_value: float,
     cache_file_name: Optional[str],
 ):
     """
@@ -316,6 +318,7 @@ def _from_torch_and_dump(
             mesh_mapper=local_mesh_mapper,
             memory_config=memory_config,
             device=device,
+            pad_value=pad_value,
         )
 
     tensor = ttnn.from_torch(
@@ -326,6 +329,7 @@ def _from_torch_and_dump(
         mesh_mapper=local_mesh_mapper,
         memory_config=memory_config,
         device=None,
+        pad_value=pad_value,
     )
     assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
 
