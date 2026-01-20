@@ -22,6 +22,16 @@ on:
         required: false
         type: boolean
         default: false
+      previous-run-id:
+        description: "Run ID of a previous workflow to download CodeChecker results from (skips analysis)"
+        required: false
+        type: string
+        default: ""
+      enable-copilot-fix:
+        description: "Enable Copilot to automatically fix one ClangSA issue and create a PR"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       distro:
@@ -38,6 +48,16 @@ on:
         default: "amd64"
       enable-static-analysis:
         description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
+        required: false
+        type: boolean
+        default: false
+      previous-run-id:
+        description: "Run ID of a previous workflow to download CodeChecker results from (skips analysis)"
+        required: false
+        type: string
+        default: ""
+      enable-copilot-fix:
+        description: "Enable Copilot to automatically fix one ClangSA issue and create a PR"
         required: false
         type: boolean
         default: false
@@ -206,7 +226,7 @@ jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
     needs: [ build-docker-image ]
-    if: ${{ inputs.enable-static-analysis == true || github.event_name == 'schedule' }}
+    if: ${{ (inputs.enable-static-analysis == true || github.event_name == 'schedule') && inputs.previous-run-id == '' }}
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
@@ -262,10 +282,313 @@ jobs:
           name: CodeChecker-Static-Analysis-Reports
           path: ${{ steps.codechecker.outputs.result-html-dir }}
 
+      - name: Extract CodeChecker issues to JSON
+        id: extract-issues
+        if: always()
+        run: |
+          set -euo pipefail
+          REPORT_DIR="${{ steps.codechecker.outputs.result-html-dir }}"
+          if [ ! -d "$REPORT_DIR" ]; then
+            echo "No CodeChecker reports found"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # CodeChecker stores reports in a specific structure
+          # Try to find the actual report directory (contains plist files or can be parsed)
+          # First, try to find plist files or the reports subdirectory
+          REPORTS_BASE=""
+
+          # Look for a reports subdirectory
+          if [ -d "$REPORT_DIR/reports" ]; then
+            REPORTS_BASE="$REPORT_DIR/reports"
+          # Look for plist files in the directory
+          elif find "$REPORT_DIR" -name "*.plist" -type f | head -1 | grep -q .; then
+            REPORTS_BASE="$REPORT_DIR"
+          # Try parent directory (sometimes reports are one level up)
+          elif [ -d "$(dirname "$REPORT_DIR")/reports" ]; then
+            REPORTS_BASE="$(dirname "$REPORT_DIR")/reports"
+          else
+            # Last resort: try the HTML dir itself
+            REPORTS_BASE="$REPORT_DIR"
+          fi
+
+          echo "Using report directory: $REPORTS_BASE"
+
+          # Export issues to JSON using CodeChecker parse
+          JSON_OUTPUT="/tmp/codechecker_issues.json"
+          if CodeChecker parse "$REPORTS_BASE" --export json > "$JSON_OUTPUT" 2>&1; then
+            # Check if we have any issues
+            if [ ! -s "$JSON_OUTPUT" ]; then
+              echo "Empty JSON output from CodeChecker"
+              echo "has-issues=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Try to parse as JSON array
+            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" 2>/dev/null || echo "0")
+            if [ "$ISSUE_COUNT" = "0" ]; then
+              echo "No issues found in CodeChecker reports"
+              echo "has-issues=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Found $ISSUE_COUNT issues"
+            echo "has-issues=true" >> "$GITHUB_OUTPUT"
+            echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
+
+            # Upload JSON for use in next job
+            cp "$JSON_OUTPUT" /work/codechecker_issues.json
+          else
+            echo "Failed to parse CodeChecker reports (this may be normal if no issues found)"
+            cat "$JSON_OUTPUT" || true
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+      - name: Upload CodeChecker issues JSON
+        uses: actions/upload-artifact@v4
+        if: steps.extract-issues.outputs.has-issues == 'true'
+        with:
+          name: CodeChecker-Issues-JSON
+          path: /work/codechecker_issues.json
+
+  # Job to download CodeChecker artifacts from a previous workflow run
+  download-previous-results:
+    name: 📥 Download Previous Results
+    if: ${{ inputs.previous-run-id != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download CodeChecker Issues JSON from previous run
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Issues-JSON
+          path: /tmp/previous-results
+          run-id: ${{ inputs.previous-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-upload as current workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeChecker-Issues-JSON
+          path: /tmp/previous-results/codechecker_issues.json
+
+      - name: Download CodeChecker HTML Reports from previous run
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Static-Analysis-Reports
+          path: /tmp/previous-html
+          run-id: ${{ inputs.previous-run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-upload HTML reports as current workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeChecker-Static-Analysis-Reports
+          path: /tmp/previous-html
+
+  copilot-fix-clangsa-issue:
+    name: 🤖 Copilot Fix ClangSA Issue
+    needs: [ clang-static-analyzer, download-previous-results ]
+    # Run if: (analysis ran successfully OR we downloaded from previous run) AND copilot fix is enabled
+    if: |
+      always() &&
+      inputs.enable-copilot-fix == true &&
+      (needs.clang-static-analyzer.result == 'success' || needs.download-previous-results.result == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      pr-url: ${{ steps.create-agent-task.outputs.pr-url }}
+      session-url: ${{ steps.create-agent-task.outputs.session-url }}
+    steps:
+      - name: Download CodeChecker issues JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Issues-JSON
+          path: /tmp
+
+      - name: Check if issues exist and select one
+        id: select-issue
+        run: |
+          set -euo pipefail
+          if [ ! -f "/tmp/codechecker_issues.json" ]; then
+            echo "No CodeChecker issues found"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Handle different JSON structures (array, object with reports, etc.)
+          ISSUE_COUNT=$(jq '
+            if type == "array" then length
+            elif type == "object" and has("reports") then (.reports | length)
+            elif type == "object" then length
+            else 0 end
+          ' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
+
+          if [ "$ISSUE_COUNT" = "0" ] || [ -z "$ISSUE_COUNT" ] || [ "$ISSUE_COUNT" = "null" ]; then
+            echo "No issues found"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found $ISSUE_COUNT issues"
+          echo "has-issues=true" >> "$GITHUB_OUTPUT"
+          echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
+
+          # Extract the first issue
+          ISSUE=$(jq -r '
+            if type == "array" then .[0]
+            elif type == "object" and has("reports") then .reports[0]
+            elif type == "object" then .[keys[0]]
+            else empty end
+          ' /tmp/codechecker_issues.json)
+
+          if [ -z "$ISSUE" ] || [ "$ISSUE" = "null" ]; then
+            echo "Failed to extract issue from JSON"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract key information (handle different JSON structures)
+          FILE_PATH=$(echo "$ISSUE" | jq -r '.file.path // .file.name // .file // .path // "unknown"')
+          LINE=$(echo "$ISSUE" | jq -r '.line // .location.line // .lineNumber // "unknown"')
+          COLUMN=$(echo "$ISSUE" | jq -r '.column // .location.col // .columnNumber // "unknown"')
+          CHECKER_NAME=$(echo "$ISSUE" | jq -r '.checker.name // .checker // .checkerName // "unknown"')
+          MESSAGE=$(echo "$ISSUE" | jq -r '.message // .description // .msg // "unknown"')
+          SEVERITY=$(echo "$ISSUE" | jq -r '.severity // .severityLevel // "unknown"')
+
+          # Get relative path (strip common prefixes)
+          if [[ "$FILE_PATH" == "/work/"* ]]; then
+            REL_PATH="${FILE_PATH#/work/}"
+          else
+            REL_PATH="$FILE_PATH"
+          fi
+
+          echo "file-path=$REL_PATH" >> "$GITHUB_OUTPUT"
+          echo "line=$LINE" >> "$GITHUB_OUTPUT"
+          echo "column=$COLUMN" >> "$GITHUB_OUTPUT"
+          echo "checker-name=$CHECKER_NAME" >> "$GITHUB_OUTPUT"
+          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+          echo "severity=$SEVERITY" >> "$GITHUB_OUTPUT"
+
+      - name: Create Copilot agent task via GitHub CLI
+        if: steps.select-issue.outputs.has-issues == 'true'
+        id: create-agent-task
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          FILE_PATH="${{ steps.select-issue.outputs.file-path }}"
+          LINE="${{ steps.select-issue.outputs.line }}"
+          COLUMN="${{ steps.select-issue.outputs.column }}"
+          CHECKER_NAME="${{ steps.select-issue.outputs.checker-name }}"
+          MESSAGE="${{ steps.select-issue.outputs.message }}"
+          SEVERITY="${{ steps.select-issue.outputs.severity }}"
+
+          # Construct the prompt for Copilot coding agent
+          PROMPT="Fix the following Clang Static Analyzer issue in this repository:
+
+          **File:** \`$FILE_PATH\`
+          **Line:** $LINE
+          **Column:** $COLUMN
+          **Checker:** $CHECKER_NAME
+          **Severity:** $SEVERITY
+          **Message:** $MESSAGE
+
+          Please:
+          1. Review the issue and the surrounding code context
+          2. Apply a fix that addresses the root cause
+          3. Ensure the fix follows the project's coding standards
+          4. Make sure the fix doesn't introduce new issues
+          5. Keep changes minimal and focused on fixing this specific issue
+
+          Create a PR with title: fix(clangsa): Fix $CHECKER_NAME issue in $FILE_PATH"
+
+          # Determine base branch
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            BASE_BRANCH="main"
+          else
+            BASE_BRANCH="${{ github.ref_name }}"
+          fi
+
+          echo "=== Creating Copilot coding agent task ==="
+          echo "Repository: ${{ github.repository }}"
+          echo "Base branch: $BASE_BRANCH"
+          echo "Prompt: $PROMPT"
+          echo ""
+
+          # Use gh agent-task create to start a Copilot coding agent session
+          # This will create a PR using Copilot's native mechanism
+          RESULT=$(gh agent-task create "$PROMPT" \
+            --repo "${{ github.repository }}" \
+            --base "$BASE_BRANCH" \
+            --json url,number,sessionUrl 2>&1) || {
+            echo "Failed to create agent task: $RESULT"
+            echo "task-created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          echo "Agent task result: $RESULT"
+
+          # Parse the result
+          PR_URL=$(echo "$RESULT" | jq -r '.url // empty')
+          PR_NUMBER=$(echo "$RESULT" | jq -r '.number // empty')
+          SESSION_URL=$(echo "$RESULT" | jq -r '.sessionUrl // empty')
+
+          if [ -n "$PR_URL" ]; then
+            echo "task-created=true" >> "$GITHUB_OUTPUT"
+            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "session-url=$SESSION_URL" >> "$GITHUB_OUTPUT"
+          else
+            echo "task-created=true" >> "$GITHUB_OUTPUT"
+            echo "session-url=$SESSION_URL" >> "$GITHUB_OUTPUT"
+            # The PR URL may not be immediately available; the session URL allows tracking
+          fi
+
+      - name: Output to job summary
+        if: steps.select-issue.outputs.has-issues == 'true'
+        run: |
+          echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.create-agent-task.outputs.task-created }}" = "true" ]; then
+            echo "GitHub Copilot coding agent has been assigned to fix a Clang Static Analyzer issue:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Issue Details:**" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **File:** \`${{ steps.select-issue.outputs.file-path }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Line:** ${{ steps.select-issue.outputs.line }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Checker:** \`${{ steps.select-issue.outputs.checker-name }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Severity:** ${{ steps.select-issue.outputs.severity }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+
+            if [ -n "${{ steps.create-agent-task.outputs.pr-url }}" ]; then
+              echo "**Pull Request:** [${{ steps.create-agent-task.outputs.pr-url }}](${{ steps.create-agent-task.outputs.pr-url }})" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            if [ -n "${{ steps.create-agent-task.outputs.session-url }}" ]; then
+              echo "**Session:** [${{ steps.create-agent-task.outputs.session-url }}](${{ steps.create-agent-task.outputs.session-url }})" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "_Copilot is working on the fix. The PR will be created when Copilot finishes._" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "Failed to create Copilot coding agent task. Check the logs for details." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Output no issues summary
+        if: steps.select-issue.outputs.has-issues != 'true'
+        run: |
+          echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer ]
-    if: ${{ always() && needs.clang-static-analyzer.result != 'skipped' }}
+    needs: [ clang-static-analyzer, download-previous-results ]
+    if: ${{ always() && (needs.clang-static-analyzer.result == 'success' || needs.download-previous-results.result == 'success') }}
     runs-on: ubuntu-latest
 
     steps:
