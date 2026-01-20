@@ -81,9 +81,9 @@ class TenstorrentEmbeddingOp(BasicOp):
 
         # Calculate sizes based on original (non-padded) dimensions for accurate metrics
         dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
-        self.src_tensor_size = self.src_batch_size * self.dim_size * dtype_size
+        self.src_tensor_size = self.src_batch_size * self.dim_size * self.dtype_size
         self.index_tensor_size = self.dst_batch_size * 8  # int64 = 8 bytes
-        self.dst_tensor_size = self.dst_batch_size * self.dim_size * dtype_size
+        self.dst_tensor_size = self.dst_batch_size * self.dim_size * self.dtype_size
 
         self.input_tensor_size = self.src_tensor_size + self.index_tensor_size
         self.output_tensor_size = self.dst_tensor_size

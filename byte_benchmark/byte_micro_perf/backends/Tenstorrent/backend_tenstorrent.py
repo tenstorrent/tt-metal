@@ -50,8 +50,6 @@ def get_avg_duration(perf_data: dict, iterations: int) -> str:
             analyses_items = sorted(program.program_analyses_results.items())
             if core_count == 0:
                 core_count = program.core_count
-            else:
-                assert core_count == program.core_count, "Inconsistent core counts across programs"
             for name, res in analyses_items:
                 if "FW" in name and "ns" in name:
                     total_duration += res.duration

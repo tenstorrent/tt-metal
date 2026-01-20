@@ -51,11 +51,19 @@ class TenstorrentRMSNormOp(BasicOp):
             raise NotImplementedError
 
         self.dtype = self.args_dict["dtype"]
-        if self.dtype not in ["bfloat16", "float32"]:
+        if self.dtype not in ["bfloat16", "float32", "bfloat8_b"]:
             raise NotImplementedError(f"dtype={self.dtype} not supported by ttnn")
 
-        self.torch_dtype = getattr(torch, self.dtype)
-        self.ttnn_dtype = ttnn.bfloat16 if self.dtype == "bfloat16" else ttnn.float32
+        self.torch_dtype = torch.float32 if self.dtype == "float32" else torch.bfloat16
+        if self.dtype == "bfloat16":
+            self.dtype_size = 2
+            self.ttnn_dtype = ttnn.bfloat16
+        elif self.dtype == "float32":
+            self.ttnn_dtype = ttnn.float32
+            self.dtype_size = 4
+        elif self.dtype == "bfloat8_b":
+            self.dtype_size = 1
+            self.ttnn_dtype = ttnn.bfloat8_b
 
         self.add_residual = self.args_dict.get("add_residual", False)
         self.epsilon = 1e-5
@@ -91,11 +99,10 @@ class TenstorrentRMSNormOp(BasicOp):
             )
 
         # Calculate sizes based on original (non-padded) dimensions for accurate metrics
-        dtype_size = torch.tensor([], dtype=self.torch_dtype).element_size()
-        self.input_tensor_size = (self.batch_size * self.dim_size + self.dim_size) * dtype_size
+        self.input_tensor_size = (self.batch_size * self.dim_size + self.dim_size) * self.dtype_size
         if self.add_residual:
-            self.input_tensor_size += self.batch_size * self.dim_size * dtype_size
-        self.output_tensor_size = self.batch_size * self.dim_size * dtype_size
+            self.input_tensor_size += self.batch_size * self.dim_size * self.dtype_size
+        self.output_tensor_size = self.batch_size * self.dim_size * self.dtype_size
         self.tensor_size = self.input_tensor_size + self.output_tensor_size
 
         self.read_bytes = self.input_tensor_size
