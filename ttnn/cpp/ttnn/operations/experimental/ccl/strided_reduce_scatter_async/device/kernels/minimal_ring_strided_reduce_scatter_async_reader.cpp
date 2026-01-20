@@ -163,20 +163,20 @@ void kernel_main() {
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         DPRINT << "direction_offset: " << direction_offset << ENDL();
 
-                        // cb_reserve_back(cb_in0, tile_granularity);
+                        cb_reserve_back(cb_in0, tile_granularity);
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                             uint32_t input_tile_id = input_tile_id_start + input_row_offset + direction_offset;
                             DPRINT << "input_tile_id: " << input_tile_id << ENDL();
                             uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                            // noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
                             DPRINT << "--------------------------------" << ENDL();
                         }
-
                         if (do_reduce) {
                             // TODO: read the next intermediate slice out of the intermediate buffer, and put it in
-                            // intermediate CB cb_reserve_back(cb_intermediate_id, tile_granularity);
+                            // intermediate CB
+                            cb_reserve_back(cb_intermediate_id, tile_granularity);
                             uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                 uint32_t intermediate_tile_id =
@@ -184,16 +184,15 @@ void kernel_main() {
                                 DPRINT << "intermediate_tile_id: " << intermediate_tile_id << ENDL();
                                 uint64_t intermediate_noc_read_addr =
                                     get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
-                                // noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                                noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
                                 intermediate_l1_write_addr += page_size;
                             }
-                            // noc_async_read_barrier();
-                            // cb_push_back(cb_intermediate_id, tile_granularity);
+                            noc_async_read_barrier();
+                            cb_push_back(cb_intermediate_id, tile_granularity);
                         }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_in0, tile_granularity);
                     }
-
-                    // noc_async_read_barrier();
-                    // cb_push_back(cb_in0, tile_granularity);
 
                     // Next slice idx
                     if (direction) {
