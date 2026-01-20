@@ -306,4 +306,4 @@ class Function:
                     if output is not None and hasattr(output, "set_node"):
                         output.set_node(node_id)
 
-        return outputs if not single_output else outputs
+        return outputs
