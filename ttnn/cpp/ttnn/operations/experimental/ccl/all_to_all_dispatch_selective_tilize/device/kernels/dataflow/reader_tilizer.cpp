@@ -517,6 +517,14 @@ void kernel_main() {
         get_read_ptr(mapping_tensor_cb_id) + linearized_mesh_coord * aligned_mapping_page_size);
     uint16_t local_expert_ids[experts_per_device];
     uint32_t local_expert_count = 0;
+
+    // Lookup table: expert_id -> local index (0xFF if not local)
+    // This eliminates the inner loop in the hot path
+    uint8_t expert_to_local_index[256];
+    for (uint32_t i = 0; i < 256; i++) {
+        expert_to_local_index[i] = 0xFF;
+    }
+
     for (uint32_t i = 0; i < experts; i++) {
         uint16_t expert_mesh_coord = expert_to_device_map[i];
         if (expert_mesh_coord == linearized_mesh_coord) {
@@ -528,6 +536,7 @@ void kernel_main() {
             // DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is " << i
             // << ENDL();
             local_expert_ids[local_expert_count] = i;
+            expert_to_local_index[i] = local_expert_count;  // Map expert ID to local index
             local_expert_count++;
         }
     }
@@ -551,7 +560,7 @@ void kernel_main() {
         // Cache source_device_mapping - only changes every tokens_per_device tokens
         // Reduces mapping loads from 512 to 16 (dispatch_devices)
         uint32_t prev_device_in_group = UINT32_MAX;
-        const uint16_t* source_device_mapping = nullptr;
+        const tt_l1_ptr uint16_t* source_device_mapping = nullptr;
 
         for (uint32_t t = 0; t < tokens; t++) {
             // source_device only changes every tokens_per_device tokens
@@ -565,18 +574,18 @@ void kernel_main() {
                     mesh_rows,
                     mesh_cols,
                     axis>(t);
-                source_device_mapping =
-                    reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+                source_device_mapping = reinterpret_cast<const tt_l1_ptr uint16_t*>(
+                    mapping_base + source_device * aligned_mapping_page_size);
                 prev_device_in_group = device_in_group;
             }
 
-            const uint16_t* token_indices =
-                reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
-            const uint16_t* token_scores =
-                reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+            const tt_l1_ptr uint16_t* token_indices =
+                reinterpret_cast<const tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
+            const tt_l1_ptr uint16_t* token_scores =
+                reinterpret_cast<const tt_l1_ptr uint16_t*>(scores_base + t * aligned_scores_page_size);
 
             // Defer pointer calculation until we know token is activated
-            uint32_t* expert_activation_l1_ptr = nullptr;
+            tt_l1_ptr uint32_t* expert_activation_l1_ptr = nullptr;
             bool activated = false;
 
             for (uint32_t k = 0; k < selected_experts_k; k++) {
@@ -587,30 +596,28 @@ void kernel_main() {
                     continue;
                 }
 
-                // Now check if it's one of our local experts
-                for (uint32_t e = 0; e < local_expert_count; e++) {
-                    if (selected_expert == local_expert_ids[e]) {
-                        // First activation for this token - set up pointer and write token id
-                        if (!activated) {
-                            expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                                expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-                            expert_activation_l1_ptr[0] = t;
-                            activated = true;
-                        }
-
-                        // Write k-index and score for this expert
-                        expert_activation_l1_ptr[1 + e] = k;
-                        expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
-
-                        // Write to e_t buffer
-                        const uint32_t e_t_offset =
-                            (e * tokens + num_activated_tokens_per_expert[e]) * sizeof(uint32_t);
-                        *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
-                        num_activated_tokens_per_expert[e]++;
-
-                        break;  // Each k can only match one local expert, no need to check others
-                    }
+                // O(1) lookup: get local expert index directly from table
+                const uint8_t e = expert_to_local_index[selected_expert];
+                if (e == 0xFF) {
+                    continue;  // Not a local expert (shouldn't happen if mapping is correct)
                 }
+
+                // First activation for this token - set up pointer and write token id
+                if (!activated) {
+                    expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                        expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
+                    expert_activation_l1_ptr[0] = t;
+                    activated = true;
+                }
+
+                // Write k-index and score for this expert
+                expert_activation_l1_ptr[1 + e] = k;
+                expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+
+                // Write to e_t buffer
+                const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * sizeof(uint32_t);
+                *reinterpret_cast<tt_l1_ptr uint32_t*>(e_t_buffer_base + e_t_offset) = t;
+                num_activated_tokens_per_expert[e]++;
             }
 
             if (activated) {
@@ -730,27 +737,27 @@ void kernel_main() {
     }
     // ========== ALL CORES: Read activated tokens from sparse buffer and pack into tilizer input CB ==========
     // The e_t buffer contains sparse token IDs for each expert, terminated by -1
-    for (uint32_t e = 0; e < experts_per_device; e++) {
-        uint32_t num_tokens = num_activated_tokens_per_expert[e];
-        uint32_t* e_t_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_base + e * tokens * sizeof(uint32_t));
+    // for (uint32_t e = 0; e < experts_per_device; e++) {
+    //     uint32_t num_tokens = num_activated_tokens_per_expert[e];
+    //     uint32_t* e_t_ptr = reinterpret_cast<uint32_t*>(e_t_buffer_base + e * tokens * sizeof(uint32_t));
 
-        // Process tokens in chunks of tokens_per_chunk
-        for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {
-            uint32_t tokens_in_chunk = std::min(tokens_per_chunk, num_tokens - chunk_start);
+    //     // Process tokens in chunks of tokens_per_chunk
+    //     for (uint32_t chunk_start = 0; chunk_start < num_tokens; chunk_start += tokens_per_chunk) {
+    //         uint32_t tokens_in_chunk = std::min(tokens_per_chunk, num_tokens - chunk_start);
 
-            cb_reserve_back(tilizer_input_cb_id, tokens_per_chunk);
+    //         cb_reserve_back(tilizer_input_cb_id, tokens_per_chunk);
 
-            // Read each activated token from the sparse input buffer
-            for (uint32_t i = 0; i < tokens_in_chunk; i++) {
-                uint32_t token_id = e_t_ptr[chunk_start + i];  // Get sparse token ID from e_t buffer
-                // read the token from the input tensor at the tilizer subtoken offset and size
-                noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + tilizer_subtoken_offset,
-                    get_write_ptr(tilizer_input_cb_id) + i * tilizer_subtoken_size,
-                    tilizer_subtoken_size);
-            }
-            noc_async_read_barrier();
-            cb_push_back(tilizer_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
-        }
-    }
+    //         // Read each activated token from the sparse input buffer
+    //         for (uint32_t i = 0; i < tokens_in_chunk; i++) {
+    //             uint32_t token_id = e_t_ptr[chunk_start + i];  // Get sparse token ID from e_t buffer
+    //             // read the token from the input tensor at the tilizer subtoken offset and size
+    //             noc_async_read(
+    //                 get_noc_addr(token_id, input_tensor_addr_gen) + tilizer_subtoken_offset,
+    //                 get_write_ptr(tilizer_input_cb_id) + i * tilizer_subtoken_size,
+    //                 tilizer_subtoken_size);
+    //         }
+    //         noc_async_read_barrier();
+    //         cb_push_back(tilizer_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
+    //     }
+    // }
 }
