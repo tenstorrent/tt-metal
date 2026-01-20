@@ -681,3 +681,26 @@ def test_shard_untilize2(device):
     output_tensor = ttnn.to_torch(output_tensor)
     assert torch_tensor.shape == output_tensor.shape
     assert torch.allclose(torch_tensor, output_tensor, 0.9999)
+
+
+# regression test for issue 19309: Tensor.to(Layout) does not pads tensor
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param(None, id="empty"),
+        pytest.param((1, 1, 9, 79), id="9x79"),
+        pytest.param((1, 1, 512, 512), id="512x512"),
+        pytest.param((1, 1, 513, 513), id="513x513"),
+    ],
+)
+def test_tensor_padding(device, shape):
+    if shape is None:
+        pt_tensor = torch.empty(0, dtype=torch.bfloat16, requires_grad=False)
+    else:
+        pt_tensor = torch.rand(torch.Size(shape), requires_grad=False).bfloat16()
+
+    tt_tensor_one = ttnn.to_layout(ttnn.Tensor(pt_tensor, ttnn.bfloat16), layout=ttnn.TILE_LAYOUT).to(device)
+    tt_tensor_two = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    tt_tensor_one_torch = ttnn.to_torch(tt_tensor_one)
+    tt_tensor_two_torch = ttnn.to_torch(tt_tensor_two)
+    assert torch.allclose(tt_tensor_one_torch, tt_tensor_two_torch, 0.9999)
