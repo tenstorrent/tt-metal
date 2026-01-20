@@ -156,11 +156,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     worker_cores.push_back(second_core);
     auto worker_core_range = CoreRangeSet(worker_cores);
 
-    // Determine which core is sender and which is receiver based on device position
-    // Device 0 (is_first_chip): core0=sender, core1=receiver
-    // Device 1 (is_last_chip): core0=receiver, core1=sender
-    CoreCoord sender_core = is_first_chip ? worker_cores[0] : worker_cores[1];
-    CoreCoord receiver_core = is_first_chip ? worker_cores[1] : worker_cores[0];
+    CoreCoord sender_core = second_core;
+    CoreCoord receiver_core = cores[0];
 
     // Tensor Info - get num_pages early for CB config
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -182,27 +179,51 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
             .set_tile_dims(src0_cb_index, tiny_tile);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
-    // two buffers for reduction inputs and one for output
     constexpr auto compute_cb_in1 = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig compute_cb_in1_config =
+    tt::tt_metal::CircularBufferConfig compute_cb_in1_config_receiver =
+        tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in1, df}})
+            .set_page_size(compute_cb_in1, input_page_size_bytes)
+            .set_tile_dims(compute_cb_in1, tiny_tile)
+            .set_globally_allocated_address(*intermediate_tensor.buffer());
+    auto compute_cb_in1_handle =
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_in1_config_receiver);
+
+    tt::tt_metal::CircularBufferConfig compute_cb_in1_config_sender =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in1, df}})
             .set_page_size(compute_cb_in1, input_page_size_bytes)
             .set_tile_dims(compute_cb_in1, tiny_tile);
-    CreateCircularBuffer(program, worker_core_range, compute_cb_in1_config);
+    CreateCircularBuffer(program, CoreRangeSet(CoreRange(sender_core)), compute_cb_in1_config_sender);
 
     constexpr auto compute_cb_in2 = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig compute_cb_in2_config =
+    tt::tt_metal::CircularBufferConfig compute_cb_in2_config_receiver =
+        tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in2, df}})
+            .set_page_size(compute_cb_in2, input_page_size_bytes)
+            .set_tile_dims(compute_cb_in2, tiny_tile)
+            .set_globally_allocated_address(*input_tensor.buffer());
+    auto compute_cb_in2_handle =
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_in2_config_receiver);
+
+    tt::tt_metal::CircularBufferConfig compute_cb_in2_config_sender =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_in2, df}})
             .set_page_size(compute_cb_in2, input_page_size_bytes)
             .set_tile_dims(compute_cb_in2, tiny_tile);
-    CreateCircularBuffer(program, worker_core_range, compute_cb_in2_config);
+    CreateCircularBuffer(program, CoreRangeSet(CoreRange(sender_core)), compute_cb_in2_config_sender);
 
     constexpr auto compute_cb_out = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig compute_cb_out_config =
+    tt::tt_metal::CircularBufferConfig compute_cb_out_config_receiver =
+        tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_out, df}})
+            .set_page_size(compute_cb_out, input_page_size_bytes)
+            .set_tile_dims(compute_cb_out, tiny_tile)
+            .set_globally_allocated_address(*output_tensor.buffer());
+    auto compute_cb_out_handle =
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_out_config_receiver);
+
+    // Sender core still needs regular CB for compute_cb_out
+    tt::tt_metal::CircularBufferConfig compute_cb_out_config_sender =
         tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{compute_cb_out, df}})
             .set_page_size(compute_cb_out, input_page_size_bytes)
             .set_tile_dims(compute_cb_out, tiny_tile);
-    CreateCircularBuffer(program, worker_core_range, compute_cb_out_config);
+    CreateCircularBuffer(program, CoreRangeSet(CoreRange(sender_core)), compute_cb_out_config_sender);
 
     constexpr auto packet_header_cb_id = tt::CBIndex::c_4;
     constexpr auto buffering_factor = 2;
@@ -231,13 +252,11 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     auto sender_physical = mesh_device->worker_core_from_logical_core(sender_core);
     auto receiver_physical = mesh_device->worker_core_from_logical_core(receiver_core);
 
-    // The remote sender is at the same physical coordinates as our receiver (due to symmetric layout)
-    auto remote_sender_noc_x = receiver_physical.x;
-    auto remote_sender_noc_y = receiver_physical.y;
+    auto remote_sender_noc_x = sender_physical.x;
+    auto remote_sender_noc_y = sender_physical.y;
 
-    // Similarly, the sender should signal the core at the same logical position as itself on the remote device
-    auto remote_receiver_noc_x = sender_physical.x;
-    auto remote_receiver_noc_y = sender_physical.y;
+    auto remote_receiver_noc_x = receiver_physical.x;
+    auto remote_receiver_noc_y = receiver_physical.y;
 
     // KERNEL CREATION
     // Sender kernels run on sender_core, receiver kernels run on receiver_core
@@ -276,14 +295,6 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         remote_sender_noc_y,
     };
 
-    std::vector<uint32_t> receiver_writer_compile_args = {
-        compute_cb_out,
-        input_tensor_num_pages,
-        input_page_size_bytes,
-        core_noc_x,
-        core_noc_y,
-    };
-
     // Create sender kernels on sender_core
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -297,18 +308,12 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         {sender_core},
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args));
 
-    // Create receiver kernels on receiver_core
+    // Create receiver reader kernel on receiver_core
     auto worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_reader.cpp",
         {receiver_core},
         tt::tt_metal::ReaderDataMovementConfig(receiver_reader_compile_args));
-
-    auto worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_writer.cpp",
-        {receiver_core},
-        tt::tt_metal::WriterDataMovementConfig(receiver_writer_compile_args));
 
     auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
@@ -388,19 +393,15 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         receiver_reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, worker_receiver_reader_kernel_id, {receiver_core}, receiver_reader_rt_args);
 
-    // Receiver writer writes reduced output
-    std::vector<uint32_t> receiver_writer_rt_args = {
-        output_tensor.buffer()->address(),
-    };
-    tt::tt_metal::SetRuntimeArgs(program, worker_receiver_writer_kernel_id, {receiver_core}, receiver_writer_rt_args);
-
     shared_variables_t shared_variables{
         .sender_worker_cores = {sender_core},
         .receiver_worker_cores = {receiver_core},
         .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .worker_receiver_reader_kernel_id = worker_receiver_reader_kernel_id,
-        .worker_receiver_writer_kernel_id = worker_receiver_writer_kernel_id,
+        .compute_cb_in1_handle = compute_cb_in1_handle,
+        .compute_cb_in2_handle = compute_cb_in2_handle,
+        .compute_cb_out_handle = compute_cb_out_handle,
         .semaphore1 = semaphore1,
         .semaphore2 = semaphore2,
         .ring_index = ring_index,
@@ -431,6 +432,11 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
         const auto& sender_semaphore = is_first_chip ? shared_vars.semaphore1 : shared_vars.semaphore2;
         const auto& receiver_semaphore = is_first_chip ? shared_vars.semaphore2 : shared_vars.semaphore1;
 
+        // Update CB-backed-by-tensor addresses
+        UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_in1_handle, *intermediate.buffer());
+        UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_in2_handle, *input.buffer());
+        UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_out_handle, *output.buffer());
+
         for (const auto& core : shared_vars.sender_worker_cores) {
             // Sender reader
             auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id)[core.x][core.y];
@@ -448,10 +454,6 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
             reader_args[0] = input.buffer()->address();
             reader_args[1] = intermediate.buffer()->address();
             reader_args[2] = receiver_semaphore.address();
-
-            // Receiver writer
-            auto& writer_args = GetRuntimeArgs(program, shared_vars.worker_receiver_writer_kernel_id)[core.x][core.y];
-            writer_args[0] = output.buffer()->address();
         }
     }
 }

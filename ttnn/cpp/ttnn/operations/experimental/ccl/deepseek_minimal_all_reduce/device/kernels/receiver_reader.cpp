@@ -82,28 +82,25 @@ void kernel_main() {
     connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     DPRINT << "before reading from local tensor\n";
-    //  read local data from own device and push to compute cbs
+    // CB is backed by input_tensor, so data is already there
+    // Just reserve and push the tiles to make them available for compute
     cb_reserve_back(cb_compute, input_num_tiles);
-    const uint32_t l1_write_addr = get_write_ptr(cb_compute);
-    uint64_t base_src_addr = get_noc_addr(data_noc_x, data_noc_y, tensor_address0);
-    noc_async_read(base_src_addr, l1_write_addr, input_num_tiles * page_size_bytes);
 
+    // Wait for remote sender to signal data has been written to intermediate tensor
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
 
-    noc_async_read_barrier();
+    // Now both local and remote data are ready, push to compute
     cb_push_back(cb_compute, input_num_tiles);
 
     DPRINT << "after semaphore wait\n";
 
     close_connections(fabric_connection);
 
+    // CB is backed by intermediate_tensor, so data is already there after semaphore signals
+    // Just push the tiles to make them available for compute
     cb_reserve_back(receiver_cb, input_num_tiles);
-    const uint32_t packet_l1_addr = get_write_ptr(receiver_cb);
-    const uint64_t packet_noc_addr = get_noc_addr(data_noc_x, data_noc_y, intermediate_base_addr);
-    noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
-    noc_async_read_barrier();
     cb_push_back(receiver_cb, input_num_tiles);
     DPRINT << "end of receiver reader kernel\n";
 }

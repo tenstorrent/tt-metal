@@ -43,10 +43,14 @@ void MAIN {
         }
         tile_regs_release();
     }
-
     // Pop all tiles at once after processing
     cb_pop_front(cb_in0, num_tiles);
     cb_pop_front(cb_in1, num_tiles);
     cb_push_back(cb_out0, num_tiles);
+
+    // Wait for pack to complete, then pop output CB to reset for next iteration
+    // This replaces the receiver_writer kernel since CB is backed by output tensor
+    cb_wait_front(cb_out0, num_tiles);
+    cb_pop_front(cb_out0, num_tiles);
 }
 }  // namespace NAMESPACE
