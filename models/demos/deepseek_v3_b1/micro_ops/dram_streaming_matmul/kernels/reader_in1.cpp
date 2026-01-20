@@ -47,11 +47,12 @@ void kernel_main() {
     // Use 3 * num_subblocks_k buffers - must stay within NOC_MAX_TRANSACTION_ID (0xF = 15)
     // Assert on host side ensures num_buffers <= 15
     constexpr uint32_t num_buffers = 3 * num_subblocks_k;
+    constexpr uint32_t extra_blocks_in_flight = 2;
     uint32_t num_free_blocks_in_buffer = num_buffers;
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_reserve_back(cb_id_in1, subblock_k);
+    cb_reserve_back(cb_id_in1, num_free_blocks_in_buffer);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = get_write_ptr(cb_id_in1);
     l1_write_addr_in1 = l1_write_addr_in1_start;
@@ -70,12 +71,12 @@ void kernel_main() {
         }
 
         // When down to 1 free buffer (1 extra in flight), wait for oldest and push it
-        if (num_free_blocks_in_buffer == num_buffers - 1) {
+        if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, subblock_k);
             block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             // Reserve 2 blocks for next iterations
-            cb_reserve_back(cb_id_in1, subblock_k * 2);
+            cb_reserve_back(cb_id_in1, subblock_k * (extra_blocks_in_flight + 1));
         } else {
             num_free_blocks_in_buffer -= 1;
         }
@@ -91,9 +92,12 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
 
-    // Push the last block
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
-    cb_push_back(cb_id_in1, subblock_k);
+    // Push the remaining blocks (extra_blocks_in_flight blocks still pending)
+    for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
+        noc_async_read_barrier_with_trid(block_trid_to_wait);
+        cb_push_back(cb_id_in1, subblock_k);
+        block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+    }
 
     // Wait for compute to finish writing all output tiles
     // CB4 is backed by output tensor - data goes directly there
