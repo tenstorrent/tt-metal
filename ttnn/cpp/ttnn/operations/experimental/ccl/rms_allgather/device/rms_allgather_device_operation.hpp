@@ -10,17 +10,17 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::experimental::prim {
 
-namespace layernorm = ttnn::operations::normalization;
+namespace layernorm = ttnn::prim;
 
 struct RMSAllGatherDeviceOperation {
-    using operation_attributes_t = fused::normalization::operation_attributes_t;
-    using tensor_args_t = fused::normalization::tensor_args_t;
+    using operation_attributes_t = RMSAllGatherParams;
+    using tensor_args_t = RMSAllGatherInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::RMSAllGatherMeshWorkloadFactory>;
-    using shared_variables_t = program::RMSAllGatherMeshWorkloadFactory::shared_variables_t;
+    using program_factory_t = std::variant<RMSAllGatherMeshWorkloadFactory>;
+    using shared_variables_t = RMSAllGatherMeshWorkloadFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -34,13 +34,13 @@ struct RMSAllGatherDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
+ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,

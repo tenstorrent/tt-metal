@@ -12,7 +12,7 @@
 
 #include <cstdint>
 
-namespace ttnn::operations::data_movement::sort::program {
+namespace ttnn::prim {
 using namespace tt::tt_metal;
 // Single row - single core
 struct SortProgramFactorySingleRowSingleCore {
@@ -25,9 +25,9 @@ struct SortProgramFactorySingleRowSingleCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, std::vector<Tensor>&);
     static void override_runtime_arguments(
-        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, std::vector<Tensor>&);
 };
 
 // SortProgramFactoryCrossCoreDataExchange - single row, multi core with processing multiple tiles on one core with
@@ -41,9 +41,9 @@ struct SortProgramFactoryCrossCoreDataExchange {
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, std::vector<Tensor>&);
     static void override_runtime_arguments(
-        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, std::vector<Tensor>&);
 
     /**
      * @brief Strategies for slicing work across cores in cross-core data exchange sort.
@@ -77,9 +77,9 @@ struct SortProgramFactorySingleRowMultiCore {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const SortParams&, const SortInputs&, tensor_return_value_t&);
+    static cached_program_t create(const SortParams&, const SortInputs&, std::vector<Tensor>&);
     static void override_runtime_arguments(
-        cached_program_t&, const SortParams&, const SortInputs&, tensor_return_value_t&);
+        cached_program_t&, const SortParams&, const SortInputs&, std::vector<Tensor>&);
 };
 
-}  // namespace ttnn::operations::data_movement::sort::program
+}  // namespace ttnn::prim

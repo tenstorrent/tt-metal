@@ -12,7 +12,7 @@
 #include <functional>
 #include <optional>
 
-namespace ttnn::operations::reduction::manual_seed {
+namespace ttnn::prim {
 
 struct ManualSeedDeviceOperation {
     using operation_attributes_t = ManualSeedParams;
@@ -20,10 +20,10 @@ struct ManualSeedDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::ManualSeedSingleSeedToAllCoresProgramFactory,
-        program::ManualSeedSingleSeedSingleCoreProgramFactory,
-        program::ManualSeedSingleSeedSetCoresProgramFactory,
-        program::ManualSeedSetSeedsSetCoresProgramFactory>;
+        ManualSeedSingleSeedToAllCoresProgramFactory,
+        ManualSeedSingleSeedSingleCoreProgramFactory,
+        ManualSeedSingleSeedSetCoresProgramFactory,
+        ManualSeedSetSeedsSetCoresProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -34,12 +34,10 @@ struct ManualSeedDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::reduction::manual_seed
-
-namespace ttnn::prim {
 ttnn::Tensor manual_seed(
     const std::variant<uint32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids);
+
 }  // namespace ttnn::prim
