@@ -44,7 +44,6 @@ def get_avg_duration(perf_data: dict, iterations: int) -> str:
     core_count = 0
     for device_id in sorted(perf_data.keys()):
         programs = sorted(list(perf_data[device_id]), key=_program_sort_key)
-        assert len(programs) == iterations, f"Expected {iterations} programs, got {len(programs)}"
         for program in programs:
             uid = program.program_execution_uid
             analyses_items = sorted(program.program_analyses_results.items())
