@@ -85,6 +85,21 @@ class FaultyLink:
 
 
 @dataclass
+class LogMetadata:
+    """Metadata extracted from log file."""
+
+    iteration: int = 0
+    timestamp: str = ""
+    detected_hosts: list = field(default_factory=list)
+    chips_found: int = 0
+    num_iterations: int = 0
+    packet_size_bytes: int = 0
+    data_size_bytes: int = 0
+    discovery_complete: bool = False
+    validation_complete: bool = False
+
+
+@dataclass
 class LogAnalysis:
     """Analysis result for a single log file."""
 
@@ -95,6 +110,7 @@ class LogAnalysis:
     extra_connections: list = field(default_factory=list)
     error_messages: list = field(default_factory=list)
     matched_lines: dict = field(default_factory=dict)  # category -> list of matching lines
+    metadata: LogMetadata = field(default_factory=LogMetadata)
 
 
 # Pattern definitions - matching C++ validation tool output
@@ -416,6 +432,71 @@ def parse_missing_connections(content: str) -> list[tuple]:
     return connections
 
 
+def parse_log_metadata(content: str, filepath: str) -> LogMetadata:
+    """Extract metadata from log file content."""
+    metadata = LogMetadata()
+
+    # Extract iteration number from filename
+    basename = os.path.basename(filepath)
+    iter_match = re.search(r"iteration_(\d+)", basename)
+    if iter_match:
+        metadata.iteration = int(iter_match.group(1))
+
+    # Parse line by line for metadata
+    for line in content.split("\n"):
+        clean = line.split("<stdout>:")[-1].strip() if "<stdout>:" in line else line.strip()
+
+        # Iteration header from script
+        if "Iteration:" in line:
+            match = re.search(r"Iteration:\s*(\d+)", line)
+            if match:
+                metadata.iteration = int(match.group(1))
+
+        # Timestamp from script header
+        if "Timestamp:" in line and not metadata.timestamp:
+            match = re.search(r"Timestamp:\s*(.+)", line)
+            if match:
+                metadata.timestamp = match.group(1).strip()
+
+        # Detected Hosts from validation tool
+        if "Detected Hosts:" in line:
+            match = re.search(r"Detected Hosts:\s*(.+?)(?:\s*\(|$)", line)
+            if match:
+                hosts_str = match.group(1).strip()
+                # Split by comma, strip whitespace, filter empty and non-hostname entries
+                hosts = [h.strip() for h in hosts_str.split(",") if h.strip()]
+                # Only keep entries that look like hostnames (contain letters and dashes)
+                metadata.detected_hosts = [h for h in hosts if re.match(r"^[a-zA-Z][\w\-]+$", h)]
+
+        # Chips found from tt-smi
+        if "chips found" in line:
+            match = re.search(r"All (\d+) chips found", line)
+            if match:
+                metadata.chips_found = int(match.group(1))
+
+        # Traffic parameters
+        if "Sending traffic" in line or "Sweeping traffic" in line:
+            iter_match = re.search(r"Num Iterations:\s*(\d+)", line)
+            if iter_match:
+                metadata.num_iterations = int(iter_match.group(1))
+            pkt_match = re.search(r"Packet Size.*?:\s*(\d+)", line)
+            if pkt_match:
+                metadata.packet_size_bytes = int(pkt_match.group(1))
+            data_match = re.search(r"Data Size.*?:\s*(\d+)", line)
+            if data_match:
+                metadata.data_size_bytes = int(data_match.group(1))
+
+        # Discovery status
+        if "Physical Discovery Complete" in line:
+            metadata.discovery_complete = True
+
+        # Validation status
+        if "Validation Complete" in line:
+            metadata.validation_complete = True
+
+    return metadata
+
+
 def analyze_log_file(filepath: str) -> LogAnalysis:
     """Analyze a single log file and return categorized results."""
     result = LogAnalysis(filepath=filepath)
@@ -427,6 +508,9 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     except Exception as e:
         result.error_messages.append(f"Failed to read file: {e}")
         return result
+
+    # Extract metadata first
+    result.metadata = parse_log_metadata(content, filepath)
 
     # Check each pattern and capture matched lines
     for category, pattern in PATTERNS.items():
@@ -496,6 +580,40 @@ def aggregate_host_stats(analyses: list[LogAnalysis]) -> dict:
     return dict(stats)
 
 
+def print_cluster_info(analyses: list[LogAnalysis]):
+    """Print cluster configuration extracted from logs."""
+    if not analyses:
+        return
+
+    # Find first log with meaningful metadata
+    hosts = set()
+    chips_found = 0
+    traffic_config = None
+
+    for a in analyses:
+        if a.metadata.detected_hosts:
+            hosts.update(a.metadata.detected_hosts)
+        if a.metadata.chips_found > chips_found:
+            chips_found = a.metadata.chips_found
+        if a.metadata.num_iterations > 0 and not traffic_config:
+            traffic_config = a.metadata
+
+    if hosts or chips_found or traffic_config:
+        print(f"{Colors.CYAN}Cluster Configuration:{Colors.NC}")
+        if hosts:
+            print(f"  Hosts: {', '.join(sorted(hosts))}")
+        if chips_found:
+            print(f"  Chips per host: {chips_found}")
+            print(f"  Total chips: {chips_found * len(hosts) if hosts else chips_found}")
+        if traffic_config:
+            print(
+                f"  Traffic config: {traffic_config.num_iterations} iterations, "
+                f"{traffic_config.packet_size_bytes}B packets, "
+                f"{traffic_config.data_size_bytes}B data"
+            )
+        print()
+
+
 def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
     """Print summary of all analyses."""
     total = len(analyses)
@@ -511,6 +629,10 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
     print()
+
+    # Print cluster info first
+    print_cluster_info(analyses)
+
     print(f"Total log files analyzed: {total}")
     if total < 50:
         print(f"{Colors.YELLOW}Warning: Expected 50 iterations, found {total}{Colors.NC}")
@@ -932,11 +1054,106 @@ def print_verbose(analyses: list[LogAnalysis]):
             print()
 
 
+def print_timeline(analyses: list[LogAnalysis]):
+    """Print visual timeline of iteration results."""
+    if not analyses:
+        return
+
+    print("=" * 50)
+    print("Iteration Timeline")
+    print("=" * 50)
+    print()
+
+    # Sort by iteration number
+    sorted_analyses = sorted(analyses, key=lambda a: a.metadata.iteration)
+
+    # Determine what icons to use
+    icons = []
+    for a in sorted_analyses:
+        if "healthy" in a.categories:
+            icons.append(("✓", Colors.GREEN))
+        elif "unhealthy" in a.categories or "workload_timeout" in a.categories:
+            icons.append(("✗", Colors.RED))
+        elif "missing_connections" in a.categories or "missing_channels" in a.categories:
+            icons.append(("○", Colors.BLUE))
+        elif "dram_failure" in a.categories or "pcie_error" in a.categories:
+            icons.append(("!", Colors.RED))
+        elif "indeterminate" in a.categories:
+            icons.append(("?", Colors.CYAN))
+        else:
+            icons.append(("~", Colors.YELLOW))
+
+    # Print timeline in rows of 25
+    row_size = 25
+    for row_start in range(0, len(icons), row_size):
+        row_end = min(row_start + row_size, len(icons))
+        row_icons = icons[row_start:row_end]
+
+        # Print iteration numbers
+        nums = " ".join(f"{row_start + i + 1:2d}" for i in range(len(row_icons)))
+        print(f"  {nums}")
+
+        # Print status icons
+        statuses = " ".join(f"{color}{icon}{Colors.NC} " for icon, color in row_icons)
+        print(f"  {statuses}")
+        print()
+
+    # Legend
+    print(
+        f"Legend: {Colors.GREEN}✓{Colors.NC}=healthy  "
+        f"{Colors.RED}✗{Colors.NC}=unhealthy  "
+        f"{Colors.BLUE}○{Colors.NC}=missing conn  "
+        f"{Colors.RED}!{Colors.NC}=hardware  "
+        f"{Colors.YELLOW}~{Colors.NC}=other  "
+        f"{Colors.CYAN}?{Colors.NC}=indeterminate"
+    )
+    print()
+
+    # Find patterns - consecutive failures
+    consecutive_failures = []
+    current_streak = []
+    for i, a in enumerate(sorted_analyses):
+        if "healthy" not in a.categories:
+            current_streak.append(i + 1)
+        else:
+            if len(current_streak) >= 3:
+                consecutive_failures.append(current_streak.copy())
+            current_streak = []
+    if len(current_streak) >= 3:
+        consecutive_failures.append(current_streak)
+
+    if consecutive_failures:
+        print(f"{Colors.YELLOW}Warning: Consecutive failure streaks detected:{Colors.NC}")
+        for streak in consecutive_failures:
+            print(f"  Iterations {streak[0]}-{streak[-1]} ({len(streak)} consecutive failures)")
+        print()
+
+
 def output_json(analyses: list[LogAnalysis]):
     """Output results as JSON."""
+    # Extract cluster info
+    hosts = set()
+    chips_found = 0
+    traffic_config = None
+    for a in analyses:
+        if a.metadata.detected_hosts:
+            hosts.update(a.metadata.detected_hosts)
+        if a.metadata.chips_found > chips_found:
+            chips_found = a.metadata.chips_found
+        if a.metadata.num_iterations > 0 and not traffic_config:
+            traffic_config = a.metadata
+
     result = {
         "timestamp": datetime.now().isoformat(),
         "total_files": len(analyses),
+        "cluster_info": {
+            "hosts": sorted(hosts) if hosts else [],
+            "chips_per_host": chips_found,
+            "total_chips": chips_found * len(hosts) if hosts else chips_found,
+            "traffic_iterations": traffic_config.num_iterations if traffic_config else 0,
+            "packet_size_bytes": traffic_config.packet_size_bytes if traffic_config else 0,
+            "data_size_bytes": traffic_config.data_size_bytes if traffic_config else 0,
+        },
         "categories": defaultdict(list),
         "link_stats": {},
         "host_stats": {},
@@ -1009,6 +1226,11 @@ def main():
         action="store_true",
         help="Show matched log lines for each detected issue",
     )
+    parser.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Show iteration timeline with pass/fail status",
+    )
 
     args = parser.parse_args()
 
@@ -1048,6 +1270,9 @@ def main():
 
         if args.all:
             print_recommendations(analyses)
+
+        if args.timeline or args.all:
+            print_timeline(analyses)
 
         if args.verbose:
             print_verbose(analyses)
