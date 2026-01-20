@@ -690,7 +690,7 @@ void writeProgramsPerfResultsToCSV(
         for (size_t i = 0; i < counts.size(); ++i) {
             const uint64_t lo = edges[i];
             const uint64_t hi = edges[i + 1];
-            log_info(tt::LogMetal, "  [{:>12} .. {:>12}) |{}| {:>8}", lo, hi, bar(counts[i]), counts[i]);
+            log_debug(tt::LogMetal, "  [{:>12} .. {:>12}) |{}| {:>8}", lo, hi, bar(counts[i]), counts[i]);
         }
     };
 
