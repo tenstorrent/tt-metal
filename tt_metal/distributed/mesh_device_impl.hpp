@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -132,6 +133,8 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+    // D2H socket for streaming performance telemetry from device to host in real-time
+    std::unique_ptr<D2HSocket> perf_telemetry_socket_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -250,6 +253,10 @@ public:
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
+    // Initialize D2H socket for real-time performance telemetry streaming from device to host
+    void init_perf_telemetry_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    // Get the perf telemetry socket (returns nullptr if not initialized)
+    D2HSocket* get_perf_telemetry_socket() const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

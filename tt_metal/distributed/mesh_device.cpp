@@ -342,6 +342,11 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+
+    // Initialize D2H socket for real-time performance telemetry streaming
+    // This must be done after fabric and dispatch FW are initialized since it uses MeshBuffer
+    mesh_device->init_perf_telemetry_socket();
+
     return mesh_device;
 }
 
@@ -431,6 +436,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+
+    // Initialize D2H socket for real-time performance telemetry streaming
+    // This must be done after fabric and dispatch FW are initialized since it uses MeshBuffer
+    mesh_device->init_perf_telemetry_socket();
+
     return result;
 }
 
@@ -1187,6 +1197,28 @@ void MeshDeviceImpl::init_fabric() {
     reference_device()->init_fabric();
 }
 
+void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    // Configuration for perf telemetry socket
+    // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
+    constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
+
+    // Use device (0,0) and core (0,0) as the sender core for telemetry
+    // This can be made configurable in the future if needed
+    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), CoreCoord(0, 0)};
+
+    log_info(tt::LogMetal, "Initializing perf telemetry D2H socket on MeshDevice {}", this->id());
+
+    perf_telemetry_socket_ =
+        std::make_unique<D2HSocket>(mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize);
+
+    log_debug(
+        tt::LogMetal,
+        "Perf telemetry socket initialized with config buffer at address 0x{:x}",
+        perf_telemetry_socket_->get_config_buffer_address());
+}
+
+D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const { return perf_telemetry_socket_.get(); }
+
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
@@ -1436,6 +1468,8 @@ void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device
 bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
 void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
 void MeshDevice::init_fabric() { pimpl_->init_fabric(); }
+void MeshDevice::init_perf_telemetry_socket() { pimpl_->init_perf_telemetry_socket(shared_from_this()); }
+D2HSocket* MeshDevice::get_perf_telemetry_socket() const { return pimpl_->get_perf_telemetry_socket(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
