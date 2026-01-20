@@ -354,7 +354,7 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(
     return core;
 }
 
-inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
+inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType /*core_type*/) {
     if (!core_resources_.contains(core)) {
         core_resources_.emplace(
             core,

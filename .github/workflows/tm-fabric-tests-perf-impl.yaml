@@ -112,9 +112,21 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Check for benchmark data
+        id: check-benchmark-data
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        shell: bash
+        run: |
+          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            echo "Benchmark files found, will upload to database"
+          else
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+            echo "Benchmark files not found, database upload will be skipped"
+          fi
       - name: Upload benchmark data
         ## Only upload benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

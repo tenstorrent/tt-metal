@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -14,7 +15,7 @@
 namespace ttnn::operations::ccl {
 
 AllToAllCombineDeviceOperation::program_factory_t AllToAllCombineDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return AllToAllCombineFromSparse{};
 }
 
@@ -73,16 +74,19 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 
     const auto num_devices = mesh_view.num_devices();
 
-    TT_FATAL(experts%num_devices==0, "Number of experts {} should be evenly divisible by devices: {}", experts, num_devices);
+    TT_FATAL(
+        experts % num_devices == 0,
+        "Number of experts {} should be evenly divisible by devices: {}",
+        experts,
+        num_devices);
 
-    if (operation_attributes.locally_reduced){
+    if (operation_attributes.locally_reduced) {
         TT_FATAL(
             input_shape[0] == 1,
             "Expecting input dim 0 equal to num devices: {}, got: {}",
             num_devices,
             input_shape[0]);
-    }
-    else{
+    } else {
         TT_FATAL(
             input_shape[0] == experts / num_devices,
             "Expected input shape dim 0: {} to be equal to expert mapping dim 2: {}",
@@ -112,7 +116,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

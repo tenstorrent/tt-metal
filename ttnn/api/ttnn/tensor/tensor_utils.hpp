@@ -7,35 +7,21 @@
 #include <cstdint>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt::tt_metal {
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const size_t> strides);
-
-constexpr auto compute_flat_input_index = [](const auto& indices, const auto& strides) {
-    uint32_t flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
 
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
-
-template <class T>
-uint32_t get_batch_size(const T& shape) {
-    uint32_t result = 1;
-    for (int i = 0; i < (int)shape.rank() - 2; i++) {
-        result *= shape[i];
-    }
-    return result;
-}
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.

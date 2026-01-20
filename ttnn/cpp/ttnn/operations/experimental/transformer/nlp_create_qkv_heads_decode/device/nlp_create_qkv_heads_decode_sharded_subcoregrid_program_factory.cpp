@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::cached_program_t
 NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
@@ -251,7 +251,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
 
 void NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     using namespace tt::tt_metal;
@@ -317,4 +317,4 @@ void NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::override_runtime_a
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode::program
+}  // namespace ttnn::experimental::prim

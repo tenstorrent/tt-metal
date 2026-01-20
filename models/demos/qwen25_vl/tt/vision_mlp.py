@@ -16,9 +16,9 @@ class MLP(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args
-        self.dim = args.dim
+        self.dim = args.vision_dim
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
+        pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.vision_hidden_dim)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         torch_bias = lambda name: self.state_dict[f"{state_dict_prefix}.{name}.bias"]
 

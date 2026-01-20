@@ -37,8 +37,8 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config,
-    const CoreRangeSet& sub_core_grids,
-    const std::optional<Tensor>& indices_tensor = std::nullopt) {
+    const CoreRangeSet& /*sub_core_grids*/,
+    const std::optional<Tensor>& /*indices_tensor*/ = std::nullopt) {
     const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -135,7 +135,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
     // pad the last dimension to satisfy the minimum size requirements
     auto padded_tensor = transformed_tensor;
     const auto pad_amount = std::max(
-        static_cast<int>(topk::constants::min_dim_per_core) - static_cast<int>(transformed_tensor.logical_shape()[-1]),
+        static_cast<int>(ttnn::prim::constants::min_dim_per_core) -
+            static_cast<int>(transformed_tensor.logical_shape()[-1]),
         0);
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {

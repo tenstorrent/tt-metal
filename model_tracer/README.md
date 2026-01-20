@@ -43,9 +43,16 @@ The following models have been traced and their configurations are available in 
 | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 
+**WH Galaxy (32 cards):**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| **DeepSeek V3** | 671B parameter MoE model | `python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --output-path deepseek_tt_out_batch_4.json --max-new-tokens 128 --model-path $DEEPSEEK_V3_HF_MODEL --cache-dir $DEEPSEEK_V3_CACHE --num-prompts 128` |
+
+
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
 
-*Last updated: January 2, 2026*
+*Last updated: January 9, 2026*
 
 ---
 
@@ -66,6 +73,110 @@ These traced configurations provide real-world operation patterns from productio
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
+
+---
+
+## Master JSON Format
+
+The `ttnn_operations_master.json` file stores traced configurations in a structured format. The loader supports both legacy and new formats for backward compatibility.
+
+### Configuration Formats
+
+**Legacy Format (Single Source):**
+```json
+{
+  "operations": {
+    "ttnn::silu": {
+      "configurations": [
+        {
+          "arguments": [...],
+          "source": "models/demos/model_name/demo.py",
+          "machine_info": [
+            {
+              "board_type": "Wormhole",
+              "device_series": "n300",
+              "card_count": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+**New Format (Contexts with Multiple Sources):**
+
+The new format supports multiple execution contexts per configuration, enabling the same operation arguments to be traced from different models and hardware configurations:
+
+```json
+{
+  "operations": {
+    "ttnn::silu": {
+      "configurations": [
+        {
+          "arguments": [...],
+          "contexts": [
+            {
+              "source": ["models/demos/deepseek_v3/demo/demo.py"],
+              "machine_info": [
+                {
+                  "board_type": "Wormhole",
+                  "device_series": "tt-galaxy-wh",
+                  "card_count": 32,
+                  "tensor_placements": [
+                    {
+                      "mesh_device_shape": "[4, 8]"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+### Multi-Chip Mesh Configuration
+
+For multi-chip operations (Galaxy, T3K, etc.), the `machine_info` should include `tensor_placements` with `mesh_device_shape` to enable proper runner assignment in CI:
+
+```json
+{
+  "machine_info": [
+    {
+      "board_type": "Wormhole",
+      "device_series": "tt-galaxy-wh",
+      "card_count": 32,
+      "tensor_placements": [
+        {
+          "mesh_device_shape": "[4, 8]"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Note:** Only `mesh_device_shape` is used by the sweep framework for runner assignment. Other tensor placement fields (like `shard_mesh`, `tensor_layout`) may be captured during tracing for informational purposes but are not used for CI routing.
+
+**Mesh Shape Values:**
+| Mesh Shape | Description | Runner Assignment |
+|------------|-------------|-------------------|
+| `[1, 1]` | Single-chip | N150 runner |
+| `[1, 2]` | 2-chip | N300/Galaxy runner |
+| `[1, 4]` | 4-chip | T3K/Galaxy runner |
+| `[2, 4]` | 8-chip | T3K/Galaxy runner |
+| `[4, 8]` | 32-chip | Galaxy runner |
+| `[8, 4]` | 32-chip (alt layout) | Galaxy runner |
+
+The sweep framework automatically:
+1. Groups vectors by mesh shape during generation
+2. Creates separate JSON files per mesh (e.g., `op__mesh_4x8.json`)
+3. Routes tests to appropriate hardware runners in CI
 
 ---
 
@@ -133,6 +244,8 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
 - Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
+- Mesh device shape for multi-chip configurations (e.g., `[4, 8]` for 32-chip Galaxy)
+- Tensor placements for distributed operations
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`

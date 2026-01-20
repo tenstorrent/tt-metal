@@ -32,7 +32,8 @@ struct SubUnaryParam {
     uint32_t w;
 };
 
-class SubUnaryFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<SubUnaryParam> {};
+class SubUnaryFixture : public TTNNFixtureWithSuiteDevice<SubUnaryFixture>,
+                        public testing::WithParamInterface<SubUnaryParam> {};
 
 TEST_P(SubUnaryFixture, CompareWithTorchReference) {
     auto param = GetParam();
