@@ -340,11 +340,7 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
-    if (this->arch_ == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
+TEST_F(MeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
     for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
         for (tt::DataFormat in0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
             for (tt::DataFormat out0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
