@@ -239,6 +239,25 @@ void Device::init_command_queue_host() {
             std::make_unique<HWCommandQueue>(
                 this, cq_shared_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
+
+    // Initialize pinned memory for dispatch cores' D2H sockets
+    // This enables realtime device-to-host data transfer from dispatch cores
+    dispatch_d2h_data_buffer_ = std::make_shared<vector_aligned<uint32_t>>(kDispatchD2HFifoSize / sizeof(uint32_t), 0);
+    dispatch_d2h_bytes_sent_buffer_ = std::make_shared<vector_aligned<uint32_t>>(4, 0);  // 16 bytes for signaling
+
+    std::vector<IDevice*> devices = {this};
+    dispatch_d2h_data_pinned_memory_ = experimental::PinnedMemory::Create(
+        devices,
+        dispatch_d2h_data_buffer_->data(),
+        dispatch_d2h_data_buffer_->size() * sizeof(uint32_t),
+        true  // map_to_noc for direct device access
+    );
+    dispatch_d2h_bytes_sent_pinned_memory_ = experimental::PinnedMemory::Create(
+        devices,
+        dispatch_d2h_bytes_sent_buffer_->data(),
+        dispatch_d2h_bytes_sent_buffer_->size() * sizeof(uint32_t),
+        true  // map_to_noc for direct device access
+    );
 }
 
 void Device::init_command_queue_device() {

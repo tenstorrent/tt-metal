@@ -344,6 +344,21 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
+std::unique_ptr<PinnedMemory> PinnedMemory::Create(
+    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) {
+    if (devices.empty()) {
+        throw std::invalid_argument("Cannot create PinnedMemory with empty device list");
+    }
+    if (!host_buffer) {
+        throw std::invalid_argument("Host buffer must not be null");
+    }
+    if (buffer_size == 0) {
+        throw std::invalid_argument("Buffer size must be greater than 0");
+    }
+
+    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_buffer, buffer_size, map_to_noc));
+}
+
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();

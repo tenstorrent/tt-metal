@@ -171,6 +171,22 @@ public:
         HostBuffer& host_buffer,
         bool map_to_noc = false);
 
+    /**
+     * @brief Pin existing host memory for a specific set of devices.
+     *
+     * Creates pinned system memory for the provided devices, mapping the existing host buffer
+     * to each device. When map_to_noc is true and supported by the system, the buffer will be
+     * mapped to the NOC for direct device access.
+     *
+     * @param devices Vector of devices to pin memory for
+     * @param host_buffer Pointer to existing host memory to map (must not be null)
+     * @param buffer_size Size of the buffer in bytes
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    static std::unique_ptr<PinnedMemory> Create(
+        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
+
 private:
     friend class distributed::MeshDevice;
 

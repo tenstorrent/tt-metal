@@ -7,6 +7,8 @@
 #include <memory>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
@@ -237,6 +239,14 @@ private:
     uint32_t trace_buffers_size_ = 0;
 
     std::unique_ptr<AllocatorImpl> default_allocator_;
+
+    // Pinned memory for dispatch cores' D2H sockets
+    // Used for realtime device-to-host data transfer from dispatch cores
+    static constexpr uint32_t kDispatchD2HFifoSize = 1024;  // FIFO size in bytes
+    std::shared_ptr<vector_aligned<uint32_t>> dispatch_d2h_data_buffer_ = nullptr;
+    std::shared_ptr<vector_aligned<uint32_t>> dispatch_d2h_bytes_sent_buffer_ = nullptr;
+    std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_data_pinned_memory_ = nullptr;
+    std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_sent_pinned_memory_ = nullptr;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
