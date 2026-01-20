@@ -181,6 +181,10 @@ public:
         return mesh_graph_descriptor_.value();
     }
 
+    // Get the Mesh Graph Descriptor file path (if available)
+    // Returns empty path if MeshGraph was created via generate_mesh_graph_of_shape()
+    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
+
 private:
     // Private constructor for static factory functions
     MeshGraph() = default;
@@ -223,6 +227,9 @@ private:
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
+
+    // Store the file path if MeshGraph was created from a descriptor file
+    std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
 };
 
 }  // namespace tt::tt_fabric
