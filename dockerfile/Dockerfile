@@ -73,7 +73,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -83,7 +83,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN uv pip install --no-cache-dir build numpy setuptools
+RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
@@ -130,7 +130,8 @@ RUN umask 000 && \
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
+RUN umask 000 && \
+    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
     ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
     echo "Debugger installation completed" && \
@@ -202,7 +203,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
