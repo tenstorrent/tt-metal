@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 // Program config types
 struct GroupNormMultiCoreProgramConfig {
@@ -51,4 +51,4 @@ struct GroupNormInputs {
     std::optional<Tensor> reciprocals;
 };
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim

@@ -777,6 +777,7 @@ class ModelArgs:
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
+                and self.ccl_topology() == ttnn.Topology.Ring
             )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
@@ -868,7 +869,8 @@ class ModelArgs:
                     1024
                     if self.num_devices == 8
                     and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and 1024 % (self.dim / self.num_devices) == 0
+                    and not is_blackhole()
+                    and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
                 )
             )

@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,7 +37,7 @@ struct DramConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // SETUP
 
     // Program
@@ -246,7 +247,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     CoreCoord core_coord;
     uint32_t dram_channel = 0;
@@ -271,7 +272,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     CoreCoord core_coord = {0, 0};
 

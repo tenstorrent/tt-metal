@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::fill_pad {
+namespace ttnn::prim {
 
 struct FillPadParams {
     float fill_value;
@@ -17,4 +17,4 @@ struct FillPadInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::data_movement::fill_pad
+}  // namespace ttnn::prim

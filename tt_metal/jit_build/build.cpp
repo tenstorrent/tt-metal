@@ -459,6 +459,10 @@ void JitBuildState::compile_one(
     // Append common args provided by the build state
     cmd += this->cflags_;
     cmd += this->includes_;
+    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
+    if (settings) {
+        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
+    }
     cmd += fmt::format("-c -o {} {} ", obj, src);
     cmd += defines;
 

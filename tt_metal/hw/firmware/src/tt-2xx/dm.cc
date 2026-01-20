@@ -9,8 +9,11 @@
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
+#include "internal/debug/sanitize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 uint8_t noc_index;
+constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
 constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x0;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x1;

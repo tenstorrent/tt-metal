@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -11,25 +12,25 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     // Check if 2D core grid is requested
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
-        return program::LayerNormPreAllGather2DProgramFactory{};
+        return LayerNormPreAllGather2DProgramFactory{};
     }
 
     // Check if Welford algorithm is requested (only for layernorm)
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford) {
-            return program::LayerNormPreAllGatherWelfordProgramFactory{};
+            return LayerNormPreAllGatherWelfordProgramFactory{};
         }
     }
 
     // Default to normal program factory
-    return program::LayerNormPreAllGatherProgramFactory{};
+    return LayerNormPreAllGatherProgramFactory{};
 }
 
 void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -39,7 +40,7 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_hit(
 
 void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& tensor = tensor_args.input;
+    const auto& tensor = tensor_args;
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
@@ -73,7 +74,7 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
 
 LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args;
 
     auto output_shape = input_tensor.logical_shape();
     uint32_t num_tiles_w = 1;
@@ -88,21 +89,21 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.device());
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
-    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
-    using OperationType = ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation;
+    using OperationType = LayerNormPreAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -111,7 +112,7 @@ Tensor layer_norm_pre_all_gather(
             .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,
         },
-        OperationType::tensor_args_t{.input = input});
+        input);
 }
 
 }  // namespace ttnn::prim
