@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Telemetry Analysis and Plotting Script
 
@@ -283,7 +286,6 @@ def plot_telemetry(
     # Extract telemetry values (only for matched logs)
     telemetry_data = {}
     if telemetry_logs:
-        matched_steps = [log.step for log in training_logs]
         for field, label in telemetry_fields:
             values = []
             for telem in telemetry_logs:

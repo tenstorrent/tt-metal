@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 # tt-smi Telemetry Polling Script
 # This script polls tt-smi periodically and logs the output to a file
 
@@ -42,6 +46,13 @@ stop_polling() {
 
 start_polling() {
     OUTPUT_FILE="$1"
+
+    # Check if bc is installed (required for sleep interval calculation)
+    if ! command -v bc &> /dev/null; then
+        echo "Error: 'bc' command not found. Please install it to use this script."
+        echo "Install with: sudo apt-get install bc (Debian/Ubuntu)"
+        exit 1
+    fi
 
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
