@@ -43,6 +43,7 @@ for i in {1..50}; do
         echo ""
         echo "Running cluster validation..."
         ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE --empty-entrypoint --host $HOSTS ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto --send-traffic --num-iterations 10
+
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"

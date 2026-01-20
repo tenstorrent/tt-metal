@@ -475,7 +475,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 "M{}-D{}: Router at x={}, y={}, UpstreamEthernetChannel={}, Direction={} :: Connecting VC{} "
                 "receiver_ch={} to "
                 "downstream "
-                "router at M{}-D{} x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
+                "router at x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
                 "AbsoluteChannel={}",
                 local_node_.mesh_id.get(),
                 local_node_.chip_id,
@@ -485,8 +485,6 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                 get_eth_direction(),
                 vc,
                 0,
-                downstream_router.local_node_.mesh_id.get(),
-                downstream_router.local_node_.chip_id,
                 downstream_builder->get_noc_x(),
                 downstream_builder->get_noc_y(),
                 downstream_router.location_.eth_chan,
