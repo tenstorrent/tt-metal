@@ -24,6 +24,7 @@
 #   - num_peers: Number of destination cores (for *_to_all patterns with fixed grid sizes)
 #       Examples: 4 (for 2x2), 25 (for 5x5)
 #       Omit for tests with variable grid sizes or non-*_to_all patterns
+#       Leave empty to use real kernel data (num_peers = "")
 #   - same_axis: Whether the source and destination core share one axis
 #       Examples: true for (0,0)->(0,5), false for (0,0)->(2,2)
 #
@@ -69,47 +70,49 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_peers: 4
+    num_peers: ""
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_peers: 25
+    num_peers: ""
 
   8:
     name: "One to All Unicast Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
+    num_peers: ""
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_peers: 4
+    num_peers: ""
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_peers: 25
+    num_peers: ""
 
   11:
     name: "One to All Multicast Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
+    num_peers: ""
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_peers: 4
+    num_peers: ""
     linked: true
 
   13:
@@ -117,7 +120,7 @@ tests:
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_peers: 25
+    num_peers: ""
     linked: true
 
   14:
@@ -125,6 +128,7 @@ tests:
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
+    num_peers: ""
     linked: true
 
   15:
@@ -132,6 +136,7 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_from_all"
+    num_peers: ""
 
   16:
     name: "Loopback Packet Sizes"
@@ -502,6 +507,7 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
+    num_peers: ""
 
   312:
     name: "All from All 2x2 From 1x1 Directed Ideal"

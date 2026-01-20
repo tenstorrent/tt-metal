@@ -157,8 +157,11 @@ class StatsReporter:
                             # Add any additional optional fields in alphabetical order
                             optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
                             for field in optional_fields:
-                                row.append(test_metadata[field])
-
+                                value = test_metadata[field]
+                                # If we have profiled data and it's not set in the test_information
+                                if field == "num_peers" and value == "":
+                                    value = run_stats.get("num_peers", 0)
+                                row.append(value)
                         row.extend(
                             [
                                 riscv,

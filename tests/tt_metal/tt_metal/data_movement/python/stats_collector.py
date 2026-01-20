@@ -192,6 +192,9 @@ class StatsCollector:
                             grid_y = attributes.get("Subordinate Grid Size Y", "N/A")
                             agg_data["grid_dimensions"] = f"{grid_x} x {grid_y}"
 
+                num_peers = attributes.get("Number of peers", 0)
+                agg_data["num_peers"] = num_peers
+
                 agg[run_host_id] = agg_data
 
             result[riscv] = agg
