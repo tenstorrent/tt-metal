@@ -19,12 +19,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from .operation_parameter_extractors import OperationParameterExtractors
+from framework.constants import LEAD_MODELS
 
-# Try to import LEAD_MODELS, use empty list if not available
-try:
-    from framework.constants import LEAD_MODELS
-except ImportError:
-    LEAD_MODELS = []
 
 # Get the base directory dynamically - import from model_tracer
 try:

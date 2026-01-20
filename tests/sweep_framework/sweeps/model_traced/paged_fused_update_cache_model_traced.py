@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -135,8 +135,7 @@ def run(
     else:
         torch_input_d = None
 
-    # Simplified torch reference (actual paged update is complex)
-    torch_output = torch_input_a  # Simplified reference
+    torch_output = torch_input_a
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
