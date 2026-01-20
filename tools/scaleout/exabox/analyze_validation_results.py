@@ -162,6 +162,8 @@ PATTERNS = {
     # MPI/communication errors
     "mpi_error": re.compile(r"PRTE has lost communication|MPI_ABORT|mpi.*error", re.IGNORECASE),
     "ssh_error": re.compile(r"Permission denied \(publickey\)|ssh.*connection.*refused", re.IGNORECASE),
+    # Truncated/incomplete runs (started but didn't finish)
+    "truncated": re.compile(r"Sending traffic across detected links"),  # If present without result = truncated
 }
 
 
@@ -537,8 +539,18 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     if "missing_connections" in result.categories or "missing_channels" in result.categories:
         result.missing_connections = parse_missing_connections(content)
 
-    # If no categories matched, mark as indeterminate
-    if not result.categories:
+    # Check for truncated runs - has traffic start but no result
+    has_result = "healthy" in result.categories or "unhealthy" in result.categories
+    if "truncated" in result.categories and not has_result:
+        # Keep truncated, remove from indeterminate candidates
+        pass
+    elif "truncated" in result.categories and has_result:
+        # Has result, so not truncated - remove the truncated category
+        result.categories.remove("truncated")
+
+    # If no meaningful categories matched, mark as indeterminate
+    non_truncated_cats = [c for c in result.categories if c != "truncated"]
+    if not non_truncated_cats:
         result.categories.append("indeterminate")
 
     return result
@@ -674,8 +686,10 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
         ("stack_trace", Colors.RED, "Stack trace/crash"),
         ("mpi_error", Colors.RED, "MPI communication error"),
         ("ssh_error", Colors.YELLOW, "SSH connection error"),
+        # Incomplete
+        ("truncated", Colors.YELLOW, "Truncated (started, no result)"),
         # Unknown
-        ("indeterminate", Colors.CYAN, "Indeterminate/incomplete"),
+        ("indeterminate", Colors.CYAN, "Indeterminate/empty"),
     ]
 
     for cat_key, color, label in category_display:
