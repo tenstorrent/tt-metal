@@ -14,8 +14,10 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -103,11 +105,8 @@ void set_runtime_args_hc_tiled_interleaved(
 }  // namespace
 
 TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInterleavedProgramFactory::create(
-    const transpose::TransposeParams& operation_attributes,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
     // pad_value is always defined at API level; padding is decided purely by shape
     const float pad_value = operation_attributes.pad_value;
 
@@ -222,9 +221,9 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
 
 void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
@@ -237,9 +236,9 @@ void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
         shared_variables.reader_kernel_id,
         shared_variables.writer_kernel_id,
         tensor_args.input,
-        tensor_return_value,
+        output_tensor,
         false,
         total_cores);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

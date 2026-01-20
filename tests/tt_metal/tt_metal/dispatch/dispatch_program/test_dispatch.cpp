@@ -352,32 +352,31 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
             this->RunProgram(mesh_device, workload);
 
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                program_.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
-                cb_config_buffer_size,
-                cb_config_vector);
-
             // ETH core doesn't have CB
             EXPECT_TRUE(program_.impl().get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
-            uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-            uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
+            // Skip L1 readback validation for mock devices (L1 memory not populated)
+            if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                tt::TargetDevice::Mock) {
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    program_.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                    cb_config_buffer_size,
+                    cb_config_vector);
 
-            bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == cb_addr;
-            bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == cb_size;
-            bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
-            bool pass_intermediate =
-                (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
-            EXPECT_TRUE(pass_intermediate);
+                uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-            uint32_t out_index = out_cb * sizeof(uint32_t);
-            bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
-            bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
-            bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
-            bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
-            EXPECT_TRUE(pass_out);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index + 2), num_tiles);
+
+                uint32_t out_index = out_cb * sizeof(uint32_t);
+                EXPECT_EQ(cb_config_vector.at(out_index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(out_index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(out_index + 2), num_tiles);
+            }
         }
     }
 }

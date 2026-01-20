@@ -23,14 +23,15 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(13);
     constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(19);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(20);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<22>();
+    constexpr auto q_args = TensorAccessorArgs<23>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -130,9 +131,18 @@ void kernel_main() {
                 page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
             }
 
-            uint32_t mask_batch_offset = nb * Sqt * Skt;
-            if constexpr (!broadcast_provided_mask_heads) {
-                mask_batch_offset *= NQH;
+            // Calculate mask batch offset based on broadcasting:
+            // - If batch is broadcasted [1 x ...]: always use batch=0, so offset = 0
+            // - If batch is not broadcasted [b x ...]: use actual batch nb
+            uint32_t mask_batch_offset = 0;
+            if constexpr (!broadcast_provided_mask_batch) {
+                if constexpr (broadcast_provided_mask_heads) {
+                    // [b x 1 x s x s]: batch offset without head factor
+                    mask_batch_offset = nb * Sqt * Skt;
+                } else {
+                    // [b x h x s x s]: batch offset with all heads
+                    mask_batch_offset = nb * Sqt * Skt * NQH;
+                }
             }
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 // Read attention sink for this Q chunk if enabled

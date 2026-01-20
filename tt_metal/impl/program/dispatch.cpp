@@ -313,6 +313,13 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
+    // Mock devices don't have real binaries, skip finalization
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        kernel_text_offset = base_offset;
+        kernel_text_size = 0;
+        return base_offset;
+    }
+
     const auto& hal = MetalContext::instance().hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 

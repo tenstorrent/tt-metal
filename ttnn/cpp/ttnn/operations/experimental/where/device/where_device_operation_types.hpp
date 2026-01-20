@@ -7,11 +7,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::ternary::where_ttt_args {
+namespace ttnn::experimental::prim {
 
-using tensor_return_value_type = Tensor;
-
-struct operation_attributes_type {
+struct WhereParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     const CoreRangeSet worker_grid;
@@ -23,10 +21,12 @@ struct operation_attributes_type {
         return tt::stl::hash::hash_objects_with_default_seed(memory_config, dtype, compute_kernel_config);
     }
 };
-struct tensor_args_type {
+
+struct WhereInputs {
     const Tensor& condition_tensor;
     Tensor true_value_tensor;
     Tensor false_value_tensor;
     std::optional<Tensor> output_tensor;
 };
-}  // namespace ttnn::operations::experimental::ternary::where_ttt_args
+
+}  // namespace ttnn::experimental::prim

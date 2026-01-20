@@ -6,15 +6,16 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "convert_to_hwc_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::experimental::prim {
 
 ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::ConvertToHWCProgramFactory{};
+    return ConvertToHWCProgramFactory{};
 }
 
 void ConvertToHWCDeviceOperation::validate_on_program_cache_hit(
@@ -53,7 +54,7 @@ TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const int HW = shape[3];
 
     // Output needs to be multiple of alignment requirement to guarantee aligned copies
-    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(tensor_args.input);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(tensor_args.input);
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return TensorSpec(
@@ -72,13 +73,13 @@ tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
         tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+ttnn::experimental::prim::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
     const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
-    using OperationType = ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation;
+    using OperationType = ttnn::experimental::prim::ConvertToHWCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config,

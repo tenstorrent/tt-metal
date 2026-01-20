@@ -18,7 +18,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_windowed::program {
+namespace ttnn::prim {
 
 // Implementation of windowed SDPA
 // [INFO] This implementation is based on the multi-core implementation of SDPA in the tt-metal repository.
@@ -659,4 +659,4 @@ void WindowedSDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_windowed::program
+}  // namespace ttnn::prim

@@ -20,7 +20,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
 
 // This type of access pattern cannot be copied.
@@ -166,8 +166,8 @@ create_program_dram_sharded(
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
     uint32_t per_core_N_in1_sender = per_core_N_compute;
-    auto subblock_hw =
-        bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
+    auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
+        per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
@@ -905,9 +905,9 @@ create_program_dram_sharded(
 std::pair<tt::tt_metal::Program, MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::shared_variables_t>
 matmul_multi_core_reuse_dram_sharded_optimized_(
     const ttnn::MeshCoordinate& mesh_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const operation_attributes_t& operation_attributes) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::prim::MatmulParams& operation_attributes) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -995,8 +995,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
         in1_tile_shape[1]);
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
-    const auto& program_config =
-        std::get<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(operation_attributes.program_config.value());
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        operation_attributes.program_config.value());
     const auto& in0_block_w = program_config.in0_block_w;
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
@@ -1069,10 +1069,10 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
 
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::cached_mesh_workload_t
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -1089,9 +1089,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload(
 
 void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1132,4 +1132,4 @@ void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_ar
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

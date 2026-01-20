@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::repeat {
+namespace ttnn::prim {
 
 struct RepeatParams {
     uint32_t m_num_repeats{};
@@ -18,4 +18,4 @@ struct RepeatInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::data_movement::repeat
+}  // namespace ttnn::prim

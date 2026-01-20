@@ -20,17 +20,17 @@
 #include <tt-metalium/work_split.hpp>
 #include <algorithm>
 
-namespace ttnn::operations::ccl::all_broadcast::program {
+namespace ttnn::prim {
 
 AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::create_mesh_workload(
     const AllBroadcastParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AllBroadcastInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const Tensor& input,
+    std::vector<Tensor>& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = input.device();
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
@@ -43,12 +43,7 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = AllBroadcastProgramFactory::create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            final_barrier_semaphore,
-            init_barrier_semaphore);
+            operation_attributes, coord, input, output_tensors, final_barrier_semaphore, init_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -59,11 +54,11 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
 AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_at(
     const AllBroadcastParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
-    const AllBroadcastInputs& tensor_args,
-    tensor_return_value_t& output_tensors,
+    const Tensor& input,
+    std::vector<Tensor>& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = input;
     tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor.device();
@@ -324,10 +319,8 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
 void AllBroadcastProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const AllBroadcastParams& /*operation_attributes*/,
-    const AllBroadcastInputs& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& input = tensor_args.input_tensor;
-
+    const Tensor& input,
+    std::vector<Tensor>& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         // const auto& coord = coordinate_range.start_coord();
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -346,11 +339,11 @@ void AllBroadcastProgramFactory::override_runtime_arguments(
             worker_reader_sender_runtime_args[0] = input.buffer()->address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = tensor_return_value[shared_vars.ring_index].buffer()->address();
+            worker_writer_sender_runtime_args[0] = output_tensors[shared_vars.ring_index].buffer()->address();
             worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
             worker_writer_sender_runtime_args[9] = shared_vars.barrier_semaphore.address();
         }
     }
 }
 
-}  // namespace ttnn::operations::ccl::all_broadcast::program
+}  // namespace ttnn::prim

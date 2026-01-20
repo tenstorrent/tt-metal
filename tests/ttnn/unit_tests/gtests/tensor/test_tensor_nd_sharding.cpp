@@ -3,6 +3,7 @@
 
 #include "gtest/gtest.h"
 
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_test_fixtures.hpp"

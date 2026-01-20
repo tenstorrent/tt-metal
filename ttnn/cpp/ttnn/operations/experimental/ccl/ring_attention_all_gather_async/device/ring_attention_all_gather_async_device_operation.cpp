@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
 RingAttentionAllGatherAsyncDeviceOperation::program_factory_t
 RingAttentionAllGatherAsyncDeviceOperation::select_program_factory(
@@ -231,4 +231,4 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
         tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim

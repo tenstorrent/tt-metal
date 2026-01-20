@@ -13,7 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::reduction::sampling::program {
+namespace ttnn::prim {
 
 SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
@@ -350,4 +350,4 @@ void SamplingProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::sampling::program
+}  // namespace ttnn::prim

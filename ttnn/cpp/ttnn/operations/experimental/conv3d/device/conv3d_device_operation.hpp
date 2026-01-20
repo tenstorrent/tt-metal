@@ -17,15 +17,15 @@
 #include "conv3d_device_operation_types.hpp"
 #include "conv3d_program_factory.hpp"
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 struct Conv3dDeviceOperation {
     using operation_attributes_t = Conv3dParams;
     using tensor_args_t = Conv3dInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::Conv3dProgramFactory>;
-    using shared_variables_t = program::Conv3dProgramFactory::shared_variables_t;
+    using program_factory_t = std::variant<Conv3dProgramFactory>;
+    using shared_variables_t = Conv3dProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,15 +38,15 @@ struct Conv3dDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_value_t conv3d(
+ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
-    const ttnn::operations::experimental::conv3d::Conv3dConfig& config,
+    const ttnn::experimental::prim::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,

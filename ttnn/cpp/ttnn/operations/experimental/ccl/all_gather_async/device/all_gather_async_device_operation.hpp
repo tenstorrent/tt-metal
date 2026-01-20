@@ -11,11 +11,11 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_gather_async {
+namespace ttnn::experimental::prim {
 
 struct AllGatherAsyncDeviceOperation {
-    using operation_attributes_t = all_gather_async::operation_attributes_t;
-    using tensor_args_t = all_gather_async::tensor_args_t;
+    using operation_attributes_t = AllGatherAsyncParams;
+    using tensor_args_t = AllGatherAsyncInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory>;
@@ -58,12 +58,11 @@ enum class AllGatherAsyncVersion {
     MINIMAL_DEFAULT = 1,
 };
 
-AllGatherAsyncVersion select_version(const operation_attributes_t& operation_attributes);
+AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes);
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto all_gather_async = ttnn::register_operation<
-    "ttnn::prim::all_gather_async",
-    ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation>();
+constexpr auto all_gather_async =
+    ttnn::register_operation<"ttnn::prim::all_gather_async", ttnn::experimental::prim::AllGatherAsyncDeviceOperation>();
 }  // namespace ttnn::prim

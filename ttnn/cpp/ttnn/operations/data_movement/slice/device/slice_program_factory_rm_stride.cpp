@@ -14,7 +14,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::slice::program {
+namespace ttnn::prim {
 
 SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
@@ -209,4 +209,4 @@ void SliceRmStrideProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::slice::program
+}  // namespace ttnn::prim

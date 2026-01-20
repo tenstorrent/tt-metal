@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::moe {
+namespace ttnn::prim {
 
 struct MoeParams {
     uint16_t k{};
@@ -21,4 +21,4 @@ struct MoeInputs {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::reduction::moe
+}  // namespace ttnn::prim

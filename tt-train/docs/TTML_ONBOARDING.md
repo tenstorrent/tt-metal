@@ -15,7 +15,7 @@
 | CMake | ≥ 3.20 | 3.30 recommended |
 | tt-metal | Latest | **Must be installed first** |
 
-## **Quick Install** 
+## **Quick Install**
 
 **Prerequisites:** Ensure `tt-metal` is installed first (see [INSTALLING.md](../INSTALLING.md)).
 
@@ -38,7 +38,7 @@ For development installation with C++ components, see [Development Installation]
 
 ## **Overview**
 
-TT-Train provides a complete training framework with automatic differentiation, optimized operations, and distributed training support—all designed specifically for Tenstorrent's tile-based scaleout architecture.
+TTML provides a complete training framework with automatic differentiation, optimized operations, and distributed training support—all designed specifically for Tenstorrent's tile-based scaleout architecture.
 
 ## **TTML vs PyTorch**
 
@@ -73,13 +73,14 @@ TTML aims for a **very similar API and developer experience** to PyTorch:
 
 ### Optimizers
 
-* `AdamW` \- AdamW with weight decay  
-* `MorehAdamW` \- Moreh-optimized AdamW  
+* `AdamW` \- AdamW with weight decay
+* `MorehAdamW` \- Moreh-optimized AdamW
 * `SGD` \- Stochastic Gradient Descent
+* *Remote*  \- Used for multihost training
 
 ### Schedulers
 
-* `identity` \- Constant learning rate  
+* `identity` \- Constant learning rate
 * `warmup_linear` \- Linear warmup \+ linear decay
 
 ### Distributed Training
@@ -132,8 +133,6 @@ See the [NanoGPT training example](https://wandb.ai/tenstorrent-ml/tt_train_nano
 
 
 ## **Getting Started**
-
-TTML provides a complete training framework with automatic differentiation, optimized operations, and distributed training support. The framework is designed specifically for Tenstorrent's tile-based scaleout architecture.
 
 **Core Concepts:**
 
@@ -282,7 +281,11 @@ cmake --build build --target llama_inference
 
 ### **Example 1: Linear Regression**
 
-A minimal example to understand the TT-Train programming model:
+[Example link](/tt-train/sources/examples/linear_regression/linear_regression.py)
+
+To run the regression example: `python3 tt-train/sources/examples/linear_regression/linear_regression.py`
+
+A minimal example to understand the TTML programming model:
 
 ```py
 import numpy as np
@@ -334,39 +337,39 @@ for epoch in range(epochs):
     indices = np.random.permutation(len(X_train))
     epoch_loss = 0.0
     n_batches = 0
-    
+
     for i in range(0, len(X_train), batch_size):
         batch_idx = indices[i:i+batch_size]
         if len(batch_idx) < batch_size:
             continue
-            
-        # Reshape to [B, 1, 1, features] - TT-Train's expected format
+
+        # Reshape to [B, 1, 1, features] - TTML's expected format
         x_batch = X_train[batch_idx].reshape(batch_size, 1, 1, n_features)
         y_batch = y_train[batch_idx].reshape(batch_size, 1, 1, n_outputs)
-        
-        # Convert to TT-Train tensors
+
+        # Convert to TTML tensors
         tt_x = ttml.autograd.Tensor.from_numpy(x_batch)
         tt_y = ttml.autograd.Tensor.from_numpy(y_batch)
-        
+
         # Forward pass
         optimizer.zero_grad()
         pred = model(tt_x)
         loss = ttml.ops.loss.mse_loss(pred, tt_y, ttml.ops.ReduceType.MEAN)
-        
+
         # Backward pass
-        loss.backward(False)
-        
+        loss.backward(False)  # retain graph = False
+
         # Get loss value AFTER backward
         loss_val = float(loss.get_value().item())
         epoch_loss += loss_val
         n_batches += 1
-        
+
         # Update weights
         optimizer.step()
-        
+
         # Reset computation graph
         ctx.reset_graph()
-    
+
     print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/n_batches:.6f}")
 
 # ============================================================
@@ -385,6 +388,19 @@ ctx.close_device()
 ```
 
 ### **Example 2: NanoGPT Training**
+
+[Full Python nanogpt training example](/tt-train/sources/examples/nano_gpt/train_nanogpt.py).
+
+To run the nanogpt Python training example: `python3 tt-train/sources/examples/nano_gpt/train_nanogpt.py -c training_shakespeare_nanogpt.yaml`
+
+[Full C++ nanogpt training example](/tt-train/sources/examples/nano_gpt/main.cpp).
+
+To run the nanogpt C++ training example:
+```bash
+export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+cd tt-train
+./build/sources/examples/nano_gpt/nano_gpt -c ./configs/training_configs/training_shakespeare_nanogpt.yaml
+```
 
 A complete language model training example:
 
@@ -457,7 +473,7 @@ optimizer = ttml.optimizers.AdamW(model.parameters(), adamw_config)
 mask_np = np.tril(np.ones((sequence_length, sequence_length), dtype=np.float32))
 mask_np = mask_np.reshape(1, 1, sequence_length, sequence_length)
 causal_mask = ttml.autograd.Tensor.from_numpy(
-    mask_np, 
+    mask_np,
     layout=ttnn.Layout.TILE,
     new_type=ttnn.DataType.BFLOAT16
 )
@@ -474,7 +490,7 @@ model.train()
 for step in range(max_steps):
     # Sample random batch
     batch_indices = np.random.randint(0, len(dataset), batch_size)
-    
+
     # Prepare batch
     input_ids = []
     target_ids = []
@@ -482,40 +498,40 @@ for step in range(max_steps):
         seq, tgt = dataset[idx]
         input_ids.extend(seq)
         target_ids.extend(tgt)
-    
+
     input_np = np.array(input_ids, dtype=np.uint32).reshape(batch_size, 1, 1, sequence_length)
     target_np = np.array(target_ids, dtype=np.uint32).reshape(batch_size, sequence_length)
-    
+
     input_tensor = ttml.autograd.Tensor.from_numpy(
         input_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
     target_tensor = ttml.autograd.Tensor.from_numpy(
         target_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
-    
+
     # Zero gradients at accumulation boundary
     if step % gradient_accumulation_steps == 0:
         optimizer.zero_grad()
-    
+
     # Forward pass
     logits = model(input_tensor, causal_mask)
-    
+
     # Compute loss
     loss = ttml.ops.loss.cross_entropy_loss(
         logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
     )
-    
+
     # Scale loss for gradient accumulation
     if gradient_accumulation_steps > 1:
         loss = ttml.ops.binary.mul(loss, 1.0 / gradient_accumulation_steps)
-    
+
     # Get loss value
     loss_val = float(loss.get_value().item())
-    
+
     # Backward pass
     loss.backward(False)
     ctx.reset_graph()
-    
+
     # Optimizer step at accumulation boundary
     if (step + 1) % gradient_accumulation_steps == 0:
         optimizer.step()
@@ -528,33 +544,33 @@ model.eval()
 
 def generate(prompt, max_tokens=100):
     prompt_ids = tokenizer.encode(prompt)
-    
+
     # Pad to sequence length
     if len(prompt_ids) < sequence_length:
         padding = [0] * (sequence_length - len(prompt_ids))
         prompt_ids = padding + prompt_ids
-    
+
     generated = []
     running = list(prompt_ids[-sequence_length:])
-    
+
     for _ in range(max_tokens):
         # Prepare input
         input_np = np.array(running, dtype=np.uint32).reshape(1, 1, 1, sequence_length)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             input_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        
+
         # Forward
         logits = model(input_tensor, causal_mask)
-        
+
         # Sample from last position (greedy)
         last_logits = logits.get_value()
         next_id = int(ttnn.argmax(last_logits, dim=-1).item()) % tokenizer.vocab_size
-        
+
         generated.append(next_id)
         running = running[1:] + [next_id]
         ctx.reset_graph()
-    
+
     return tokenizer.decode(generated)
 
 print("\nGenerated text:")
@@ -563,6 +579,205 @@ print(generate("ROMEO: ", max_tokens=200))
 ctx.close_device()
 ```
 
+## **Build your own model**
+
+### Implementing a Module
+You can implement your own model as a Module consisting of submodules (either self-written or provided by TTML) and Parameters, similar to PyTorch.
+
+You need to implement initialization of Modules/Parameters and a forward pass. TTML's autograd engine will automatically implement the backward pass.
+
+#### Python module
+
+Here's an example of the [LayerNorm implementation in Python](/tt-train/sources/ttml/ttml/models/nanogpt/gpt_block.py). It creates weights (Parameters) for gamma (scale) and beta (shift/bias) of LayerNorm manually in the Module's `__init__`. In the forward pass, it simply calls `ttml.ops.layernorm.layernorm`. `ttml.ops.layernorm.layernorm` is responsible for building the autograd graph and propagating gradients to inputs and weights.
+
+```python
+
+class LayerNorm(AbstractModuleBase):
+    """Layer normalization module with gamma and beta parameters."""
+
+    def __init__(self, embedding_dim: int, bias: bool = True) -> None:
+        """Initialize layer norm.
+
+        Args:
+            embedding_dim: Dimension of embeddings
+            bias: Whether to use bias (beta) parameter
+        """
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+
+        # Layer norm requires gamma (scale) and beta (shift) parameters
+        ln_shape = (1, 1, 1, embedding_dim)
+        gamma_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
+        gamma_tensor = ttml.autograd.Tensor.from_numpy(
+            gamma_np, layout=ttnn.Layout.TILE
+        )
+        self.gamma = Parameter(gamma_tensor)
+
+        if bias:
+            beta_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
+            beta_tensor = ttml.autograd.Tensor.from_numpy(
+                beta_np, layout=ttnn.Layout.TILE
+            )
+            self.beta = Parameter(beta_tensor)
+        else:
+            self.beta = None
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Forward pass of layer norm.
+
+        Args:
+            x: Input tensor
+
+        Returns:
+            Normalized output tensor
+        """
+        return ttml.ops.layernorm.layernorm(
+            x, self.gamma.tensor, self.beta.tensor if self.beta else None
+        )
+```
+
+Here's the [implementation of the GPTMLP module in Python](/tt-train/sources/ttml/ttml/models/nanogpt/gpt_mlp.py), which uses the Linear submodule (`ttml.modules.LinearLayer`) as well as the ttml operation (`ttml.ops.dropout`):
+
+```python
+class GPTMLP(AbstractModuleBase):
+    """GPT-style MLP (feed-forward) layer."""
+
+    def __init__(self, embedding_dim: int, dropout: float = 0.0) -> None:
+        """Initialize GPT MLP layer.
+
+        Args:
+            embedding_dim: Dimension of embeddings
+            dropout: Dropout probability
+        """
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+        self.dropout_prob = dropout
+        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
+
+        # First linear: embedding_dim -> embedding_dim * 4
+        self.fc1 = LinearLayer(embedding_dim, embedding_dim * 4, True)
+
+        # Second linear: embedding_dim * 4 -> embedding_dim
+        self.fc2 = LinearLayer(embedding_dim * 4, embedding_dim, True)
+
+    # train() and eval() are inherited from AbstractModuleBase
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """Forward pass of MLP.
+
+        Args:
+            x: Input tensor
+
+        Returns:
+            Output tensor after MLP
+        """
+        x = self.fc1(x)
+        x = ttml.ops.unary.gelu(x)
+        x = self.fc2(x)
+
+        # Note: It's better to just use Dropout module here
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob)
+
+        return x
+```
+
+#### C++ module
+C++ modules are fairly similar to Python modules, with one small difference: they require manual `register_module`, `register_tensor`, and `create_name` calls.
+[linear_module.hpp](/tt-train/sources/ttml/modules/linear_module.hpp), [linear_module.cpp](/tt-train/sources/ttml/modules/linear_module.cpp), [gpt_block.hpp](/tt-train/sources/ttml/modules/gpt_block.hpp), [gpt_block.cpp](/tt-train/sources/ttml/modules/gpt_block.cpp)
+
+```cpp
+// gpt_block.hpp
+class GPTMLP : public modules::ModuleBase {
+    std::shared_ptr<LinearLayer> fc1;
+    std::shared_ptr<LinearLayer> fc2;
+    std::shared_ptr<DropoutLayer> dropout;
+
+public:
+    GPTMLP(uint32_t embedding_size, float dropout_prob);
+
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
+};
+
+// gpt_block.cpp
+GPTMLP::GPTMLP(uint32_t embedding_size, float dropout_prob) {
+    fc1 = std::make_shared<LinearLayer>(embedding_size, embedding_size * 4);
+    fc2 = std::make_shared<LinearLayer>(embedding_size * 4, embedding_size);
+    dropout = std::make_shared<DropoutLayer>(dropout_prob);
+
+    create_name("gpt_mlp");
+    register_module(fc1, "fc1");
+    register_module(fc2, "fc2");
+    register_module(dropout, "dropout");
+}
+
+autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
+    auto x = (*fc1)(input);
+    x = ops::gelu(x);
+    x = (*fc2)(x);
+    x = (*dropout)(x);
+    return x;
+}
+```
+
+### Implementing a new operation
+
+#### Python operation
+Unfortunately, there is currently no way to implement operations in Python, but this feature is coming soon.
+
+#### C++ operation
+TTML operations are responsible for:
+1. Forward pass
+2. Lifetime of activations
+3. Backward pass
+4. Populating the autograd graph
+
+TTML operations rely on TTNN operations.
+
+Example: Element-wise multiplication:
+
+```cpp
+namespace ttml::ops {
+
+autograd::TensorPtr mul(
+    const autograd::TensorPtr& a,
+    const autograd::TensorPtr& b
+) {
+    // 1. Forward pass
+    // Create output tensor
+    auto out = autograd::create_tensor();
+
+    // Compute output value
+    out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
+
+    // 2. Gradient callback lambda captures activations that are required for the backward pass.
+    // Make sure that you're not capturing anything not needed, since this might increase memory usage.
+    autograd::GradFunction grad = [a, b, out]() {
+        // 3. Backward implementation
+        // d(a*b)/da = b, d(a*b)/db = a
+        // Chain rule: grad_a = upstream_grad * b
+        auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
+        auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
+
+        // Accumulate gradients (supports multi-use tensors)
+        a->add_grad(a_grad);
+        b->add_grad(b_grad);
+    };
+
+    // 4. Register in computation graph
+    auto links = autograd::get_links(a, b);
+    // Note: add_backward_node returns std::optional<NodeId> (nullopt if grads disabled)
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+}  // namespace ttml::ops
+```
+
+
 ## **Scale Up**
 
 Scale up refers to optimizing training on a single device or multiple devices on the **same host** by:
@@ -570,6 +785,8 @@ Scale up refers to optimizing training on a single device or multiple devices on
 - Using gradient accumulation to simulate larger batches
 - Enabling memory-efficient training (gradient checkpointing)
 - Optimizing tensor layouts and operations
+- **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
+- **Distributed Data Parallel (DDP)**: Replicate model, shard data across devices
 
 **Key Architecture Benefit:**
 TTML uses a **unified mesh API** where a single process manages all devices on a host. Unlike PyTorch (which spawns 1 process per device), TTML spawns **1 process per host**, simplifying multi-device coordination and reducing overhead.
@@ -593,24 +810,6 @@ transformer_config:
   runner_type: "memory_efficient"  # Gradient checkpointing
 ```
 
-**Memory Optimization Tips:**
-- Use `memory_efficient` runner type to reduce activation memory
-- Reduce batch size and increase gradient accumulation
-- Monitor memory usage with `MemoryUsageTracker` (see [Profiling](#profiling))
-
-## **Scale Out**
-
-Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
-- **Data Parallel (DDP)**: Replicate model, shard data across devices
-- **Tensor Parallel (TP)**: Shard model weights across devices (FSDP-style)
-- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
-- **Multi-host**: Scale across multiple machines with unified mesh topology
-
-**Architecture:**
-- **Scale-up** (same host): Single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
-- **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
-- **Unified API**: Same mesh configuration works for both single-host and multi-host scenarios
-
 **Data Parallel Example:**
 
 ```python
@@ -624,12 +823,39 @@ training_config:
   batch_size: 16  # Will be split across 4 devices (4 per device)
 ```
 
+**Memory Optimization Tips:**
+- Use `memory_efficient` runner type to reduce activation memory
+- Reduce batch size and increase gradient accumulation
+- Monitor memory usage with `MemoryUsageTracker` (see [Profiling](#profiling))
+
+## **Scale Out**
+
+Scale out refers to distributed training across **multiple hosts** (each host can have multiple devices) using:
+- **Pipeline Parallel (PP)**: Shard layers sequentially across devices
+- **Multi-host**: Scale across multiple machines with unified mesh topology
+
+**Architecture:**
+- **Scale-up** (same host): A single process manages all devices via `mesh_shape: [1, N]` (e.g., `[1, 8]` for LoudBox)
+- **Scale-out** (multiple hosts): One process per host, coordinated via MPI or Fabric communication
+- **Unified API**: The same mesh configuration works for both single-host and multi-host scenarios
+
+
+**2/3-tier Architecture**
+
+Currently, we employ a 2- or 3-tier architecture when performing multi-host training.
+
+All hosts are split into 2 or 3 roles: Worker / AggregatorOptimizer (2-tier) or Worker / Aggregator / Optimizer (3-tier).
+
+In the 3-tier architecture, the Aggregator gathers and reduces gradients from every worker. Then it sends the gathered gradients to the Optimizer, which performs the optimizer step and sends new weights back to the Aggregator, which broadcasts them back to workers. In the 2-tier architecture, the Aggregator and Optimizer are merged into a single node.
+
+For more details and instructions on how to run, see [this doc](/tt-train/sources/examples/python/multihost/hierarchical_parallel/README.md)
+
 **Tensor Parallel Example (FSDP-style):**
 
 Tensor Parallel in TTML implements FSDP (Fully Sharded Data Parallel) semantics:
 - **Parameter sharding**: Model weights are sharded across devices using `shard_tensor_to_mesh_mapper`
-- **Gather on demand**: Parameters are gathered when needed during forward pass (via `all_gather`)
-- **Reduce gradients**: Gradients are reduced across devices during backward pass (via `reduce_scatter`)
+- **Gather on demand**: Parameters are gathered when needed during the forward pass (via `all_gather`)
+- **Reduce gradients**: Gradients are reduced across devices during the backward pass (via `reduce_scatter`)
 
 ```python
 # 32-device TP (e.g., Galaxy)
@@ -643,7 +869,7 @@ transformer_config:
   vocab_size: 32000  # Will be padded to 32768
 ```
 
-**Key difference from DDP:**
+**Key Differences from DDP:**
 - **DDP**: Full model replication → higher memory usage, only gradients synchronized
 - **TP (FSDP)**: Parameter sharding → lower memory usage per device, parameters gathered/reduced as needed
 
@@ -669,7 +895,7 @@ multihost_config:
 - **Dual device**: `[1, 2]` (N300, P300) - 1 process, 2 devices
 - **LoudBox**: `[1, 8]` (8 devices) - 1 process, 8 devices
 - **Galaxy**: `[1, 32]` (32 devices) - 1 process, 32 devices
-- **Multi-host**: Multiple processes (1 per host), each managing its device mesh
+- **Multi-host**: Multiple processes (1 per host), each managing its own device mesh
 
 **Process Model Comparison:**
 | Scenario | PyTorch | TTML |
@@ -716,7 +942,8 @@ See [PROFILER.md](./PROFILER.md) for detailed profiling guide.
 Track memory usage across training phases:
 
 ```python
-from ttml.utils.memory_utils import MemoryUsageTracker
+# Access via ttml.core.utils
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # Begin tracking
 guard = MemoryUsageTracker.begin_capture()
@@ -726,7 +953,7 @@ MemoryUsageTracker.snapshot("MODEL_CREATION")
 MemoryUsageTracker.snapshot("FORWARD_PASS")
 MemoryUsageTracker.snapshot("BACKWARD_PASS")
 
-# Print results
+# Print results and cleanup
 MemoryUsageTracker.end_capture("ITERATION_COMPLETE")
 MemoryUsageTracker.print_memory_usage()
 ```
@@ -825,31 +1052,31 @@ tt-train/
 
 ### **Autograd System**
 
-**1\. AutoContext** (`autograd/auto_context.hpp`)
+**1. AutoContext** (`autograd/auto_context.hpp`)
 
-The global singleton managing TT-Train's runtime state:
+The global singleton managing TTML's runtime state:
 
 ```cpp
 class AutoContext {
 public:
     static AutoContext& get_instance();
-    
+
     // Device management
     void open_device();
     void close_device();
     ttnn::MeshDevice& get_device();
-    
+
     // Graph management
     Graph& get_graph();  // Access to underlying graph (advanced usage)
     void reset_graph();
-    
+
     // Gradient tracking
     void set_gradient_mode(GradMode mode);
     GradMode get_gradient_mode() const;
-    
+
     // RNG
     void set_seed(uint32_t seed);
-    
+
     // Backward node registration
     std::optional<NodeId> add_backward_node(GradFunction&& fn, std::span<NodeId> links);
 };
@@ -858,7 +1085,7 @@ public:
 inline AutoContext& ctx() { return AutoContext::get_instance(); }
 ```
 
-**2\. Graph** (`autograd/graph.hpp`)
+**2. Graph** (`autograd/graph.hpp`)
 
 Stores backward functions and dependencies:
 
@@ -882,14 +1109,14 @@ private:
 class Graph {
     std::vector<GraphNode> m_graph_nodes;
     std::vector<std::vector<size_t>> m_links;  // Adjacency list
-    
+
 public:
     NodeId add_node(GradFunction&& grad_function, std::span<NodeId> links);
     void reset();  // Clear for next iteration
 };
 ```
 
-**3\. Tensor** (`autograd/tensor.hpp`)
+**3. Tensor** (`autograd/tensor.hpp`)
 
 The core tensor abstraction with autograd support:
 
@@ -899,18 +1126,18 @@ class Tensor : public std::enable_shared_from_this<Tensor> {
     tt::tt_metal::Tensor m_grad;      // Accumulated gradient
     bool m_requires_grad = true;
     std::optional<NodeId> m_node_id;  // Link to backward graph
-    
+
 public:
     // Value access
     const tt::tt_metal::Tensor& get_value(
         PreferredPrecision precision = PreferredPrecision::HALF) const;
-    
+
     // Gradient operations
     void set_grad(const tt::tt_metal::Tensor& grad);
     void add_grad(const tt::tt_metal::Tensor& grad);  // Accumulates!
     const tt::tt_metal::Tensor& get_grad() const;
     tt::tt_metal::Tensor& get_grad();  // Non-const version
-    
+
     // Backward pass
     void backward(bool retain_graph = false);
 };
@@ -920,44 +1147,7 @@ using TensorPtr = std::shared_ptr<Tensor>;
 
 ### **Implementing a New Operation**
 
-Every operation must implement both forward and backward:
-
-```cpp
-// Example: Element-wise multiplication
-namespace ttml::ops {
-
-autograd::TensorPtr mul(
-    const autograd::TensorPtr& a,
-    const autograd::TensorPtr& b
-) {
-    // 1. Create output tensor
-    auto out = autograd::create_tensor();
-    
-    // 2. Forward: compute output value
-    out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
-    
-    // 3. Define backward function (captures inputs by shared_ptr)
-    autograd::GradFunction grad = [a, b, out]() {
-        // d(a*b)/da = b, d(a*b)/db = a
-        // Chain rule: grad_a = upstream_grad * b
-        auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
-        auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
-        
-        // Accumulate gradients (supports multi-use tensors)
-        a->add_grad(a_grad);
-        b->add_grad(b_grad);
-    };
-    
-    // 4. Register in computation graph
-    auto links = autograd::get_links(a, b);
-    // Note: add_backward_node returns std::optional<NodeId> (nullopt if grads disabled)
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-    
-    return out;
-}
-
-}  // namespace ttml::ops
-```
+Every operation must implement both forward and backward. [See example](#implementing-a-new-operation)
 
 ### **Implementing a New C++ Module**
 
@@ -968,7 +1158,7 @@ Modules encapsulate parameters and forward logic:
 class MyLayer : public ModuleBase {
     LinearLayer m_linear;
     RMSNormLayer m_norm;
-    
+
 public:
     MyLayer(uint32_t in_features, uint32_t out_features)
         : m_linear(in_features, out_features)
@@ -978,7 +1168,7 @@ public:
         register_module("linear", m_linear);
         register_module("norm", m_norm);
     }
-    
+
     autograd::TensorPtr forward(const autograd::TensorPtr& input) override {
         auto x = m_linear(input);
         x = m_norm(x);
@@ -987,6 +1177,8 @@ public:
     }
 };
 ```
+
+See [more examples](#implementing-a-module)
 
 ### **Memory-Efficient Training**
 
@@ -1031,19 +1223,19 @@ Tests use Google Test:
 TEST(OpsTest, MatmulForward) {
     auto& ctx = ttml::autograd::ctx();
     ctx.open_device();
-    
+
     // Create inputs
     auto a = create_random_tensor({32, 64});
     auto b = create_random_tensor({64, 128});
-    
+
     // Forward
     auto c = ttml::ops::matmul(a, b);
-    
+
     // Verify shape
     auto shape = c->get_shape();
     EXPECT_EQ(shape[0], 32);
     EXPECT_EQ(shape[1], 128);
-    
+
     ctx.close_device();
 }
 
@@ -1098,4 +1290,3 @@ python scripts/analyze_memory.py --logs memory.log --visualize_peak
 ```
 
 ---
-

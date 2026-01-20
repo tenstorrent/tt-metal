@@ -10,12 +10,12 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::transformer::sdpa_windowed {
+namespace ttnn::prim {
 
 struct SdpaWindowedParams {
     std::optional<float> scale;
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<SDPAProgramConfig> program_config;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
@@ -26,4 +26,4 @@ struct SdpaWindowedInputs {
     Tensor cu_window_seqlens;
 };
 
-}  // namespace ttnn::operations::transformer::sdpa_windowed
+}  // namespace ttnn::prim

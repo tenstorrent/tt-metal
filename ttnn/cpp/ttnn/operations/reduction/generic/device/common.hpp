@@ -17,9 +17,9 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 
 }  // namespace tt::tt_metal
 
-namespace ttnn::operations::reduction::generic::detail {
+namespace ttnn::prim {
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
 
-}  // namespace ttnn::operations::reduction::generic::detail
+}  // namespace ttnn::prim

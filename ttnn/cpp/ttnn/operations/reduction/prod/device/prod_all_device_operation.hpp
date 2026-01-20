@@ -9,14 +9,14 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::prod_all {
+namespace ttnn::prim {
 
 struct ProdAllDeviceOperation {
     using operation_attributes_t = ProdAllParams;
     using tensor_args_t = ProdAllInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::ProdAllProgramFactory>;
+    using program_factory_t = std::variant<ProdAllProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -29,8 +29,6 @@ struct ProdAllDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::reduction::prod_all
-
-namespace ttnn::prim {
 ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+
 }  // namespace ttnn::prim

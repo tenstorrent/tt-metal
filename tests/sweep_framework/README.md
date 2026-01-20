@@ -424,6 +424,76 @@ In the example above:
 - Detect memory regressions in CI
 - Optimize memory layouts before running on hardware
 
+## CI Execution
+
+The sweep framework runs automatically in CI via the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow. There are four distinct run types:
+
+### Run Types
+
+| Run Type | Schedule | Suite | Description |
+|----------|----------|-------|-------------|
+| **Nightly** | Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly` | Regular sweep testing with standard parameters |
+| **Comprehensive** | Wed, Sat @ 4:00 AM UTC | All suites | Exhaustive testing with all suite combinations |
+| **Model Traced** | Daily @ 4:00 AM UTC | `model_traced` | Tests with configurations traced from real models |
+| **Lead Models** | Daily @ 3:00 AM UTC | `model_traced` | Tests from prioritized lead models with multi-chip support |
+
+### Lead Models
+
+Lead models are prioritized models whose traced configurations receive special treatment in CI, including automatic routing to multi-chip runners.
+
+**Configuration:** Lead models are defined in `tests/sweep_framework/framework/constants.py`:
+
+```python
+LEAD_MODELS = [
+    "deepseek_v3",
+]
+```
+
+To add a new lead model, add its directory name pattern to this list. The pattern is matched against the `source` path in traced operations.
+
+**Generation:** To generate vectors for lead models only:
+
+```bash
+python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
+```
+
+### Multi-Chip Runner Assignment
+
+For lead model runs, the framework automatically routes operations to appropriate hardware based on their `mesh_device_shape`:
+
+| Mesh Shape | Description | Runner |
+|------------|-------------|--------|
+| `[1, 1]` | Single-chip | N150 |
+| `[1, 2]`, `[1, 4]`, `[2, 4]` | Small multi-chip | Galaxy |
+| `[4, 8]`, `[8, 4]` | 32-chip | Galaxy (topology-6u) |
+
+**How it works:**
+
+1. **Vector Generation:** The parameter generator reads `mesh_device_shape` from `traced_machine_info.tensor_placements` in the master JSON
+2. **File Routing:** Vectors are grouped by mesh shape and written to separate files (e.g., `op__mesh_4x8.json`)
+3. **Matrix Computation:** `framework/compute_sweep_matrix.py` creates a GitHub Actions matrix that maps mesh shapes to runners
+4. **Execution:** CI spawns parallel jobs on appropriate hardware based on the matrix
+
+**Runner Configuration:** The mesh-to-runner mapping is defined in `framework/compute_sweep_matrix.py`:
+
+```python
+def get_lead_models_mesh_runner_config():
+    return [
+        {
+            "mesh_shapes": ["1x1"],
+            "runs_on": "tt-ubuntu-2204-n150-stable",
+            ...
+        },
+        {
+            "mesh_shapes": ["1x2", "1x4", "2x4", "4x8", "8x4"],
+            "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+            ...
+        },
+    ]
+```
+
+For more details on the master JSON format and tensor placements, see the [Model Tracer README](../../model_tracer/README.md).
+
 ## FAQ / Troubleshooting
 
 - If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install beautifultable termcolor`:

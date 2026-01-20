@@ -66,7 +66,7 @@ ttnn::Tensor encoder(
         .transpose_mcast = false,
         .fused_activation = std::nullopt,
     };
-    ttnn::operations::matmul::operation_attributes_t attributes;
+    ttnn::prim::MatmulParams attributes;
     attributes.program_config = fused_qkv_matmul_program_config;
     attributes.output_mem_config = l1_memory_config;
 

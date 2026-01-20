@@ -84,9 +84,9 @@ if [ -n "$skip_commits" ]; then
   echo "Auto-skip commits list: $skip_commits"
 fi
 
-# Create the virtual environment and install dependencies (including wheel)
+# Create the virtual environment and install dependencies (including wheel). Allowing non-interactive overwrite.
 echo "Creating virtual environment and installing dependencies..."
-./create_venv.sh
+./create_venv.sh --force
 
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"

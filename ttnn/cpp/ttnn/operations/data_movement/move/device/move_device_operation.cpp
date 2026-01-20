@@ -7,14 +7,14 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::operations::data_movement::move {
+namespace ttnn::prim {
 
 MoveDeviceOperation::program_factory_t MoveDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     switch (operation_attributes.move_op_parallelization_strategy) {
-        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: return program::MoveShardedProgramFactory{};
-        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: return program::MoveOverlapProgramFactory{};
-        case MoveOpParallelizationStrategy::MULTI_CORE: return program::MoveProgramFactory{};
+        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED: return MoveShardedProgramFactory{};
+        case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP: return MoveOverlapProgramFactory{};
+        case MoveOpParallelizationStrategy::MULTI_CORE: return MoveProgramFactory{};
         default: TT_FATAL(false, "Invalid move operation parallelization strategy");
     }
 }
@@ -48,24 +48,23 @@ MoveDeviceOperation::create_op_performance_model(
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensor = tensor_return_value;
-    const int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    const int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::move
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_t move(
+ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const ttnn::operations::data_movement::move::MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
-    using OperationType = ttnn::operations::data_movement::move::MoveDeviceOperation;
+    const ttnn::prim::MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
+    using OperationType = ttnn::prim::MoveDeviceOperation;
     bool backwards = false;
-    if (move_op_parallelization_strategy ==
-        ttnn::operations::data_movement::move::MoveOpParallelizationStrategy::MULTI_CORE) {
+    if (move_op_parallelization_strategy == ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE) {
         Buffer* src_buffer = input_tensor.buffer();
         Buffer* dst_buffer = output_tensor.buffer();
         const bool src_and_dst_in_l1 = src_buffer->buffer_type() == tt::tt_metal::BufferType::L1 &&

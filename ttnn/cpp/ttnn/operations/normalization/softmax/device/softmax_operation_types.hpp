@@ -11,8 +11,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace ttnn::operations::normalization {
-
+namespace ttnn {
 // Softmax program configuration structs
 struct SoftmaxDefaultProgramConfig {};
 struct SoftmaxShardedMultiCoreProgramConfig {
@@ -32,10 +31,17 @@ enum class SoftmaxOperationType : uint8_t {
     ScaleMaskSoftmaxInPlace = 3,
     ScaleCausalMaskHWSoftmaxInPlace = 4
 };
+}  // namespace ttnn
 
 // Softmax operation structs
-namespace softmax {
-struct operation_attributes_t {
+namespace ttnn::prim {
+
+// Kernel path constants
+inline constexpr const char* SOFTMAX_KERNEL_PATH_GENERAL =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels";
+inline constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION =
+    "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention";
+struct SoftmaxParams {
     const SoftmaxOperationType softmax_type;
     const int8_t dim;
     const std::optional<float> scale;
@@ -48,12 +54,9 @@ struct operation_attributes_t {
     const bool numeric_stable;
 };
 
-struct tensor_args_t {
+struct SoftmaxInputs {
     const Tensor& input_tensor;
     const std::optional<const Tensor> mask;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = ttnn::Tensor;
-}  // namespace softmax
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

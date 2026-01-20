@@ -71,19 +71,6 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 20,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-DeskBox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x2",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 2}",
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
               "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
@@ -253,6 +240,35 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
+              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct",
+              "model": "meta-llama/Llama-3.1-8B-Instruct",
+              "server-timeout": 10,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-DeskBox",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x2",
+              "tt-llama-text-ver": "tt_transformers",
+              "additional-server-args": "--data_parallel_size 2",
+              "use-vllm-v1": true,
+              "structured-output": true,
+              "multimodal": false,
+              "owner_id": "U08GELBB1AP"
+            },
+            {
+              "name": "[BH-QB-GE][v1] Llama-3.1-8B-Instruct",
+              "model": "meta-llama/Llama-3.1-8B-Instruct",
+              "server-timeout": 10,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-QB-GE",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-llama-text-ver": "tt_transformers",
+              "use-vllm-v1": true,
+              "structured-output": true,
+              "multimodal": false,
+              "owner_id": "U08GELBB1AP"
+            },
+            {
               "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
@@ -355,7 +371,7 @@ jobs:
       - ${{ matrix.test-group.runner-label }}
       - ${{ matrix.test-group.arch }}
       - in-service
-      - pipeline-functional
+      - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -376,7 +392,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:ro') || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:

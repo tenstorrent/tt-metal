@@ -20,7 +20,7 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 
-namespace ttnn::operations::data_movement::repeat::program {
+namespace ttnn::prim {
 
 RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::create(
     const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -127,4 +127,4 @@ void RepeatProgramFactoryLastDim::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::repeat::program
+}  // namespace ttnn::prim

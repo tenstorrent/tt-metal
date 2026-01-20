@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_adamw_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <optional>
 

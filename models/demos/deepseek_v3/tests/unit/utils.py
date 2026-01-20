@@ -35,10 +35,10 @@ def run_test(mesh_device, run_op_proc, check_op_proc, enable_trace):
 
         # Every device executes the same op, check that each device returned the
         # same result
-        view = mesh_device.get_view()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
         coords = list(tt_outputs.tensor_topology().mesh_coords())
         for coord, tt_output in zip(coords, ttnn.get_device_tensors(tt_outputs)):
-            if not view.is_local(coord):
+            if view is not None and not view.is_local(coord):
                 continue
             tt_output = ttnn.to_torch(tt_output)
             check_op_proc(tt_output)
@@ -66,10 +66,10 @@ def run_test(mesh_device, run_op_proc, check_op_proc, enable_trace):
 
         # Every device executes the same op, check that each device returned the
         # same result
-        view = mesh_device.get_view()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
         coords = list(tt_outputs.tensor_topology().mesh_coords())
         for coord, tt_output in zip(coords, ttnn.get_device_tensors(tt_outputs)):
-            if not view.is_local(coord):
+            if view is not None and not view.is_local(coord):
                 continue
             tt_output = ttnn.to_torch(tt_output)
             check_op_proc(tt_output)

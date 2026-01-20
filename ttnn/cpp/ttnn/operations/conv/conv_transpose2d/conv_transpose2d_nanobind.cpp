@@ -20,6 +20,9 @@
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
+
 void bind_conv_transpose2d(nb::module_& mod) {
     bind_registered_operation(
         mod,
@@ -104,10 +107,10 @@ void bind_conv_transpose2d(nb::module_& mod) {
                uint32_t groups,
                const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const conv2d::Conv2dConfig>& conv_config,
+               const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config,
+               const std::optional<const Conv2dSliceConfig>& dram_slice_config,
                bool mirror_kernel,
                const bool return_output_dim,
                const bool return_weights_and_bias) -> ResultWithOptions {

@@ -1,0 +1,14 @@
+# --- Meshes ---------------------------------------------------------------
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 16 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 4
+    policy: RELAXED
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

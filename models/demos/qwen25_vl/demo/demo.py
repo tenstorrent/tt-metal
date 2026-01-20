@@ -359,6 +359,9 @@ def test_demo(
 
     processor = model_args.processor
     tokenizer = model_args.tokenizer
+
+    # NOTE: For qwen 2.5 vl, we do not use QK fused ops
+    model_args.use_qk_fused = False
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     # Load vision model and processor

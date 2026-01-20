@@ -8,7 +8,7 @@
 
 #include "sdpa_decode_device_operation_types.hpp"
 
-namespace ttnn::operations::transformer::sdpa_decode::program {
+namespace ttnn::prim {
 
 struct SdpaDecodeProgramFactory {
     struct shared_variables_t {
@@ -46,4 +46,4 @@ struct SdpaDecodeProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::transformer::sdpa_decode::program
+}  // namespace ttnn::prim

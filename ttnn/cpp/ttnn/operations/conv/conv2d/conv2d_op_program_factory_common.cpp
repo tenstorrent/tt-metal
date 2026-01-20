@@ -18,7 +18,11 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
+
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -757,4 +761,4 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

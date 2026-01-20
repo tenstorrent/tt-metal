@@ -6,14 +6,15 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::matmul::group_attn_matmul {
+namespace ttnn::experimental::prim {
 
 GroupAttnMatmulDeviceOperation::program_factory_t GroupAttnMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::GroupAttnMatmulProgramFactory{};
+    return GroupAttnMatmulProgramFactory{};
 }
 
 void GroupAttnMatmulDeviceOperation::validate_on_program_cache_hit(
@@ -250,12 +251,11 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         input_tensor_b.device()->id());
 }
 
-}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation::tensor_return_value_t
-group_attn_matmul(
+Tensor group_attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -267,9 +267,9 @@ group_attn_matmul(
     uint32_t out_subblock_w,
     bool row_major,
     std::optional<Tensor> preallocated_output) {
-    using OperationType = ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation;
+    using OperationType = ttnn::experimental::prim::GroupAttnMatmulDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = ttnn::experimental::prim::GroupAttnMatmulParams{
         .num_tokens = num_tokens,
         .transpose_hw = transpose_hw,
         .out_subblock_w = out_subblock_w,
@@ -280,7 +280,7 @@ group_attn_matmul(
         .compute_kernel_config = compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{}),
     };
 
-    auto tensor_args = OperationType::tensor_args_t{
+    auto tensor_args = ttnn::experimental::prim::GroupAttnMatmulInputs{
         .input_tensor_a = input_tensor_a,
         .input_tensor_b = input_tensor_b,
         .preallocated_output = std::move(preallocated_output),

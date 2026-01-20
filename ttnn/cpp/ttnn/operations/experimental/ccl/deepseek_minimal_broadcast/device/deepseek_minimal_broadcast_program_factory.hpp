@@ -5,7 +5,7 @@
 #pragma once
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program {
+namespace ttnn::experimental::prim {
 struct DeepseekMinimalBroadcastProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
@@ -42,4 +42,4 @@ private:
         const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program
+}  // namespace ttnn::experimental::prim

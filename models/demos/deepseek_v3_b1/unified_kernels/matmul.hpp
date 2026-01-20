@@ -19,7 +19,7 @@
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// Matmul micro-op with configurable output width (up to 4)
+// Matmul micro-op with configurable output width (supports large out_w via blocking)
 //
 // Computes: output[1,out_w] = in0[1,K] @ in1[K,out_w]
 //
@@ -123,25 +123,42 @@ struct Matmul {
                 tile_regs_release();
             } else {
                 // Use standard matmul API for multiple output tiles
+                // Process in blocks of up to 256 tiles (max DST size)
                 mm_block_init(args.in0, args.in1, args.out, transpose, out_subblock_w, out_subblock_h, in0_block_w);
 
-                tile_regs_acquire();
+                constexpr uint32_t max_dst_size = 256;
+                constexpr uint32_t num_blocks = (out_w + max_dst_size - 1) / max_dst_size;
 
-                for (uint32_t k = 0; k < args.k_num_tiles; k++) {
-                    for (uint32_t w = 0; w < out_w; w++) {
-                        // Each output tile w accumulates into DST[w]
-                        matmul_tiles(args.in0, args.in1, k, k * out_w + w, w);
+                uint32_t block_start = 0;
+                for (uint32_t block = 0; block < num_blocks; block++) {
+                    uint32_t block_end = (block_start + max_dst_size < out_w) ? block_start + max_dst_size : out_w;
+                    uint32_t block_size = block_end - block_start;
+
+                    tile_regs_acquire();
+
+                    uint32_t in1_k_offset = block_start;  // Tracks k * out_w + block_start
+                    for (uint32_t k = 0; k < args.k_num_tiles; k++) {
+                        uint32_t in1_idx = in1_k_offset;
+                        for (uint32_t dst_idx = 0; dst_idx < block_size; dst_idx++) {
+                            matmul_tiles(args.in0, args.in1, k, in1_idx, dst_idx);
+                            in1_idx++;
+                        }
+                        in1_k_offset += out_w;
                     }
-                }
 
-                tile_regs_commit();
+                    tile_regs_commit();
 
-                // Pack all output tiles
-                tile_regs_wait();
-                for (uint32_t w = 0; w < out_w; w++) {
-                    pack_tile(w, args.out, w);
+                    // Pack output tiles for this block
+                    tile_regs_wait();
+                    uint32_t out_idx = block_start;
+                    for (uint32_t dst_idx = 0; dst_idx < block_size; dst_idx++) {
+                        pack_tile(dst_idx, args.out, out_idx);
+                        out_idx++;
+                    }
+                    tile_regs_release();
+
+                    block_start += max_dst_size;
                 }
-                tile_regs_release();
             }
 
             // Pop inputs

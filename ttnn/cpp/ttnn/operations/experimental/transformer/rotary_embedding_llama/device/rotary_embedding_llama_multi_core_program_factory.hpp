@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama::program {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaMultiCore {
     struct shared_variables_t {
@@ -38,4 +38,4 @@ struct RotaryEmbeddingLlamaMultiCore {
         tt::tt_metal::Tensor& output);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama::program
+}  // namespace ttnn::experimental::prim

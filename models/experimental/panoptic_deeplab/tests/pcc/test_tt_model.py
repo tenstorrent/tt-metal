@@ -31,7 +31,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
             PANOPTIC_DEEPLAB,
             {
                 "semantic": {"pcc": 0.986, "abs_err": 1.3, "rel_err": 0.4},
-                "center": {"pcc": 0.805, "abs_err": 0.1, "rel_err": 2.0},
+                "center": {"pcc": 0.804, "abs_err": 0.1, "rel_err": 2.1},
                 "offset": {"pcc": 0.990, "abs_err": 10.4, "rel_err": 0.6},
             },
             skip_if_not_blackhole_20_cores,

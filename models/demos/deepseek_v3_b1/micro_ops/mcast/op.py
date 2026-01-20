@@ -35,13 +35,14 @@ class McastSingleCore:
         return input_tensor.repeat(num_output_cores, 1)
 
     @staticmethod
-    def op(input_tensor, output_tensor, noc=ttnn.NOC.NOC_1):
+    def op(input_tensor, output_tensor, mcast_grid, noc=ttnn.NOC.NOC_1):
         """
         Execute mcast operation using generic_op.
 
         Args:
             input_tensor: Input tensor (must be sharded on single core)
             output_tensor: Pre-allocated output tensor (must be sharded across multiple cores)
+            mcast_grid: Grid of cores to multicast to
             noc: NOC to use for multicast (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1)
 
         Returns:
@@ -55,12 +56,11 @@ class McastSingleCore:
         output_memory_config = output_tensor.memory_config()
         input_core_grid = input_memory_config.shard_spec.grid
         output_core_grid = output_memory_config.shard_spec.grid
+        assert mcast_grid.contains(output_core_grid), "Mcast grid must contain output core grid"
 
         # Extract mcast_core (first core from input grid) and mcast_grid (first range from output grid)
         input_core_ranges = list(input_core_grid.ranges())
-        output_core_ranges = list(output_core_grid.ranges())
         mcast_core = input_core_ranges[0].start
-        mcast_grid = output_core_ranges[0]
 
         # Get NOC coordinates for mcast destination
         mcast_dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid.start)
@@ -82,13 +82,13 @@ class McastSingleCore:
             raise ValueError(f"Unsupported dtype: {dtype}")
 
         # Determine if sender is part of receiver grid
-        is_part_of_receiver_grid = output_core_grid.contains(mcast_core)
+        is_part_of_receiver_grid = mcast_grid.contains(mcast_core)
 
         # All cores (input + output) for semaphore allocation and kernel execution
         all_cores = output_core_grid.merge(input_core_grid)
 
         # Calculate number of output cores
-        num_output_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
+        mcast_num_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_id = 0
@@ -136,12 +136,13 @@ class McastSingleCore:
             ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
-            ("mcast_num_cores", num_output_cores),
+            ("mcast_num_cores", mcast_num_cores),
             ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
             ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
             ("mcast_data_size_bytes", total_size),
             ("mcast_src_cb", src_cb),
             ("mcast_src_num_pages", src_num_pages),
+            ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
         ]
 
         # Get the output tensor's buffer address for mcast destination (runtime arg)

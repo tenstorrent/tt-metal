@@ -10,7 +10,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::split::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -86,9 +86,9 @@ void setup_runtime(
 }  // namespace
 
 SplitProgramFactory::cached_program_t SplitProgramFactory::create(
-    const split::SplitParams& operation_attributes,
-    const split::SplitInputs& tensor_args,
-    split::tensor_return_value_t& output_tensors) {
+    const ttnn::prim::SplitParams& operation_attributes,
+    const ttnn::prim::SplitInputs& tensor_args,
+    std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = tensor_args.input;
     const uint32_t num_chunks = operation_attributes.num_splits;
 
@@ -219,9 +219,9 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
 
 void SplitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split::SplitParams& /*operation_attributes*/,
-    const split::SplitInputs& tensor_args,
-    split::tensor_return_value_t& output_tensors) {
+    const ttnn::prim::SplitParams& /*operation_attributes*/,
+    const ttnn::prim::SplitInputs& tensor_args,
+    std::vector<Tensor>& output_tensors) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -252,4 +252,4 @@ void SplitProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::split::program
+}  // namespace ttnn::prim

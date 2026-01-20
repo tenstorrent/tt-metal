@@ -4,15 +4,15 @@
 
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
 SplitFusedQKVAndSplitHeadsProgramFactory::cached_program_t SplitFusedQKVAndSplitHeadsProgramFactory::create(
-    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
-    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
+    const SplitQueryKeyValueAndSplitHeadsParams& operation_attributes,
+    const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
     std::vector<Tensor>& output_tensors) {
     const auto& a = tensor_args.input_tensor;
     auto& output = output_tensors;
@@ -179,8 +179,8 @@ SplitFusedQKVAndSplitHeadsProgramFactory::cached_program_t SplitFusedQKVAndSplit
 
 void SplitFusedQKVAndSplitHeadsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsParams& /*operation_attributes*/,
-    const split_query_key_value_and_split_heads::SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
+    const SplitQueryKeyValueAndSplitHeadsParams& /*operation_attributes*/,
+    const SplitQueryKeyValueAndSplitHeadsInputs& tensor_args,
     std::vector<Tensor>& output_tensors) {
     auto* src_dram_buffer = tensor_args.input_tensor.buffer();
 
@@ -217,4 +217,4 @@ void SplitFusedQKVAndSplitHeadsProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program
+}  // namespace ttnn::experimental::prim

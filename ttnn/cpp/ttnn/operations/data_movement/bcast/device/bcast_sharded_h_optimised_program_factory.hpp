@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::bcast::program {
+namespace ttnn::prim {
 
 struct BcastShardedHOptimisedProgramFactory {
     using shared_variables_t = BcastShardedHSharedVariables;
@@ -25,4 +25,4 @@ struct BcastShardedHOptimisedProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::bcast::program
+}  // namespace ttnn::prim

@@ -11,7 +11,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
     const ConcatParams& /*operation_attributes*/, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -140,4 +140,4 @@ void ConcatS2IProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

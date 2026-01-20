@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "copy_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::copy::program {
+namespace ttnn::prim {
 
 struct CopySharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -20,15 +20,13 @@ struct CopyProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const copy::operation_attributes_t& operation_attributes,
-        const copy::tensor_args_t& tensor_args,
-        copy::tensor_return_value_t& output);
+        const CopyParams& operation_attributes, const CopyInputs& tensor_args, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const copy::operation_attributes_t& operation_attributes,
-        const copy::tensor_args_t& tensor_args,
-        copy::tensor_return_value_t& output);
+        const CopyParams& operation_attributes,
+        const CopyInputs& tensor_args,
+        Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::copy::program
+}  // namespace ttnn::prim

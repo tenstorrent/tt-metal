@@ -519,6 +519,7 @@ target_sources(
             inc/api/dataflow/dataflow_api.h
             inc/api/debug/assert.h
             inc/api/debug/dprint.h
+            inc/api/debug/timing_perturbation.h
             inc/api/debug/dprint_pages.h
             inc/api/debug/dprint_tensix.h
             inc/api/debug/dprint_tile.h

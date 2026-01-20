@@ -149,7 +149,7 @@ static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    ttnn::operations::matmul::operation_attributes_t& parameters,
+    ttnn::prim::MatmulParams& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -180,7 +180,8 @@ static ttnn::Tensor bound_matmul(
 
     //----------------------------------------------------------------------------------------------
     // The following code is replicated from matmul_op.cpp and helps determine the program config
-    auto matmul_struct = create_matmul_attributes(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
+    auto matmul_struct =
+        ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
 
     uint32_t bias_single_tile_size = 0;
     if (bias.has_value()) {
@@ -233,7 +234,7 @@ static ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         parameters.transpose_a);
 
-    auto attributes = ttnn::operations::matmul::create_matmul_attributes(
+    auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
 
     auto output_tensor = ttnn::prim::matmul(
@@ -296,7 +297,7 @@ Tensor MatmulOperation::invoke(
                 std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
             ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
             : false;
-    auto matmul_params = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
         /*bcast_batch=*/std::nullopt,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -343,7 +344,7 @@ Tensor LinearOperation::invoke(
     bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
     TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
 
-    auto matmul_params = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
         /*bcast_batch=*/std::nullopt,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -390,7 +391,7 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     std::vector<Tensor> input_tensors = input_tensors_b;
     input_tensors.insert(input_tensors.begin(), input_tensor_a);
 
-    auto parameters = matmul::operation_attributes_t{
+    auto parameters = ttnn::prim::MatmulParams{
         program_config,
         /*bcast_batch=*/std::nullopt,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -409,7 +410,7 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     return ttnn::prim::matmul(
         input_tensors,
         optional_output_tensor,
-        create_matmul_attributes(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}));
+        ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}));
 }
 
 void AddmmOperation::validate(
@@ -464,7 +465,7 @@ Tensor AddmmOperation::invoke(
 
     validate(input_tensor, mat1_tensor, mat2_tensor, alpha, beta);
 
-    auto matmul_params = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
         std::nullopt,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,

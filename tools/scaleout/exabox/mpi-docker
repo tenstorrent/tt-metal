@@ -1,0 +1,340 @@
+#!/bin/bash
+
+print_usage() {
+    echo "Usage: $0 [--image <image>] [--empty-entrypoint] [--print] [--print-only] [global-mpi-args] <executable> [args...]"
+    echo "       $0 [--image <image>] [--empty-entrypoint] [--print] [--print-only] [global-mpi-args] <per-rank-specs> [: <per-rank-specs> ...]"
+    echo
+    echo "  --image <image>       (Optional) Docker image to use"
+    echo "  --empty-entrypoint    (Optional) Pass --entrypoint=\"\" to docker run"
+    echo "  --print               Print the command alongside execution"
+    echo "  --print-only          Print the command without executing it"
+    echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
+    echo "                        Examples: --host, --hostfile, --bind-to, --map-by, -np, etc."
+    echo "  <executable> [args]   Executable and arguments (single mode)"
+    echo "  <per-rank-specs>      Per-rank specification: -np <N> [-x VAR=val ...] <executable> [args...]"
+    echo "  :                     Separator for multiple per-rank specifications (optional)"
+    echo
+    echo "Modes:"
+    echo "  1. Single executable mode: Global args followed by executable (no per-rank -np needed)"
+    echo "  2. Multi-rank mode: Global args, then -np with executable (can specify -np in global args)"
+    echo "  3. Per-rank mode: Global args, then per-rank -np specifications separated by ':'"
+    echo
+    echo "Global vs Per-Rank Arguments:"
+    echo "  - Arguments before the first executable or before per-rank -np are global"
+    echo "  - In per-rank mode (with ':'), each rank can have unique -np, -x, and executable"
+    echo
+    echo "Examples:"
+    echo "  # Single executable, let MPI determine ranks from hostfile:"
+    echo "  $0 --image myimage --host host1,host2 ./myapp arg1 arg2"
+    echo
+    echo "  # Single executable with explicit -np in global args:"
+    echo "  $0 --image myimage --host host1,host2 -np 4 ./myapp"
+    echo
+    echo "  # Unique command per rank:"
+    echo "  $0 --image myimage --bind-to none --host host1,host2 -np 1 -x RANK=0 ./myapp : -np 1 -x RANK=1 ./myapp"
+    echo
+    echo "  # With additional global MPI arguments:"
+    echo "  $0 --image myimage --oversubscribe --timeout 300 --host host1,host2 ./myapp"
+}
+
+default() {
+    local image="ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
+    local empty_entrypoint=false
+    local print_flag=false
+    local print_only=false
+
+    # Parse script-specific arguments first
+    local script_args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image)
+                image="$2"
+                shift 2
+                ;;
+            --image=*)
+                image="${1#--image=}"
+                shift
+                ;;
+            --empty-entrypoint)
+                empty_entrypoint=true
+                shift
+                ;;
+            --print)
+                print_flag=true
+                shift
+                ;;
+            --print-only)
+                print_only=true
+                shift
+                ;;
+            *)
+                # Remaining arguments are for MPI
+                break
+                ;;
+        esac
+    done
+
+    # Remaining args contain MPI params and commands (possibly with : separators)
+    local remaining_args=("$@")
+
+    if [[ ${#remaining_args[@]} -eq 0 ]]; then
+        echo "Error: MPI arguments and executable are required."
+        print_usage
+        exit 1
+    fi
+
+    # Parse global MPI options (these apply to all ranks)
+    # Any arguments before the first -np are treated as global
+    local global_mpi_args=()
+    local has_host_or_hostfile=false
+    local i=0
+    local found_executable=false
+
+    # List of MPI flags that take arguments
+    local flags_with_args="--host --hostfile -H --bind-to --map-by --rank-by --timeout --output-filename --mca -x"
+
+    while [[ $i -lt ${#remaining_args[@]} ]]; do
+        local arg="${remaining_args[$i]}"
+
+        # Check if this is -np (start of per-rank specifications)
+        if [[ "$arg" == "-np" || "$arg" == "-n" || "$arg" == "--np" ]]; then
+            break
+        fi
+
+        # If we encounter a non-flag argument and we haven't seen it as a value to a flag, it's the executable
+        if [[ "$arg" != -* && "$arg" != ":" ]]; then
+            # This is the executable - stop parsing global args
+            break
+        fi
+
+        # Track if we have host/hostfile
+        if [[ "$arg" == "--host" || "$arg" == "--hostfile" || "$arg" == "-H" ]]; then
+            has_host_or_hostfile=true
+        fi
+
+        # Add this argument to global args
+        global_mpi_args+=("$arg")
+        i=$((i + 1))
+
+        # If this is a known flag that takes arguments, consume them
+        if [[ " $flags_with_args " =~ " $arg " && $i -lt ${#remaining_args[@]} ]]; then
+            # For --mca, we need to consume two more arguments (key and value)
+            if [[ "$arg" == "--mca" ]]; then
+                if [[ $i -lt ${#remaining_args[@]} ]]; then
+                    global_mpi_args+=("${remaining_args[$i]}")
+                    i=$((i + 1))
+                fi
+                if [[ $i -lt ${#remaining_args[@]} ]]; then
+                    global_mpi_args+=("${remaining_args[$i]}")
+                    i=$((i + 1))
+                fi
+            else
+                # Most flags take one argument
+                global_mpi_args+=("${remaining_args[$i]}")
+                i=$((i + 1))
+            fi
+        fi
+    done
+
+    # Remaining args are per-rank specifications
+    local per_rank_args=("${remaining_args[@]:$i}")
+
+    # Check if we have per-rank args (starting with -np) or just an executable
+    local single_executable_mode=false
+    if [[ ${#per_rank_args[@]} -gt 0 && "${per_rank_args[0]}" != "-np" && "${per_rank_args[0]}" != "-n" && "${per_rank_args[0]}" != "--np" ]]; then
+        # We have args but they don't start with -np, so this is single executable mode
+        single_executable_mode=true
+    fi
+
+    # Split per-rank args by colon (:) to support per-rank commands
+    local rank_groups=()
+    local current_group=()
+
+    for arg in "${per_rank_args[@]}"; do
+        if [[ "$arg" == ":" ]]; then
+            if [[ ${#current_group[@]} -gt 0 ]]; then
+                rank_groups+=("$(printf '%s\n' "${current_group[@]}")")
+                current_group=()
+            fi
+        else
+            current_group+=("$arg")
+        fi
+    done
+
+    # Add the last group
+    if [[ ${#current_group[@]} -gt 0 ]]; then
+        rank_groups+=("$(printf '%s\n' "${current_group[@]}")")
+    fi
+
+    if [[ ${#rank_groups[@]} -eq 0 ]]; then
+        echo "Error: No valid rank groups found."
+        print_usage
+        exit 1
+    fi
+
+    if [[ "$has_host_or_hostfile" == false ]]; then
+        echo "Error: Either --host or --hostfile must be specified in MPI arguments."
+        print_usage
+        exit 1
+    fi
+
+    # Build the command for each rank group
+    local base_mpirun_args="--tag-output --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_exclude docker0,lo"
+
+    # Add global MPI args to base
+    if [[ ${#global_mpi_args[@]} -gt 0 ]]; then
+        base_mpirun_args="$base_mpirun_args ${global_mpi_args[*]}"
+    fi
+
+    # Build entrypoint option if empty-entrypoint flag is set
+    local entrypoint_opt=""
+    if [[ "$empty_entrypoint" == true ]]; then
+        entrypoint_opt="--entrypoint=\"\""
+    fi
+
+    # Process each rank group
+    local mpirun_segments=()
+
+    # In single executable mode, we only have one group with just the executable
+    if [[ "$single_executable_mode" == true ]]; then
+        # Just one group, just the executable
+        local group="${rank_groups[0]}"
+        local group_array=()
+        while IFS= read -r line; do
+            group_array+=("$line")
+        done <<< "$group"
+
+        local executable="${group_array[*]}"
+
+        if [[ -z "$executable" ]]; then
+            echo "Error: executable is required."
+            print_usage
+            exit 1
+        fi
+
+        # Extract -x environment variables from global_mpi_args to pass to Docker
+        local docker_env_vars=()
+        local i=0
+        while [[ $i -lt ${#global_mpi_args[@]} ]]; do
+            if [[ "${global_mpi_args[$i]}" == "-x" ]]; then
+                i=$((i + 1))
+                if [[ $i -lt ${#global_mpi_args[@]} ]]; then
+                    docker_env_vars+=("-e")
+                    docker_env_vars+=("${global_mpi_args[$i]}")
+                fi
+            fi
+            i=$((i + 1))
+        done
+
+        # Build docker -e flags for environment variables
+        local docker_env_flags=""
+        if [[ ${#docker_env_vars[@]} -gt 0 ]]; then
+            docker_env_flags="${docker_env_vars[*]}"
+        fi
+
+        # Build docker command
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+
+        # Single segment without per-rank args
+        mpirun_segments+=("bash -c '$docker_cmd'")
+    else
+        # Multi-executable mode with per-rank specifications
+        for group in "${rank_groups[@]}"; do
+            # Parse this group's arguments (local/per-rank options)
+            local mpi_args=()
+            local docker_env_vars=()
+            local executable=""
+
+            # Read group into array
+            local group_array=()
+            while IFS= read -r line; do
+                group_array+=("$line")
+            done <<< "$group"
+
+            # Parse MPI args and executable for this group
+            local i=0
+            while [[ $i -lt ${#group_array[@]} ]]; do
+                local arg="${group_array[$i]}"
+                case "$arg" in
+                    -np|-n|--np)
+                        mpi_args+=("$arg")
+                        i=$((i + 1))
+                        if [[ $i -lt ${#group_array[@]} ]]; then
+                            mpi_args+=("${group_array[$i]}")
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    -x)
+                        mpi_args+=("$arg")
+                        i=$((i + 1))
+                        if [[ $i -lt ${#group_array[@]} ]]; then
+                            local env_var="${group_array[$i]}"
+                            mpi_args+=("$env_var")
+                            # Extract for docker -e flag
+                            docker_env_vars+=("-e")
+                            docker_env_vars+=("$env_var")
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    --*)
+                        mpi_args+=("$arg")
+                        i=$((i + 1))
+                        # Check if next argument is a value (doesn't start with --)
+                        if [[ $i -lt ${#group_array[@]} && "${group_array[$i]}" != --* && "${group_array[$i]}" != -* ]]; then
+                            mpi_args+=("${group_array[$i]}")
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    *)
+                        # First non-flag argument is start of executable
+                        executable="${group_array[@]:$i}"
+                        break
+                        ;;
+                esac
+            done
+
+            if [[ -z "$executable" ]]; then
+                echo "Error: executable is required for each rank group."
+                print_usage
+                exit 1
+            fi
+
+            # Build docker -e flags for environment variables
+            local docker_env_flags=""
+            if [[ ${#docker_env_vars[@]} -gt 0 ]]; then
+                docker_env_flags="${docker_env_vars[*]}"
+            fi
+
+            # Build docker command for this group
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
+
+            # Combine this group's MPI args with docker command
+            mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
+        done
+    fi
+
+    # Join all segments with " : "
+    local combined_segments=""
+    for i in "${!mpirun_segments[@]}"; do
+        if [[ $i -eq 0 ]]; then
+            combined_segments="${mpirun_segments[$i]}"
+        else
+            combined_segments="$combined_segments : ${mpirun_segments[$i]}"
+        fi
+    done
+
+    full_cmd="mpirun-ulfm $base_mpirun_args $combined_segments"
+
+    # Handle printing and execution based on flags
+    if [[ "$print_only" == true ]]; then
+        echo "$full_cmd"
+    elif [[ "$print_flag" == true ]]; then
+        echo "$full_cmd"
+        eval "$full_cmd"
+    else
+        eval "$full_cmd"
+    fi
+}
+
+# Call the default function with all script arguments
+default "$@"

@@ -91,6 +91,7 @@ def test_attention_inference(
         model_args.max_seq_len,
         model_args.rope_theta,
         model_args.rope_scaling,
+        model_args.use_qk_fused,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -127,6 +128,7 @@ def test_attention_inference(
     tt_model = Attention(
         mesh_device,
         tt_ccl,
+        model_args,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,

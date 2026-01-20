@@ -20,19 +20,15 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::prim {
 
 InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToShardedPartialProgramFactory::create(
-    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
-    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
-    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
-    const auto& input = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const InterleavedToShardedPartialParams& params, const Tensor& input, Tensor& output) {
     // Partial op behavior
     bool keep_l1_aligned = false;
 
-    uint32_t num_slices = operation_attributes.num_slices;
-    uint32_t slice_index = operation_attributes.slice_index;
+    uint32_t num_slices = params.num_slices;
+    uint32_t slice_index = params.slice_index;
 
     tt::tt_metal::Program program{};
 
@@ -191,7 +187,8 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h =
+        operations::data_movement::detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -378,21 +375,22 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
 
 void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
-    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
-    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    const InterleavedToShardedPartialParams& params,
+    const Tensor& input_tensor,
+    Tensor& output_tensor) {
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_slices = operation_attributes.num_slices;
-    uint32_t slice_index = operation_attributes.slice_index;
+    uint32_t num_slices = params.num_slices;
+    uint32_t slice_index = params.slice_index;
     bool partial_op = num_slices > 1;
     uint32_t starting_idx_h = 0;
     if (partial_op) {
         uint32_t runtime_slice_index = slice_index;
-        starting_idx_h = calculate_starting_idx_h(tensor_args.input_tensor, num_slices, runtime_slice_index);
+        starting_idx_h =
+            operations::data_movement::detail::calculate_starting_idx_h(input_tensor, num_slices, runtime_slice_index);
     }
 
     auto& shared_variables = cached_program.shared_variables;
@@ -422,4 +420,4 @@ void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::prim

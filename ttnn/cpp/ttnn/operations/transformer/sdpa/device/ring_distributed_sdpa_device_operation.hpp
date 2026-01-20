@@ -13,16 +13,16 @@
 #include "ring_distributed_sdpa_device_operation_types.hpp"
 #include "ring_distributed_sdpa_program_factory.hpp"
 
-namespace ttnn::operations::transformer::ring_distributed_sdpa {
+namespace ttnn::prim {
 
 struct RingDistributedSdpaDeviceOperation {
-    using operation_attributes_t = ring_distributed_sdpa::operation_attributes_t;
-    using tensor_args_t = ring_distributed_sdpa::tensor_args_t;
-    using spec_return_value_t = ring_distributed_sdpa::spec_return_value_t;
-    using tensor_return_value_t = ring_distributed_sdpa::tensor_return_value_t;
+    using operation_attributes_t = RingDistributedSDPAParams;
+    using tensor_args_t = RingDistributedSDPAInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<program::RingDistributedSdpaMeshWorkloadFactory>;
-    using shared_variables_t = program::RingDistributedSdpaMeshWorkloadFactory::shared_variables_t;
+    using program_factory_t = std::variant<RingDistributedSdpaMeshWorkloadFactory>;
+    using shared_variables_t = RingDistributedSdpaMeshWorkloadFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -39,12 +39,7 @@ struct RingDistributedSdpaDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::transformer::ring_distributed_sdpa
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation::tensor_return_value_t
-ring_distributed_sdpa(
+Tensor ring_distributed_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
