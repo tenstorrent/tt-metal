@@ -274,7 +274,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
+TEST_F(GenericMeshDeviceFixture, ) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
@@ -313,7 +313,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
     // Parameters
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
-    uint32_t num_of_transactions = 1;
+    uint32_t num_of_transactions = 256;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -324,12 +324,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
         .test_id = 89,
         .num_of_transactions = num_of_transactions,
         .num_banks = mesh_device->num_dram_channels(),
-        .pages_per_bank = 28,
+        .pages_per_bank = 32,
         .page_size_bytes = page_size_bytes,
         .l1_data_format = l1_data_format,
         .cores = core_range_set,
         .use_trid = true,
-        .num_of_trids = 1,
+        .num_of_trids = 16,
         .use_2_0 = true};
 
     // Run
