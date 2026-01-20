@@ -209,9 +209,10 @@ class DRAMStreamingMatmul:
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: triple buffered per K subblock * num_subblocks_k
-        # This allows reader to stay ahead of compute for entire K dimension
-        in1_CB_tiles = subblock_k * 3 * num_subblocks_k
+        # in1: triple buffered (3 buffers) for DRAM read pipelining
+        # Uses transaction IDs 1, 2, 3 which must cycle in sync with buffer offsets
+        num_in1_buffers = 3
+        in1_CB_tiles = subblock_k * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
         # Output: per_core_N tiles (tensor-backed - size determined by tensor)

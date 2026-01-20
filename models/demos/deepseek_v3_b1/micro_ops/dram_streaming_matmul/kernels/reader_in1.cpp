@@ -44,21 +44,21 @@ void kernel_main() {
     noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
 
     // Multi-buffering with transaction IDs for pipelining
-    // Buffer 3 * num_subblocks_k blocks so compute doesn't block reader for full K dimension
-    constexpr uint32_t total_num_blocks_in_buffer = 3 * num_subblocks_k;
-    // Max blocks in flight before we need to wait (leave 2 slot free for now)
-    constexpr uint32_t max_blocks_in_flight = total_num_blocks_in_buffer - 2;
-    uint32_t num_blocks_in_flight = 0;  // Blocks read but not yet pushed
+    // Use 3 buffers (transaction IDs 1, 2, 3) - must stay within NOC_MAX_TRANSACTION_ID (0xF)
+    // The CB size is 3 * num_subblocks_k to allow compute to work at its own pace
+    constexpr uint32_t num_buffers = 3;
+    uint32_t num_free_blocks_in_buffer = num_buffers;
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_reserve_back(cb_id_in1, subblock_k * total_num_blocks_in_buffer);
+    cb_reserve_back(cb_id_in1, subblock_k);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = get_write_ptr(cb_id_in1);
     l1_write_addr_in1 = l1_write_addr_in1_start;
 
     // Read in1: for each N column, read num_subblocks_k K subblocks
     for (uint32_t n = 0; n < num_iterations; ++n) {
+        // Set transaction ID for this block's reads
         noc_async_read_set_trid(curr_block_trid);
 
         // Read pages for this K subblock
@@ -69,18 +69,19 @@ void kernel_main() {
             l1_write_addr_in1 += in1_page_size;
         }
 
-        num_blocks_in_flight += 1;
-
-        // When we reach max blocks in flight, wait for oldest block and push it
-        if (num_blocks_in_flight == max_blocks_in_flight) {
+        // When down to 2 free buffers, wait for oldest and push it
+        if (num_free_blocks_in_buffer == 2) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, subblock_k);
-            cb_reserve_back(cb_id_in1, subblock_k);  // Reserve space for next write
-            block_trid_to_wait = (block_trid_to_wait == total_num_blocks_in_buffer) ? 1 : (block_trid_to_wait + 1);
-            num_blocks_in_flight -= 1;
+            block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+            // Reserve 2 blocks for next iterations
+            cb_reserve_back(cb_id_in1, subblock_k * 2);
+        } else {
+            num_free_blocks_in_buffer -= 1;
         }
 
-        if (curr_block_trid == total_num_blocks_in_buffer) {
+        // Advance write pointer and transaction ID (circular within num_buffers)
+        if (curr_block_trid == num_buffers) {
             l1_write_addr_in1_offset = 0;
             curr_block_trid = 1;
         } else {
@@ -90,13 +91,9 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
 
-    // Push all remaining blocks in flight
-    while (num_blocks_in_flight > 0) {
-        noc_async_read_barrier_with_trid(block_trid_to_wait);
-        cb_push_back(cb_id_in1, subblock_k);
-        block_trid_to_wait = (block_trid_to_wait == total_num_blocks_in_buffer) ? 1 : (block_trid_to_wait + 1);
-        num_blocks_in_flight -= 1;
-    }
+    // Push the last block
+    noc_async_read_barrier_with_trid(block_trid_to_wait);
+    cb_push_back(cb_id_in1, subblock_k);
 
     // Wait for compute to finish writing all output tiles
     // CB4 is backed by output tensor - data goes directly there
