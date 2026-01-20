@@ -1,11 +1,48 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_allreduce, apply_rope
 from .weights import AttentionWeights
+
+# Debug mode: Set DEBUG_DECODE_ATTENTION=1 to enable detailed logging
+DEBUG_DECODE = os.getenv("DEBUG_DECODE_ATTENTION", "0") == "1"
+
+
+def _debug_tensor_stats(name, tensor, user_idx=None):
+    """Log tensor statistics for debugging."""
+    if not DEBUG_DECODE:
+        return
+
+    import torch
+    from loguru import logger
+
+    # Get first device tensor for inspection
+    device_tensors = ttnn.get_device_tensors(tensor)
+    t = ttnn.to_torch(device_tensors[0]).float()
+
+    stats = f"shape={list(t.shape)}, min={t.min().item():.4f}, max={t.max().item():.4f}, mean={t.mean().item():.4f}, std={t.std().item():.4f}"
+
+    # Check for NaN/Inf
+    has_nan = torch.isnan(t).any().item()
+    has_inf = torch.isinf(t).any().item()
+    if has_nan or has_inf:
+        stats += f" ⚠️ NaN={has_nan}, Inf={has_inf}"
+
+    # If user_idx specified, show stats for that specific user
+    if user_idx is not None and len(t.shape) >= 3:
+        try:
+            user_t = t[..., user_idx, :]
+            user_stats = f"user_{user_idx}: min={user_t.min().item():.4f}, max={user_t.max().item():.4f}"
+            stats += f" | {user_stats}"
+        except Exception:
+            pass
+
+    logger.debug(f"[DECODE_ATTN] {name}: {stats}")
 
 
 def decode_forward(
@@ -51,11 +88,15 @@ def decode_forward(
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
+    # Debug: Log input tensor stats
+    _debug_tensor_stats("hidden_states (input)", hidden_states)
+
     # QKV projection
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    _debug_tensor_stats("xqkv_fused (after QKV proj)", xqkv_fused)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -68,6 +109,9 @@ def decode_forward(
         num_kv_heads=num_local_kv_heads,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
+    _debug_tensor_stats("tt_q (before RoPE)", tt_q)
+    _debug_tensor_stats("tt_k (before RoPE)", tt_k)
+    _debug_tensor_stats("tt_v", tt_v)
 
     xqkv_fused.deallocate(True)
 
@@ -76,11 +120,10 @@ def decode_forward(
     tt_k_orig = tt_k
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
+    _debug_tensor_stats("tt_q (after RoPE)", tt_q)
+    _debug_tensor_stats("tt_k (after RoPE)", tt_k)
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
-
-    # DEBUG: Check for NaN/Inf in Q/K after rope (enable with DEBUG_ATTENTION=1)
-    # Disabled by default to avoid performance impact
 
     # Update KV cache
     k_cache, v_cache = kv_cache
@@ -148,23 +191,29 @@ def decode_forward(
         )
     tt_q.deallocate(True)
 
+    # Debug: Log SDPA output
+    _debug_tensor_stats("tt_sdpa_tensor (SDPA output)", tt_sdpa_tensor)
+
     # Concat heads and apply output projection
 
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
+    _debug_tensor_stats("tt_sdpa_out (after concat heads)", tt_sdpa_out)
 
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
+    _debug_tensor_stats("tt_out (after o_proj)", tt_out)
 
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    # Keep bfloat16 for allreduce precision (was bfloat8_b causing precision loss)
     tt_out = ttnn.reshape(
         tt_out,
         (1, 1, batch_size, hidden_size),
         (1, 1, 32, hidden_size),
     )
+    _debug_tensor_stats("tt_out (final, before allreduce)", tt_out)
     # tt_out = ttnn.unsqueeze(tt_out, 0)
 
     # Tensor parallel allreduce

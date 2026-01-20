@@ -96,6 +96,7 @@ class ModelArgs:
         assert self.model_name in [
             "gpt-oss-20b",
             "gpt-oss-120b",
+            "gpt-oss-20b-nvfp4",
         ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g openai/gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 

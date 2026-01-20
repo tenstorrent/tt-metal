@@ -57,7 +57,7 @@ class MLP:
                 mesh_device=mesh_device,
                 config=throughput_expert_config,
                 state_dict=experts_state_dict,
-                weight_dtype=ttnn.bfloat4_b,
+                weight_dtype=ttnn.bfloat8_b,  # bfloat8_b to avoid OOM on 120B (bfloat16 causes OOM)
                 dispatch_cluster_axis=0,
                 # decode_memory_config=ttnn.L1_MEMORY_CONFIG,
                 decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
@@ -84,7 +84,7 @@ class MLP:
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat4_b,
+                weight_dtype=ttnn.bfloat8_b,  # bfloat8_b to avoid OOM on 120B (bfloat16 causes OOM)
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
             )
 

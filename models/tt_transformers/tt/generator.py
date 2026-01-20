@@ -282,7 +282,7 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        # self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -348,6 +348,9 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
+            # Pass global user ID for row-sharded page table handling
+            local_kwargs["global_user_id"] = user_id
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(

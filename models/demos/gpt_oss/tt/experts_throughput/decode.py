@@ -14,12 +14,36 @@ The MoE forward pass flow is:
 5. Apply routing weights and reduce across experts
 """
 
+import os
 from math import prod
 
 import ttnn
 
 from .config import AllToAllCombineConfig, AllToAllDispatchConfig, ThroughputExpertConfig, ThroughputProgramConfig
 from .weights import ThroughputExpertWeights
+
+# Debug mode for tracing expert operations
+DEBUG_THROUGHPUT_EXPERT = os.getenv("DEBUG_THROUGHPUT_EXPERT", "0") == "1"
+_current_layer_idx = 0  # Set by layer.py
+
+
+def _debug_expert_stats(name, tensor):
+    """Log tensor statistics for debugging expert operations."""
+    if not DEBUG_THROUGHPUT_EXPERT:
+        return
+
+    from loguru import logger
+
+    device_tensors = ttnn.get_device_tensors(tensor)
+    t = ttnn.to_torch(device_tensors[0]).float()
+
+    stats = f"shape={list(t.shape)}, min={t.min().item():.4f}, max={t.max().item():.4f}, mean={t.mean().item():.4f}, std={t.std().item():.4f}"
+
+    max_abs = t.abs().max().item()
+    if max_abs > 1000:
+        stats += f" ⚠️ EXTREME"
+
+    logger.debug(f"[EXPERT L{_current_layer_idx}] {name}: {stats}")
 
 
 def _apply_swiglu(
@@ -222,7 +246,7 @@ def decode_forward(
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
     )
 
-    memory_config = dispatch_config.memory_config
+    memory_config = ttnn.DRAM_MEMORY_CONFIG  # dispatch_config.memory_config
 
     # ==========================================================================
     # STEP 5: EXPERT COMPUTATION - Gate/Up/Down projections with sparse matmul
@@ -231,6 +255,8 @@ def decode_forward(
     #
     # sparse_matmul only computes (token_block, expert) pairs where sparsity=1,
     # significantly reducing computation for sparse expert activation patterns.
+
+    _debug_expert_stats("expert_input", expert_input)
 
     # Gate projection (w1): [B*S/block, block, H] x [experts, H, I] -> [B*S/block, experts, block, I]
     w1_out = ttnn.sparse_matmul(
@@ -243,11 +269,13 @@ def decode_forward(
         is_input_b_sparse=True,
         output_tile=ttnn.Tile([config.sparsity_block_size, ttnn.TILE_SIZE]),
     )
+    _debug_expert_stats("w1_out (gate sparse_matmul)", w1_out)
 
     # Add gate bias
     # w1_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
     w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+    _debug_expert_stats("w1_out (after bias)", w1_out)
 
     # Up projection (w3): same shape as gate
     w3_out = ttnn.sparse_matmul(
@@ -261,14 +289,17 @@ def decode_forward(
         output_tile=ttnn.Tile([config.sparsity_block_size, ttnn.TILE_SIZE]),
     )
     ttnn.deallocate(expert_input)
+    _debug_expert_stats("w3_out (up sparse_matmul)", w3_out)
 
     # Add up bias
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
     w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
+    _debug_expert_stats("w3_out (after bias)", w3_out)
 
     # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+    _debug_expert_stats("activated (after swiglu)", activated)
 
     # For testing standard SiLU activation instead of SwiGLU, uncomment below and comment above:
     # activated = _apply_silu_mul(w1_out, w3_out, memory_config)
@@ -293,6 +324,7 @@ def decode_forward(
     )
     ttnn.deallocate(activated)
     ttnn.deallocate(sparsity)
+    _debug_expert_stats("expert_output_sparse (after down proj)", expert_output_sparse)
 
     # Add down projection bias
     # expert_output shape: [num_sparse_blocks, num_experts_per_device, block_size, hidden]

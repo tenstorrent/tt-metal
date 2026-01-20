@@ -3,6 +3,8 @@
 
 """Prefill forward pass for experts (seq_len>1)."""
 
+import os
+
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
@@ -16,6 +18,29 @@ from .operations import (
     reduce_experts,
 )
 from .weights import ExpertWeights
+
+# Debug mode for expert operations
+DEBUG_EXPERT_OPS = os.getenv("DEBUG_EXPERT_OPS", "0") == "1"
+_current_layer_idx = 0  # Global counter set by layer.py
+
+
+def _debug_expert_stats(name, tensor):
+    """Log tensor statistics for debugging expert operations."""
+    if not DEBUG_EXPERT_OPS:
+        return
+
+    from loguru import logger
+
+    device_tensors = ttnn.get_device_tensors(tensor)
+    t = ttnn.to_torch(device_tensors[0]).float()
+
+    stats = f"shape={list(t.shape)}, min={t.min().item():.4f}, max={t.max().item():.4f}, mean={t.mean().item():.4f}, std={t.std().item():.4f}"
+
+    max_abs = t.abs().max().item()
+    if max_abs > 1000:
+        stats += f" ⚠️ EXTREME"
+
+    logger.debug(f"[EXPERT L{_current_layer_idx}] {name}: {stats}")
 
 
 def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device):
@@ -54,7 +79,7 @@ def _process_prefill_chunk(
     seq_len,
 ):
     """Process a single chunk of the sequence in prefill mode."""
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = ttnn.bfloat16  # Changed from bfloat8_b for precision
     TILE_SIZE = 32
 
     # Reshape for prefill (group tokens into tiles)
@@ -70,6 +95,8 @@ def _process_prefill_chunk(
 
     num_experts_per_tok = (config.num_experts // ep) * group_size
     output_tile = ttnn.Tile([32, 32])
+    _debug_expert_stats("hidden_states_4D (input)", hidden_states_4D)
+
     # Gate projection
     gate = ttnn.sparse_matmul(
         hidden_states_4D,
@@ -84,8 +111,10 @@ def _process_prefill_chunk(
     # Note: transpose/reshape operations return views - do not deallocate originals
     gate = ttnn.transpose(gate, 1, 3)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    _debug_expert_stats("gate (after sparse_matmul)", gate)
     bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
     gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
+    _debug_expert_stats("gate (after bias)", gate)
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -105,11 +134,14 @@ def _process_prefill_chunk(
     # Note: transpose/reshape operations return views - do not deallocate originals
     up = ttnn.transpose(up, 1, 3)
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    _debug_expert_stats("up (after sparse_matmul)", up)
     bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
     up = ttnn.add(up, bias_transposed, output_tensor=up)
+    _debug_expert_stats("up (after bias)", up)
 
     # Apply SwiGLU (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
+    _debug_expert_stats("down_input (after swiglu)", down_input)
     # Note: reshape returns a view - do not deallocate original
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
 
@@ -154,6 +186,7 @@ def _process_prefill_chunk(
             dtype=activation_dtype,
         )
         down_input_split.deallocate(True)
+        _debug_expert_stats(f"down[{i}] (after sparse_matmul)", down)
 
         # Apply bias and routing weights
         split_seq_len = seq_len if seq_len < split_size else split_size
@@ -161,10 +194,13 @@ def _process_prefill_chunk(
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
+        _debug_expert_stats(f"next_states[{i}] (after down_bias)", next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
+        _debug_expert_stats(f"next_states[{i}] (after routing)", next_states)
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
+        _debug_expert_stats(f"next_states_reduced[{i}]", next_states_reduced)
         next_states_reduced_list.append(next_states_reduced)
         routing_weights_list[i].deallocate(True)
 
@@ -203,7 +239,7 @@ def prefill_forward(
     Returns:
         Expert output [1, batch, seq_len, hidden_size]
     """
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = ttnn.bfloat16  # Changed from bfloat8_b for precision
     batch_dim = 1
     seq_dim = 2
     batch_size = hidden_states.shape[batch_dim]

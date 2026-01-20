@@ -109,7 +109,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     Returns:
         Output tensor after projection
     """
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    # Keep bfloat16 for o_proj to avoid activation explosion in deeper layers
     out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
     tensor.deallocate(True)
     out = ttnn.add(out, weights.o_proj_bias, output_tensor=out)

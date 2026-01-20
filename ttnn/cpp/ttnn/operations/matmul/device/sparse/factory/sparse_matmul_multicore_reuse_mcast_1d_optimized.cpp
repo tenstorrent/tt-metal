@@ -99,6 +99,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const auto batchB = get_batch_size(bshape);
 
+    // Validate sparsity page size is large enough to hold batchB uint16_t entries
+    // Each sparsity page is read as an array of uint16_t values indexed by bB in [0, batchB)
+    const auto sparsity_page_size = sparsity.buffer()->aligned_page_size();
+    TT_FATAL(
+        sparsity_page_size >= batchB * sizeof(uint16_t),
+        "Sparsity page size ({}) must be >= batchB * sizeof(uint16_t) ({} * 2 = {}). "
+        "This can cause out-of-bounds memory reads in the sparse matmul kernel.",
+        sparsity_page_size,
+        batchB,
+        batchB * sizeof(uint16_t));
+
     // When input A and input B are sparse, the batch dims are same.
     // We pick batchB and set batchA to 1.
     // When input A is sparse but B is not, both in0 and in1 need to loop over the "additional"
@@ -108,7 +119,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     if (operation_attributes.is_input_a_sparse && operation_attributes.is_input_b_sparse) {
         batchA = 1;
     } else if (operation_attributes.is_input_a_sparse) {
-        batchA = get_batch_size(ashape) / batchB;
+        auto batch_size_a = get_batch_size(ashape);
+        TT_FATAL(
+            batchB > 0 && batch_size_a % batchB == 0,
+            "When is_input_a_sparse=true, batch size of A ({}) must be divisible by batch size of B ({})",
+            batch_size_a,
+            batchB);
+        batchA = batch_size_a / batchB;
     } else {
         batchA = get_batch_size(ashape);
     }

@@ -33,7 +33,7 @@ class Attention:
         layer_idx,
         paged_attention_config=None,
         transformation_mats=None,
-        weight_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat16,  # Changed from bfloat8_b for precision
         tensor_cache_path=None,
         create_kv_cache=True,
     ):

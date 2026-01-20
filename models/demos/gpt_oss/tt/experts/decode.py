@@ -37,7 +37,7 @@ def decode_forward(
     Returns:
         Expert output [1, batch, 1, hidden_size]
     """
-    activation_dtype = ttnn.bfloat8_b
+    activation_dtype = ttnn.bfloat16  # Changed from bfloat8_b for precision
     batch_dim = 1
     seq_dim = 2
     batch_size = hidden_states.shape[batch_dim]

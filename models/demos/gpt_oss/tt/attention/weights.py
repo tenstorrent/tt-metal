@@ -30,7 +30,7 @@ def load_attention_weights(
     config: AttentionConfig,
     state_dict,
     mesh_config: MeshConfig,
-    weight_dtype=ttnn.bfloat8_b,
+    weight_dtype=ttnn.bfloat16,  # Changed from bfloat8_b for precision
     bias_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
 ) -> AttentionWeights:

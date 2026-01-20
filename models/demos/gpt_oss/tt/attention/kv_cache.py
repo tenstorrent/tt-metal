@@ -16,7 +16,7 @@ def init_kv_cache(
     config: AttentionConfig,
     mesh_config: MeshConfig,
     paged_attention_config=None,
-    cache_dtype=ttnn.bfloat8_b,
+    cache_dtype=ttnn.bfloat16,  # Use bfloat16 for KV cache to avoid precision loss
     tensor_cache_path=None,
 ):
     """
@@ -27,7 +27,7 @@ def init_kv_cache(
         config: Attention configuration
         mesh_config: Mesh parallelization config
         paged_attention_config: Optional paged attention configuration
-        cache_dtype: Data type for cache tensors (default: bfloat8_b)
+        cache_dtype: Data type for cache tensors (default: bfloat16)
         tensor_cache_path: Optional path for cache file
 
     Returns:

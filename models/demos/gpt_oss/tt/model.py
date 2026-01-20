@@ -174,7 +174,7 @@ class Model:
             substate(state_dict, "lm_head")["weight"].transpose(0, 1),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # Changed from bfloat8_b for precision
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_sharded.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
@@ -273,7 +273,9 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        logits = ttnn.matmul(
+            hidden_states, self.lm_head_weight, dtype=ttnn.bfloat16
+        )  # Changed from bfloat8_b for precision
         hidden_states.deallocate(True)
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
@@ -301,7 +303,9 @@ class Model:
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # Embed tokens
-        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        input_embeds = ttnn.embedding(
+            tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )  # Changed from bfloat8_b for precision
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
@@ -441,7 +445,7 @@ class Model:
         return tokens, current_pos_tt, rope_idxs, page_table
 
     def prepare_inputs_prefill_trace(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None, **kwargs
     ):
         """Prepare inputs on host so we later send them to device"""
         host_inputs = self.prepare_inputs_prefill(
@@ -451,21 +455,46 @@ class Model:
             chunk_page_table=chunk_page_table,
             trace_enabled=True,
             last_token_idx=last_token_idx,
+            **kwargs,
         )
         return host_inputs
 
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
         """Transform and embed tokens on device"""
-        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        tokens_embd = ttnn.embedding(
+            tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )  # Changed from bfloat8_b for precision
         tokens.deallocate(True)
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_prefill(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
+        **kwargs,
     ):
-        """Prepare inputs for prefill mode"""
+        """Prepare inputs for prefill mode
+
+        Args:
+            tokens: Input token tensor
+            start_pos: Starting position (for chunked prefill)
+            page_table: Page table for paged attention
+            chunk_page_table: Chunk page table for long sequences
+            trace_enabled: Whether trace capture is enabled
+            last_token_idx: Index of last token for output slicing
+            global_user_id: Global user ID - used to determine target row for row-sharded mode
+            **kwargs: Additional arguments (ignored)
+        """
+        # Default global_user_id to 0 if not provided
+        if global_user_id is None:
+            global_user_id = 0
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -475,7 +504,9 @@ class Model:
         tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
-            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            tokens_embd = ttnn.embedding(
+                tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )  # Changed from bfloat8_b for precision
             tokens.deallocate(True)
 
             # Ensure proper 4D shape
@@ -505,8 +536,28 @@ class Model:
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+            elif self.users_row_sharded and page_table.shape[0] == 1:
+                # Single-user prefill with row-sharding: create page table with valid entries
+                # only on the target row to prevent KV cache corruption on other rows
+                num_rows = self.mesh_device.shape[0]
+                users_per_row = getattr(self.args, "max_local_batch_size", self.args.max_batch_size // num_rows)
+                target_row = global_user_id // users_per_row
+
+                # Create page table with -1 (invalid) for all rows except target
+                full_page_table = torch.full((num_rows, page_table.shape[1]), -1, dtype=page_table.dtype)
+                full_page_table[target_row] = page_table[0]
+
+                tt_page_table = ttnn.from_torch(
+                    full_page_table,
+                    device=device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                    ),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
             else:
-                # Single-user prefill or non-row-sharded: replicate page table
+                # Non-row-sharded: replicate page table
                 tt_page_table = ttnn.from_torch(
                     page_table,
                     device=device,
@@ -541,8 +592,27 @@ class Model:
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
         if self.users_row_sharded:
-            tt_output_tensor = ttnn.get_device_tensors(tt_out)[:: self.mesh_device.shape[1]]
-            return torch.concat([ttnn.to_torch(t) for t in tt_output_tensor], dim=-2)
+            # Get one tensor from each row (first column device)
+            device_tensors = ttnn.get_device_tensors(tt_out)
+            row_tensors = device_tensors[:: self.mesh_device.shape[1]]  # Devices 0, 8, 16, 24 for 4x8 mesh
+            torch_tensors = [ttnn.to_torch(t) for t in row_tensors]
+
+            # Debug: Log tensor shapes to diagnose output concatenation issues
+            import os
+
+            if os.getenv("DEBUG_CONCAT", "0") == "1":
+                from loguru import logger
+
+                logger.debug(f"concat_device_output: num_rows={len(torch_tensors)}")
+                for i, t in enumerate(torch_tensors):
+                    logger.debug(f"  Row {i} tensor shape: {t.shape}")
+
+            result = torch.concat(torch_tensors, dim=-2)
+
+            if os.getenv("DEBUG_CONCAT", "0") == "1":
+                logger.debug(f"  Concatenated shape: {result.shape}")
+
+            return result
         else:
             tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
             tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
