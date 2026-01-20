@@ -734,6 +734,36 @@ jobs:
 
           echo "copilot-success=true" >> "$GITHUB_OUTPUT"
 
+      - name: Save patch files before PR creation
+        if: steps.copilot-fix.outputs.copilot-success == 'true'
+        id: save-patch-early
+        run: |
+          mkdir -p /tmp/copilot-patch-artifact
+
+          # Save the patch file if Copilot created one
+          if [ -f /tmp/copilot_fix.patch ] && [ -s /tmp/copilot_fix.patch ]; then
+            cp /tmp/copilot_fix.patch /tmp/copilot-patch-artifact/
+            echo "Saved copilot_fix.patch"
+            echo "patch-exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Save the description if it exists
+          if [ -f /tmp/copilot_fix_description.txt ]; then
+            cp /tmp/copilot_fix_description.txt /tmp/copilot-patch-artifact/
+            echo "Saved copilot_fix_description.txt"
+          fi
+
+          # Also generate a diff from current uncommitted changes
+          if ! git diff --quiet 2>/dev/null; then
+            git diff > /tmp/copilot-patch-artifact/uncommitted_changes.patch
+            echo "Generated uncommitted_changes.patch from working directory"
+            echo "patch-exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Show what was saved
+          echo "=== Saved patch files ==="
+          ls -la /tmp/copilot-patch-artifact/ 2>/dev/null || echo "No files saved yet"
+
       - name: Check for changes and create PR if needed
         if: steps.copilot-fix.outputs.copilot-success == 'true'
         id: create-pr
@@ -804,9 +834,9 @@ jobs:
             COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$CURRENT_BRANCH" 2>/dev/null || echo "0")
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
               echo "Found $COMMITS_AHEAD commit(s) on $CURRENT_BRANCH - pushing and creating PR"
-              # Configure git remote with token for push
-              REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-              git remote set-url origin "$REPO_URL"
+              # Configure git credentials
+              git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+              git remote set-url origin "https://github.com/${{ github.repository }}.git"
               git push -u origin "$CURRENT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
               PR_URL=$(gh pr create \
@@ -837,9 +867,9 @@ jobs:
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
               echo "Found $COMMITS_AHEAD commit(s) on $COPILOT_BRANCH - pushing and creating PR"
               git checkout "$COPILOT_BRANCH"
-              # Configure git remote with token for push
-              REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-              git remote set-url origin "$REPO_URL"
+              # Configure git credentials
+              git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+              git remote set-url origin "https://github.com/${{ github.repository }}.git"
               git push -u origin "$COPILOT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
               PR_URL=$(gh pr create \
@@ -877,17 +907,26 @@ jobs:
           git diff --stat
           echo ""
 
-          # Configure git remote to use the token for push
-          # This ensures we can push even if the checkout didn't set up credentials correctly
-          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git remote set-url origin "$REPO_URL"
-          echo "Configured git remote with token authentication"
+          # === Debug: Check GitHub authentication and permissions ===
+          echo "=== GitHub CLI Auth Status ==="
+          gh auth status || true
+          echo ""
+          echo "=== Repository Permissions ==="
+          gh api "/repos/${{ github.repository }}" --jq '.permissions' || echo "Could not get repo permissions"
+          echo ""
+          echo "=== Authenticated User ==="
+          gh api user --jq '.login' 2>/dev/null || echo "Could not determine authenticated user"
+          echo ""
           echo "Repository: ${{ github.repository }}"
           echo "Token length: ${#GH_TOKEN} characters"
+          echo ""
 
-          # Verify token has push access by checking rate limit (shows authenticated user)
-          echo "Checking GitHub authentication:"
-          gh api user --jq '.login' 2>/dev/null || echo "Could not determine authenticated user"
+          # Clear any existing credentials and force the use of the PAT
+          # This prevents the runner's default credential helper from interfering
+          echo "=== Configuring Git credentials ==="
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+          git remote set-url origin "https://github.com/${{ github.repository }}.git"
+          echo "Configured git extraheader and remote URL"
 
           # Create a branch with timestamp
           BRANCH_NAME="copilot/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
@@ -911,6 +950,7 @@ jobs:
           Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
 
           # Push
+          echo "=== Pushing branch ==="
           git push -u origin "$BRANCH_NAME"
 
           # Create PR
@@ -942,6 +982,14 @@ jobs:
           echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "pr-created=true" >> "$GITHUB_OUTPUT"
 
+      - name: Upload patch artifact
+        if: always() && steps.save-patch-early.outputs.patch-exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Copilot-Fix-Patch
+          path: /tmp/copilot-patch-artifact/
+          retention-days: 30
+
       - name: Output to job summary
         if: steps.select-issue.outputs.has-issues == 'true'
         run: |
@@ -955,12 +1003,23 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Please review the changes carefully before merging." >> "$GITHUB_STEP_SUMMARY"
           elif [ "${{ steps.copilot-fix.outputs.copilot-success }}" = "true" ]; then
-            echo "⚠️ Copilot ran successfully but no changes were made." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Copilot ran successfully but PR creation failed." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "This could mean:" >> "$GITHUB_STEP_SUMMARY"
-            echo "- All issues were determined to be false positives" >> "$GITHUB_STEP_SUMMARY"
-            echo "- The issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Copilot decided not to make changes" >> "$GITHUB_STEP_SUMMARY"
+            if [ "${{ steps.save-patch-early.outputs.patch-exists }}" = "true" ]; then
+              echo "📦 **Patch file uploaded as artifact:** Download 'Copilot-Fix-Patch' from the workflow artifacts to manually apply the fix." >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "To apply the patch manually:" >> "$GITHUB_STEP_SUMMARY"
+              echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+              echo 'git apply copilot_fix.patch' >> "$GITHUB_STEP_SUMMARY"
+              echo '# or' >> "$GITHUB_STEP_SUMMARY"
+              echo 'git apply current_changes.patch' >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "No patch file was generated. This could mean:" >> "$GITHUB_STEP_SUMMARY"
+              echo "- All issues were determined to be false positives" >> "$GITHUB_STEP_SUMMARY"
+              echo "- The issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Copilot decided not to make changes" >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "❌ Copilot task did not complete successfully. Check the logs for details." >> "$GITHUB_STEP_SUMMARY"
           fi
