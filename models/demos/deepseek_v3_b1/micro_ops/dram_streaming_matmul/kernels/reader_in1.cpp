@@ -44,9 +44,9 @@ void kernel_main() {
     noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
 
     // Multi-buffering with transaction IDs for pipelining
-    // Use 3 buffers (transaction IDs 1, 2, 3) - must stay within NOC_MAX_TRANSACTION_ID (0xF)
-    // The CB size is 3 * num_subblocks_k to allow compute to work at its own pace
-    constexpr uint32_t num_buffers = 3;
+    // Use 3 * num_subblocks_k buffers - must stay within NOC_MAX_TRANSACTION_ID (0xF = 15)
+    // Assert on host side ensures num_buffers <= 15
+    constexpr uint32_t num_buffers = 3 * num_subblocks_k;
     uint32_t num_free_blocks_in_buffer = num_buffers;
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
@@ -69,8 +69,8 @@ void kernel_main() {
             l1_write_addr_in1 += in1_page_size;
         }
 
-        // When down to 2 free buffers, wait for oldest and push it
-        if (num_free_blocks_in_buffer == 2) {
+        // When down to 1 free buffer (1 extra in flight), wait for oldest and push it
+        if (num_free_blocks_in_buffer == num_buffers - 1) {
             noc_async_read_barrier_with_trid(block_trid_to_wait);
             cb_push_back(cb_id_in1, subblock_k);
             block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);

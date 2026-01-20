@@ -210,11 +210,6 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     else:
         subblock_k = k // tile_w // 2
 
-    # TODO: remove it once we figure out why having larger outer dim
-    # caused the test with silu to fail with pcc error
-    if n == 7168 and fused_activation != None:
-        subblock_k = k // tile_w
-
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""
     logger.info(f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n}, num_cores={num_cores}")

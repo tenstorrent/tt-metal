@@ -209,9 +209,10 @@ class DRAMStreamingMatmul:
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: triple buffered (3 buffers) for DRAM read pipelining
-        # Uses transaction IDs 1, 2, 3 which must cycle in sync with buffer offsets
-        num_in1_buffers = 3
+        # in1: 3 * num_subblocks_k buffers for DRAM read pipelining
+        # Transaction IDs must stay within NOC_MAX_TRANSACTION_ID (0xF = 15)
+        num_in1_buffers = 3 * num_subblocks_k
+        assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
         in1_CB_tiles = subblock_k * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
