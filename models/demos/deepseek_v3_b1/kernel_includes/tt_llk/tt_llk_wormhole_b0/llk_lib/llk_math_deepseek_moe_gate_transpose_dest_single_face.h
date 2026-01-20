@@ -42,30 +42,27 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step0_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,  // replay buffer offset
-        16,                                // 16 instructions: 8x MOVD2B + 8x MOVB2D
-        [] {
-            // Move 8 rows from DEST to SrcB interleaved (1 row at a time)
-            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
-            TTI_MOVD2B(0, 18, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 1);
-            TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 2);
-            TTI_MOVD2B(0, 22, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 3);
-            TTI_MOVD2B(0, 24, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 4);
-            TTI_MOVD2B(0, 26, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 5);
-            TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 6);
-            TTI_MOVD2B(0, 30, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 7);
+    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
+    // Move 8 rows from DEST to SrcB interleaved (1 row at a time)
+    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
+    TTI_MOVD2B(0, 18, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 1);
+    TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 2);
+    TTI_MOVD2B(0, 22, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 3);
+    TTI_MOVD2B(0, 24, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 4);
+    TTI_MOVD2B(0, 26, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 5);
+    TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 6);
+    TTI_MOVD2B(0, 30, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 7);
 
-            // Move 8 rows from SrcB back to DEST interleaved (1 row at a time)
-            TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
-            TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
-            TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
-            TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
-            TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
-            TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
-            TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
-            TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
-        });
+    // Move 8 rows from SrcB back to DEST interleaved (1 row at a time)
+    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
+    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
+    TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
+    TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
+    TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
+    TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
+    TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
+    TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
+
     uint d2b_instr = lltt::replay_insn(math::replay_buf_offset, 8);
     uint b2d_instr = lltt::replay_insn(math::replay_buf_offset + 8, 8);
 
@@ -79,27 +76,23 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
     // For 16-bit data, simple single-pass transpose
     // Load replay buffer with the transpose sequence for one 16x16 face (face 0: rows 0-15)
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,  // replay buffer offset
-        11,                                // 11 instructions: 2x MOVD2B + TRNSPSRCB + 8x MOVB2D
-        [] {
-            // Move 4 rows from DEST to SrcB (4 rows at a time)
-            // This will place the first 2 rows in the first 2 columns, and the last 2 rows in the last 2 columns
-            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
-            TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
+    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 11);
+    // Move 4 rows from DEST to SrcB (4 rows at a time)
+    // This will place the first 2 rows in the first 2 columns, and the last 2 rows in the last 2 columns
+    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
+    TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
 
-            TTI_TRNSPSRCB;
+    TTI_TRNSPSRCB;
 
-            // Move 8 rows from SrcB back to DEST interleaved (1 row at a time)
-            TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
-            TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
-            TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
-            TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
-            TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
-            TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
-            TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
-            TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
-        });
+    // Move 8 rows from SrcB back to DEST interleaved (1 row at a time)
+    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
+    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
+    TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
+    TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
+    TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
+    TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
+    TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
+    TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
     uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
@@ -109,19 +102,15 @@ inline void deepseek_moe_gate_transpose_dest_single_face_step1_configure_mop() {
 template <uint32_t num_tiles = 1, bool is_32bit>
 inline void deepseek_moe_gate_transpose_dest_single_face_step2_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
-    load_replay_buf(
-        ckernel::math::replay_buf_offset,  // replay buffer offset
-        4,                                 // 4 instructions: 2x MOVD2B + TRNSPSRCB + 1x MOVB2D
-        [] {
-            // Move 8 rows from DEST to SrcB (4 rows at a time)
-            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
-            TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 4);
+    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 4);
+    // Move 8 rows from DEST to SrcB (4 rows at a time)
+    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
+    TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 4);
 
-            TTI_TRNSPSRCB;
+    TTI_TRNSPSRCB;
 
-            // Move 1 row from SrcB back to DEST
-            TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
-        });
+    // Move 1 row from SrcB back to DEST
+    TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
     uint replay_instr = lltt::replay_insn(math::replay_buf_offset, 4);
 
     ckernel_template tmp(num_tiles, 1, replay_instr);
