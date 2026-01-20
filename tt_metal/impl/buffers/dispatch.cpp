@@ -65,10 +65,7 @@ struct BufferWriteDispatchParams {
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy},
-        pinned_src_addr{src_addr},
-        use_pinned_transfer{src_pinned} {
-    }
+        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr{src_addr}, use_pinned_transfer{src_pinned} {}
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
@@ -510,6 +507,9 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
+    // If we're not using pinned transfer the data will be inline with the dispatch write in a single prefetch command
+    // so we need to flush the prefetch. With pinned memory the data will come in a separate command and we shouldn't
+    // flush between them.
     const bool flush_prefetch = !use_pinned_transfer;
     command_sequence.add_dispatch_write_paged(
         flush_prefetch,
@@ -662,9 +662,8 @@ void issue_buffer_dispatch_command_sequence(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     if (dispatch_params.issue_wait) {
-        uint32_t last_index = num_worker_counters;
-        for (auto i = 0; i < last_index; ++i) {
-            auto offset_index = *sub_device_ids[i];
+        for (const auto& sub_device_id : sub_device_ids) {
+            auto offset_index = *sub_device_id;
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
@@ -677,6 +676,11 @@ void issue_buffer_dispatch_command_sequence(
     } else {
         populate_interleaved_buffer_write_dispatch_cmds(src, command_sequence, buffer, dispatch_params);
     }
+    TT_ASSERT(
+        command_sequence.write_offset_bytes() == cmd_sequence_sizeB,
+        "Command sequence size mismatch, calculator: {}, command sequence: {}",
+        cmd_sequence_sizeB,
+        command_sequence.write_offset_bytes());
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
