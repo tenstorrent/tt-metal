@@ -1882,7 +1882,8 @@ void fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
-    std::vector<uint32_t>& worker_rt_args) {
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -1899,7 +1900,8 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address 10
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
+        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
@@ -1907,6 +1909,5 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
-
 
 }  // namespace ttnn::ccl
