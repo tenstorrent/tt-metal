@@ -94,7 +94,8 @@ class TtPatchTSMixerLayerNorm:
 
     def __call__(self, x):
         # x: (B, C, N_p, D)
-        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
+        x = ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
+        return x
 
 
 class TtPatchTSMixerLayerNormDispatcher:
