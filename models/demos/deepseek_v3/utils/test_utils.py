@@ -356,7 +356,7 @@ def run_reference_with_attention(
         position_ids = position_ids_or_seq_lens.unsqueeze(1)
         max_position_id = position_ids.max().item()
 
-        mask = torch.full((batch_size, 1, 1, max_position_id + 1), float("-inf"), dtype=dtype)
+        mask = torch.full((batch_size, 1, 1, max_position_id + 1), torch.finfo(dtype).min, dtype=dtype)
         for mask_row, position_id in zip(mask, position_ids_or_seq_lens):
             mask_row[:, :, :position_id] = 0.0
         mask[:, :, :, -1] = 0.0
@@ -423,7 +423,7 @@ def run_reference_with_attention(
                 # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
                 mask_chunk = torch.full(
                     (batch_size, 1, chunk_size_actual, kv_seq_len),
-                    float("-inf"),
+                    torch.finfo(torch.bfloat16).min,
                     dtype=torch.bfloat16,
                     device=device,
                 )
