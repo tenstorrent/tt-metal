@@ -24,7 +24,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
       extra-tag:
         required: true

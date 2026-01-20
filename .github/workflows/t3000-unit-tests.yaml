@@ -51,7 +51,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours

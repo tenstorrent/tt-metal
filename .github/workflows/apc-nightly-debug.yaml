@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       enable-lto:
-        default: true
+        default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
 

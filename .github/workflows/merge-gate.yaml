@@ -120,7 +120,7 @@ jobs:
       build-type: Release
       build-wheel: true
       platform: "Ubuntu 22.04"
-      enable-lto: true
+      enable-lto: false
       skip-tt-train: false
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}

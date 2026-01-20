@@ -21,7 +21,7 @@ jobs:
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: false
   tg-op-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit

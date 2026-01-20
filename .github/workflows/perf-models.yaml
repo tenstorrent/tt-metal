@@ -50,7 +50,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
@@ -71,7 +71,7 @@ jobs:
     with:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: false
   models-perf:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

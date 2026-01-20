@@ -43,7 +43,7 @@ on:
         default: false
         type: boolean
       enable-lto:
-        default: true
+        default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
   schedule:

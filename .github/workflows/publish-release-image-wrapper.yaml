@@ -26,7 +26,7 @@ jobs:
     with:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: false
   create-image-tag-name:
     runs-on: ubuntu-latest
     outputs:

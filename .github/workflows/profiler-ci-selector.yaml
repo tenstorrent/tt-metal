@@ -37,7 +37,8 @@ on:
         type: boolean
         default: false
       enable-lto:
-        default: true
+        default: false
+        required: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
       platform:
@@ -84,7 +85,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
         required: false
         type: boolean
-        default: true
+        default: false
       platform:
         required: false
         type: string

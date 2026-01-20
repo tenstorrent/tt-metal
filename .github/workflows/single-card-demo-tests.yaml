@@ -37,7 +37,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 13,18 * * 0,1,2,3,4,5,6" # frequency of functional models

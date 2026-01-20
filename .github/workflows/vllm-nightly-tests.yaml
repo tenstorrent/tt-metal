@@ -42,7 +42,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC

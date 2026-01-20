@@ -81,7 +81,7 @@ jobs:
     with:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: true
+      enable-lto: false
       tracy: true
       skip-tt-train: true
 

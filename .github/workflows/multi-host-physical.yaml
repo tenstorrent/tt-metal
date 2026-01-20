@@ -39,7 +39,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule

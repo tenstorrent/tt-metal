@@ -52,7 +52,7 @@ on:
       enable-lto:
         description: "Enable Link Time Optimization (LTO)"
         required: false
-        default: true
+        default: false
         type: boolean
 
 jobs:

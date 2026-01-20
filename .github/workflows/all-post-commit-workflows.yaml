@@ -15,7 +15,7 @@ on:
       enable-lto:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
     inputs:
@@ -46,7 +46,7 @@ on:
         type: boolean
         description: "Force test everything regardless of file changes"
       enable-lto:
-        default: true
+        default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
   push:
