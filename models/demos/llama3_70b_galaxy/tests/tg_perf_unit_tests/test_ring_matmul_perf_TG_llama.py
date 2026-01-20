@@ -11,6 +11,24 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 THRESHOLD = 1.0
 
 
+# Override the autouse ensure_devices fixture to prevent device initialization
+# in the parent process, which would conflict with the child pytest process
+@pytest.fixture(autouse=True)
+def ensure_devices():
+    """Skip device initialization since this test spawns child pytest processes."""
+
+
+# Override galaxy_type fixture to avoid calling ttnn.cluster.get_cluster_type()
+# which might acquire device locks
+@pytest.fixture(scope="function")
+def galaxy_type():
+    """Return galaxy type without initializing devices."""
+    import os
+
+    # Use environment variable if set, otherwise default to "4U"
+    return os.environ.get("GALAXY_TYPE", "4U")
+
+
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [

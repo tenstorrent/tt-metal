@@ -44,22 +44,32 @@ def run_allgather_only_with_trace(
     ccl_semaphore_handles,
     barrier_semaphore_handles,
     use_barrier,
+    cluster_axis=0,
     num_iter=20,
     warmup_iters=20,
     subdevice_id=None,
     profiler=BenchmarkProfiler(),
+    chunks_per_sync=None,
+    num_workers_per_link=1,
+    num_buffers_per_channel=None,
 ):
     # Compile Run
     logger.info("Compiling model")
+    print(all_gather_topology)
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
+        None,
         dim,
-        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        [ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        cluster_axis=cluster_axis,
+        topology=all_gather_topology,
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_gather_topology,
         subdevice_id=subdevice_id,
         barrier_semaphore=barrier_semaphore_handles[0] if use_barrier else None,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -70,13 +80,18 @@ def run_allgather_only_with_trace(
         for i in range(warmup_iters):
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
+                None,
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                [ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                cluster_axis=cluster_axis,
+                topology=all_gather_topology,
                 num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_gather_topology,
                 subdevice_id=subdevice_id,
                 barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
             )
             tt_out_tensor.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
@@ -85,13 +100,18 @@ def run_allgather_only_with_trace(
     for i in range(num_iter):
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
+            None,
             dim,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            [ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            cluster_axis=cluster_axis,
+            topology=all_gather_topology,
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
             subdevice_id=subdevice_id,
             barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
         if i != num_iter - 1:
             tt_out_tensor.deallocate(True)
@@ -178,6 +198,7 @@ def run_all_gather_impl(
         input_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
         )
+        # input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
         if output_shard_shape is None:
             assert (
                 output_shard_grid is None
@@ -205,6 +226,7 @@ def run_all_gather_impl(
             output_mem_config = ttnn.MemoryConfig(
                 tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
             )
+            # output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
     ###
 
     input_tensor_mesh_list = []
@@ -260,6 +282,7 @@ def run_all_gather_impl(
             ccl_semaphore_handles=ccl_semaphore_handles,
             barrier_semaphore_handles=barrier_semaphore_handles,
             use_barrier=use_barrier,
+            cluster_axis=1,
             num_iter=num_iters,
             warmup_iters=warmup_iters,
             subdevice_id=worker_sub_device_id,
@@ -645,7 +668,6 @@ def test_tg_trace_rms_fuse_qwen(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
-@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
@@ -852,6 +874,633 @@ def test_6u_trace_rms_fuse_qwen(
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# ============================================================================
+# DeepSeek V3 CCL Tests
+# ============================================================================
+
+
+# Test 1: Embedding All-Gather
+# Input shape per device: [1, 1, 32, 896]
+# Gathers across cluster_axis=0 on dimension -1
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, tensor_mem_layout",
+    [
+        (
+            8,
+            [1, 1, 32, 32 * 8],  # 896 * 8 = 7168 (full hidden size)
+            3,  # Gather on last dimension
+            ttnn.TILE_LAYOUT,
+            (32, 32),  # Shard shape per core
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),  # 4x7=28 cores
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(20, 200)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8_grid")], indirect=True)
+def test_deepseek_embedding_all_gather(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    tensor_mem_layout,
+):
+    """Test all-gather operation used in DeepSeek V3 embedding layer."""
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        use_barrier=True,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        output_shard_shape=None,
+        output_shard_grid=None,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+    )
+
+
+# Test 2: RMS Norm Stats All-Gather
+# Stats shape per device: [1, 1, 32, 32]
+# Gathers statistics across devices for distributed normalization
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        (
+            8,
+            [1, 1, 32, 256],  # 32 * 8 = 256 (gathered stats)
+            3,  # Gather on last dimension
+            ttnn.TILE_LAYOUT,
+            (32, 32),  # Single tile per device
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),  # Single core
+            (32, 32),  # Output shard shape
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),  # Output shard grid
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(20, 200)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_deepseek_rms_norm_all_gather(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+):
+    """Test all-gather operation for RMS norm statistics in DeepSeek V3."""
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        use_barrier=True,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+    )
+
+
+# Test 3: MLA (Multi-Latent Attention) All-Gather
+# Various shapes used in attention mechanism
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, tensor_mem_layout",
+    [
+        # KV cache all-gather: [1, 1, 32, 512] per device -> [1, 1, 32, 4096]
+        (
+            8,
+            [1, 1, 32, 4096],  # 512 * 8 = 4096
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 64),  # Shard across cores
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))}),  # 2x4=8 cores
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(20, 200)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_deepseek_mla_all_gather(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    tensor_mem_layout,
+):
+    """Test all-gather operation used in DeepSeek V3 MLA (Multi-Latent Attention)."""
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        use_barrier=True,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        output_shard_shape=None,
+        output_shard_grid=None,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+    )
+
+
+# Test 4: MLP Reduce-Scatter
+# Input shape: [1, 1, 32, 7168] -> Output per device: [1, 1, 32, 896]
+# Reduces and scatters across devices after MLP
+def run_reduce_scatter_with_trace(
+    mesh_device,
+    reduce_scatter_topology,
+    input_tensor_mesh,
+    scatter_dim,
+    num_links,
+    output_mem_config,
+    ccl_semaphore_handles,
+    num_iter=20,
+    warmup_iters=20,
+    subdevice_id=None,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+        input_tensor_mesh,
+        scatter_dim,
+        multi_device_global_semaphore=[
+            ccl_semaphore_handles[0],
+            ccl_semaphore_handles[1],
+            ccl_semaphore_handles[2],
+        ],
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=reduce_scatter_topology,
+        subdevice_id=subdevice_id,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    if warmup_iters > 0:
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(warmup_iters):
+            tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor_mesh,
+                scatter_dim,
+                multi_device_global_semaphore=[
+                    ccl_semaphore_handles[3 * i],
+                    ccl_semaphore_handles[3 * i + 1],
+                    ccl_semaphore_handles[3 * i + 2],
+                ],
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=reduce_scatter_topology,
+                subdevice_id=subdevice_id,
+            )
+            tt_out_tensor.deallocate(True)
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor_mesh,
+            scatter_dim,
+            multi_device_global_semaphore=[
+                ccl_semaphore_handles[3 * i],
+                ccl_semaphore_handles[3 * i + 1],
+                ccl_semaphore_handles[3 * i + 2],
+            ],
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=reduce_scatter_topology,
+            subdevice_id=subdevice_id,
+        )
+        if i != num_iter - 1:
+            tt_out_tensor.deallocate(True)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+
+    signpost("start")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    signpost("stop")
+
+    return tt_out_tensor
+
+
+def run_reduce_scatter_impl(
+    mesh_device,
+    num_devices,
+    input_shape,
+    scatter_dim,
+    num_links,
+    input_dtype,
+    layout,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    reduce_scatter_topology,
+    num_iters=1,
+    trace_mode=False,
+    output_shard_shape=None,
+    output_shard_grid=None,
+    tensor_mem_layout=None,
+    warmup_iters=2,
+):
+    if num_iters < 1:
+        pytest.fail("num_iters must be >= 1")
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 3)
+    ]
+
+    ### For sharded reduce scatter
+    if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
+        pytest.fail(
+            "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
+        )
+    if input_shard_shape and input_shard_grid:
+        input_shard_spec = ttnn.ShardSpec(
+            input_shard_grid,
+            input_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_mem_config = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
+        )
+        if output_shard_shape is None:
+            assert (
+                output_shard_grid is None
+            ), "output_shard_grid must not be provided if output_shard_shape is not provided"
+            output_shard_shape = list(input_shard_shape)
+            if scatter_dim == len(input_shape) - 1:
+                output_shard_shape[1] = output_shard_shape[1] // num_devices
+            else:
+                output_shard_shape[0] = output_shard_shape[0] // num_devices
+            output_shard_spec = ttnn.ShardSpec(
+                input_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
+        else:
+            assert output_shard_grid is not None, "output_shard_grid must be provided if output_shard_shape is provided"
+            output_shard_spec = ttnn.ShardSpec(
+                output_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
+
+    input_tensor_mesh_list = []
+    output_tensor_goldens_list = []
+
+    if trace_mode:
+        input_tensor = torch.rand(input_shape).bfloat16()
+        input_tensor_mesh = ttnn.from_torch(
+            input_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        input_tensor_mesh_list.append(input_tensor_mesh)
+
+        # Compute expected output
+        output_golden = input_tensor * num_devices
+        output_tensor_goldens_list.append(output_golden)
+    else:
+        for i in range(num_iters):
+            input_tensor = torch.rand(input_shape).bfloat16()
+            input_tensor_mesh = ttnn.from_torch(
+                input_tensor,
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=input_mem_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            input_tensor_mesh_list.append(input_tensor_mesh)
+
+            output_golden = input_tensor * num_devices
+            output_tensor_goldens_list.append(output_golden)
+
+    tt_out_tensor_list = []
+    if trace_mode:
+        tt_out_tensor = run_reduce_scatter_with_trace(
+            mesh_device,
+            reduce_scatter_topology,
+            input_tensor_mesh_list[0],
+            scatter_dim,
+            num_links,
+            output_mem_config,
+            ccl_semaphore_handles=ccl_semaphore_handles,
+            num_iter=num_iters,
+            warmup_iters=warmup_iters,
+            subdevice_id=worker_sub_device_id,
+        )
+        tt_out_tensor_list.append(tt_out_tensor)
+    else:
+        for i in range(num_iters):
+            tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor_mesh_list[i],
+                scatter_dim,
+                multi_device_global_semaphore=[
+                    ccl_semaphore_handles[3 * i],
+                    ccl_semaphore_handles[3 * i + 1],
+                    ccl_semaphore_handles[3 * i + 2],
+                ],
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=reduce_scatter_topology,
+                subdevice_id=worker_sub_device_id,
+            )
+            tt_out_tensor_list.append(tt_out_tensor)
+
+        logger.info(f"Waiting for op")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info(f"Done op")
+
+    passed = True
+    for tensor_index in range(len(tt_out_tensor_list)):
+        tt_out_tensor = tt_out_tensor_list[tensor_index]
+        output_tensor = output_tensor_goldens_list[tensor_index]
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            logger.info(f"Checking for device {t.device().id()}")
+
+            # Get the expected slice for this device
+            scatter_split = torch.chunk(output_tensor, num_devices, dim=scatter_dim)
+            expected_slice = scatter_split[i]
+
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_output_tensor, expected_slice)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, expected_slice)
+            if not eq:
+                logger.error(f"output mismatch for tensor {i}")
+                passed = False
+
+    mesh_device.reset_sub_device_stall_group()
+
+    if not passed:
+        assert eq, f"{i} FAILED: {output}"
+
+
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize(
+    "num_devices, input_shape, scatter_dim, layout, input_shard_shape, input_shard_grid, tensor_mem_layout",
+    [
+        (
+            8,
+            [1, 1, 32, 7168],  # Full hidden size, will scatter to 896 per device
+            3,  # Scatter on last dimension
+            ttnn.TILE_LAYOUT,
+            (32, 32),  # Shard shape per core
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),  # 4x7=28 cores
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(20, 200)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_deepseek_mlp_reduce_scatter(
+    mesh_device,
+    num_devices,
+    input_shape,
+    scatter_dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    tensor_mem_layout,
+):
+    """Test reduce-scatter operation used in DeepSeek V3 MLP layer."""
+    run_reduce_scatter_impl(
+        mesh_device,
+        num_devices,
+        input_shape,
+        scatter_dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        reduce_scatter_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        output_shard_shape=None,
+        output_shard_grid=None,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+    )
+
+
+# Test 5: MoE Reduce-Scatter
+# Larger shapes used in Mixture of Experts
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.parametrize(
+    "num_devices, input_shape, scatter_dim, layout, input_shard_shape, input_shard_grid, tensor_mem_layout",
+    [
+        (
+            8,
+            [1, 1, 32, 16384],  # MoE output: 2048 per device * 8 = 16384
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 64),  # Larger shard per core
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),  # 8x4=32 cores
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(20, 200)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_deepseek_moe_reduce_scatter(
+    mesh_device,
+    num_devices,
+    input_shape,
+    scatter_dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    tensor_mem_layout,
+):
+    """Test reduce-scatter operation used in DeepSeek V3 MoE layer."""
+    run_reduce_scatter_impl(
+        mesh_device,
+        num_devices,
+        input_shape,
+        scatter_dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        reduce_scatter_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        output_shard_shape=None,
+        output_shard_grid=None,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
         trace_mode=trace_mode,
     )
 
