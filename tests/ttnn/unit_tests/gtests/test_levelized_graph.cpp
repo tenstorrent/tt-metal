@@ -1341,7 +1341,8 @@ TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
         matmul_ops.clear();
         // Collect tensor IDs
         std::vector<decltype(tensor_a_vertex.id)> tensor_ids;
-        for (auto t : tensor_vertices) {
+        tensor_ids.reserve(tensor_vertices.size());
+for (auto t : tensor_vertices) {
             tensor_ids.push_back(t->id);
         }
         for (auto it = levelized_graph.vertices().begin(); it != levelized_graph.vertices().end(); ++it) {
