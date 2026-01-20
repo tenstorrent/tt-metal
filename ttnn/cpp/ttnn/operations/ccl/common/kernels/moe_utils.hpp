@@ -6,7 +6,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
-#include "api/debug/dprint.h"
 
 namespace ttnn::operations::ccl::common {
 
@@ -691,16 +690,16 @@ inline std::pair<uint16_t, uint32_t> get_fabric_mcast_hop_mask_and_direction(
                                                                                                            : false;
 
     // Generate the multicast packet's hop mask
+    auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(LinearizedSrcMeshCoord);
     uint16_t fabric_mcast_hop_mask = 0;
     for (uint32_t i = 0; i < NumDestinations; i++) {
+        auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coords[i]);
         // Calculate the number of hops between source chip and destination
         uint32_t num_hops;
         if (travelling_ew) {
-            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshCols>(
-                LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i], direction_polarity);
+            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshCols>(src_col, dest_col, direction_polarity);
         } else {
-            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshRows>(
-                LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i], direction_polarity);
+            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshRows>(src_row, dest_row, direction_polarity);
         }
         // Set the corresponding bit in the fabric multicast hop mask
         fabric_mcast_hop_mask |= (1 << (num_hops - 1));
@@ -772,7 +771,6 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
         MeshRows,
         MeshCols,
         FabricMaxNumDestinations>(linearized_dest_mesh_coords, NumDestinations);
-
     // Send the packet
     fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
         addrgen,

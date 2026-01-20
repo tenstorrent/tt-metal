@@ -31,7 +31,6 @@ constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 constexpr bool is_sparse_multicast = get_compile_time_arg_val(8) == 1;
 
 void kernel_main() {
-    DPRINT << "HELLO FROM TEST_LINEAR_API_UNICAST_WRITE_SENDER" << ENDL();
     size_t rt_arg_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
@@ -79,7 +78,6 @@ void kernel_main() {
             switch (noc_send_type) {
                 case NOC_UNICAST_WRITE: {
                     if constexpr (is_sparse_multicast) {
-                        DPRINT << "EXECUTING SPARSE MULTICAST NOC UNICAST WRITE" << ENDL();
                         fabric_sparse_multicast_noc_unicast_write(
                             connections,
                             route_id,
@@ -96,7 +94,6 @@ void kernel_main() {
                             tt::tt_fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     } else {
-                        DPRINT << "EXECUTING CHIP MULTICAST NOC UNICAST WRITE" << ENDL();
                         fabric_multicast_noc_unicast_write(
                             connections,
                             route_id,
