@@ -97,6 +97,56 @@ jobs:
       run-multiprocess-tests: 'false'
       run-ccl-tests: 'false'
 
+  # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
+  wh-t3k-udm-tests:
+    if: ${{ inputs.run-wh-t3k-fabric-tests }}
+    runs-on:
+      - tt-ubuntu-2204-N300-llmbox-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    name: Wormhole T3K UDM tests
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run UDM tests
+        timeout-minutes: 30
+        run: |
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
+          ./build/test/ttnn/unit_tests_ttnn_udm
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06MJ6CVCGZ # Yu Gao
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
+
   # Wormhole 6U - Galaxy Quick Health (most of quick-6u-health, skipping 2 tests)
   wh-6u-fabric-tests:
     if: ${{ inputs.run-wh-6u-fabric-tests }}
@@ -238,6 +288,14 @@ jobs:
           - name: fabric 2D fixture unit tests
             cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
+          - name: fabric UDM mode unit tests
+            cmd: |
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
+            timeout: 15
+          - name: ttnn UDM unit tests
+            cmd: ./build/test/ttnn/unit_tests_ttnn_udm
+            timeout: 10
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
             timeout: 15
