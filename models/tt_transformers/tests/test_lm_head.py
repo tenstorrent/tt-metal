@@ -13,9 +13,14 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    (True, False),
+)
 @pytest.mark.parametrize(
     "seq_len",
     (32,),
@@ -34,11 +39,22 @@ from models.tt_transformers.tt.model_config import ModelArgs
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
+def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True)
+    prefetcher = Prefetcher(mesh_device, num_tensors=0, num_layers=1) if use_prefetcher else None
+
+    if use_prefetcher:
+        prefetcher.init("decode")
+
+    model_args = ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True, prefetcher=prefetcher
+    )
     model_args.n_layers = 1
+
+    if use_prefetcher:
+        model_args.build_prefetcher_configs("decode")
+
     state_dict = model_args.load_state_dict()
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -61,22 +77,22 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         max_columns_per_device=model_args.max_columns_per_device_lm_head,
+        prefetcher=prefetcher,
     )
 
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
-        memory_config=model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
+        memory_config=model_args.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"]
+        if use_prefetcher
+        else model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run LM_Head")
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output,

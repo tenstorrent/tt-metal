@@ -18,6 +18,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 @torch.no_grad()
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("use_prefetcher", (True, False))
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -81,6 +82,7 @@ def test_model_inference(
     ensure_gc,
     is_ci_env,
     request,
+    use_prefetcher,
 ):
     test_id = request.node.callspec.id
     if is_ci_env:
@@ -124,6 +126,7 @@ def test_model_inference(
         paged_attention_config=paged_attention_config,
         dtype=dtype,
         num_layers=num_layers,
+        use_prefetcher=use_prefetcher,
     )
 
     if (

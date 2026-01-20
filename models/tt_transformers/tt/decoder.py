@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -27,12 +28,13 @@ class TransformerBlock(LightweightModule):
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
+        prefetcher=None,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-
+        self.prefetcher = prefetcher
         self.num_devices = args.num_devices
         self.args = args
         self.hidden_size = args.dim
@@ -46,7 +48,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
-
+        self.use_prefetcher = prefetcher is not None and prefetcher.mode == "decode"
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
         self.attention = ActualAttentionClass(
@@ -61,6 +63,7 @@ class TransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            prefetcher=prefetcher,
         )
 
         if getattr(self.args, "is_mixture_of_experts", False):
@@ -93,6 +96,7 @@ class TransformerBlock(LightweightModule):
                 layer_num=layer_num,
                 dtype=dtype,
                 model_config=self.model_config,
+                prefetcher=prefetcher,
             )
 
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
@@ -111,14 +115,13 @@ class TransformerBlock(LightweightModule):
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
                 **extra_rmsnorm_kwargs,
             ),
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
@@ -134,14 +137,13 @@ class TransformerBlock(LightweightModule):
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
                 **extra_rmsnorm_kwargs,
             ),
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="FFN_LN_AG_CONFIG",
         )
@@ -165,6 +167,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
         else:
@@ -191,6 +194,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
         else:
@@ -212,8 +216,16 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
+
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        def get_skip_mem_cfg():
+            if self.prefetcher is None:
+                return self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            else:
+                return self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+
+        skip_mem_cfg = get_skip_mem_cfg() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -224,7 +236,8 @@ class TransformerBlock(LightweightModule):
         )
 
         # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)
+        attn_in = self.attention_norm(x, mode, norm_config=self.model_config["ATTN_NORM_CONFIG"])
+
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -249,7 +262,8 @@ class TransformerBlock(LightweightModule):
                 x.deallocate(True)
         else:
             hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode)
+        hidden_states = self.ff_norm(hidden_states, mode, norm_config=self.model_config["FF_NORM_CONFIG"])
+
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices

@@ -32,6 +32,7 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        prefetcher=None,
     ):
         super().__init__()
         self.args = args
@@ -44,6 +45,7 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
+        self.prefetcher = prefetcher
         self.tt_ccl = TT_CCL(self.mesh_device)
 
         embd_kwargs = {
@@ -61,6 +63,7 @@ class Transformer(LightweightModule):
         self.embd = embd_cls(**embd_kwargs)
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -69,6 +72,8 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
+            rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if prefetcher is not None else ttnn.TILE_LAYOUT,
+            prefetcher=prefetcher,
         )
 
         if args.rope_theta_local:
@@ -96,6 +101,7 @@ class Transformer(LightweightModule):
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
+                prefetcher=prefetcher,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -111,14 +117,13 @@ class Transformer(LightweightModule):
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
-            self.tt_ccl,
-            args.is_galaxy,
+            tt_ccl=self.tt_ccl,
+            prefetcher=prefetcher,
+            TG=args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -130,12 +135,13 @@ class Transformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
+            prefetcher=prefetcher,
         )
 
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
+        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -152,7 +158,7 @@ class Transformer(LightweightModule):
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
-        logits = self.norm(logits, mode="prefill")
+        logits = self.norm(logits, mode="prefill", norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
         if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
         logits = self.lm_head(logits)
@@ -230,56 +236,49 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        mat_len = self.rope_setup.cos_matrix.shape[2]
+        mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
         # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
-        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
+        assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
+        # Calculate if padding is needed (when required_end > mat_len)
         required_end = start_pos + S
-        if required_end > mat_len:
-            pad_len = required_end - mat_len
-        else:
-            pad_len = 0
+        pad_len = max(0, required_end - mat_len)
 
-        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
-        slice_start = 0 if trace_enabled else start_pos
+        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix
+        # In case of trace, we will use the whole matrix for all seq_lens supported by trace
+        prefill_start_pos = 0 if trace_enabled else start_pos
         slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
-        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
-        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+
+        cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+
         if pad_len > 0:
-            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            # Padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-        tt_rot_mats_prefill_global = [
-            cos_slice,
-            sin_slice,
-        ]
+
+        tt_rot_mats_prefill_global = [cos_slice, sin_slice]
 
         if hasattr(self, "rope_local_setup"):
-            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
+            local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
             local_required_end = start_pos + S
-            if local_required_end > local_mat_len:
-                local_pad_len = local_required_end - local_mat_len
-            else:
-                local_pad_len = 0
-
+            local_pad_len = max(0, local_required_end - local_mat_len)
             local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
-            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
-            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
+
+            local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
+
             if local_pad_len > 0:
-                # pad at end of 3rd dim (dim=2) by local_pad_len
+                # Pad at end of 3rd dim (dim=2) by local_pad_len
                 local_padding = [(0, 0)] * 4
                 local_padding[2] = (0, local_pad_len)
                 local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
                 local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
 
-            tt_rot_mats_prefill_local = [
-                local_cos_slice,
-                local_sin_slice,
-            ]
+            tt_rot_mats_prefill_local = [local_cos_slice, local_sin_slice]
         else:
             tt_rot_mats_prefill_local = None
 
@@ -374,7 +373,10 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def _transform_decode_inputs_device(self, tokens):
+    def _transform_decode_inputs_device(
+        self,
+        tokens,
+    ):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
@@ -383,11 +385,18 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
-        tt_tokens = self.embd(tokens)
+        tt_tokens = self.embd(
+            tokens,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            if self.prefetcher is None
+            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+        )
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
-            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            self.args.model_config["DECODE_RESIDUAL_MEMCFG"]
+            if self.prefetcher is None
+            else self.args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
         )
         return tt_tokens
 
@@ -508,9 +517,13 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats_global = self.rope_setup.get_rot_mats(
+            rot_mat_idxs, prefetcher=self.prefetcher if self.prefetcher is not None else None
+        )
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
+
         x_embed = self._transform_decode_inputs_device(x)
+
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -543,22 +556,38 @@ class Transformer(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=num_links,
-                memory_config=tt_logits.memory_config(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+        tt_logits = ttnn.untilize(
+            tt_logits,
+            use_multicore=True,
+            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
+        )
 
         if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
+
+    def switch_mode(self, mode):
+        if mode == "decode":
+            if self.prefetcher is not None:
+                self.prefetcher.init("decode")
+                self.args.build_prefetcher_configs("decode")
+                self.prefetcher.prefetch()
+        else:
+            if self.prefetcher is not None:
+                self.prefetcher.init("prefill")
+                self.args.build_prefetcher_configs("prefill")
 
     def forward(
         self,
@@ -574,13 +603,25 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
+        if mode == "decode":
+            # Run prefetcher if it is enabled
+            if self.prefetcher is not None:
+                self.prefetcher.run()
+
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
+
             if mode == "decode" and not self.args.is_galaxy:
-                x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
+                x = ttnn.to_memory_config(
+                    x,
+                    self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                    if self.prefetcher is None
+                    else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                    activation_dtype,
+                )
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
@@ -597,6 +638,10 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
+        if mode == "decode":
+            if self.prefetcher is not None:
+                self.prefetcher.stop()
+
         if mode == "prefill" and get_last_token == -1:
             return x
 
@@ -605,7 +650,9 @@ class Transformer(LightweightModule):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode)
+        # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=1,y=0) - (x=4,y=7)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=NdShardSpec(shard_shape=Shape([32, 64]),grid={[(x=1,y=0) - (x=4,y=7)]},orientation=ShardOrientation::ROW_MAJOR,shard_distribution_strategy=ShardDistributionStrategy::ROUND_ROBIN_1D),created_with_nd_shard_spec=0)
+
+        x = self.norm(x, mode=mode, norm_config=self.model_config["LM_HEAD_NORM_CONFIG"])
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
