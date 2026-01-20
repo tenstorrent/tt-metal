@@ -94,7 +94,10 @@ protected:
     bool is_fw_;
     bool process_defines_at_compile_{};
     bool firmware_is_kernel_object_{};
-    uint32_t dispatch_message_addr_;
+
+    HalProgrammableCoreType core_type_;
+    HalProcessorClassType processor_class_;
+    uint32_t processor_id_;
 
     std::string out_path_;
     std::string target_name_;
