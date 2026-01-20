@@ -156,21 +156,21 @@ FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
     }
 }
 
-// TODO: Optimize for BF16 Layout and big reads and writes
+// Row-major helpers for 32-bit elements (float32/int32/uint32).
 FORCE_INLINE void fill_tile_with_first_column_rm(uint32_t ptr_arg, uint32_t row_width) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
-    // is it not possible to read like QWORD to make this more efficiently and bulk read and write here ?
+    const uint32_t first_elem = ptr[0];
     for (uint32_t i = 1; i < row_width; i++) {
-        ptr[i] = ptr[0];
+        ptr[i] = first_elem;
     }
 }
 
 FORCE_INLINE void fill_tile_with_first_row_rm(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(ptr_arg);
-    // is it not possible to read like QWORD to make this more efficnelty and bulk read and write here ?
-    for (uint32_t i = 1; i < num_rows; i++) {
-        for (uint32_t j = 0; j < row_width; j++) {
-            ptr[i * row_width + j] = ptr[j];
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr_arg);
+    for (uint32_t row = 1; row < num_rows; row++) {
+        const uint32_t row_offset = row * row_width;
+        for (uint32_t col = 0; col < row_width; col++) {
+            ptr[row_offset + col] = ptr[col];
         }
     }
 }

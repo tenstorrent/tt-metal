@@ -7,8 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
-#define DPRINT_ENABLED 1
-
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
@@ -72,12 +70,6 @@ void kernel_main() {
 
     // Max bytes per horizontal chunk 't'
     uint32_t stride_size_bytes = full_page_size > tile_bytes ? tile_bytes : full_page_size;
-
-    // DPRINT << "KERNEL INIT: "
-    //        << "Rows=" << num_rows << " Width=" << row_width_elements << " OutHt=" << outHt
-    //        << " | A: " << (is_a_row_bcast ? "ROW " : "") << (is_a_col_bcast ? "COL" : "") << " Pg=" << page_size_a
-    //        << " | B: " << (is_b_row_bcast ? "ROW " : "") << (is_b_col_bcast ? "COL" : "") << " Pg=" << page_size_b
-    //        << ENDL();
 
     uint32_t current_row_offset = 0;
 
@@ -233,5 +225,4 @@ void kernel_main() {
         }
         current_row_offset += num_rows;
     }
-    // DPRINT << "Reader Exit" << ENDL();
 }
