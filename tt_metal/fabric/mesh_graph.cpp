@@ -104,6 +104,7 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
+        mesh_graph_desc_file_path_ = filepath;
         mesh_graph_descriptor_.emplace(filepath, true);
         this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config);
     } else {
@@ -188,11 +189,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
-    if (has_flag(fabric_type, FabricType::TORUS_X)) {
+    if (has_flag(fabric_type, FabricType::TORUS_X) and mesh_shape[1] > 1) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
     }
-    if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+    if (has_flag(fabric_type, FabricType::TORUS_Y) and mesh_shape[0] > 1) {
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }

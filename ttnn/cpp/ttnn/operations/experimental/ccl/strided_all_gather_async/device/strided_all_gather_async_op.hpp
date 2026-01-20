@@ -25,15 +25,15 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
+namespace ttnn::experimental::prim {
 
 struct StridedAllGatherAsync {
-    using operation_attributes_t = strided_all_gather_async::operation_attributes_t;
-    using tensor_args_t = strided_all_gather_async::tensor_args_t;
-    using spec_return_value_t = strided_all_gather_async::spec_return_value_t;
-    using tensor_return_value_t = strided_all_gather_async::tensor_return_value_t;
+    using operation_attributes_t = StridedAllGatherAsyncParams;
+    using tensor_args_t = StridedAllGatherAsyncInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<program::StridedAllGatherAsyncProgramFactory>;
+    using program_factory_t = std::variant<StridedAllGatherAsyncProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -45,12 +45,11 @@ struct StridedAllGatherAsync {
 
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync::tensor_return_value_t
-strided_all_gather_async(
+Tensor strided_all_gather_async(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,

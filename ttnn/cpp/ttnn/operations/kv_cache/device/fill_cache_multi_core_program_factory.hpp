@@ -6,7 +6,7 @@
 #include "update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::kv_cache::program {
+namespace ttnn::prim {
 
 struct FillCacheMultiCoreProgramFactory {
     struct shared_variables_t {
@@ -37,4 +37,4 @@ struct FillCacheMultiCoreProgramFactory {
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::kv_cache::program
+}  // namespace ttnn::prim

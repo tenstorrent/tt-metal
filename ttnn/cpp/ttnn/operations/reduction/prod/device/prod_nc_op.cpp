@@ -3,6 +3,7 @@
 
 #include "prod_nc_op.hpp"
 #include "prod_nc_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace tt::operations::primary {
 

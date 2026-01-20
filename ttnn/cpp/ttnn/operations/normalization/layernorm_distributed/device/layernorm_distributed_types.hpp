@@ -6,8 +6,8 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 enum class LayerNormDistributedType { LAYERNORM, RMSNORM };
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

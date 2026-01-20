@@ -130,6 +130,7 @@ def test_attention_inference(
     tt_model = Attention(
         mesh_device,
         tt_ccl,
+        model_args,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,

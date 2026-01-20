@@ -18,6 +18,9 @@
 
 namespace ttnn::operations::conv::conv2d {
 
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
+
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;

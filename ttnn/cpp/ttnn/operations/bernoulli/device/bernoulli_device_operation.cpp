@@ -4,16 +4,17 @@
 
 #include "bernoulli_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::bernoulli {
 
 BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_program_factory(
-    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 
 void BernoulliDeviceOperation::validate_inputs(
-    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
@@ -55,7 +56,10 @@ BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_
     }
 
     auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, tt::tt_metal::TensorLayout(operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
+    return TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
@@ -67,7 +71,8 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
     cached_operation_attributes.seed = 0;
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);

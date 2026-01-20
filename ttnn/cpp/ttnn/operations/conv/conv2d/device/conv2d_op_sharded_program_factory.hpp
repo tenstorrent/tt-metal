@@ -6,7 +6,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
 
 struct Conv2dShardedProgramFactory {
     struct shared_variables_t {
@@ -32,4 +32,4 @@ struct Conv2dShardedProgramFactory {
         Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

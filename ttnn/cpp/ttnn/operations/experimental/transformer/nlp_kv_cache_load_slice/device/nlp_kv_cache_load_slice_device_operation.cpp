@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
+namespace ttnn::experimental::prim {
 
 NlpKVCacheLoadSliceDeviceOperation::program_factory_t NlpKVCacheLoadSliceDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::NlpKVCacheLoadSliceProgramFactory{};
+    return NlpKVCacheLoadSliceProgramFactory{};
 }
 
 void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_hit(
@@ -121,18 +122,17 @@ NlpKVCacheLoadSliceDeviceOperation::tensor_return_value_t NlpKVCacheLoadSliceDev
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::tensor_return_value_t nlp_kv_cache_load_slice(
+Tensor nlp_kv_cache_load_slice(
     const Tensor& input_tensor,
     uint32_t seq_len_start,
     uint32_t seq_len_end,
     [[maybe_unused]] const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType =
-        ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::NlpKVCacheLoadSliceDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NlpKVCacheLoadSliceDeviceOperation;
 
     auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];

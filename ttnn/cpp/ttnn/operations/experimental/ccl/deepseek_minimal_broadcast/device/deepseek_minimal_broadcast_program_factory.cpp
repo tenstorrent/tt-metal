@@ -7,7 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -32,7 +32,7 @@
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program {
+namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastProgramFactory::cached_mesh_workload_t
 DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
@@ -339,4 +339,4 @@ void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
         }
     }
 }
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program
+}  // namespace ttnn::experimental::prim

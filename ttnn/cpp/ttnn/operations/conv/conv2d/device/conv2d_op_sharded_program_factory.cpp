@@ -26,7 +26,13 @@
 #include <utility>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
+
+namespace unary = ttnn::operations::unary;
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
@@ -1407,4 +1413,4 @@ void Conv2dShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

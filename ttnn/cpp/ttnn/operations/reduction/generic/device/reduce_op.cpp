@@ -79,7 +79,7 @@ Tensor reduce(
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
 
-    auto parallelization_strategy = detail::get_parallelization_strategy(input_tensor, reduce_dim);
+    auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 

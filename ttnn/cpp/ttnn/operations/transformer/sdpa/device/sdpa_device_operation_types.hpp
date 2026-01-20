@@ -9,12 +9,12 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <optional>
 
-namespace ttnn::operations::transformer::sdpa {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct SDPAParams {
     std::optional<float> scale;
     tt::tt_metal::MemoryConfig output_mem_config;
-    std::optional<SDPAProgramConfig> program_config;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     bool is_causal = false;
     std::optional<int64_t> chunk_start_idx;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -23,7 +23,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> sliding_window_size;
 };
 
-struct tensor_args_t {
+struct SDPAInputs {
     Tensor q;
     Tensor k;
     std::optional<Tensor> v;
@@ -32,7 +32,4 @@ struct tensor_args_t {
     std::optional<Tensor> attention_sink;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::prim

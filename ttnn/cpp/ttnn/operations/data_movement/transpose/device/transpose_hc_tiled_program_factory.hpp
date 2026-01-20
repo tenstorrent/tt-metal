@@ -9,7 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 struct TransposeHCTiledSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -27,15 +27,13 @@ struct TransposeHCTiledProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const transpose::TransposeParams& operation_attributes,
-        const transpose::TransposeInputs& tensor_args,
-        transpose::tensor_return_value_t& tensor_return_value);
+        const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const transpose::TransposeParams& operation_attributes,
-        const transpose::TransposeInputs& tensor_args,
-        transpose::tensor_return_value_t& tensor_return_value);
+        const TransposeParams& operation_attributes,
+        const TransposeInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

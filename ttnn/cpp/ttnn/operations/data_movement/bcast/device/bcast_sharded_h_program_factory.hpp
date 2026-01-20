@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::bcast::program {
+namespace ttnn::prim {
 
 // Shared variables for MULTI_CORE_H_SHARDED strategies
 struct BcastShardedHSharedVariables {
@@ -33,4 +33,4 @@ struct BcastShardedHProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::bcast::program
+}  // namespace ttnn::prim

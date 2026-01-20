@@ -10,7 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::recv_async {
+namespace ttnn::experimental::prim {
 
 RecvAsyncDeviceOperation::program_factory_t RecvAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
@@ -25,7 +25,7 @@ void RecvAsyncDeviceOperation::validate_on_program_cache_hit(
 void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;
-    const auto& output_tensor = tensor_args.output_tensor;
+    const auto& output_tensor = tensor_args;
 
     std::vector<Tensor> output_tensors = {output_tensor};
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
@@ -34,18 +34,18 @@ void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
 
 RecvAsyncDeviceOperation::spec_return_value_t RecvAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return {tensor_args.output_tensor.tensor_spec()};
+    return {tensor_args.tensor_spec()};
 }
 
 RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return {tensor_args.output_tensor};
+    return {tensor_args};
 }
 
 tt::stl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& output_tensor = tensor_args.output_tensor;
+    const ttnn::Tensor& output_tensor = tensor_args;
 
     auto program_factory = select_program_factory(args, tensor_args);
 
@@ -53,16 +53,16 @@ tt::stl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
         args.mesh_socket, output_tensor, program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::recv_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation::tensor_return_value_t recv_async(
+std::vector<Tensor> recv_async(
     const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    using OperationType = ttnn::operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RecvAsyncDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
-    auto tensor_args = OperationType::tensor_args_t{.output_tensor = output_tensor};
+    const auto& tensor_args = output_tensor;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

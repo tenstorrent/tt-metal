@@ -5,18 +5,19 @@
 #include "padded_slice_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::padded_slice {
+namespace ttnn::experimental::prim {
 
 PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        return program::PaddedSliceRMProgramFactory{};
+        return PaddedSliceRMProgramFactory{};
     }
     if (tensor_args.input.layout() == Layout::TILE) {
-        return program::PaddedSliceTileProgramFactory{};
+        return PaddedSliceTileProgramFactory{};
     }
     TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
 }
@@ -121,18 +122,18 @@ tt::stl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
         args, tensor_args, program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation::tensor_return_value_t padded_slice(
+ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padded_slice(
     const Tensor& input,
     const ttnn::Shape& padded_slice_start,
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation;
+    using OperationType = ttnn::experimental::prim::PaddedSliceDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .padded_slice_start = padded_slice_start,

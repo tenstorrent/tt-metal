@@ -14,7 +14,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -116,11 +116,8 @@ void set_runtime_args_hc_tiled(
 }  // namespace
 
 TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory::create(
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
@@ -229,9 +226,9 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
 
 void TransposeHCTiledProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
@@ -240,7 +237,7 @@ void TransposeHCTiledProgramFactory::override_runtime_arguments(
         shared_variables.reader_kernel_id,
         shared_variables.writer_kernel_id,
         tensor_args.input,
-        tensor_return_value,
+        output_tensor,
         shared_variables.num_cores_total,
         shared_variables.num_cores_y,
         shared_variables.core_group_1,
@@ -250,4 +247,4 @@ void TransposeHCTiledProgramFactory::override_runtime_arguments(
         false);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

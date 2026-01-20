@@ -11,14 +11,14 @@
 #include "fast_reduce_nc_device_operation_types.hpp"
 #include "fast_reduce_nc_program_factory.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::experimental::prim {
 
 struct FastReduceNCDeviceOperation {
-    using operation_attributes_t = DetailParams;
-    using tensor_args_t = DetailInputs;
+    using operation_attributes_t = FastReduceNCParams;
+    using tensor_args_t = FastReduceNCInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::FastReduceNCProgramFactory>;
+    using program_factory_t = std::variant<FastReduceNCProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -29,11 +29,11 @@ struct FastReduceNCDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation::tensor_return_value_t fast_reduce_nc(
+Tensor fast_reduce_nc(
     const Tensor& input,
     const int32_t& dim,
     const std::optional<const Tensor>& output,

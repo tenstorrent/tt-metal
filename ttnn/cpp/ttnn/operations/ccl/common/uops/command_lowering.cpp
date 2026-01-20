@@ -5,7 +5,8 @@
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 

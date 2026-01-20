@@ -24,7 +24,7 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
 
     // Per-core output height is B times the per-core HW width (i.e., sticks)
     const int output_shard_height = B * input_shard_width;
-    const int alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
+    const int alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(input_tensor);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     const int output_shard_width = tt::round_up(C, alignment_elements);
 
@@ -57,7 +57,7 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
             output_memory_config = infer_hwc_output_memory_config(a);
         }
     }
-    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(a);
+    const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(a);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_memory_config.shard_spec()->shape[1] % alignment_elements == 0,

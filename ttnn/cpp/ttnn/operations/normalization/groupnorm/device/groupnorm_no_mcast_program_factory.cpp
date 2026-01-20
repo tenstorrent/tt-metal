@@ -19,7 +19,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory::create(
     const GroupNormParams& operation_attributes, const GroupNormInputs& tensor_args, Tensor& tensor_return_value) {
@@ -1165,4 +1165,4 @@ void GroupNormNoMcastProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim

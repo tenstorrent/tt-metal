@@ -10,10 +10,10 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
 
-namespace ttnn::operations::matmul {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
-    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+struct MatmulParams {
+    std::optional<operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
     std::optional<bool> bcast_batch = std::nullopt;
     tt::tt_metal::MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;
@@ -29,13 +29,10 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
 };
 
-struct tensor_args_t {
+struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights
     std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias
     std::vector<std::optional<Tensor>> optional_output_tensors;       // output
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
-
-}  // namespace ttnn::operations::matmul
+}  // namespace ttnn::prim

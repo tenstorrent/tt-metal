@@ -20,7 +20,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::interleaved_to_sharded {
+namespace ttnn::prim {
 
 // Hardcoded for non-partial interleaved_to_sharded operation
 // to keep backward compatibility after migration to new infra
@@ -29,11 +29,11 @@ constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
 InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const operation_attributes_t&  /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const InterleavedToShardedParams&  /*operation_attributes*/,
+    const InterleavedToShardedInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     // Keep explicit bool init to match legacy behavior which forced it true
     bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
 
@@ -194,7 +194,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = detail::calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -381,11 +381,11 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
 
 void InterleavedToShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&  /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const InterleavedToShardedParams&  /*operation_attributes*/,
+    const InterleavedToShardedInputs& tensor_args,
+    Tensor& output_tensor) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -413,4 +413,4 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::interleaved_to_sharded
+}  // namespace ttnn::prim

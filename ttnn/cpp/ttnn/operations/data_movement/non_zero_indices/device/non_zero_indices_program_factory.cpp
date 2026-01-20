@@ -10,12 +10,10 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::nonzero::program {
+namespace ttnn::prim {
 
 NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::create(
-    const NonzeroParams& /*operation_attributes*/,
-    const NonzeroInputs& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const NonzeroParams& /*operation_attributes*/, const NonzeroInputs& tensor_args, NonzeroResult& output_tensors) {
     const auto& input = tensor_args.input;
     const auto& out_num_indices = std::get<0>(output_tensors);
     const auto& out_indices = std::get<1>(output_tensors);
@@ -93,7 +91,7 @@ void NonZeroIndicesProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NonzeroParams& /*operation_attributes*/,
     const NonzeroInputs& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    NonzeroResult& output_tensors) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto& kernel_id = shared_vars.kernel_id;
@@ -115,4 +113,4 @@ void NonZeroIndicesProgramFactory::override_runtime_arguments(
     runtime_args[5] = input.element_size();
 }
 
-}  // namespace ttnn::operations::data_movement::nonzero::program
+}  // namespace ttnn::prim

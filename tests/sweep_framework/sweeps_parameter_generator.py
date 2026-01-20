@@ -11,11 +11,15 @@ import os
 import pathlib
 import random
 import sys
+import ast
+from collections import defaultdict
 
+from framework.constants import format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -26,12 +30,83 @@ SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 
 
+def get_mesh_shape_from_vector(vector):
+    """Extract mesh_device_shape from traced_machine_info, default to [1, 1] for single-chip.
+
+    Args:
+        vector: Dictionary containing vector parameters including traced_machine_info
+
+    Returns:
+        tuple: (rows, cols) representing mesh shape, e.g., (2, 4) or (1, 1) for single-chip
+    """
+    machine_info = vector.get("traced_machine_info")
+    if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
+        # Check if mesh_device_shape is directly in machine_info (old format)
+        mesh_shape = machine_info[0].get("mesh_device_shape")
+        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+            return tuple(mesh_shape)
+
+        # Check if mesh_device_shape is inside tensor_placements (new format)
+        tensor_placements = machine_info[0].get("tensor_placements")
+        if tensor_placements and isinstance(tensor_placements, list) and len(tensor_placements) > 0:
+            # Parse mesh_device_shape from string format "[2, 4]" to list
+            mesh_shape_str = tensor_placements[0].get("mesh_device_shape", "")
+            if isinstance(mesh_shape_str, str):
+                # Parse "[2, 4]" format
+                try:
+                    mesh_shape = ast.literal_eval(mesh_shape_str)
+                    if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+                        return tuple(mesh_shape)
+                except (ValueError, SyntaxError) as e:
+                    # Invalid or malformed mesh_device_shape string; fall back to default (1, 1)
+                    logger.debug(f"Failed to parse mesh_device_shape '{mesh_shape_str}': {e}")
+            elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
+                return tuple(mesh_shape_str)
+
+    return (1, 1)  # Default: single-chip
+
+
+def group_vectors_by_mesh_shape(vectors):
+    """Group vectors by their mesh_device_shape.
+
+    Args:
+        vectors: List of vector dictionaries
+
+    Returns:
+        dict: Mapping of mesh_shape tuple to list of vectors with that mesh shape
+    """
+
+    grouped = defaultdict(list)
+    for vector in vectors:
+        mesh_shape = get_mesh_shape_from_vector(vector)
+        grouped[mesh_shape].append(vector)
+
+    return grouped
+
+
 # Generate vectors from module parameters
-def generate_vectors(module_name):
-    test_module = importlib.import_module("sweeps." + module_name)
+def generate_vectors(module_name, model_traced, suite_name=None):
+    # Configure MasterConfigLoader filter BEFORE importing sweep modules
+    # This replaces the previous environment variable approach for cleaner control
+    MasterConfigLoader.set_lead_models_filter(model_traced == "lead")
+
+    # Import or reload the module to pick up the filter setting
+    # Note: Reload is still needed because sweep modules define parameters at import time
+    module_path = "sweeps." + module_name
+    if module_path in sys.modules:
+        # Force reload if module was already imported with different filter setting
+        test_module = importlib.reload(sys.modules[module_path])
+    else:
+        test_module = importlib.import_module(module_path)
+
     parameters = test_module.parameters
 
     for suite in parameters:
+        # Skip suite if suite_name filter is specified and doesn't match
+        if suite_name and suite != suite_name:
+            logger.info(f"Skipping suite {suite} (filtering to {suite_name}).")
+            continue
+
         logger.info(f"Generating test vectors for suite {suite}.")
         suite_vectors = list(permutations(parameters[suite]))
         for v in suite_vectors:
@@ -167,12 +242,49 @@ def validate_exported_vectors(export_path, module_name, suite_name):
 
 
 def export_suite_vectors_json(module_name, suite_name, vectors):
-    """Export test vectors to JSON file with atomic writes and deduplication.
+    """Export test vectors to JSON files grouped by mesh shape with atomic writes and deduplication.
+
+    Vectors are grouped by mesh_device_shape and written to separate files:
+    - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
+    - model_traced.op__mesh_1x1.json (for single-chip)
+
+    IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
+    the sweep_name field. This ensures stable full_test_name and input_hash values
+    for historical comparison in Superset dashboards. The mesh configuration is
+    already captured in traced_machine_info within the vector data.
 
     Args:
         module_name: Name of the test module
         suite_name: Name of the test suite
         vectors: List of vector dictionaries to export
+    """
+    # Group vectors by mesh shape
+    grouped_vectors = group_vectors_by_mesh_shape(vectors)
+
+    # Export each mesh group to a separate file
+    for mesh_shape, mesh_vectors in grouped_vectors.items():
+        # Skip empty groups
+        if not mesh_vectors:
+            continue
+
+        # Generate mesh-specific filename (NOT sweep_name)
+        # The mesh suffix is for file routing only, not for modifying vector metadata
+        mesh_suffix = format_mesh_suffix(mesh_shape)
+        mesh_module_name = f"{module_name}{mesh_suffix}"
+
+        # Export vectors WITHOUT modifying sweep_name
+        # The mesh info is already in traced_machine_info; sweep_name stays stable
+        # for historical comparison (full_test_name in Superset)
+        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
+
+
+def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
+    """Internal function to export vectors for a specific mesh shape to JSON file.
+
+    Args:
+        module_name: Name including mesh suffix (e.g., 'model_traced.gelu__mesh_2x4')
+        suite_name: Name of the test suite
+        vectors: List of vector dictionaries for this mesh shape
     """
     EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
     EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
@@ -265,7 +377,12 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
                 f"If issues persist, delete the file and regenerate."
             )
 
-        logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
+        # Extract mesh shape from module name for logging
+        if "__mesh_" in module_name:
+            mesh_info = module_name.split("__mesh_")[1]
+            logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name} (mesh {mesh_info}).")
+        else:
+            logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
     except (IOError, OSError) as e:
         logger.error(f"Failed to write vectors to {EXPORT_PATH}: {e}")
         raise
@@ -280,15 +397,18 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, skip_modules=None, model_traced_only=False):
+def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name=None):
     skip_modules_set = set()
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
+    if suite_name:
+        logger.info(f"Filtering to suite: {suite_name}")
+
     if not module_name:
         # Determine which directory to search based on model_traced_only flag
-        if model_traced_only:
+        if model_traced is not None:
             search_dir = SWEEP_SOURCES_DIR / "model_traced"
             logger.info("Generating test vectors for model_traced operations only.")
             # Only search directly in model_traced directory, not subdirectories
@@ -304,7 +424,7 @@ def generate_tests(module_name, skip_modules=None, model_traced_only=False):
                 continue
             logger.info(f"Generating test vectors for module {module_name}.")
             try:
-                generate_vectors(module_name)
+                generate_vectors(module_name, model_traced, suite_name)
                 logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
             except Exception as e:
                 logger.error(f"Failed to generate vectors for module {module_name}: {e}")
@@ -315,7 +435,7 @@ def generate_tests(module_name, skip_modules=None, model_traced_only=False):
             return
         logger.info(f"Generating test vectors for module {module_name}.")
         try:
-            generate_vectors(module_name)
+            generate_vectors(module_name, model_traced, suite_name)
         except Exception as e:
             logger.error(f"Failed to generate vectors for module {module_name}: {e}")
             raise
@@ -334,13 +454,6 @@ if __name__ == "__main__":
         default=os.getenv("USER"),
         help="Custom tag for the vectors you are generating. This is to keep copies separate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
     )
-    parser.add_argument("--explicit", required=False, action="store_true")
-    parser.add_argument(
-        "--dump-file",
-        required=False,
-        action="store_true",
-        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
-    )
     parser.add_argument(
         "--randomize",
         required=False,
@@ -355,26 +468,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-traced",
         required=False,
-        action="store_true",
-        help="If set, only generate test vectors for operations in sweeps/model_traced directory",
+        type=str,
+        nargs="?",
+        const="all",
+        default=None,
+        choices=["all", "lead"],
+        help="Generate test vectors for model traced operations. Options: 'all' (default if flag provided) or 'lead' (only lead models like DeepSeek). Omit flag to generate all sweeps.",
+    )
+    parser.add_argument(
+        "--suite-name",
+        required=False,
+        type=str,
+        help="Generate vectors for a specific suite only (e.g., 'nightly', 'model_traced'). Omit to generate all suites.",
     )
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Vectors are always dumped to disk in JSON format.
-    if args.dump_file:
-        logger.warning(
-            "The --dump-file flag is deprecated and will be removed in a future version. "
-            "Vectors are now always dumped to disk in JSON format by default. "
-            "Please remove this flag from your scripts."
-        )
-
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
-
-    if args.tag == "ci-main" and not args.explicit:
-        logger.error("The ci-main tag is reserved for CI only.")
-        exit(1)
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
     logger.info("Vectors will be exported to: tests/sweep_framework/vectors_export/")
@@ -388,4 +499,4 @@ if __name__ == "__main__":
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
 
-    generate_tests(args.module_name, args.skip_modules, args.model_traced)
+    generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)

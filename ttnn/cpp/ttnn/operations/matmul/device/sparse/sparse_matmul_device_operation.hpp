@@ -9,15 +9,15 @@
 #include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
-namespace ttnn::operations::sparse_matmul {
+namespace ttnn::prim {
 
 struct SparseMatmulDeviceOperation {
-    using operation_attributes_t = sparse_matmul::operation_attributes_t;
-    using tensor_args_t = sparse_matmul::tensor_args_t;
-    using spec_return_value_t = sparse_matmul::spec_return_value_t;
-    using tensor_return_value_t = sparse_matmul::tensor_return_value_t;
+    using operation_attributes_t = SparseMatmulParams;
+    using tensor_args_t = SparseMatmulInputs;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<program::SparseMatmulMultiCoreReuseMcast1DProgramFactory>;
+    using program_factory_t = std::variant<SparseMatmulMultiCoreReuseMcast1DProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -50,7 +50,7 @@ struct SparseMatmulDeviceOperation {
         bool is_input_b_sparse = true,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const matmul::MatmulProgramConfig>& program_config = std::nullopt,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreCoord>& user_core_coord = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
@@ -58,16 +58,13 @@ struct SparseMatmulDeviceOperation {
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
-SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attributes(
+SparseMatmulParams create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    const SparseMatmulDeviceOperation::operation_attributes_t& parameters,
+    const SparseMatmulParams& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors);
 
-}  // namespace ttnn::operations::sparse_matmul
+constexpr auto sparse_matmul = ttnn::register_operation<"ttnn::prim::sparse_matmul", SparseMatmulDeviceOperation>();
 
-namespace ttnn::prim {
-constexpr auto sparse_matmul = ttnn::
-    register_operation<"ttnn::prim::sparse_matmul", ttnn::operations::sparse_matmul::SparseMatmulDeviceOperation>();
 }  // namespace ttnn::prim

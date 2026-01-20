@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::create(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -226,4 +226,4 @@ void ConcatS2STiledProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

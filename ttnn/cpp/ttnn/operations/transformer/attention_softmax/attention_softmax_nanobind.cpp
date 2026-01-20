@@ -43,7 +43,7 @@ void bind_attention_softmax(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("head_size") = nb::none(),
             nb::arg("attention_mask") = nb::none(),
-            nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
+            nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
             nb::arg("memory_config") = nb::none()});
 
@@ -75,7 +75,7 @@ void bind_attention_softmax(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("head_size") = nb::none(),
             nb::arg("attention_mask") = nb::none(),
-            nb::arg("program_config").noconvert() = ttnn::operations::normalization::SoftmaxDefaultProgramConfig{},
+            nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
             nb::arg("causal_mask") = false,
             nb::arg("memory_config") = nb::none()});
 }

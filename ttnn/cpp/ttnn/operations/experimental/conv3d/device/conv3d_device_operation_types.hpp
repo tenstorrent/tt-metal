@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 struct Conv3dConfig {
     Conv3dConfig(
@@ -93,4 +93,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     const std::array<uint32_t, 3>& kernel_size);
 }  // namespace detail
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim

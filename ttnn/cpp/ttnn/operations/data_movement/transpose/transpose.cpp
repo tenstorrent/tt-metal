@@ -22,33 +22,36 @@ using namespace tt::tt_metal::experimental;
 using namespace tt;
 
 inline Tensor transpose_(
-    const Tensor& a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config, float pad_value = 0.0f) {
+    const Tensor& a,
+    ttnn::prim::TransposeOpDim transpose_dim,
+    const MemoryConfig& output_mem_config,
+    float pad_value = 0.0f) {
     auto prim_permute = [&](const ttnn::Tensor& input, const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
     bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
     switch (transpose_dim) {
-        case TransposeOpDim::HC:
+        case ttnn::prim::TransposeOpDim::HC:
             if (interleaved_rm) {
                 return prim_permute(a, ttnn::SmallVector<uint32_t>{0, 2, 1, 3});
             }
             break;
-        case TransposeOpDim::NH:
+        case ttnn::prim::TransposeOpDim::NH:
             return ttnn::permute(
                 (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
-        case TransposeOpDim::NW:
+        case ttnn::prim::TransposeOpDim::NW:
             return ttnn::permute(
                 (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
-        case TransposeOpDim::CW:
+        case ttnn::prim::TransposeOpDim::CW:
             return ttnn::permute(
                 (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
-        case TransposeOpDim::CN:
+        case ttnn::prim::TransposeOpDim::CN:
             if (interleaved_rm) {
                 return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
             }
             break;
-        case TransposeOpDim::WH:
+        case ttnn::prim::TransposeOpDim::WH:
             if (interleaved_rm) {
                 return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
@@ -200,20 +203,20 @@ ttnn::Tensor transpose_impl(
             std::swap(normalized_dim1, normalized_dim2);
         }
 
-        TransposeOpDim transpose_dim = TransposeOpDim::NW;
+        ttnn::prim::TransposeOpDim transpose_dim = ttnn::prim::TransposeOpDim::NW;
 
         if (normalized_dim2 == 3 && normalized_dim1 == 0) {
-            transpose_dim = TransposeOpDim::NW;
+            transpose_dim = ttnn::prim::TransposeOpDim::NW;
         } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
-            transpose_dim = TransposeOpDim::CW;
+            transpose_dim = ttnn::prim::TransposeOpDim::CW;
         } else if (normalized_dim2 == 3 && normalized_dim1 == 2) {
-            transpose_dim = TransposeOpDim::WH;
+            transpose_dim = ttnn::prim::TransposeOpDim::WH;
         } else if (normalized_dim2 == 2 && normalized_dim1 == 0) {
-            transpose_dim = TransposeOpDim::NH;
+            transpose_dim = ttnn::prim::TransposeOpDim::NH;
         } else if (normalized_dim2 == 2 && normalized_dim1 == 1) {
-            transpose_dim = TransposeOpDim::HC;
+            transpose_dim = ttnn::prim::TransposeOpDim::HC;
         } else if (normalized_dim2 == 1 && normalized_dim1 == 0) {
-            transpose_dim = TransposeOpDim::CN;
+            transpose_dim = ttnn::prim::TransposeOpDim::CN;
         } else {
             TT_ASSERT(false, "Unsupported transpose dims");
         }

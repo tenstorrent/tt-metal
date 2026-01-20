@@ -497,7 +497,7 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 

@@ -9,15 +9,13 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard::program {
+namespace ttnn::prim {
 
 template <bool local_is_input>
 NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLocalShardFactory<local_is_input>::create(
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
+    auto& output = output_tensor;
 
     auto* input_buffer = input.buffer();
     auto* output_buffer = output.buffer();
@@ -128,7 +126,7 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
     // For now, directly set runtime args
     {
         const auto& input = tensor_args.input;
-        const auto& output = tensor_return_value;
+        const auto& output = output_tensor;
         auto* local_buffer = local_is_input ? input.buffer() : output.buffer();
         auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
@@ -159,11 +157,11 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
 template <bool is_reader>
 void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/,
+    const ReshardInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
 
     auto& program = cached_program.program;
     const auto& brisc_kernel_id = cached_program.shared_variables.brisc_kernel_id;
@@ -202,4 +200,4 @@ void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
 template struct NdReshardCopyLocalShardFactory<true>;
 template struct NdReshardCopyLocalShardFactory<false>;
 
-}  // namespace ttnn::operations::data_movement::reshard::program
+}  // namespace ttnn::prim

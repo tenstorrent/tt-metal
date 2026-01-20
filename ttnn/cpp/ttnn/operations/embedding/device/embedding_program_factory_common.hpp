@@ -13,7 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 struct CoreSplitResult {
     uint32_t required_cores = 0;
     CoreRangeSet all_cores;
@@ -24,4 +24,4 @@ struct CoreSplitResult {
 };
 
 CoreSplitResult split_work_to_cores_aligned(CoreCoord grid_size, uint32_t units_to_divide, uint32_t alignment);
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

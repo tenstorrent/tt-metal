@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <unordered_map>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async_generic {
+namespace ttnn::experimental::prim {
 
 namespace {
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
@@ -35,9 +35,9 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
 }  // namespace
 
 AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllToAllAsyncGenericParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -69,9 +69,9 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
 
 ttnn::device_operation::CachedProgram<AllToAllAsyncGenericProgram::shared_variables_t>
 AllToAllAsyncGenericProgram::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllToAllAsyncGenericParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& init_barrier_semaphore,
     const tt::tt_metal::GlobalSemaphore& final_barrier_semaphore) {
@@ -254,8 +254,8 @@ AllToAllAsyncGenericProgram::create_at(
 
 void AllToAllAsyncGenericProgram::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const AllToAllAsyncGenericParams& /*operation_attributes*/,
+    const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = coordinate_range.start_coord();
@@ -279,4 +279,4 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async_generic
+}  // namespace ttnn::experimental::prim

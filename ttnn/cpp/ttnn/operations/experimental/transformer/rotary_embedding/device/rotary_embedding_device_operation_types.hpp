@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingParams {
     uint32_t seq_len = 0;
@@ -22,7 +22,4 @@ struct RotaryEmbeddingInputs {
     Tensor sin;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding
+}  // namespace ttnn::experimental::prim

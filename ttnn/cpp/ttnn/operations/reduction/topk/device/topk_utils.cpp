@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
-namespace ttnn::operations::reduction::topk::utils {
+namespace ttnn::prim {
 
 uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __builtin_clz(x))); }
 
@@ -95,4 +95,4 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     return memory_cost_local < device->l1_size_per_core();
 }
 
-}  // namespace ttnn::operations::reduction::topk::utils
+}  // namespace ttnn::prim

@@ -16,7 +16,12 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::conv {
-using namespace conv2d;
+using ttnn::prim::Conv2dBlockConfig;
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dInputs;
+using ttnn::prim::Conv2dParallelizationConfig;
+using ttnn::prim::Conv2dParams;
+using ttnn::prim::Conv2dSliceConfig;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;

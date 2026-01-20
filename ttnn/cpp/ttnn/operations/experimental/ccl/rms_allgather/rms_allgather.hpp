@@ -17,7 +17,7 @@ namespace operations::fused::normalization {
 struct ExecuteFusedRMSNorm {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+        const ttnn::prim::LayerNormProgramConfig& program_config,
         uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const GlobalSemaphore& semaphore,

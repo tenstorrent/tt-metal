@@ -13,6 +13,8 @@
 
 namespace ttnn::operations::conv::conv1d {
 
+using ttnn::prim::Conv2dSliceConfig;
+
 Result Conv1dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -74,9 +76,8 @@ Result Conv1dOperation::invoke(
             conv_config,
             compute_config,
             memory_config,
-            conv2d::Conv2dSliceConfig{
-                .slice_type =
-                    conv2d::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
+            Conv2dSliceConfig{
+                .slice_type = Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 

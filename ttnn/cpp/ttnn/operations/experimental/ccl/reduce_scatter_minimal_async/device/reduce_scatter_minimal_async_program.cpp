@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
@@ -39,8 +39,8 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-// Import types from the new TMP pattern
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts;
+// Import types from the new pattern
+using ttnn::experimental::prim::ReduceScatterProgramArtifacts;
 
 namespace ttnn {
 
@@ -1721,8 +1721,8 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
 }  // namespace ttnn
 
-// Implementations for the TMP namespace - wrappers to ttnn namespace functions
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
+// Implementations for the prim namespace - wrappers to ttnn namespace functions
+namespace ttnn::experimental::prim {
 
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
@@ -1882,10 +1882,10 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
 // Mesh Workload Factory implementations
 RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -1900,10 +1900,10 @@ RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMe
 
 ttnn::device_operation::CachedProgram<RingReduceScatterMeshWorkloadFactory::shared_variables_t>
 RingReduceScatterMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
@@ -1947,9 +1947,9 @@ RingReduceScatterMeshWorkloadFactory::create_at(
 
 void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& intermediate = tensor_return_value.at(0);
     const auto& output = tensor_return_value.at(1);
@@ -1976,10 +1976,10 @@ void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
 }
 
 LineReduceScatterMeshWorkloadFactory::cached_mesh_workload_t LineReduceScatterMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -1994,10 +1994,10 @@ LineReduceScatterMeshWorkloadFactory::cached_mesh_workload_t LineReduceScatterMe
 
 ttnn::device_operation::CachedProgram<LineReduceScatterMeshWorkloadFactory::shared_variables_t>
 LineReduceScatterMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto& intermediate_tensor = tensor_return_value.at(0);
     auto& output_tensor = tensor_return_value.at(1);
@@ -2041,9 +2041,9 @@ LineReduceScatterMeshWorkloadFactory::create_at(
 
 void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceScatterMinimalAsyncParams& operation_attributes,
+    const ReduceScatterMinimalAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& intermediate = tensor_return_value.at(0);
     const auto& output = tensor_return_value.at(1);
@@ -2073,4 +2073,4 @@ void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+}  // namespace ttnn::experimental::prim

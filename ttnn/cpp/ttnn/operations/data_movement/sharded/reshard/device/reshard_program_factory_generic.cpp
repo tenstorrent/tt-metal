@@ -10,7 +10,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -632,13 +632,10 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-namespace program {
 ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
+    auto& output = output_tensor;
 
     auto* device = input.device();
 
@@ -763,11 +760,11 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
 void ReshardGenericFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::ReshardParams& /*operation_attributes*/,
-    const reshard::ReshardInputs& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/,
+    const ReshardInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     uint32_t input_addr = input.buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
@@ -781,5 +778,5 @@ void ReshardGenericFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_dst0, *output.buffer());
 }
-}  // namespace program
-}  // namespace ttnn::operations::data_movement::reshard
+
+}  // namespace ttnn::prim

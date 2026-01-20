@@ -15,14 +15,14 @@
 
 #include "convert_to_chw_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::cnn::to_chw {
+namespace ttnn::experimental::prim {
 
 struct ConvertToCHWDeviceOperation {
-    using operation_attributes_t = ToChwParams;
-    using tensor_args_t = ToChwInputs;
+    using operation_attributes_t = ConvertToCHWParams;
+    using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<program::ConvertToCHWProgramFactory>;
+    using program_factory_t = std::variant<ConvertToCHWProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -32,11 +32,10 @@ struct ConvertToCHWDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::cnn::to_chw
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation::tensor_return_value_t convert_to_chw(
-    const Tensor& input, const std::optional<DataType>& dtype);
+Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype);
 
 }  // namespace ttnn::prim

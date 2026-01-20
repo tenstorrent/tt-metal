@@ -9,7 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 struct GroupNormMcastSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
@@ -36,4 +36,4 @@ struct GroupNormMcastProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::normalization::group_norm
+}  // namespace ttnn::prim

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -27,8 +26,7 @@
 #include <ranges>
 #include <optional>
 
-namespace ttnn {
-namespace operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
@@ -140,7 +138,9 @@ void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_run
     }
 }
 
-}  // namespace operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn {
 
 RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
 ring_attention_all_gather_async_multi_core_with_workers_helper(

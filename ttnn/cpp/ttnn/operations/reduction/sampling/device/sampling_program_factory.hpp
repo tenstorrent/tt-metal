@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
 
-namespace ttnn::operations::reduction::sampling::program {
+namespace ttnn::prim {
 
 struct SamplingSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -31,4 +31,4 @@ struct SamplingProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::sampling::program
+}  // namespace ttnn::prim
