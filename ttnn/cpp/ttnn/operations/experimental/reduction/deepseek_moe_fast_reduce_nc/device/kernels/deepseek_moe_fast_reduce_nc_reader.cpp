@@ -5,10 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
-inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
-    return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
-}
-
 constexpr uint32_t page_size = get_compile_time_arg_val(0);
 constexpr uint32_t input_granularity = get_compile_time_arg_val(1);
 constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
@@ -22,7 +18,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
 
     uint32_t input_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_input_tiles = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_tiles_to_reduce_together = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t id_range_length = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t reduce_tile_size = get_arg_val<uint32_t>(arg_idx++);
@@ -48,7 +44,7 @@ void kernel_main() {
         if constexpr (reduction_dim == 0) {
             read_tile_id = outer_id;
         } else {
-            read_tile_id = get_read_tile_id(outer_id, reduce_tile_size, inner_tile_size);
+            read_tile_id = ((outer_id / inner_tile_size) * reduce_tile_size) + (outer_id % inner_tile_size);
         }
 
         // Now reduce all tiles in the reduction dim. The first index is the
@@ -58,7 +54,7 @@ void kernel_main() {
         // need to be reduced, then the first core would access tiles at
         // indices 0, 130, 260, 390, 64, 64+130, 64+260, 64+390, 128,
         // 128+130, 128+260, and 128+390.
-        for (uint32_t j = 0; j < num_input_tiles; ++j) {
+        for (uint32_t j = 0; j < num_tiles_to_reduce_together; ++j) {
             if (input_granularity_index == 0) {
                 cb_reserve_back(compute_input_cb_id_0, input_granularity);
                 l1_write_addr_in0 = get_write_ptr(compute_input_cb_id_0);

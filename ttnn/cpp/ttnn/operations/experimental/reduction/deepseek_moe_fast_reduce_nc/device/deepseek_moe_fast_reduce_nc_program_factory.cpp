@@ -226,7 +226,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     // It is taken into account in the num_cols_per_core_group variables and
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
-    for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i, ++tile_offset) {
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         uint32_t num_tiles_per_core;
@@ -243,12 +243,12 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
             input_tensor.buffer()->address(),
             num_tiles_to_reduce_together,
             id_range_length,
-            tile_offset,
+            i,
             reduction_num_tiles,
             inner_num_tiles};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        std::vector<uint32_t> writer_rt_args = {output_tensors.at(0).buffer()->address(), id_range_length, tile_offset};
+        std::vector<uint32_t> writer_rt_args = {output_tensors.at(0).buffer()->address(), id_range_length, i};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
