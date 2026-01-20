@@ -23,13 +23,14 @@ def create_random_tensor(shape, random_tensor_gen):
 
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 2, 4, 8],
+    [1, 2, 4, 8, 12],
 )
 @pytest.mark.parametrize(
     "B, K, core_grid",
     [
         (1, 32, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
         (1, 64, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
+        (1, 512, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})),
         (1, 1024, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})),
         (1, 2048, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})),
     ],

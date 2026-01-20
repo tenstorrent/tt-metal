@@ -138,7 +138,9 @@ class FusedResblock:
                 num_layers,
             ],
             config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC (required for persistent mcast)
+                processor=ttnn.DataMovementProcessor.RISCV_0,
+                noc=ttnn.NOC.NOC_0,
+                noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
             ),
         )
         mcast_writer_kernel_descriptor = ttnn.KernelDescriptor(
@@ -152,7 +154,9 @@ class FusedResblock:
                 sender_semaphore_descriptor.id,
             ],
             config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
+                processor=ttnn.DataMovementProcessor.RISCV_1,
+                noc=ttnn.NOC.NOC_1,
+                noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
             ),
         )
         return mcast_reader_kernel_descriptor, mcast_writer_kernel_descriptor, mcast_cb_descriptor
