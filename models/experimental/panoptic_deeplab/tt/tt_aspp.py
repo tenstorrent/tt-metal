@@ -91,6 +91,15 @@ class TtASPP(LightweightModule):
             final_config = base_config
             logger.debug(f"No model_configs for {conv_path}, using base config")
 
+        # Debug print memory config
+        shard_type = type(final_config.sharding_strategy).__name__ if final_config.sharding_strategy else "None"
+        act_block_h = (
+            final_config.sharding_strategy.act_block_h_override
+            if hasattr(final_config.sharding_strategy, "act_block_h_override")
+            else 0
+        )
+        logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
+
         # Create TtConv2d using TT CNN Builder
         return TtConv2d(final_config, self.device)
 
@@ -253,7 +262,7 @@ class TtASPP(LightweightModule):
 
             # Special handling for branch 3: needs flattened format for bfloat8_b dilated convolutions
             # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
-            if i == 3 and x_l1.dtype == ttnn.bfloat8_b:
+            if (i == 2 or i == 3) and x_l1.dtype == ttnn.bfloat8_b:
                 branch_out = conv(x_l1)
                 branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
                 # Sliced conv needs manual ReLU

@@ -86,6 +86,15 @@ class TtDeepLabV3PlusHead(LightweightModule):
             final_config = base_config
             logger.debug(f"No model_configs provided, using base config for {conv_path}")
 
+        # Debug print memory config
+        shard_type = type(final_config.sharding_strategy).__name__ if final_config.sharding_strategy else "None"
+        act_block_h = (
+            final_config.sharding_strategy.act_block_h_override
+            if hasattr(final_config.sharding_strategy, "act_block_h_override")
+            else 0
+        )
+        logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
+
         # Create TtConv2d using TT CNN Builder
         return TtConv2d(final_config, self.device)
 

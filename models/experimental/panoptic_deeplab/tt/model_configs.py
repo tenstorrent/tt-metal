@@ -925,8 +925,8 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         dilated_configs = [
             ("aspp.convs.0", 64),  # 1x1 convolution
             ("aspp.convs.1", 32),  # dilation=6, act_block_h=32
-            ("aspp.convs.2", 32),  # dilation=12, act_block_h=32
-            ("aspp.convs.4", 64),  # pooling conv
+            # ("aspp.convs.2", 32),  # dilation=12, act_block_h=32
+            ("aspp.convs.4", 32),  # pooling conv
             ("aspp.project", 64),  # project conv
         ]
 
@@ -941,7 +941,15 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             )
 
         self.config.register_layer_override(
-            "aspp.convs.3",
+            "aspp.convs.2",  # dilation=12
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
+            deallocate_activation=False,
+            activation=None,
+            # enable_weights_double_buffer=True,
+        )
+        self.config.register_layer_override(
+            "aspp.convs.3",  # dilation=18
             slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
             sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
             deallocate_activation=False,
@@ -986,7 +994,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
         # Each head has its own decoder, so we need to configure both semantic and instance heads
@@ -997,7 +1005,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
                     slice_strategy=L1FullSliceStrategyConfiguration(),
                     sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
                     deallocate_activation=True,
-                    enable_weights_double_buffer=True,
+                    # enable_weights_double_buffer=True,
                 )
 
         # Fusion layers: Two convs per stage (except res5 which only has projection)
@@ -1015,7 +1023,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             path,
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
     def setup_decoder_fuse_conv_1(self, stage: str):
@@ -1024,7 +1032,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             f"decoder.{stage}.fuse_conv.1",
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
     def setup_semantic_head(self):
@@ -1035,7 +1043,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
@@ -1056,7 +1064,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=False,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
@@ -1064,7 +1072,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
@@ -1073,7 +1081,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
     def setup_instance_offset_head(self):
@@ -1087,7 +1095,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             slice_strategy=L1FullSliceStrategyConfiguration(),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
         self.config.register_layer_override(
@@ -1096,5 +1104,5 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=True,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
