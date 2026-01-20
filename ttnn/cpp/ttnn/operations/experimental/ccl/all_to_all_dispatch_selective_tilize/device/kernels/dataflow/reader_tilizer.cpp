@@ -584,40 +584,56 @@ void kernel_main() {
             const tt_l1_ptr uint16_t* token_scores =
                 reinterpret_cast<const tt_l1_ptr uint16_t*>(scores_base + t * aligned_scores_page_size);
 
+            // BITMAP APPROACH: Build a 256-bit bitmap of which experts this token selected
+            // 256 experts = 8 uint32_t values (256 bits)
+            uint32_t selected_expert_bitmap[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+            for (uint32_t k = 0; k < selected_experts_k; k++) {
+                const uint16_t expert = token_indices[k];
+                selected_expert_bitmap[expert >> 5] |= (1u << (expert & 31));
+            }
+
             // Defer pointer calculation until we know token is activated
             tt_l1_ptr uint32_t* expert_activation_l1_ptr = nullptr;
             bool activated = false;
 
-            for (uint32_t k = 0; k < selected_experts_k; k++) {
-                const uint16_t selected_expert = token_indices[k];
+            // Iterate through local experts and check bitmap for O(1) membership test
+            for (uint32_t e = 0; e < local_expert_count; e++) {
+                const uint16_t local_expert = local_expert_ids[e];
 
-                // Check if this expert maps to our device first (likely to fail, skip early)
-                if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
-                    continue;
+                // O(1) bitmap check: is this local expert in the token's selected set?
+                if (!(selected_expert_bitmap[local_expert >> 5] & (1u << (local_expert & 31)))) {
+                    continue;  // This local expert was not selected by this token
                 }
 
-                // O(1) lookup: get local expert index directly from table
-                const uint8_t e = expert_to_local_index[selected_expert];
-                if (e == 0xFF) {
-                    continue;  // Not a local expert (shouldn't happen if mapping is correct)
-                }
+                // Check if this expert maps to our device from this source
+                // (needed for expert replication where same expert can be on multiple devices)
+                // if (source_device_mapping[local_expert] != linearized_mesh_coord) {
+                //     continue;
+                // }
 
-                // First activation for this token - set up pointer and write token id
-                if (!activated) {
-                    expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                        expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-                    expert_activation_l1_ptr[0] = t;
-                    activated = true;
-                }
+                // Find the k-index for this expert to get the score
+                // for (uint32_t k = 0; k < selected_experts_k; k++) {
+                //     if (token_indices[k] == local_expert) {
+                //         // First activation for this token - set up pointer and write token id
+                //         if (!activated) {
+                //             expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                //                 expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
+                //             expert_activation_l1_ptr[0] = t;
+                //             activated = true;
+                //         }
 
-                // Write k-index and score for this expert
-                expert_activation_l1_ptr[1 + e] = k;
-                expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+                //         // Write k-index and score for this expert
+                //         expert_activation_l1_ptr[1 + e] = k;
+                //         expert_activation_l1_ptr[1 + experts_per_device + e] =
+                //         static_cast<uint32_t>(token_scores[k]);
 
                 // Write to e_t buffer
                 const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * sizeof(uint32_t);
                 *reinterpret_cast<tt_l1_ptr uint32_t*>(e_t_buffer_base + e_t_offset) = t;
                 num_activated_tokens_per_expert[e]++;
+                // break;  // Found the k-index, done with this expert
+                //     }
+                // }
             }
 
             if (activated) {
