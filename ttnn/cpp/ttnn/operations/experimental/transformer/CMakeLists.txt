@@ -109,6 +109,7 @@ target_sources(
         dit_layernorm_post_all_gather/dit_layernorm_post_all_gather.cpp
         dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_device_operation.cpp
         dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_welford_program_factory.cpp
+        dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp
