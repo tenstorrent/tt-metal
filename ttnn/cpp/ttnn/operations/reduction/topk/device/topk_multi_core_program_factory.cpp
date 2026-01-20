@@ -43,10 +43,10 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
-    auto config_opt =
+    const auto config_opt =
         find_topk_core_config(width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
     if (config_opt.has_value()) {
-        auto config = config_opt.value();
+        const auto& config = config_opt.value();
         return {
             config.num_cores + 1,
             config.split_size,
@@ -95,7 +95,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const auto* device = input_tensor.device();
 
     const auto input_shape = input_tensor.padded_shape();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(

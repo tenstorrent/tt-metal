@@ -72,7 +72,7 @@ void MAIN {
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
     // init pack, compute and unpack
-    init_sfpu(input_cb_index, tt::CBIndex::c_16);
+    init_sfpu(input_cb_index, values_cb_index);
     ckernel::topk_tile_init();
 
     // MAIN PROCESSING LOOP: Aggregate results from all local cores for each height row

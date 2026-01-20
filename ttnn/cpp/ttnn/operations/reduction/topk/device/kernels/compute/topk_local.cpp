@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -112,7 +110,8 @@ void MAIN {
     // Runtime args
     uint32_t direction_init = get_arg_val<uint32_t>(0);
 
-    // dest indices for where to unpack the tiles for the llk
+    // Constants
+    // Dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
     constexpr uint32_t input_dest_start = 0;
     constexpr uint32_t index_dest_start = 2;
@@ -120,9 +119,8 @@ void MAIN {
     constexpr uint32_t index_dest_end = 3;
     constexpr uint32_t tiles_per_seq = (K + 31) / 32;
 
-    // we support K only up to 64
+    // Supports K only up to 64
     int end_phase = (K <= 64) ? logk - 1 : 5;
-    // init pack, compute and unpack
 
     ckernel::topk_tile_init();
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
@@ -131,14 +129,11 @@ void MAIN {
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
-    // MAIN PROCESSING LOOP: Process each height row independently
+    // Process each height row independently
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = !largest;  // Sort direction for bitonic sequence properties
 
-        // STEP 1: INITIAL BITONIC SORT OF LOCAL CHUNK
-        // Process input tiles in pairs and apply local topk_sort to establish
-        // initial bitonic sequences. This creates the foundation for the
-        // divide-and-conquer merge phases that follow.
+        // Initial bitonic sort on local width chunk
         process_and_sort_tiles(
             input_cb_index,             // Input values buffer (double-buffered)
             index_cb_index,             // Input indices buffer (double-buffered)
@@ -175,7 +170,7 @@ void MAIN {
                 logk,                       // log2(K) for bitonic network depth
                 seq_per_2tiles,             // Sequences that fit in 2 tiles
                 largest);                   // Find largest (true) or smallest (false)
-        }
+        }  // m_iter loop
 
         // STEP 3: EXTRACT AND PREPARE LOCAL TopK RESULTS FOR TRANSMISSION
         // After bitonic merging, the top Kt tiles contain the locally optimal
@@ -220,6 +215,6 @@ void MAIN {
         // NOTE: At this point, values_cb_index and output_ind_cb_index contain
         // the locally optimal TopK results for this core's width chunk.
         // The writer kernel will send these to the final aggregation core.
-    }
+    }  // ht loop
 }
 }  // namespace NAMESPACE
