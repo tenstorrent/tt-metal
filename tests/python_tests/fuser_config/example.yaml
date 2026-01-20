@@ -9,6 +9,13 @@ operations:
     unpacker: "UnpackerA"
     math:
       fpu: "Datacopy"
+      sfpu:
+        - type: "UnarySfpu"
+          operation: "Fill"
+          approximation_mode: "No"
+          iterations: 32
+          dst_dest_tile_index: 2
+          fill_const_value: 1.0
     packer: "Packer"
     dest_acc: "Yes"
     math_fidelity: "LoFi"
@@ -113,12 +120,13 @@ operations:
     packer: "Packer"
     dest_acc: "Yes"
     math_fidelity: "HiFi2"
+    output_pack_dims: [32, 64]
 
   - src_a: "matmul_result"
     src_b: "input_C"
     output: "final_output"
-    src_a_dims: [64, 64]
-    src_b_dims: [64, 64]
+    src_a_dims: [32, 64]
+    src_b_dims: [64, 32]
     input_format: "Float32"
     output_format: "Float32"
     unpacker: "MatmulUnpacker"
@@ -128,11 +136,11 @@ operations:
         - type: "UnarySfpu"
           operation: "Sqrt"
           approximation_mode: "No"
-          iterations: 128
+          iterations: 32
         - type: "BinarySfpu"
           operation: "SfpuElwadd"
           approximation_mode: "No"
-          iterations: 128
+          iterations: 32
           src1_dest_tile_index: 0
           src2_dest_tile_index: 0
           dst_dest_tile_index: 0

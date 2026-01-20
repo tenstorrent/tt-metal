@@ -335,6 +335,8 @@ class UnarySfpu(Sfpu):
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 32,
+        dest_idx: int = 0,
+        fill_const_value=5,
     ):
         if not operation in MathOperation.get_sfpu_unary_operations():
             raise ValueError(
@@ -343,6 +345,8 @@ class UnarySfpu(Sfpu):
         self.iterations = iterations
         self.approx_mode = approx_mode
         self.operation = operation
+        self.dest_idx = dest_idx
+        self.fill_const_value = fill_const_value
 
     def get_headers(self) -> List[str]:
         return [
@@ -371,6 +375,8 @@ class UnarySfpu(Sfpu):
             format_input,
             dimensions,
             self.iterations,
+            self.dest_idx,
+            self.fill_const_value,
         )
 
     def exec(self, operation_config: "FusedOperation") -> str:
@@ -381,8 +387,8 @@ class UnarySfpu(Sfpu):
         code = (
             f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
             f"    _llk_math_eltwise_unary_sfpu_init_<SfpuType::{self.operation.cpp_enum_value}>();\n"
-            f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>(0);\n"
-            f"    test_utils::call_sfpu_operation<{self.approx_mode.value}, {dest_acc}, {self.iterations}>({op}, math_format{stage});\n"
+            f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
+            f"    test_utils::call_sfpu_operation<{self.approx_mode.value}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
             f"    _llk_math_eltwise_unary_sfpu_done_();\n"
         )
 
@@ -560,7 +566,7 @@ class Math:
         stage = operation_config.stage_id
         dest_acc = operation_config.dest_acc.value
         if stage == 0:
-            code = f"    _llk_math_hw_configure_(math_format{stage}, math_format{stage});\n"
+            code = f"    _llk_math_hw_configure_<{dest_acc}>(math_format{stage}, math_format{stage});\n"
         else:
             code = f"    _llk_math_reconfig_data_format_<{dest_acc}, false>(math_format{stage}, math_format{stage});\n"
 

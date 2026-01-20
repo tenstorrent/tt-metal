@@ -1279,6 +1279,8 @@ class UnarySFPUGolden:
         input_format,
         dimensions: tuple[int, int],
         iterations: int = None,
+        dest_idx: int = 0,
+        fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
     ):
         self.data_format = data_format
@@ -1310,8 +1312,8 @@ class UnarySFPUGolden:
 
         tensor = to_tensor(operand1, dst_format)
 
-        if iterations is None or iterations * 32 > tensor.numel():
-            iterations = tensor.numel() // 32
+        if iterations is None or iterations * TILE_SIZE > tensor.numel():
+            iterations = tensor.numel() // TILE_SIZE
 
         if iterations <= 0:
             raise ValueError(f"Invalid iterations: {iterations}")
@@ -1320,11 +1322,32 @@ class UnarySFPUGolden:
 
         result = tilize_block(result, dimensions, input_format).flatten()
 
-        op_res = [self.ops[operation](x) for x in result.tolist()[0 : 32 * iterations]]
+        start = ELEMENTS_PER_TILE * dest_idx
+        elements_to_process = TILE_SIZE * iterations
 
-        result[0 : 32 * iterations] = torch.tensor(
-            op_res, dtype=format_dict[dst_format]
-        )
+        if start + elements_to_process > tensor.numel():
+            raise ValueError(
+                f"Processing {iterations} iterations from dest_idx={dest_idx} "
+                f"would exceed tensor bounds (trying to access element {start + elements_to_process}, "
+                f"but tensor has only {tensor.numel()} elements)"
+            )
+
+        op_res = [
+            (
+                self.ops[operation](x, fill_const_value)
+                if operation == MathOperation.Fill
+                else self.ops[operation](x)
+            )
+            for x in result.tolist()[
+                ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
+                + TILE_SIZE * iterations
+            ]
+        ]
+
+        result[
+            ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
+            + TILE_SIZE * iterations
+        ] = torch.tensor(op_res, dtype=format_dict[dst_format])
 
         result = untilize_block(result, input_format, dimensions).flatten()
 
@@ -1474,13 +1497,13 @@ class UnarySFPUGolden:
         )
         return torch.nn.functional.gelu(input_tensor).item()
 
-    def _fill(self, x):
+    def _fill(self, x, const_value=5):
         input_tensor = (
             x
             if isinstance(x, torch.Tensor)
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
-        return input_tensor.fill_(5).item()
+        return input_tensor.fill_(const_value).item()
 
     def _hardsigmoid(self, x):
         input_tensor = (

@@ -88,6 +88,9 @@ Dimensions of the src_a operand in format `[height, width]`. Values must be mult
 #### `src_b_dims` (array of 2 integers, required)
 Dimensions of the src_b operand in format `[height, width]`. Same rules as `src_a_dims`.
 
+#### `output_pack_dims` (array of 2 integers, optional)
+Override dimensions of the output operand in format `[height, width]`. Same rules as `src_a_dims`.
+
 **Important:** The result of the FPU operation must fit in dest, which has limited capacity based on `dest_sync` and `dest_acc` settings. This is especially critical for `Matmul` operations where the result dimensions may differ from input dimensions. See the dest tile capacity table in the Hardware Configuration section.
 
 ---
@@ -202,6 +205,10 @@ The `approximation_mode` controls the precision/speed tradeoff. Set it to `"Yes"
 
 The `iterations` field determines how many datums to process. Each iteration processes 32 datums (one row of a face), meaning 32 iterations process one full tile (1024 elements). The number of iterations must be calculated based on your input dimensions. For example, a 64×64 matrix contains 4 tiles (4096 elements), requiring 128 iterations to process all data. The value must be at least 1 and cannot exceed the total number of elements divided by 32, where total elements equals `src_a_dims[0] * src_a_dims[1]`.
 
+The `dst_dest_tile_index` specifies the starting tile index within the dest register where the operation begins (default: 0). See **Understanding Tile Indices** for details on tile indexing.
+
+The `fill_const_value` sets the constant value that each element will be set to when using the `Fill` operation (default: 1.0).
+
 **BinarySfpu Configuration:**
 ```yaml
 sfpu:
@@ -246,11 +253,13 @@ math:
     - type: "UnarySfpu"
       operation: "Exp"        # First: apply exp(x)
       approximation_mode: "No"
+      dest_idx: 0
       iterations: 128
     - type: "UnarySfpu"
       operation: "Neg"        # Second: apply -x (so result is -exp(x))
       approximation_mode: "No"
       iterations: 128
+      dest_idx: 0
     - type: "BinarySfpu"
       operation: "SfpuElwadd" # Third: add two tiles together
       approximation_mode: "No"

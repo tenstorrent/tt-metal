@@ -34,12 +34,9 @@ class FusedGolden:
             output.master_golden, dtype=format_dict[output.data_format]
         )
 
-        if res_tensor.ndim != 1:
-            res_tensor = res_tensor.flatten()
-        if l1_golden.ndim != 1:
-            l1_golden = l1_golden.flatten()
-        if master_golden.ndim != 1:
-            master_golden = master_golden.flatten()
+        res_tensor = res_tensor.reshape(operation.output_pack_dims)
+        l1_golden = l1_golden.reshape(operation.output_pack_dims)
+        master_golden = master_golden.reshape(operation.output_pack_dims)
 
         print("L1 golden check:")
         l1_passed = passed_test(

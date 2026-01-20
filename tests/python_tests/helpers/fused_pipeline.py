@@ -180,8 +180,14 @@ def parse_math_operation(
                     sfpu_config.get("approximation_mode", "No"), ApproximationMode.No
                 )
                 iterations = sfpu_config.get("iterations", 32)
+                dest_idx = sfpu_config.get("dst_dest_tile_index", 0)
+                fill_const_value = sfpu_config.get("fill_const_value", 1.0)
 
-                sfpu_ops.append(UnarySfpu(operation, approx_mode, iterations))
+                sfpu_ops.append(
+                    UnarySfpu(
+                        operation, approx_mode, iterations, dest_idx, fill_const_value
+                    )
+                )
 
             elif sfpu_type == "BinarySfpu":
                 operation = SFPU_BINARY_OPERATION_MAP[sfpu_config["operation"]]
@@ -274,6 +280,8 @@ def parse_operation(
         kwargs["unpack_transpose_faces"] = TRANSPOSE_MAP[
             op_config["unpack_transpose_faces"]
         ]
+    if "output_pack_dims" in op_config:
+        kwargs["output_pack_dims"] = op_config["output_pack_dims"]
 
     return FusedOperation(
         operand_mapping=operand_mapping,

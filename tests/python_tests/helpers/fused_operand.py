@@ -14,11 +14,12 @@ from helpers.tilize_untilize import tilize_block
 @dataclass
 class Operand:
     name: str
-    dimensions: Optional[Tuple[int, int, int, int]] = None
+    dimensions: Optional[Tuple[int, int]] = None
     data_format: Optional[DataFormat] = None
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
+    pack_dims: Optional[Tuple[int, int]] = None
     _data: Optional[torch.Tensor] = None
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
@@ -30,6 +31,8 @@ class Operand:
             raise ValueError(
                 f"Input operand '{self.name}' must have dimensions and data_format"
             )
+        if self.is_input():
+            self.pack_dims = self.dimensions
 
     def is_input(self) -> bool:
         return not self.is_output
@@ -161,8 +164,8 @@ class OperandMapping:
         src_a_op = operand_registry.get(self.src_a)
         src_b_op = operand_registry.get(self.src_b)
 
-        M = src_a_op.dimensions[0]
-        N = src_b_op.dimensions[1]
+        M = src_a_op.pack_dims[0]
+        N = src_b_op.pack_dims[1]
 
         return (M, N)
 
