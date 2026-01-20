@@ -83,15 +83,14 @@ The script categorizes each log file and gives you a summary with success rate. 
 | **Unhealthy links** | Data mismatch, CRC errors, or retrains detected | Check the FAULTY LINKS REPORT in the log. Same channel failing repeatedly = bad cable. Scattered failures = try power cycle. See [Data Mismatch During Traffic Tests](#data-mismatch-during-traffic-tests) |
 | **Timeout issues** | Cores hung waiting for response | Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
 | **Missing connections** | Links in FSD not found in discovered state | Check cables are seated. Verify correct FSD file. See [QSFP Connections Missing](#qsfp-connections-missing-between-hosts) or [UMD Firmware Version Mismatch](#umd-firmware-version-mismatch---links-not-detected) |
-| **Extra connections** | Unexpected links found | Usually means wrong FSD file for your topology |
+| **Extra connections** | Unexpected links found | System has been cabled up incorrectly with FSD file for your topology. Verify you're using the correct FSD file (8x16 vs 4x32) |
 | **DRAM training failures** | Chip memory failed to initialize | Hardware issue. See [GDDR Issue on Chip](#gddr-issue-on-chip). Contact syseng |
 | **Indeterminate** | Log incomplete (test crashed/hung) | Check if machine rebooted (`uptime`). May need power cycle |
 
 **Interpreting success rate:**
-- 100% (50/50): Cluster is solid, ready for workloads
-- 90%+ (45+/50): Mostly stable, isolated failures may be transient. Try power cycle and re-run
-- 70-90%: Likely a flaky link. Check which channel fails most often in the logs
-- <70%: Serious issue. Check for consistent failure patterns, may need cable swap or hardware investigation
+- 100% (50/50): Cluster is solid, we are yet to achieve this.
+- 80%+ (40+/50): Counts as physical validation pass, cluster is in usable state.
+- <80%: Doesn't pass physical validation, indicates a potential serious issue, check for consistent failure patterns, may need cable swap or hardware investigation
 
 **Manual log inspection - error strings to grep for:**
 
@@ -141,6 +140,12 @@ ssh -A [username]@[hostname]
 
 If you get a `known_hosts` warning, delete the offending line from `~/.ssh/known_hosts`.
 
+**Verify MPI can reach all hosts** (`<hosts>` = comma-separated list):
+```bash
+mpirun --host <hosts> hostname
+```
+This should print the hostname of each machine. If it hangs or prompts for a password, SSH agent forwarding isn't working properly.
+
 **Important**: Do NOT copy SSH keys between machines for MPI. Always use agent forwarding (`ssh -A`).
 
 ---
@@ -153,13 +158,9 @@ cannot map elf file into memory: Permission denied
 ```
 Error points to `/tmp/tt-metal-cache/...`
 
-**Cause**: The `/tmp/tt-metal-cache` directory was created by a different user (e.g., local-syseng) from a previous test run.
+**Cause**: The most likely issue is in `mpi-docker` configuration.
 
-**Solution**: Remove the cache directory:
-```bash
-rm -rf /tmp/tt-metal-cache
-```
-Then re-run your tests.
+**Solution**: Contact @tt-asaigal or @jpanasiukTT about this issue. They can help debug the `mpi-docker` setup and permissions.
 
 ---
 
