@@ -11,11 +11,11 @@
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-struct DeepseekReduceScatterMeshWorkloadFactory {
+struct DeepseekMoEReductScatterMeshWorkloadFactory {
     struct shared_variables_t {
         tt::tt_metal::GlobalSemaphore op_semaphore;
         tt::tt_metal::GlobalSemaphore pre_op_barrier_semaphore;
-        DeepseekReduceScatterProgramArtifacts program_artifacts;
+        DeepseekMoEReductScatterProgramArtifacts program_artifacts;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

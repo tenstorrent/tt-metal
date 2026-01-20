@@ -17,12 +17,12 @@
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-struct DeepseekReduceScatterDeviceOperation {
+struct DeepseekMoEReductScatterDeviceOperation {
     using operation_attributes_t = deepseek_moe_reduce_scatter::detail::operation_attributes_t;
     using tensor_args_t = deepseek_moe_reduce_scatter::detail::tensor_args_t;
     using spec_return_value_t = deepseek_moe_reduce_scatter::detail::spec_return_value_t;
     using tensor_return_value_t = deepseek_moe_reduce_scatter::detail::tensor_return_value_t;
-    using program_factory_t = std::variant<DeepseekReduceScatterMeshWorkloadFactory>;
+    using program_factory_t = std::variant<DeepseekMoEReductScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -41,7 +41,7 @@ struct DeepseekReduceScatterDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
+ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekMoEReductScatterDeviceOperation::
     tensor_return_value_t
     deepseek_moe_reduce_scatter(
         const std::vector<ttnn::Tensor>& input_tensors,

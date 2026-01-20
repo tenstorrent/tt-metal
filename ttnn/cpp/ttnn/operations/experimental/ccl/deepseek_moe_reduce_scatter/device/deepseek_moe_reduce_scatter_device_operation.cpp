@@ -15,12 +15,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-DeepseekReduceScatterDeviceOperation::program_factory_t DeepseekReduceScatterDeviceOperation::select_program_factory(
+DeepseekMoEReductScatterDeviceOperation::program_factory_t
+DeepseekMoEReductScatterDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return DeepseekReduceScatterMeshWorkloadFactory{};
+    return DeepseekMoEReductScatterMeshWorkloadFactory{};
 }
 
-void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_hit(
+void DeepseekMoEReductScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // lightweight validation for cache hits
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
@@ -30,7 +31,7 @@ void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_hit(
     }
 }
 
-void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
+void DeepseekMoEReductScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
@@ -132,7 +133,7 @@ void DeepseekReduceScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!output_memory_config.is_sharded(), "deepseek_moe_reduce_scatter only supports interleaved output tensor");
 }
 
-spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
+spec_return_value_t DeepseekMoEReductScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
@@ -156,7 +157,7 @@ spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
     };
 }
 
-tensor_return_value_t DeepseekReduceScatterDeviceOperation::create_output_tensors(
+tensor_return_value_t DeepseekMoEReductScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
@@ -177,13 +178,13 @@ tensor_return_value_t DeepseekReduceScatterDeviceOperation::create_output_tensor
     };
 }
 
-tt::stl::hash::hash_t DeepseekReduceScatterDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t DeepseekMoEReductScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "DeepseekReduceScatterDeviceOperation::compute_program_hash is called");
+    log_trace(tt::LogOp, "DeepseekMoEReductScatterDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
-    return tt::tt_metal::operation::hash_operation<DeepseekReduceScatterDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<DeepseekMoEReductScatterDeviceOperation>(
         operation_attributes.output_memory_config,
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -196,7 +197,7 @@ tt::stl::hash::hash_t DeepseekReduceScatterDeviceOperation::compute_program_hash
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation::
+ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekMoEReductScatterDeviceOperation::
     tensor_return_value_t
     deepseek_moe_reduce_scatter(
         const std::vector<ttnn::Tensor>& input_tensors,
@@ -204,8 +205,8 @@ ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::Deepse
         uint32_t dim,
         uint32_t num_links,
         std::optional<uint32_t> cluster_axis) {
-    using OperationType =
-        ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekReduceScatterDeviceOperation;
+    using OperationType = ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::
+        DeepseekMoEReductScatterDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{std::move(output_memory_config), dim, num_links, cluster_axis},
