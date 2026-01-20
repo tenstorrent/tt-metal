@@ -126,13 +126,18 @@ def _run_ds_fused_all_gather_preff1_3_test(
     ccl,
     step_prefix: str,
 ):
+    # Log run configuration for superset
+    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
+
     tt_output = ds_fused_all_gather_preff1_3_ttnn(tt_input, run_config, ccl)
 
     # Output is replicated across devices after all-gather; just take from first device
     # since all devices have identical copies
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
 
-    _compare_with_reference(tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol)
+    pcc_value, max_abs_error = _compare_with_reference(
+        tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol
+    )
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
         perf_profiler = BenchmarkProfiler()
@@ -176,6 +181,9 @@ def _run_ds_fused_all_gather_preff1_3_test(
             step_warm_up_num_iterations=PERF_WARMUP_ITERS,
             target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
         )
+        # Log PCC and ATOL metrics to superset
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-pcc", pcc_value)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-max_abs_error", max_abs_error)
         benchmark_data.save_partial_run_json(
             perf_profiler,
             run_type="deepseek_v3_fused_ops",
@@ -299,11 +307,29 @@ def _maybe_skip_long_seq(seq_len: int):
 
 def _compare_with_reference(
     tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
-):
+) -> tuple[float, float]:
+    """Compare TTNN output with reference and return metrics.
+
+    Returns:
+        Tuple of (pcc_value, max_abs_error) for logging to superset.
+    """
     passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
+    max_abs_error = (tt_output - ref_output).abs().max().item()
     logger.info(f"PCC: {pcc}")
+    logger.info(f"Max absolute error: {max_abs_error}")
     assert passing, f"PCC {pcc} is below required {expected_pcc}"
     torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
+    return pcc, max_abs_error
+
+
+def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int):
+    """Log the test run configuration."""
+    logger.info("=== TEST RUN CONFIGURATION ===")
+    logger.info(f"Mode: {mode}")
+    logger.info(f"Sequence length: {seq_len}")
+    logger.info(f"Trace mode: {trace_mode}")
+    logger.info(f"Program cache enabled: {program_cache_enabled}")
+    logger.info("===============================")
 
 
 def _measure_perf_us(

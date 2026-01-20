@@ -100,9 +100,16 @@ def ds_fused_ff1_3_ttnn(
 
 def _compare_with_reference(
     tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
-):
+) -> tuple[float, float]:
+    """Compare TTNN output with reference and return metrics.
+
+    Returns:
+        Tuple of (pcc_value, max_abs_error) for logging to superset.
+    """
     passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
+    max_abs_error = (tt_output - ref_output).abs().max().item()
     logger.info(f"PCC: {pcc}")
+    logger.info(f"Max absolute error: {max_abs_error}")
     assert passing, f"PCC {pcc} is below required {expected_pcc}"
     # Note: For quantized weights (bfloat4_b), PCC is the primary metric.
     # torch.testing.assert_close may be too strict, so we only use it for sanity checks.
@@ -110,6 +117,18 @@ def _compare_with_reference(
         torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
     except AssertionError as e:
         logger.warning(f"assert_close failed but PCC passed: {e}")
+    return pcc, max_abs_error
+
+
+def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int, use_real_weights: bool):
+    """Log the test run configuration."""
+    logger.info("=== TEST RUN CONFIGURATION ===")
+    logger.info(f"Mode: {mode}")
+    logger.info(f"Sequence length: {seq_len}")
+    logger.info(f"Trace mode: {trace_mode}")
+    logger.info(f"Program cache enabled: {program_cache_enabled}")
+    logger.info(f"Use real weights: {use_real_weights}")
+    logger.info("===============================")
 
 
 def _deallocate_outputs(outputs):
@@ -181,7 +200,11 @@ def _run_ds_fused_ff1_3_test(
     seq_len: int,
     batch_size: int,
     step_prefix: str,
+    use_real_weights: bool,
 ):
+    # Log run configuration for superset
+    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len, use_real_weights)
+
     ref_w1_out, ref_w3_out = ref_outputs
     tt_w1_out, tt_w3_out = ds_fused_ff1_3_ttnn(tt_input, run_config, mode, seq_len)
 
@@ -195,9 +218,13 @@ def _run_ds_fused_ff1_3_test(
     )
 
     logger.info("Comparing w1_out (gate projection):")
-    _compare_with_reference(tt_w1_out_torch, ref_w1_out, expected_pcc, expected_atol, expected_rtol)
+    w1_pcc, w1_max_abs_error = _compare_with_reference(
+        tt_w1_out_torch, ref_w1_out, expected_pcc, expected_atol, expected_rtol
+    )
     logger.info("Comparing w3_out (up projection):")
-    _compare_with_reference(tt_w3_out_torch, ref_w3_out, expected_pcc, expected_atol, expected_rtol)
+    w3_pcc, w3_max_abs_error = _compare_with_reference(
+        tt_w3_out_torch, ref_w3_out, expected_pcc, expected_atol, expected_rtol
+    )
 
     if os.getenv(DEVICE_PERF_ENV_VAR) is None:
         perf_profiler = BenchmarkProfiler()
@@ -239,6 +266,11 @@ def _run_ds_fused_ff1_3_test(
             step_warm_up_num_iterations=PERF_WARMUP_ITERS,
             target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
         )
+        # Log PCC and ATOL metrics to superset
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w1_pcc", w1_pcc)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w1_max_abs_error", w1_max_abs_error)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w3_pcc", w3_pcc)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w3_max_abs_error", w3_max_abs_error)
         benchmark_data.save_partial_run_json(
             perf_profiler,
             run_type="deepseek_v3_fused_ops",
@@ -580,6 +612,7 @@ def test_ds_fused_ff1_3(
         effective_seq_len,
         batch_size,
         f"ds_fused_ff1_3_{mode}_seq{seq_len}",
+        use_real_weights,
     )
 
 
