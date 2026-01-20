@@ -96,6 +96,22 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
         "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
         "concat the output tokens along.",
         operation_attributes.output_concat_dim);
+
+    // Validate expert mapping tensor shape: new format is [devices, experts]
+    auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
+    TT_FATAL(
+        mapping_shape.rank() == 2,
+        "Expert mapping tensor must have rank 2 with shape [devices, experts], got rank {}",
+        mapping_shape.rank());
+
+    auto* mesh_device = input_tensor.device();
+    const auto& mesh_view = mesh_device->get_view();
+    uint32_t expected_devices = mesh_view.num_devices();
+    TT_FATAL(
+        mapping_shape[0] == expected_devices,
+        "Expert mapping tensor first dimension must equal number of devices ({}), got {}",
+        expected_devices,
+        mapping_shape[0]);
 }
 
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_hit(

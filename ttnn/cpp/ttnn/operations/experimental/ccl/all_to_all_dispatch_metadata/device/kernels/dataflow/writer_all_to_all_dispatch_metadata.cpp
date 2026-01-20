@@ -399,7 +399,8 @@ void kernel_main() {
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
-    cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+    cb_wait_front(mapping_tensor_cb_id, 1);
+    uint16_t* expert_mapping = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id));
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
@@ -425,43 +426,43 @@ void kernel_main() {
             output_token_write_addr,
             (int32_t)input_page_size,
             alignment);
+        // New expert mapping format: [devices, experts] where mapping[expert] = target_device_id
+        // We read the source device's row, so expert_mapping[expert_chosen] gives the target device directly
+
         // for (uint32_t k = 0; k < selected_experts_k; k++) {
         //     // get the expert that is chosen for the current token
         //     uint16_t expert_chosen = token_indices[k];
-        //     uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
-        //     uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+        //     // Direct lookup: get target device from expert mapping
+        //     uint16_t target_device = expert_mapping[expert_chosen];
 
-        //     // find the devices that the expert lives on and dispatch the input tokens to them
-        //     // if there is no tensor parallelism, then the token will only be sent to one device
-        //     for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-        //         if (devices_for_expert[d] == 1 &&
-        //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
-        //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
-        //             if (d == linearized_mesh_coord) {
-        //                 // if the expert lives on the current device, we dispatch the input token to it
-        //                 detail::dispatch_input_local_device_flushed(
-        //                     input_token_read_addr, output_token_write_addr, output_page_size);
-        //                 needs_barrier = true;
-        //             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
-        //                 // if the expert lives on a remote device, we dispatch the input token to it
-        //                 // if axis is specified then we only send to the devices that are along the axis
-        //                 // if axis is not specified then we send to all devices
+        //     // Check if we've already sent to this device for this token (avoid duplicate sends)
+        //     if (send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] == 0) {
+        //         send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] = 1;
 
-        //                 fabric_send_chip_unicast_noc_unicast_1d<
-        //                     linearized_mesh_coord,
-        //                     topology,
-        //                     mesh_rows,
-        //                     mesh_cols,
-        //                     fabric_max_packet_size>(
-        //                     output_addr_gen,
-        //                     fabric_connections,
-        //                     unicast_packet_header,
-        //                     d,
-        //                     input_token_read_addr,
-        //                     global_token,
-        //                     (int)output_page_size,
-        //                     alignment);
-        //             }
+        //         if (target_device == linearized_mesh_coord) {
+        //             // if the expert lives on the current device, we dispatch the input token to it
+        //             detail::dispatch_input_local_device_flushed(
+        //                 input_token_read_addr, output_token_write_addr, output_page_size);
+        //             needs_barrier = true;
+        //         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(target_device)) {
+        //             // if the expert lives on a remote device, we dispatch the input token to it
+        //             // if axis is specified then we only send to the devices that are along the axis
+        //             // if axis is not specified then we send to all devices
+
+        //             fabric_send_chip_unicast_noc_unicast_1d<
+        //                 linearized_mesh_coord,
+        //                 topology,
+        //                 mesh_rows,
+        //                 mesh_cols,
+        //                 fabric_max_packet_size>(
+        //                 output_addr_gen,
+        //                 fabric_connections,
+        //                 unicast_packet_header_neg,
+        //                 target_device,
+        //                 input_token_read_addr,
+        //                 global_token,
+        //                 (int)output_page_size,
+        //                 alignment);
         //         }
         //     }
         // }

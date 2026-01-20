@@ -51,7 +51,9 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     uint32_t tokens_per_device = get_num_rows(input_tensor);
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
 
-    auto mapping_pages = get_num_pages(mapping_tensor);
+    // New mapping format: [devices, experts]
+    // Each page is one device's row, we only need to store the source device's page (1 page)
+    constexpr uint32_t mapping_pages_in_cb = 1;
 
     auto mesh_view = input_tensor.device()->get_view();
     uint32_t num_devices = mesh_view.num_devices();
@@ -64,7 +66,7 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     std::array<uint32_t, 7> cb_sizes = {
         buffering_factor * aligned_input_page_size,
         tokens_per_core * aligned_indices_page_size,
-        mapping_pages * aligned_mapping_page_size,
+        mapping_pages_in_cb * aligned_mapping_page_size,  // Only 1 page for source device's mapping
         num_devices * tokens_per_core * sizeof(uint8_t),
         tokens_per_device * (aligned_indices_page_size + aligned_scores_page_size),
         num_packet_headers * packet_header_size_bytes,
@@ -190,7 +192,9 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t experts = mapping_shape[-2];
+    // New expert mapping format: [devices, experts]
+    // mapping_shape[0] = num_devices, mapping_shape[-1] = experts
+    uint32_t experts = mapping_shape[-1];
 
     auto input_page_size = detail::get_page_size(input_tensor);
     auto indices_page_size = detail::get_page_size(indices_tensor);
@@ -350,6 +354,10 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
+    // New mapping format: [devices, experts]
+    // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
+    constexpr uint32_t mapping_pages_for_kernel = 1;
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,
         indices_tensor_cb_id,
@@ -359,7 +367,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
         input_pages,
         indices_pages,
-        mapping_pages,
+        mapping_pages_for_kernel,  // Only 1 page - source device's mapping row
         output_pages,
         metadata_pages,
 

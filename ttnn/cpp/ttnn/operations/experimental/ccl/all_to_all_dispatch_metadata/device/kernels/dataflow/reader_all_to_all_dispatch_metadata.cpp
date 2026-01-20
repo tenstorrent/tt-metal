@@ -82,21 +82,22 @@ void kernel_main() {
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
 
-    // read the expert mapping table
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
+    // Read the expert mapping table - new format: [devices, experts]
+    // Each page is one device's view of the mapping. Read only the source device's page.
+    // Page index = linearized_mesh_coord (source device index)
+    constexpr uint32_t mapping_pages_to_read = 1;
+    cb_reserve_back(mapping_tensor_cb_id, mapping_pages_to_read);
     uint32_t base_mapping_addr = get_write_ptr(mapping_tensor_cb_id);
-    for (uint32_t i = 0; i < mapping_pages; i++) {
-        uint32_t l1_write_addr = base_mapping_addr + i * aligned_mapping_page_size;
-        noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
-    }
-    noc_async_read_barrier();
-    cb_push_back(mapping_tensor_cb_id, mapping_pages);
+    noc_async_read_page(linearized_mesh_coord, mapping_addr_gen, base_mapping_addr);
 
     ASSERT(indices_pages == input_pages);
     ASSERT(scores_pages == indices_pages);
     // read the input tokens, selected experts, and scores for each token
     uint32_t base_indices_addr = get_write_ptr(indices_tensor_cb_id);
     uint32_t base_scores_addr = get_write_ptr(scores_tensor_cb_id);
+    noc_async_read_barrier();
+    cb_push_back(mapping_tensor_cb_id, mapping_pages_to_read);
+
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
         cb_reserve_back(scores_tensor_cb_id, 1);

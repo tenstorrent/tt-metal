@@ -19,8 +19,42 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
+def gen_expert_mapping_new_format(experts, mesh_shape, cluster_axis):
+    """
+    Create per-device expert mapping tensor that maps each expert to the device it belongs to.
+    Shape: [devices, experts] where each entry is the linearized mesh coordinate of the device
+    that owns that expert from the perspective of that source device.
+
+    For now, all devices see the same mapping (no replicated experts).
+    For 256 experts and 16 devices (16 experts per device):
+    expert_mapping[d, e] = e // experts_per_device
+
+    In the future, this can be extended to support replicated experts where each device
+    sees the "optimal" device (e.g., shortest distance) for each expert.
+
+    This tensor is replicated on every device (even devices not along the dispatch axis).
+    """
+    devices = mesh_shape[0] * mesh_shape[1]
+    experts_per_device = experts // devices
+    expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
+    for e in range(experts):
+        expert_mapping[0, e] = e // experts_per_device
+    # Replicate across all devices (same mapping for now)
+    expert_mapping = expert_mapping.repeat(devices, 1)
+    return expert_mapping
+
+
 def gen_tensors_for_metadata_op(
-    batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
+    batch,
+    experts,
+    selected_experts_k,
+    hidden_size,
+    seq_len,
+    mesh_shape,
+    devices,
+    cluster_axis=1,
+    scheme="random",
+    dtype=torch.bfloat16,
 ):
     """
     Generate tensors for the all_to_all_dispatch_metadata operation.
@@ -34,15 +68,19 @@ def gen_tensors_for_metadata_op(
         input_tokens: [batch, 1, seq_len, hidden_size] - input tokens per device
         expert_indices: [batch, 1, seq_len, selected_experts_k] - expert indices per device
         expert_scores: [batch, 1, seq_len, selected_experts_k] - expert scores per device
-        expert_mapping: [1, 1, experts, devices] - expert to device mapping
+        expert_mapping_old: [1, 1, experts, devices] - old format expert to device mapping (one-hot)
+        expert_mapping_new: [devices, experts] - new format expert to device mapping (direct device ID)
         sparse_output_token_tensor: [devices, total_tokens, hidden_size] - golden output tokens
         metadata_tensor: [devices, total_tokens, selected_experts_k] - golden indices (all-gathered)
         scores_tensor: [devices, total_tokens, selected_experts_k] - golden scores (all-gathered)
     """
     # Use original gen_tensors to get base tensors
-    input_tokens, expert_indices, expert_mapping, sparse_output_orig, metadata_orig = gen_tensors(
+    input_tokens, expert_indices, expert_mapping_old, sparse_output_orig, metadata_orig = gen_tensors(
         batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
     )
+
+    # Generate new format expert mapping: [devices, experts] with device IDs
+    expert_mapping_new = gen_expert_mapping_new_format(experts, mesh_shape, cluster_axis)
 
     total_tokens = batch * seq_len
 
@@ -70,7 +108,8 @@ def gen_tensors_for_metadata_op(
         input_tokens,
         expert_indices,
         expert_scores,
-        expert_mapping,
+        expert_mapping_old,
+        expert_mapping_new,
         sparse_output_token_tensor,
         metadata_tensor,
         scores_tensor,
@@ -104,9 +143,11 @@ def run_all_to_all_dispatch_metadata_test(
     expert_indices_tensors = []
     expert_scores_tensors = []
     expert_mapping_tensors = []
+    expert_mapping_new_tensors = []  # New format mapping tensors
     input_tensors = []
 
     torch_expert_mappings = []
+    torch_expert_mappings_new = []  # New format mappings
     torch_expert_scores_list = []
 
     output_tensor_goldens_list = []
@@ -122,7 +163,8 @@ def run_all_to_all_dispatch_metadata_test(
             input_tokens,
             expert_indices,
             expert_scores,
-            expert_mapping,
+            expert_mapping_old,
+            expert_mapping_new,
             sparse_output_token_tensor,
             metadata_tensor,
             scores_tensor,
@@ -134,6 +176,7 @@ def run_all_to_all_dispatch_metadata_test(
             seq_len,
             mesh_shape,
             devices,
+            cluster_axis=cluster_axis,
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
         )
@@ -142,7 +185,8 @@ def run_all_to_all_dispatch_metadata_test(
             logger.info(f"input_tokens shape: {input_tokens.shape}")
             logger.info(f"expert_indices shape: {expert_indices.shape}")
             logger.info(f"expert_scores shape: {expert_scores.shape}")
-            logger.info(f"expert_mapping shape: {expert_mapping.shape}")
+            logger.info(f"expert_mapping_old shape: {expert_mapping_old.shape}")
+            logger.info(f"expert_mapping_new shape: {expert_mapping_new.shape}")
             logger.info(f"sparse_output_token_tensor shape: {sparse_output_token_tensor.shape}")
             logger.info(f"metadata_tensor shape: {metadata_tensor.shape}")
             logger.info(f"scores_tensor shape: {scores_tensor.shape}")
@@ -150,7 +194,8 @@ def run_all_to_all_dispatch_metadata_test(
         output_tensor_goldens_list.append(sparse_output_token_tensor)
         output_metadata_goldens_list.append(metadata_tensor)
         output_scores_goldens_list.append(scores_tensor)
-        torch_expert_mappings.append(expert_mapping)
+        torch_expert_mappings.append(expert_mapping_old)
+        torch_expert_mappings_new.append(expert_mapping_new)
         torch_expert_scores_list.append(expert_scores)
 
         tt_input = ttnn.from_torch(
@@ -183,8 +228,9 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=mesh_mapper,
         )
 
+        # Old format expert mapping: [1, 1, experts, devices] - one-hot encoding
         tt_expert_mapping = ttnn.from_torch(
-            expert_mapping,
+            expert_mapping_old,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
@@ -192,16 +238,29 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
+        # New format expert mapping: [devices, experts] - direct device ID lookup
+        # Each entry expert_mapping_new[d, e] = device_id that owns expert e
+        tt_expert_mapping_new = ttnn.from_torch(
+            expert_mapping_new,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
         if iter == 0:
             logger.info(f"tt_input shape: {tt_input.shape}")
             logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
             logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
-            logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
+            logger.info(f"tt_expert_mapping (old) shape: {tt_expert_mapping.shape}")
+            logger.info(f"tt_expert_mapping_new shape: {tt_expert_mapping_new.shape}")
 
         input_tensors.append(tt_input)
         expert_indices_tensors.append(tt_expert_indices)
         expert_scores_tensors.append(tt_expert_scores)
         expert_mapping_tensors.append(tt_expert_mapping)
+        expert_mapping_new_tensors.append(tt_expert_mapping_new)
 
     tt_out_tensor_list = []
 
@@ -218,7 +277,7 @@ def run_all_to_all_dispatch_metadata_test(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_scores_tensors[buffer_index],
-                expert_mapping_tensors[buffer_index],
+                expert_mapping_new_tensors[buffer_index],  # New format: [devices, experts]
                 cluster_axis=cluster_axis,
                 num_links=num_links,
                 topology=topology,
@@ -363,36 +422,44 @@ def run_all_to_all_dispatch_metadata_test(
             break
 
         # Verify output tokens with new shape [devices, total_tokens, hidden_size]
+        # Using new format expert mapping: expert_mapping_new[src_device, expert] = target_device_id
+        # We use the source device's copy of the mapping for the lookup to future-proof
+        # for expert masking where each device may have a different view of expert locations.
+        # Token layout: tokens from each source device are concatenated sequentially
+        tokens_per_src_device = total_tokens_out // devices
         for t in range(total_tokens_out):
+            # Determine which source device this token came from
+            src_device = t // tokens_per_src_device
             for k in range(selected_experts_k):
-                expert_id = tt_metadata_tensor[0, t, k]
-                for d in range(devices):
-                    if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
-                        is_all_equal = torch.equal(
-                            tt_torch_tensor[d, t, :], output_tensor_goldens_list[tensor_index][d, t, :]
-                        )
-                        if not is_all_equal:
-                            logger.info(
-                                f"Output tensor {tensor_index} mismatch at token {t}, expert {expert_id}, device {d}"
-                            )
-                            passed = False
-                            first_failed_tensor_index = tensor_index
-                            first_failed_batch_index = t  # Using token index instead
-                            failed_indices = torch.where(
-                                tt_torch_tensor[d, t, :] != output_tensor_goldens_list[tensor_index][d, t, :]
-                            )
-                            first_10_fail_idx = failed_indices[0][:10]
-                            logger.info(f"First 10 failing indices: {first_10_fail_idx}")
-                            logger.info(
-                                f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, t, first_10_fail_idx]}"
-                            )
-                            logger.info(
-                                f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, t, first_10_fail_idx]}"
-                            )
-                            first_failed_expert_index = expert_id
-                            first_failed_device_index = d
-                            first_failed_sequence_index = t
-                            break
+                expert_id = tt_metadata_tensor[src_device, t, k]
+                # Use the source device's copy of the expert mapping for the lookup
+                target_device = torch_expert_mappings_new[tensor_index][src_device, expert_id].item()
+                is_all_equal = torch.equal(
+                    tt_torch_tensor[target_device, t, :], output_tensor_goldens_list[tensor_index][target_device, t, :]
+                )
+                if not is_all_equal:
+                    logger.info(
+                        f"Output tensor {tensor_index} mismatch at token {t}, expert {expert_id}, src_device {src_device}, target_device {target_device}"
+                    )
+                    passed = False
+                    first_failed_tensor_index = tensor_index
+                    first_failed_batch_index = t  # Using token index instead
+                    failed_indices = torch.where(
+                        tt_torch_tensor[target_device, t, :]
+                        != output_tensor_goldens_list[tensor_index][target_device, t, :]
+                    )
+                    first_10_fail_idx = failed_indices[0][:10]
+                    logger.info(f"First 10 failing indices: {first_10_fail_idx}")
+                    logger.info(
+                        f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[target_device, t, first_10_fail_idx]}"
+                    )
+                    logger.info(
+                        f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][target_device, t, first_10_fail_idx]}"
+                    )
+                    first_failed_expert_index = expert_id
+                    first_failed_device_index = target_device
+                    first_failed_sequence_index = t
+                    break
             if not passed:
                 break
         if not passed:
