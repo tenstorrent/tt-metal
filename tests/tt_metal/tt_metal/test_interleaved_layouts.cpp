@@ -41,6 +41,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -80,7 +81,8 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::ID
         vector<uint32_t> dst_vec;
         tt_metal::detail::ReadFromBuffer(sticks_buffer, dst_vec);
 
-        pass &= (src_vec == dst_vec);
+        pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            src_vec, dst_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -210,15 +212,8 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        pass &= (src_vec == result_vec);
-
-        if (not pass) {
-            std::cout << "GOLDEN" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(src_vec, num_output_tiles);
-
-            std::cout << "RESULT" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
-        }
+        pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
 
         DeallocateBuffer(*dst_dram_buffer);
 
@@ -348,21 +343,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        pass &= (src_vec == result_vec);
-
-        if (not pass) {
-            std::cout << "GOLDEN" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(src_vec, num_output_tiles);
-
-            std::cout << "RESULT" << std::endl;
-            print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
-        }
+        pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
+            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
 
     } catch (const std::exception& e) {
         pass = false;
-        // Capture the exception error message
         log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
