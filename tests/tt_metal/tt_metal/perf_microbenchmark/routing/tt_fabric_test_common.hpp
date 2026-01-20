@@ -1634,7 +1634,9 @@ private:
     mutable bool frequency_validated_ = false;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
-        const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
+        const auto mesh_id_env = std::getenv("TT_MESH_ID");
+        TT_FATAL(mesh_id_env != nullptr, "TT_MESH_ID environment variable must be set");
+        const auto local_mesh_id = MeshId{std::stoi(mesh_id_env)};
         const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 

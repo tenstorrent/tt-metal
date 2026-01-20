@@ -11,10 +11,10 @@ namespace ttml::metal::ops::silu_bw::device {
 
 struct SiLUBackwardProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle silu_bw_reader_kernel_id;
-        tt::tt_metal::KernelHandle silu_bw_writer_kernel_id;
-        tt::tt_metal::KernelHandle silu_bw_kernel_group_1_id;
-        tt::tt_metal::KernelHandle silu_bw_kernel_group_2_id;
+        tt::tt_metal::KernelHandle silu_bw_reader_kernel_id{};
+        tt::tt_metal::KernelHandle silu_bw_writer_kernel_id{};
+        tt::tt_metal::KernelHandle silu_bw_kernel_group_1_id{};
+        tt::tt_metal::KernelHandle silu_bw_kernel_group_2_id{};
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};
