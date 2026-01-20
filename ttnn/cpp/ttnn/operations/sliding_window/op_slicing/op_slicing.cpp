@@ -129,16 +129,14 @@ static Op2DSliceConfig::SliceType best_guess_slice_type(
             return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
         }
         return Op2DSliceConfig::SliceType::DRAM_WIDTH;
-    } else {
-        if (input_width < 200) {
-            return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
-        } else {
-            if (input_height > input_width) {
-                return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
-            }
-            return Op2DSliceConfig::SliceType::DRAM_WIDTH;
-        }
     }
+    if (input_width < 200) {
+        return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+    }
+    if (input_height > input_width) {
+        return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+    }
+    return Op2DSliceConfig::SliceType::DRAM_WIDTH;
 }
 
 Op2DSliceConfig determine_slice_config(
@@ -270,11 +268,11 @@ void run_sliced_op(
     dram_slice_config.num_slices = std::min(dram_slice_config.num_slices, max_num_slices);
 
     if (dram_slice_config.num_slices == 1) {
-        for(auto & this_output_tensor : output_tensors) {
+        for (auto& this_output_tensor : output_tensors) {
             this_output_tensor.get().deallocate(true);
         }
         auto op_output_tensors = op_slice_attr->run_L1_op(input_tensor, {0, 0}, {output_height, output_width});
-        for(uint32_t i = 0; i < num_output_tensors; i++) {
+        for (uint32_t i = 0; i < num_output_tensors; i++) {
             output_tensors[i].get() = ttnn::to_memory_config(
                 op_output_tensors[i],
                 tt::tt_metal::MemoryConfig{

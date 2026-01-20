@@ -16,12 +16,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::program {
+namespace ttnn::prim {
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
@@ -130,6 +128,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
@@ -726,9 +725,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
 void SDPAProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes,
+    const SDPAInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -756,6 +755,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunked_q_chunk_offset = 0;
     if (is_chunked) {
         page_table_addr = tensor_args.page_table.value().buffer()->address();
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
     }
 
@@ -788,4 +788,4 @@ void SDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::program
+}  // namespace ttnn::prim

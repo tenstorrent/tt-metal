@@ -22,5 +22,5 @@ std::unique_ptr<tt::tt_metal::Hal> create_hal(const std::unique_ptr<tt::umd::Clu
         tt::tt_metal::get_platform_architecture(rtoptions),
         is_base_routing_fw_enabled,
         is_2_erisc_mode,
-        tt::tt_metal::get_profiler_dram_bank_size_per_risc_bytes(rtoptions));
+        tt::tt_metal::get_profiler_dram_bank_size_for_hal_allocation(rtoptions));
 }

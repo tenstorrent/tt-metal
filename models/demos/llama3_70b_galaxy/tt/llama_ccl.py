@@ -1226,7 +1226,8 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
+    # TODO: remove this once we have a proper 2D grid implementation, currently we see bad outputs
+    use_2d_grid = False
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -1273,7 +1274,7 @@ def tt_sharded_distributed_rmsnorm(
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
-    tt_out = ttnn.fused_rms_1_1_32_8192(
+    tt_out = ttnn.fused_rms_minimal(
         inp,
         ln_sharded_progcfg,
         cluster_axis,

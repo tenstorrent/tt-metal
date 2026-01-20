@@ -40,11 +40,12 @@ from models.experimental.grok.reference.configuration_grok1 import Grok1Config
     "iterations",
     (1, 2, 10),
 )
-def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers, validation_type):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_grok_model_inference(mesh_device, reset_seeds, iterations, n_layers, validation_type):
     pcc = 0.97
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device)
+    model_args = TtModelArgs(mesh_device)
     model_args.n_layers = n_layers
 
     state_dict = model_args.load_state_dict()
@@ -68,7 +69,7 @@ def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers
 
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -114,7 +115,7 @@ def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers
         del decode_input, attn_mask
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=-1))
+            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
             .squeeze(1)
             .view(batch, seqlen, -1)
             .detach()
@@ -201,10 +202,11 @@ def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers
     (1, 2, 4, 8, 16, 32, 64),
 )
 @pytest.mark.timeout(60 * 30 * 64)
-def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_grok_model_layers(mesh_device, reset_seeds, n_layers):
     pcc = 0.97
 
-    model_args = TtModelArgs(t3k_mesh_device)
+    model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -221,7 +223,7 @@ def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
     rot_mat = prepare_rotation_mat_ttnn(
         model_args.head_dim,
         model_args.max_seq_len,
-        t3k_mesh_device,
+        mesh_device,
     )
 
     current_pos = 0
@@ -250,7 +252,7 @@ def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
         tt_decode_input,
         model_args.dim,
         current_pos,
-        t3k_mesh_device,
+        mesh_device,
     )
 
     tt_hidden = tt_decode_input
@@ -258,12 +260,10 @@ def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
 
     for layer_num in range(first_layer, n_layers):
         logger.info(f"[Decode] Running layer {layer_num+1}/{n_layers}")
-        tt_hidden, pt_hidden = run_layer(layer_num, tt_hidden, pt_hidden, attn_mask, rot_mat, t3k_mesh_device)
+        tt_hidden, pt_hidden = run_layer(layer_num, tt_hidden, pt_hidden, attn_mask, rot_mat, mesh_device)
 
         # Measure PCC
-        tt_hidden_torch = ttnn.to_torch(tt_hidden, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[
-            0
-        ].squeeze()
+        tt_hidden_torch = ttnn.to_torch(tt_hidden, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0].squeeze()
         pt_hidden_torch = pt_hidden.squeeze()
 
         logger.info(f"[Decode] Comparing layer {layer_num+1}/{n_layers}")
@@ -285,7 +285,7 @@ def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
 
     # Load TTNN model with no layers, just norm and lm head
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=[],
@@ -293,17 +293,17 @@ def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
     )
 
     tt_out = tt_model(tt_hidden, None, None, None)
-    tt_out_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=-1)).squeeze()
+    tt_out_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1)).squeeze()
 
     passing, pcc_message = comp_pcc(pt_out, tt_out_torch, pcc)
     logger.info(comp_allclose(pt_out, tt_out_torch))
     logger.info(pcc_message)
 
 
-def run_layer(layer_num, tt_decode_input, pt_decode_input, attn_mask, rot_mat, t3k_mesh_device):
+def run_layer(layer_num, tt_decode_input, pt_decode_input, attn_mask, rot_mat, mesh_device):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device)
+    model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict(start_layer=layer_num)
     key_start = f"model.layers.{layer_num}."
@@ -324,7 +324,7 @@ def run_layer(layer_num, tt_decode_input, pt_decode_input, attn_mask, rot_mat, t
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=layer_num,

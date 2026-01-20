@@ -129,7 +129,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
 void FullOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     [[maybe_unused]] const tensor_args_t&,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

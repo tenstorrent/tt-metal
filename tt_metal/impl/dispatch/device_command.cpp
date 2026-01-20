@@ -359,6 +359,50 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
 }
 
 template <bool hugepage_write>
+template <bool flush_prefetch, bool inline_data>
+void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
+    uint8_t num_mcast_dests,
+    uint32_t noc_xy_addr,
+    DeviceAddr addr,
+    DeviceAddr data_sizeB,
+    const void* data,
+    uint32_t write_offset_index) {
+    uint32_t payload_sizeB = sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0);
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+    auto initialize_write_cmd = [&](CQDispatchCmdLarge* write_cmd) {
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H;
+        write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
+        write_cmd->write_linear.write_offset_index = write_offset_index;
+        write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
+        write_cmd->write_linear.addr = addr;
+        write_cmd->write_linear.length = data_sizeB;
+    };
+    CQDispatchCmdLarge* write_cmd_dst = this->reserve_space<CQDispatchCmdLarge*>(sizeof(CQDispatchCmdLarge));
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmdLarge write_cmd{};
+        initialize_write_cmd(&write_cmd);
+        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmdLarge));
+    } else {
+        initialize_write_cmd(write_cmd_dst);
+    }
+
+    if constexpr (flush_prefetch && inline_data) {
+        TT_ASSERT(data != nullptr);
+        this->add_data(data, data_sizeB, data_sizeB);
+    }
+
+    if constexpr (!flush_prefetch) {
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+}
+
+// Explicit template instantiations for add_dispatch_write_linear_h
+template void DeviceCommand<true>::add_dispatch_write_linear_h<false, false>(
+    uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
     uint32_t go_signal,
@@ -698,13 +742,13 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     const bool no_stride,
     uint32_t write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
+    bool multicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>;
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value
+    uint32_t max_num_packed_sub_cmds = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>
                                            ? packed_write_max_unicast_sub_cmds
                                            : packed_write_max_multicast_sub_cmds;
     TT_FATAL(
@@ -778,13 +822,13 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     const bool no_stride,
     uint32_t write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
+    bool multicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>;
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value
+    uint32_t max_num_packed_sub_cmds = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>
                                            ? packed_write_max_unicast_sub_cmds
                                            : packed_write_max_multicast_sub_cmds;
     TT_ASSERT(

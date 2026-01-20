@@ -9,6 +9,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -35,7 +36,7 @@ struct PCIeReadBwConfig {
 /// @return true if test passes, false otherwise
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeReadBwConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     auto device_id = device->id();
 
     // Program
@@ -54,7 +55,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
     // Get PCIe core coordinates
     const metal_SocDescriptor& soc_d = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    TT_ASSERT(!pcie_cores.empty(), "No PCIe cores found");
+    TT_FATAL(!pcie_cores.empty(), "No PCIe cores found");
 
     // Physical Core Coordinates
     uint32_t packed_subordinate_core_coordinates = pcie_cores[0].x << 16 | (pcie_cores[0].y & 0xFFFF);

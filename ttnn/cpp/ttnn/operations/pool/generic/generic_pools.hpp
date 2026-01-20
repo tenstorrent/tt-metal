@@ -42,7 +42,8 @@ struct MaxPool2DOp {
         bool reallocate_halo_output = true,
         bool return_indices = false,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR);
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
@@ -64,7 +65,8 @@ struct AvgPool2DOp {
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR);
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false);
 };
 
 }  // namespace operations::pool

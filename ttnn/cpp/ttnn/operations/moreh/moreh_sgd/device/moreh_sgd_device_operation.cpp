@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_sgd_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -11,7 +12,7 @@
 
 namespace ttnn::operations::moreh::moreh_sgd {
 void MorehSgdOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& params_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
 
@@ -32,7 +33,7 @@ void MorehSgdOperation::validate_inputs(
 }
 
 MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 

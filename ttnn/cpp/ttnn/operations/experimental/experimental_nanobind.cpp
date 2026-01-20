@@ -32,6 +32,8 @@
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
@@ -51,6 +53,7 @@
 #include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -74,6 +77,8 @@ void py_module(nb::module_& mod) {
     transformer::detail::bind_all_reduce_create_qkv_heads(mod);
 
     transformer::bind_wan_fused_distributed_rmsnorm(mod);
+    transformer::bind_dit_layernorm_pre_all_gather(mod);
+    transformer::bind_dit_layernorm_post_all_gather(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
@@ -120,6 +125,8 @@ void py_module(nb::module_& mod) {
     operations::experimental::ternary::detail::bind_where(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+
+    isin::detail::bind_isin_operation(mod);
 }
 
 }  // namespace ttnn::operations::experimental

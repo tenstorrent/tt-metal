@@ -10,6 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -23,7 +24,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 }  // namespace detail
 
 MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return MeshPartition{};
 }
 
@@ -68,7 +69,7 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
 }
 
 void MeshPartitionDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 MeshPartitionDeviceOperation::spec_return_value_t MeshPartitionDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
