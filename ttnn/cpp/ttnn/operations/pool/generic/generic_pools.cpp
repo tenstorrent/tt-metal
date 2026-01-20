@@ -808,7 +808,9 @@ static std::vector<Tensor> pool2d_DRAM(
             reallocate_halo_output,
             return_indices,
             dtype,
-            output_layout);
+            output_layout,
+            std::nullopt,
+            config_tensor_in_dram);
     }
 
     printf("[Pool2D DRAM] About to run sliced op with num_slices=%u\n", dram_slice_config.num_slices);
