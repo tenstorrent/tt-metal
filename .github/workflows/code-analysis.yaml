@@ -818,7 +818,8 @@ jobs:
 
           # Method 3: Check if Copilot already created a PR
           echo "=== Checking for existing PRs ==="
-          EXISTING_PR=$(gh pr list --head "copilot/" --json number,headRefName --jq '.[0].number' 2>/dev/null || true)
+          # Check for PRs from both copilot/ branches (if Copilot created one) and users/ branches (if we created one)
+          EXISTING_PR=$(gh pr list --json number,headRefName --jq '[.[] | select(.headRefName | startswith("copilot/") or startswith("users/"))] | .[0].number' 2>/dev/null || true)
           if [ -n "$EXISTING_PR" ]; then
             echo "Copilot already created PR #$EXISTING_PR"
             PR_URL=$(gh pr view "$EXISTING_PR" --json url --jq '.url')
@@ -835,7 +836,7 @@ jobs:
             if [ "$COMMITS_AHEAD" -gt 0 ]; then
               echo "Found $COMMITS_AHEAD commit(s) on $CURRENT_BRANCH - pushing and creating PR"
               # Configure git credentials
-              git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+              gh auth setup-git
               git remote set-url origin "https://github.com/${{ github.repository }}.git"
               git push -u origin "$CURRENT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
@@ -868,7 +869,7 @@ jobs:
               echo "Found $COMMITS_AHEAD commit(s) on $COPILOT_BRANCH - pushing and creating PR"
               git checkout "$COPILOT_BRANCH"
               # Configure git credentials
-              git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+              gh auth setup-git
               git remote set-url origin "https://github.com/${{ github.repository }}.git"
               git push -u origin "$COPILOT_BRANCH"
               COMMIT_MSG=$(git log -1 --format=%s)
@@ -921,15 +922,18 @@ jobs:
           echo "Token length: ${#GH_TOKEN} characters"
           echo ""
 
-          # Clear any existing credentials and force the use of the PAT
-          # This prevents the runner's default credential helper from interfering
+          # Configure git to use GitHub CLI for authentication
           echo "=== Configuring Git credentials ==="
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n "x-access-token:${GH_TOKEN}" | base64)"
+          gh auth setup-git
+          echo "Configured git to use gh CLI for authentication"
+
+          # Also set the remote URL to ensure it's using HTTPS
           git remote set-url origin "https://github.com/${{ github.repository }}.git"
-          echo "Configured git extraheader and remote URL"
+          echo "Remote URL: $(git remote get-url origin)"
 
           # Create a branch with timestamp
-          BRANCH_NAME="copilot/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
+          # Use users/ prefix as some orgs restrict top-level branch creation (like copilot/)
+          BRANCH_NAME="users/${{ github.actor }}/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH_NAME"
 
           # Stage all changes
