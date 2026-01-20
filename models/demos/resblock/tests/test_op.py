@@ -169,6 +169,10 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 
+    # Fail if we have infs or nans in the output
+    if torch.isinf(torch_output).any() or torch.isnan(torch_output).any():
+        pytest.fail("Output contains infs or nans")
+
     passing, pcc_message = comp_pcc(expected, torch_output, 0.9925)
     logger.info(pcc_message)
 
