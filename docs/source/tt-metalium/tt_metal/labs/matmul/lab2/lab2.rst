@@ -117,10 +117,30 @@ color of the square corresponds to the core that is responsible for producing th
    :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD (Each color represents a different core)
 
 TT-Metalium includes utilities to simplify work distribution across cores.
-The ``tt::tt_metal::split_work_to_cores(core_grid, work_units)`` function calculates how many work units each core should process,
-based on the total amount of work units and the number of available cores. It distributes the work as evenly as possible,
+This is done in two steps:
+
+#. Determine the **amount** of work each core should do.
+#. Assign **specific instances of work** to specific cores, based on the amount of work each core should do|
+   determined in the first step.
+
+TT-Metalium provides a utility function ``tt::tt_metal::split_work_to_cores(core_grid, work_units)``,
+which can be used to determine the amount of work each core should do.
+The function calculates how many work units each core should process, based on the total amount of work units
+and the number of available cores. The function distributes the work as evenly as possible,
 even if the number of work units does not divide evenly among the cores.
-In case of matrix multiplication, the work units are the output tiles and the function may be called as follows:
+
+``work_units`` is simply an integer that represents the total amount of work to be distributed.
+The meaning of ``work_units`` is determined by the specific problem being solved and the parallelization
+strategy being used. For example, for matrix multiplication, ``work_units`` could be any of the following:
+
+* Number of elements in the output matrix. Since each output element can be computed in paraller,
+  we could choose to assign individual elements to cores.
+* Number of tiles in the output matrix. Similar to the above, we could choose to assign individual
+  tiles to cores.
+* Number of larger blocks in the output matrix. We could choose larger tiles, or even entire blocks
+  of tiles in the output matrix as units of work to be assigned to cores.
+
+If we assume that work units are the output tiles, the function may be called as follows:
 
 .. code-block:: cpp
 
@@ -203,87 +223,41 @@ Similarly, reader, compute, and writer kernels need to be created on all cores, 
 Set Per-Core Runtime Arguments
 ------------------------------
 
-For each participating core and each kernel, determine what kernel arguments are needed so that kernel on each core has
-sufficient information to perform only those operations that are needed for tiles assigned to that core.
+The way to assign **specific instances of work** to specific cores is through runtime arguments for each kernel instance.
+We need to determine what arguments are needed for each kernel instance so that kernel on each core has sufficient
+information to perform only those operations that are needed for the tiles assigned to that core.
 The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
 needs to loop over the correct number of output tiles and inner-dimension tiles.
 
 All kernel arguments that need to be different between cores must be passed as runtime arguments and set for each core differently.
-Arguments that are the same for all cores can be passed as compile-time arguments or runtime arguments.
-As discussed in Lab 1, the decision is based on a tradeoff between potential performance benefit from using compile-time arguments
-vs. kernel having to be recompiled for each core.
-
-Once this is in place, the rest of the program (enqueuing, execution, reading back the output tensor, untilizing, and verifying
-against the CPU reference) follows the same pattern as in Lab 1.
+Arguments that are the same for all cores can be passed as either compile-time arguments or runtime arguments.
+As discussed in Lab 1, the decision to use compile-time arguments vs. runtime arguments is based on a tradeoff between potential
+performance benefit from using compile-time arguments vs. kernels having to be recompiled for each core.
 
 
 Inspecting and Choosing Cores
 *****************************
 
-Inspecting Device Core Count
-============================
-
-Before you can decide how to distribute work, you need to know how many compute cores your device has.
-
-One option is to use Tenstorrent command-line tools.
-On many systems, the ``tt-smi`` utility prints per-device information, including core counts.
-For example:
-
-.. code-block:: bash
-
-   tt-smi
-   # or, on some systems:
-   tt-smi info
-
-should display information about the installed device(s), including the number of compute cores.
-If this command is not available or does not show core counts, consult your local installation documentation or system administrator.
-
-As shown earlier, you can also obtain this information directly from your TT-Metalium C++ program using:
+As shown earlier, the number of compute cores on the device can be obtained using the
+``compute_with_storage_grid_size()`` TT-Metalium C++ API:
 
 .. code-block:: cpp
 
    auto core_grid = device->compute_with_storage_grid_size();
    uint32_t total_compute_cores = core_grid.x * core_grid.y;
 
-Here, ``total_compute_cores`` is the maximum number of Tensix cores you can use for matrix multiplication on that device.
-
-
-Using All Cores or a Subset of Cores
-====================================
-
-In this lab, you will run matrix multiplication with:
-
-* Work distributed over **half** of the available cores.
-
-* Work distributed over **all** available cores.
-
+In this lab, you will run matrix multiplication with varying number of cores.
 The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
-Other cores will remain idle for that program.
-Of course, runtime arguments should only be set on cores that have been assigned work.
+Any cores without kernels created on them will remain idle for that program. In real applications, they would be allocated to other tasks.
 
-To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then:
-
-* Create circular buffers on all cores in ``all_cores``.
-
-* Create kernels on all cores in ``all_cores``.
-
-* Set runtime arguments on all those cores.
-
-To use only **half** the cores, you can proceed as follows:
-
-1. Compute ``total_compute_cores`` as above, and define a target count:
-
-   .. code-block:: cpp
-
-      uint32_t target_cores = std::max(1u, total_compute_cores / 2);
-
-2. Construct a set of exactly ``target_cores`` core coordinates, for example by taking the first several cores in row-major order across the grid.
-
-3. Use this smaller set wherever you previously used ``all_cores`` when creating circular buffers, creating kernels, and setting runtime arguments.
-
-4. Adjust the work distribution so that the same total number of output tiles is spread across this reduced set of cores, with each tile still computed exactly once.
-
-The most important constraint is that **every core on which you create a kernel must also receive runtime arguments for that kernel**.
+To use **all** available compute cores, you can pass the full compute grid to the work-splitting helper, obtain ``all_cores``, and then
+create CBs and kernels on all cores in ``all_cores``, passing appropriate runtime arguments to the kernels.
+To use fewer cores, you can modify core grid by selecting only a subset of cores. For example, to use only half the cores, you could simply
+selecting only the first half of the cores in the ``y`` dimension and pass that modified core grid to the work-splitting helper.
+The rest of the code can usually remain the same, because the work-splitting helper automatically distributes the work evenly among
+the smaller set of cores.
+As a result, the same total number of output tiles ends up spread across this reduced set of cores, with each tile still computed exactly once.
+It is important to remember that **every core on which you create a kernel must also receive appropriate runtime arguments for that kernel**.
 Creating a kernel on a core without setting runtime arguments can lead to undefined behavior, including crashes or hangs.
 
 
@@ -293,105 +267,27 @@ Exercise 1: Multi Core Matrix Multiplication
 In this exercise, you will:
 
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
-
+#. Verify correctness by comparing the result against the CPU reference implementation.
 #. Run the same workload using:
-
+   * Work distributed over **quarter** of the compute cores.
    * Work distributed over **half** of the compute cores.
-
    * Work distributed over **all** available compute cores.
+#. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
+#. Plot a speedup plot comparing the performance of the three runs relative to the single core implementation from Lab 1.
 
-#. Profile and compare the performance of the two runs using the device profiler introduced in Lab 1.
+Additional details
+------------------
 
-You will **not** start from any existing multi-core example.
-Instead, you will extend your own single-core matmul program from Lab 1 to multiple cores, while continuing to use the ``Tensor`` class to represent matrices on the device.
+To call the ``compute_with_storage_grid_size()`` API, you need to get the ``device`` object,
+which can be obtained from the program state object (i.e. ``prog_state.mesh_device.get()``).
 
-Steps
------
+You will need to create circular buffers for tiles of ``A``, ``B``, and ``C`` on all participating cores,
+instead of only on a single core.
+Note that the ``create_cb`` helper function needs to be updated to accept a ``CoreRangeSet`` of cores,
+which can then be passed on to the ``CreateCircularBuffer`` function.
+Alternatively, you could update ``create_cb`` to take a variant argument similar to the ``CreateCircularBuffer`` function.
 
-#. **Start from your Lab 1 single-core matmul program**
-
-   Begin with your solution to Exercise 7 in Lab 1.
-   This program should already:
-
-   * Allocate tiled tensors for ``A``, ``B``, and ``C`` in device memory using the ``Tensor`` class.
-
-   * Create circular buffers and reader, compute, and writer kernels on a single core.
-
-   * Perform matrix multiplication on the device and compare the result against a CPU reference implementation.
-
-#. **Choose matrix dimensions consistent with Lab 1**
-
-   Use the same shapes as in Lab 1:
-
-   * ``A`` of size ``640x320`` and ``B`` of size ``320x640``, producing ``C`` of size ``640x640``, or
-
-
-#. **Extend the host code to multiple cores**
-
-   Modify your host program as follows:
-
-   * Open a device and obtain the compute-with-storage grid size using ``compute_with_storage_grid_size()``.
-     You can get the ``device`` object needed to call ``compute_with_storage_grid_size()`` from the program state object (i.e. ``prog_state.mesh_device.get()``).
-
-   * Compute the total number of output tiles.
-
-   * Call the work-splitting helper to divide these tiles among cores, and obtain a set of participating cores (for example, ``all_cores``) and per-core tile counts.
-
-   * Create circular buffers for tiles of ``A``, ``B``, and ``C`` on all participating cores, instead of only on a single core.
-     Note that the ``create_cb`` helper function needs to be updated to accept a ``CoreRangeSet`` of cores
-     and pass it on to the ``CreateCircularBuffer`` function. Alternatively, you could update ``create_cb`` to
-     take a variant argument, like the ``CreateCircularBuffer`` function.
-
-
-   * Create reader, compute, and writer kernels on all participating cores, and pass appropriate compile-time and runtime arguments to all the kernels.
-
-#. **Implement the all-cores version**
-
-   First implement a version that uses all cores in your chosen core set
-   Execute the program, read the output tensor back into a host vector, untilize it, and compare against the CPU reference.
-   Verify that the results are numerically close to the golden result, as in Lab 1.
-
-#. **Implement the half-cores version**
-
-   Next, modify the work distribution so that **only half** of the available compute cores are used:
-
-   * Determine ``total_compute_cores`` using ``compute_with_storage_grid_size()``
-
-   * Construct a ``CoreRangeSet`` of exactly half that many cores.
-
-   * Recompute the mapping from output tiles to cores using this reduced set.
-     Every output tile must still be produced exactly once, and the sum of per-core tile counts must equal ``num_output_tiles``.
-
-   * Create circular buffers and kernels only on this reduced core set, and set runtime arguments only for these cores.
-
-   Run the program and again compare the result against the CPU golden implementation for correctness.
-
-#. **Profile both versions**
-
-   Use the device profiler from Lab 1 to profile both the all-cores and half-cores versions:
-
-   * Ensure that you build in Release mode and that DPRINT is disabled.
-
-   * For each version, run your program with
-
-     .. code-block:: bash
-
-        TT_METAL_DEVICE_PROFILER=1
-
-     set, and examine the generated ``profile_log_device.csv`` file.
-
-   * For each run, compute the total firmware time by subtracting the minimum cycle count from the maximum cycle count and multiplying by the clock period, as you did in Lab 1.
-
-#. **Compare performance**
-
-   Compare the firmware times of the two versions.
-   Comment on:
-
-   * How close the all-cores version comes to ideal scaling compared to the half-cores version.
-
-   * How evenly work appears to be distributed across cores.
-
-   * Any differences you observe in kernel or firmware execution patterns.
+When profiling, you can use the device profiler from Lab 1. Ensure that you build in Release mode and that DPRINT is disabled.
 
 
 Background: Data Reuse in Multi Core Matmul
@@ -400,12 +296,11 @@ Background: Data Reuse in Multi Core Matmul
 Motivation
 ==========
 
-In the multi-core SPMD implementation above, each core processes a subset of the output tiles.
-For each output tile, the reader kernel streams in all required tiles of ``A`` and ``B`` across the inner dimension ``K``, and the compute kernel accumulates the results.
-Once a tile's contribution is computed, intermediate results are written to the output tensor and no longer reside in on-chip buffers.
-
-However, matrix multiplication has significant structure that allows **partial results and inputs to be reused**.
-Repeatedly writing intermediate results to device memory and reading them back is expensive in both time and bandwidth.
+In the multi core SPMD implementation above, each core processes a subset of the output tiles.
+For each output tile, the reader kernel streams in all required tiles of ``A`` and ``B`` across
+the inner dimension ``K``, and the compute kernel accumulates the results.
+Repeatedly fetching the same input tiles from device memory is expensive in both time and bandwidth.
+However, matrix multiplication has significant structure that allows **inputs to be reused**.
 An optimized multi-core matmul can reduce this overhead by:
 
 * Grouping tiles into **blocks** and **subblocks**.
