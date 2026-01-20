@@ -588,32 +588,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          ISSUE_COUNT="${{ steps.select-issue.outputs.issue-count }}"
-
-          # Write prompt to a file to avoid shell escaping issues
-          cat > /tmp/copilot_prompt.md << 'PROMPT_EOF'
-          The Clang Static Analyzer found issues in this repository. Here are some of them:
-
-          PROMPT_EOF
-
-          # Append the issue list
+          # Build prompt file using echo to avoid heredoc YAML issues
+          echo "The Clang Static Analyzer found issues in this repository. Here are some of them:" > /tmp/copilot_prompt.md
+          echo "" >> /tmp/copilot_prompt.md
           cat /tmp/issue_list.txt >> /tmp/copilot_prompt.md
-
-          # Append instructions
-          cat >> /tmp/copilot_prompt.md << 'PROMPT_EOF'
-
-          Please:
-          1. Review these issues and choose ONE that is:
-             - A real bug (not a false positive)
-             - Safe to fix without changing program behavior
-             - Reasonably straightforward to address
-          2. Examine the code to understand the context
-          3. Apply a minimal fix that addresses the root cause
-          4. Ensure the fix follows the project's coding standards
-          5. Create a PR with a clear title like: fix(clangsa): Fix [checker] in [filename]
-
-          Note: Some of these may be false positives. Use your judgment to pick a genuine issue that can be safely fixed.
-          PROMPT_EOF
+          echo "" >> /tmp/copilot_prompt.md
+          echo "Please:" >> /tmp/copilot_prompt.md
+          echo "1. Review these issues and choose ONE that is:" >> /tmp/copilot_prompt.md
+          echo "   - A real bug (not a false positive)" >> /tmp/copilot_prompt.md
+          echo "   - Safe to fix without changing program behavior" >> /tmp/copilot_prompt.md
+          echo "   - Reasonably straightforward to address" >> /tmp/copilot_prompt.md
+          echo "2. Examine the code to understand the context" >> /tmp/copilot_prompt.md
+          echo "3. Apply a minimal fix that addresses the root cause" >> /tmp/copilot_prompt.md
+          echo "4. Ensure the fix follows the project's coding standards" >> /tmp/copilot_prompt.md
+          echo "5. Create a PR with a clear title like: fix(clangsa): Fix [checker] in [filename]" >> /tmp/copilot_prompt.md
+          echo "" >> /tmp/copilot_prompt.md
+          echo "Note: Some of these may be false positives. Use your judgment to pick a genuine issue that can be safely fixed." >> /tmp/copilot_prompt.md
 
           echo "=== Prompt file contents ==="
           cat /tmp/copilot_prompt.md
@@ -626,6 +616,10 @@ jobs:
           else
             BASE_BRANCH="${{ github.ref_name }}"
           fi
+
+          echo ""
+          echo "=== Authenticating GitHub CLI ==="
+          echo "${{ secrets.AUTO_TRIAGE_TOKEN }}" | gh auth login --with-token
 
           echo ""
           echo "=== Creating Copilot coding agent task ==="
