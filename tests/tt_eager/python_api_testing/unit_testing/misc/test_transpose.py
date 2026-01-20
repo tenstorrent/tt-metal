@@ -987,7 +987,7 @@ def test_transpose_issue_11650_10350(shape, dims, layout, dtype, device):
 )
 @pytest.mark.parametrize(
     "pad_value",
-    [None, float("-inf")],
+    [0.0, float("-inf")],
 )
 def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
     torch.manual_seed(2005)
