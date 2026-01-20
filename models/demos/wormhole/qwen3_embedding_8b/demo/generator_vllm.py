@@ -325,15 +325,16 @@ class Qwen3ForEmbedding:
 
         # Create page_table with shape [batch_size, num_blocks]
         # For paged attention, we need sequential block indices starting from 0
-        # Each batch item gets its own set of sequential blocks
+        # Each batch item gets its own set of distinct sequential blocks to avoid conflicts
+        # Note: Even though users are processed sequentially, they all use user_id=0 when
+        # page_table is present, so they need distinct physical blocks to avoid overwriting
+        # each other's KV cache data.
         page_table = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
-        # Fill with sequential block indices (0, 1, 2, ...) for each batch item
-        # Note: In a real scenario, vLLM would manage block allocation, but for embedding
-        # models we use sequential allocation
         for i in range(batch_size):
             # Each sequence gets blocks starting from i * num_blocks to avoid conflicts
-            # But for simplicity, we'll use sequential blocks (0, 1, 2, ...) for each
-            page_table[i] = torch.arange(num_blocks, dtype=torch.int32)
+            # This ensures batch item 0 uses blocks [0, num_blocks-1],
+            # batch item 1 uses blocks [num_blocks, 2*num_blocks-1], etc.
+            page_table[i] = torch.arange(i * num_blocks, (i + 1) * num_blocks, dtype=torch.int32)
 
         logger.debug(
             f"Creating page_table for paged attention: "
@@ -341,12 +342,7 @@ class Qwen3ForEmbedding:
             f"batch_size={batch_size}, original_seq_len={original_seq_len}"
         )
 
-        # Run prefill to get model output
-        # Note: For embedding models, we typically need hidden states before LM head
-        # but the current Transformer model returns logits. We'll need to modify
-        # the approach based on the actual Qwen3-Embedding implementation.
-        # Pass allocated KV cache (even though we don't use it for embeddings)
-        #
+        # Run prefill to get hidden states (before LM head) for embeddings
         # IMPORTANT: The TT backend processes users sequentially (one at a time) due to
         # architectural constraints. The attention mechanism uses user_id to index into
         # the KV cache, requiring single-user processing. This is expected behavior and
@@ -357,66 +353,25 @@ class Qwen3ForEmbedding:
         # - First batch: Captures trace (slower, ~1-2 seconds)
         # - Subsequent batches: Reuses trace (faster, ~100-200ms per batch)
         # The trace key is: f"{prefill_seq_len}_{model_id}", where prefill_seq_len comes from
-        # get_padded_prefill_len(seq_len). By using the padded seq_len (max_seq_len) instead
-        # of the original seq_len, we ensure all batches reuse the same trace.
-        logits = self.generator.prefill_forward_text(
+        # get_padded_prefill_len(seq_len). We use the padded seq_len (max_seq_len) for trace
+        # reuse, but use original_seq_len for prompt_lens to correctly extract the last real token.
+        #
+        # CRITICAL: Use original_seq_len for prompt_lens, not padded seq_len!
+        # prompt_lens is used to set last_token_idx = seq_len - 1, which must point to the
+        # actual last token, not a padding token. The padding is only for trace reuse.
+        hidden_states = self.generator.prefill_forward_text(
             input_tokens_pt,
             page_table=page_table,
             kv_cache=self._kv_cache,
-            prompt_lens=[seq_len] * batch_size,  # Use padded seq_len, not original_seq_len!
+            prompt_lens=[original_seq_len] * batch_size,  # Use original_seq_len, not padded seq_len!
             enable_trace=True,  # Explicitly enable trace for best performance
+            return_hidden_states=True,  # Return hidden states before LM head, not logits
         )
 
-        # For embedding models, we typically extract embeddings from hidden states
-        # Since the Transformer model returns logits (after LM head), we need to
-        # work backwards or modify the model to return hidden states.
-        #
-        # For Qwen3-Embedding specifically, the model should return embeddings
-        # directly. This implementation assumes the model has been modified to
-        # return embeddings, or we extract them from a different layer.
-        #
-        # TODO: This needs to be adapted based on the actual Qwen3-Embedding
-        # implementation in tt-inference-server
-
-        # Convert output to PyTorch tensor
-        # The output shape depends on how Qwen3-Embedding is implemented
-        # Expected: [batch_size, seq_len, hidden_dim] or [batch_size, hidden_dim]
-        if hasattr(logits, "shape"):
-            # If logits is already a torch tensor
-            embeddings = logits
-        else:
-            # Convert from TTNN tensor
-            embeddings = ttnn.to_torch(
-                logits,
-                dtype=torch.float32,
-                mesh_composer=None,  # Will be set by ttnn.to_torch if needed
-            )
-
-        # Apply pooling to get final embeddings
-        # Qwen3-Embedding typically uses mean pooling or CLS token
-        if embeddings.dim() == 3:
-            # Shape: [batch_size, seq_len, hidden_dim]
-            # Apply mean pooling with attention mask
-            if attention_mask is not None:
-                # Expand mask: [batch_size, seq_len] -> [batch_size, seq_len, 1]
-                mask_expanded = attention_mask.unsqueeze(-1).to(embeddings.dtype)
-                # Mask out padding tokens
-                embeddings = embeddings * mask_expanded
-                # Sum over sequence dimension
-                sum_embeddings = embeddings.sum(dim=1)
-                # Count non-padding tokens
-                mask_sum = mask_expanded.sum(dim=1).clamp(min=1e-9)
-                # Mean pooling
-                embeddings = sum_embeddings / mask_sum
-            else:
-                # Simple mean pooling
-                embeddings = embeddings.mean(dim=1)
-        elif embeddings.dim() == 2:
-            # Already in shape [batch_size, hidden_dim]
-            pass
-        else:
-            # Unexpected shape, try to squeeze
-            embeddings = embeddings.squeeze()
+        # hidden_states shape: [batch_size, hidden_size]
+        # This is the last token's hidden state after layer norm, before LM head
+        # For Qwen3-Embedding, this is the correct embedding output
+        embeddings = hidden_states
 
         # Ensure output is 2D: [batch_size, embedding_dim]
         if embeddings.dim() == 1 and batch_size == 1:
