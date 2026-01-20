@@ -264,7 +264,7 @@ def handle_cat(func, args, kwargs):
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
     tensors = args[0]
-    dim = args[1]
+    dim = args[1] if len(args) > 1 else 0
     deallocate_tensors = []
     device = None
     for index, tensor in enumerate(tensors):

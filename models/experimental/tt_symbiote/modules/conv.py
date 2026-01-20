@@ -29,6 +29,8 @@ def get_shape_from_module_name(module_name, model_config):
     if model_config is None or not isinstance(model_config, dict) or module_name not in model_config:
         return None
     config = model_config[module_name]
+    if config.get("reshape_output", False):
+        return None
     return config.get("input_shapes", None)
 
 
