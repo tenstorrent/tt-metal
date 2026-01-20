@@ -106,7 +106,7 @@ std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for_port_t
 
     for (const auto& [endpoint_a, endpoint_b] : connections) {
         auto normalized = normalize_node_connection(Node::BoardConnection(endpoint_a, endpoint_b));
-        if (seen_connections.count(normalized) > 0) {
+        if (seen_connections.contains(normalized)) {
             continue;  // Skip duplicate
         }
         seen_connections.insert(normalized);
@@ -240,7 +240,7 @@ std::set<Node::BoardConnection> build_normalized_board_connection_set(
 }
 
 // Helper: Build normalized set of graph-level port connections
-static std::set<PortConnection> build_normalized_graph_connection_set(const std::vector<PortConnection>& connections) {
+std::set<PortConnection> build_normalized_graph_connection_set(const std::vector<PortConnection>& connections) {
     std::set<PortConnection> normalized_set;
     for (const auto& conn : connections) {
         normalized_set.insert(normalize_graph_connection(conn));
@@ -549,20 +549,19 @@ HostId resolve_path_from_proto(
             return HostId(child_mapping.host_id());
         }
         throw std::runtime_error("Node " + node_name + " is not a leaf node");
-    } else {
-        // Multi-level path - descend into subgraph
-        const std::string& subgraph_name = path[index];
-        if (!graph_instance.child_mappings().contains(subgraph_name)) {
-            throw std::runtime_error(fmt::format(
-                "Child mapping not found: '{}' in instance '{}'", subgraph_name, graph_instance.template_name()));
-        }
-        const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
-
-        if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-            return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
-        }
-        throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
     }
+    // Multi-level path - descend into subgraph
+    const std::string& subgraph_name = path[index];
+    if (!graph_instance.child_mappings().contains(subgraph_name)) {
+        throw std::runtime_error(fmt::format(
+            "Child mapping not found: '{}' in instance '{}'", subgraph_name, graph_instance.template_name()));
+    }
+    const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
+
+    if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+        return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
+    }
+    throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
 }
 
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
