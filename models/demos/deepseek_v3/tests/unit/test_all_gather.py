@@ -82,6 +82,9 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 @pytest.mark.parametrize("enable_trace", [True, False])
 @skip_with_watcher("Test is not passing with watcher enabled github issue #36312")
 def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology, enable_trace):
+    if is_watcher_enabled():
+        pytest.skip("Test is not passing with watcher enabled")
+
     shape, dtype, buffer_type, shard_spec = shape_dtype_buffer_type_shard_spec
 
     tt_input, torch_reference, output_mem_config = _get_tensors(
