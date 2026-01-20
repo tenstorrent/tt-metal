@@ -623,7 +623,7 @@ jobs:
           ISSUE_LIST=$(cat /tmp/issue_list.txt)
 
           read -r -d '' PROMPT << 'PROMPT_EOF' || true
-          You are operating in a CI environment with no interactive approval.
+          You are operating in a CI environment. Your task is to analyze Clang Static Analyzer issues and fix one of them.
 
           The Clang Static Analyzer found issues in this repository. Here are some of them:
 
@@ -638,13 +638,17 @@ jobs:
              - A real bug (not a false positive)
              - Safe to fix without changing program behavior
              - Reasonably straightforward to address
-          2. Examine the code to understand the context
-          3. Apply a minimal fix that addresses the root cause
+          2. Read the source file to understand the context
+          3. Apply a minimal fix that addresses the root cause using your file editing tools
           4. Ensure the fix follows the project's coding standards
-          5. Create a new branch, commit the fix, push it, and create a PR
-             - Branch name: copilot/fix-clangsa-TIMESTAMP (use current timestamp)
-             - PR title: fix(clangsa): Fix [checker] in [filename]
-             - Target branch: ${BASE_BRANCH}
+
+          IMPORTANT: After you make the fix:
+          - Save the unified diff to a file at /tmp/copilot_fix.patch using a command like:
+            git diff > /tmp/copilot_fix.patch
+          - Also write a brief description of what you fixed to /tmp/copilot_fix_description.txt
+          - Include the checker name and filename in the description
+
+          Do NOT create branches, commits, or PRs - we will handle that after you generate the patch.
 
           Note: Some of these may be false positives. Use your judgment to pick a genuine issue that can be safely fixed.
           "
@@ -659,12 +663,71 @@ jobs:
           # Save base branch for later steps
           echo "base-branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
 
+          # Debug: Show current directory and git status before Copilot
+          echo "=== Pre-Copilot state ==="
+          echo "Working directory: $(pwd)"
+          echo "Git branch: $(git branch --show-current)"
+          echo "Git status:"
+          git status --short
+          echo ""
+
           # Use programmatic mode with --allow-all-tools for CI environment
-          copilot -p "$PROMPT" --allow-all-tools || {
+          # Run in the workspace directory explicitly
+          copilot -p "$PROMPT" --allow-all-tools 2>&1 | tee /tmp/copilot_output.log || {
             echo "Copilot execution failed"
+            echo "=== Copilot output ==="
+            cat /tmp/copilot_output.log || true
             echo "copilot-success=false" >> "$GITHUB_OUTPUT"
             exit 0
           }
+
+          echo ""
+          echo "=== Post-Copilot state ==="
+          echo "Git branch: $(git branch --show-current)"
+          echo "Git status:"
+          git status --short
+          echo "All branches:"
+          git branch -a
+          echo ""
+
+          # Check if any files were modified directly
+          MODIFIED_FILES=$(git status --porcelain 2>/dev/null | wc -l)
+          echo "Modified files count (direct): $MODIFIED_FILES"
+
+          # Check if Copilot created a patch file
+          if [ -f /tmp/copilot_fix.patch ]; then
+            echo "=== Copilot created patch file ==="
+            echo "Patch file size: $(wc -c < /tmp/copilot_fix.patch) bytes"
+            echo "Patch contents:"
+            cat /tmp/copilot_fix.patch
+            echo "=== End of patch ==="
+
+            # Check if patch is non-empty
+            if [ -s /tmp/copilot_fix.patch ]; then
+              echo "patch-file=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Patch file is empty"
+              echo "patch-file=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "No patch file created by Copilot"
+            echo "patch-file=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Check for description file
+          if [ -f /tmp/copilot_fix_description.txt ]; then
+            echo "=== Fix description ==="
+            cat /tmp/copilot_fix_description.txt
+            echo "=== End of description ==="
+          fi
+
+          # Check if we're on a different branch now
+          CURRENT_BRANCH=$(git branch --show-current)
+          if [[ "$CURRENT_BRANCH" == copilot/* ]]; then
+            echo "Copilot switched to branch: $CURRENT_BRANCH"
+            echo "Commits on this branch:"
+            git log --oneline -5
+          fi
 
           echo "copilot-success=true" >> "$GITHUB_OUTPUT"
 
@@ -677,9 +740,52 @@ jobs:
           set -euo pipefail
 
           BASE_BRANCH="${{ steps.copilot-fix.outputs.base-branch }}"
+          CHANGES_APPLIED="false"
+          FIX_DESCRIPTION=""
 
-          # Check if Copilot already created a PR
-          EXISTING_PR=$(gh pr list --head "copilot/" --json number --jq '.[0].number' 2>/dev/null || true)
+          echo "=== Checking for Copilot changes ==="
+          echo ""
+
+          # Method 1: Check if Copilot created a patch file
+          if [ -f /tmp/copilot_fix.patch ] && [ -s /tmp/copilot_fix.patch ]; then
+            echo "Found patch file from Copilot - applying it"
+
+            # Reset any existing changes first
+            git checkout -- . 2>/dev/null || true
+            git clean -fd 2>/dev/null || true
+
+            # Apply the patch
+            if git apply /tmp/copilot_fix.patch; then
+              echo "Patch applied successfully"
+              CHANGES_APPLIED="true"
+              if [ -f /tmp/copilot_fix_description.txt ]; then
+                FIX_DESCRIPTION=$(cat /tmp/copilot_fix_description.txt)
+              fi
+            else
+              echo "Failed to apply patch with git apply, trying patch command"
+              if patch -p1 < /tmp/copilot_fix.patch; then
+                echo "Patch applied with patch command"
+                CHANGES_APPLIED="true"
+                if [ -f /tmp/copilot_fix_description.txt ]; then
+                  FIX_DESCRIPTION=$(cat /tmp/copilot_fix_description.txt)
+                fi
+              else
+                echo "Failed to apply patch - patch may be malformed"
+              fi
+            fi
+          fi
+
+          # Method 2: Check if Copilot made direct changes (uncommitted)
+          if [ "$CHANGES_APPLIED" = "false" ]; then
+            if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+              echo "Found direct uncommitted changes from Copilot"
+              CHANGES_APPLIED="true"
+            fi
+          fi
+
+          # Method 3: Check if Copilot already created a PR
+          echo "=== Checking for existing PRs ==="
+          EXISTING_PR=$(gh pr list --head "copilot/" --json number,headRefName --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$EXISTING_PR" ]; then
             echo "Copilot already created PR #$EXISTING_PR"
             PR_URL=$(gh pr view "$EXISTING_PR" --json url --jq '.url')
@@ -688,14 +794,79 @@ jobs:
             exit 0
           fi
 
-          # Check if there are any changes (staged, unstaged, or untracked)
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-            echo "No changes detected - Copilot may not have made any fixes"
+          # Method 4: Check if Copilot switched to a copilot/ branch with commits
+          CURRENT_BRANCH=$(git branch --show-current)
+          if [[ "$CURRENT_BRANCH" == copilot/* ]]; then
+            echo "Copilot switched to branch: $CURRENT_BRANCH"
+            COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$CURRENT_BRANCH" 2>/dev/null || echo "0")
+            if [ "$COMMITS_AHEAD" -gt 0 ]; then
+              echo "Found $COMMITS_AHEAD commit(s) on $CURRENT_BRANCH - pushing and creating PR"
+              git push -u origin "$CURRENT_BRANCH"
+              COMMIT_MSG=$(git log -1 --format=%s)
+              PR_URL=$(gh pr create \
+                --title "$COMMIT_MSG" \
+                --body "## 🤖 Automated Clang Static Analyzer Fix
+
+          This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
+
+          **Generated by:** GitHub Copilot CLI
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please review the changes carefully before merging." \
+                --base "$BASE_BRANCH" \
+                --head "$CURRENT_BRANCH")
+              echo "Created PR: $PR_URL"
+              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+              echo "pr-created=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # Method 5: Check for any local copilot/ branches
+          COPILOT_BRANCHES=$(git branch --list 'copilot/*' 2>/dev/null | tr -d ' *' || true)
+          if [ -n "$COPILOT_BRANCHES" ]; then
+            COPILOT_BRANCH=$(echo "$COPILOT_BRANCHES" | head -1)
+            echo "Found local branch: $COPILOT_BRANCH"
+            COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$COPILOT_BRANCH" 2>/dev/null || echo "0")
+            if [ "$COMMITS_AHEAD" -gt 0 ]; then
+              echo "Found $COMMITS_AHEAD commit(s) on $COPILOT_BRANCH - pushing and creating PR"
+              git checkout "$COPILOT_BRANCH"
+              git push -u origin "$COPILOT_BRANCH"
+              COMMIT_MSG=$(git log -1 --format=%s)
+              PR_URL=$(gh pr create \
+                --title "$COMMIT_MSG" \
+                --body "## 🤖 Automated Clang Static Analyzer Fix
+
+          This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
+
+          **Generated by:** GitHub Copilot CLI
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please review the changes carefully before merging." \
+                --base "$BASE_BRANCH" \
+                --head "$COPILOT_BRANCH")
+              echo "Created PR: $PR_URL"
+              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+              echo "pr-created=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # If no changes were applied by any method, exit
+          if [ "$CHANGES_APPLIED" = "false" ]; then
+            echo "No changes detected from Copilot"
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Changes detected - creating PR manually"
+          # Create branch, commit, push, and create PR from the applied changes
+          echo "=== Creating PR from applied changes ==="
+
+          # Show what changed
+          echo "Changes to be committed:"
+          git status --short
+          git diff --stat
+          echo ""
 
           # Create a branch with timestamp
           BRANCH_NAME="copilot/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
@@ -704,8 +875,15 @@ jobs:
           # Stage all changes
           git add -A
 
+          # Build commit message
+          if [ -n "$FIX_DESCRIPTION" ]; then
+            COMMIT_MSG="fix(clangsa): $FIX_DESCRIPTION"
+          else
+            COMMIT_MSG="fix(clangsa): Automated fix from Clang Static Analyzer"
+          fi
+
           # Commit
-          git commit -m "fix(clangsa): Automated fix from Clang Static Analyzer
+          git commit -m "$COMMIT_MSG
 
           This fix was generated by GitHub Copilot based on Clang Static Analyzer findings.
 
@@ -715,16 +893,27 @@ jobs:
           git push -u origin "$BRANCH_NAME"
 
           # Create PR
-          PR_URL=$(gh pr create \
-            --title "fix(clangsa): Automated fix from Clang Static Analyzer" \
-            --body "## 🤖 Automated Clang Static Analyzer Fix
+          PR_TITLE="$COMMIT_MSG"
+          PR_BODY="## 🤖 Automated Clang Static Analyzer Fix
 
           This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
 
           **Generated by:** GitHub Copilot CLI
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          Please review the changes carefully before merging." \
+          if [ -n "$FIX_DESCRIPTION" ]; then
+            PR_BODY="${PR_BODY}
+
+          **Fix description:** $FIX_DESCRIPTION"
+          fi
+
+          PR_BODY="${PR_BODY}
+
+          Please review the changes carefully before merging."
+
+          PR_URL=$(gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
             --base "$BASE_BRANCH" \
             --head "$BRANCH_NAME")
 
