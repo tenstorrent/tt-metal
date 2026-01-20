@@ -267,7 +267,7 @@ class TtASPP(LightweightModule):
                 elif branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
                     branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
 
-            branch_out = ttnn.to_memory_config(branch_out, ttnn.L1_MEMORY_CONFIG)
+            branch_out = ttnn.to_memory_config(branch_out, ttnn.DRAM_MEMORY_CONFIG)
             res.append(branch_out)
 
         # Global average pooling branch

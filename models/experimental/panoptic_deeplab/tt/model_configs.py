@@ -924,10 +924,9 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         # Dilated conv branches
         dilated_configs = [
             ("aspp.convs.0", 64),  # 1x1 convolution
-            ("aspp.convs.1", 64),  # dilation=6, act_block_h=128
-            ("aspp.convs.2", 64),  # dilation=12, act_block_h=64
-            # ("aspp.convs.3", 64),  # dilation=18, act_block_h=64
-            ("aspp.convs.4", 32),  # pooling conv
+            ("aspp.convs.1", 32),  # dilation=6, act_block_h=32
+            ("aspp.convs.2", 32),  # dilation=12, act_block_h=32
+            ("aspp.convs.4", 64),  # pooling conv
             ("aspp.project", 64),  # project conv
         ]
 
@@ -938,7 +937,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
                 sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
                 deallocate_activation=False,
                 # activation=None,
-                enable_weights_double_buffer=True,
+                # enable_weights_double_buffer=True,
             )
 
         self.config.register_layer_override(
@@ -947,13 +946,9 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
             sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
             deallocate_activation=False,
             activation=None,
-            enable_weights_double_buffer=True,
+            # enable_weights_double_buffer=True,
         )
 
-        self.config.register_layer_override(
-            "aspp.convs.4",
-            deallocate_activation=False,
-        )
         self.config.register_layer_override(
             "aspp.project",
             deallocate_activation=True,
