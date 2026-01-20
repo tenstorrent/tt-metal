@@ -368,9 +368,9 @@ void set_or_update_runtime_arguments(
 
                 c_num_tiles = c_num_tiles * tt::div_up(row_width, tile_hw);
                 // this is a hack but works
-                // we need to fill the tile to aim for max utlizotn
-                num_rows = std::max<DeviceAddr>(1, tile_hw / row_width);
-                // numrows can be greater than the height of the tensor
+                // we need to fill the tile to aim for max utilization
+                num_rows = std::max<uint32_t>(1u, tile_hw / row_width);
+                // num_rows can be greater than the logical height; row-major buffers are padded for full tiles
             }
         }
 
@@ -542,7 +542,8 @@ void set_or_update_runtime_arguments(
             uint32_t row_width = c.buffer()->aligned_page_size() / a.element_size();
             uint32_t div = tt::div_up(row_width, tile_hw);
             // Calculate how many actual rows this core processed
-            current_row += (c_num_tiles * num_rows) / div;
+            const uint32_t rows_per_core = c_num_tiles / div;
+            current_row += rows_per_core * num_rows;
         } else {
             // Fallback for tiled layout (not primary concern here, but good practice)
             current_row += num_rows;
@@ -852,7 +853,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // writer does not read b.
     if (b.has_value()) {
         if (inputs_row_major) {
-            // set the macors for bcast here for the unifeid one
             kernel_config.reader_kernel = KernelName::ReaderRmUnifiedNg;
             writer_kernel = KernelName::WriterRmNoBcastNg;
         } else {
