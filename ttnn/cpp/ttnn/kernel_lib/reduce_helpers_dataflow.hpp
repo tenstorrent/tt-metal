@@ -5,30 +5,23 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
-// Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
-constexpr uint32_t FACE_SIZE_U32 = 128;
 // Row size in uint32 (8 u32 = 16 bf16)
 constexpr uint32_t ROW_SIZE_U32 = 8;
 
-template <bool half_tile>
-FORCE_INLINE void zero_faces(uint32_t write_addr) {
-    constexpr uint32_t num_faces = half_tile ? 2 : 4;
-    constexpr uint32_t bytes_to_zero = num_faces * FACE_SIZE_U32 * sizeof(uint32_t);
-    constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
-
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
-
+/**
+ * @brief Fill row 0 of each face with a scaler value
+ *
+ * Writes the scaler value to columns 0-7 (the first 8 uint32_t positions)
+ * of row 0 in each face. This corresponds to 16 bf16 values per face.
+ *
+ * @tparam half_tile If true, fill faces 0-1 only. If false, fill all 4 faces.
+ * @param ptr Pointer to the start of the tile in L1 memory
+ * @param scaler Packed bf16 value to write (bf16 << 16 | bf16)
+ */
 template <bool half_tile>
 FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
     constexpr uint32_t num_faces = half_tile ? 2 : 4;
@@ -60,14 +53,17 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
  */
 template <bool half_tile = false>
 FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
+    ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
+    // Verify scaler is properly packed: high 16 bits must equal low 16 bits
+    ASSERT((scaler >> 16) == (scaler & 0xFFFF));
+
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr = get_write_ptr(cb_id);
 
     zero_faces<half_tile>(write_addr);
 
     if (scaler != 0) {
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-        fill_row0<half_tile>(ptr, scaler);
+        fill_row0<half_tile>(addr_to_l1_ptr(write_addr), scaler);
     }
 
     cb_push_back(cb_id, 1);
