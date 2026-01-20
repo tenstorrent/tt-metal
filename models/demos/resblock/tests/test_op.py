@@ -48,7 +48,13 @@ def create_random_tensor(shape, random_tensor_gen):
     "generation_type",
     ["randn", "uniform"],
 )
-def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype, num_layers):
+@pytest.mark.parametrize(
+    "use_custom_mm",
+    [True, False],
+)
+def test_resblock(
+    device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype, num_layers, use_custom_mm
+):
     if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
     # if activation_dtype != weight_dtype:
@@ -152,13 +158,14 @@ def test_resblock(device, B, K, core_grid, generation_type, tile_size, activatio
         tile=out_tile,
     )
 
-    logger.info("Running Fused ResBlock operation")
+    logger.info(f"Running Fused ResBlock operation with use_custom_mm={use_custom_mm}")
     ttnn_output = FusedResblock.op(
         ttnn_a,
         weight0_tensor,
         weight1_tensor,
         ttnn_output,
         num_layers=num_layers,
+        use_custom_mm=use_custom_mm,
         fp32_dest_acc_en=True,
     )
 

@@ -524,6 +524,7 @@ class FusedResblock:
         num_tiles_k: int,
         num_layers: int,
         fp32_dest_acc_en: bool,
+        use_custom_mm: bool,
         out_dtype: ttnn.DataType,
         out_tile_size: int,
         out_tile_descriptor: ttnn.TileDescriptor,
@@ -665,6 +666,7 @@ class FusedResblock:
                 num_tiles_k,
                 1 if fp32_dest_acc_en else 0,
                 num_layers,
+                1 if use_custom_mm else 0,
             ],
             runtime_args=runtime_args,
             config=ttnn.ComputeConfigDescriptor(
@@ -692,6 +694,7 @@ class FusedResblock:
         output_tensor: ttnn.Tensor,
         num_layers: int = 1,
         fp32_dest_acc_en: bool = False,
+        use_custom_mm: bool = True,
         debug: bool = False,
     ) -> ttnn.Tensor:
         """
@@ -706,6 +709,8 @@ class FusedResblock:
             output_tensor: Output tensor of shape [M, K], width-sharded across cores
             num_layers: Number of ResBlock layers. Must equal weight0.shape[-2] / K (and weight1.shape[-2] / K)
             fp32_dest_acc_en: Enable FP32 destination accumulation
+            use_custom_mm: Use custom_mm API (MOP-based K-dimension reduction) instead of generic matmul.
+                          Defaults to True for better performance.
             debug: Enable debug logging
 
         Returns:
@@ -818,6 +823,7 @@ class FusedResblock:
             num_tiles_k,
             num_layers,
             fp32_dest_acc_en,
+            use_custom_mm,
             out_dtype,
             out_tile_size,
             out_tile_descriptor,

@@ -12,10 +12,12 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+#include "../../deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+
 // Minimal init to switch from matmul mode to copy_tile mode.
 // This is lighter weight than init_sfpu() because it skips the pack-related
-// initialization (which is already done by mm_block_init if output CB is the same).
-// Also skips llk_math_pack_sync_init which is already done by mm_block_init.
+// initialization (which is already done by mm_block_init/custom_mm_block_init if output CB is the same).
+// Also skips llk_math_pack_sync_init which is already done by mm_block_init/custom_mm_block_init.
 template <uint32_t icb>
 FORCE_INLINE void init_copy_tile_after_matmul() {
     // Reconfigure unpacker hardware for unary operation (same CB for both A and B)
@@ -29,7 +31,14 @@ FORCE_INLINE void init_copy_tile_after_matmul() {
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 }
 
-template <uint32_t CbA, uint32_t CbB, uint32_t CbOut, uint32_t NumTilesK, uint32_t OutputTileId = 0, bool PopA = false>
+template <
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t NumTilesK,
+    uint32_t OutputTileId = 0,
+    bool PopA = false,
+    bool UseCustomMM = true>
 FORCE_INLINE void matmul_with_relu_block() {
     DeviceZoneScopedN("matmul_with_relu_block");
 
@@ -42,8 +51,12 @@ FORCE_INLINE void matmul_with_relu_block() {
 
     {
         DeviceZoneScopedN("matmul_tiles");
-        for (uint32_t k = 0; k < NumTilesK; k++) {
-            matmul_tiles(CbA, CbB, k, k, 0);
+        if constexpr (UseCustomMM) {
+            custom_mm_block(CbA, CbB, 0, 0, 0, false, NumTilesK);
+        } else {
+            for (uint32_t k = 0; k < NumTilesK; k++) {
+                matmul_tiles(CbA, CbB, k, k, 0);
+            }
         }
     }
     {
@@ -77,7 +90,8 @@ template <
     uint32_t NumTilesBias,
     uint32_t OutputTileId = 0,
     bool PopA = false,
-    bool PopBias = false>
+    bool PopBias = false,
+    bool UseCustomMM = true>
 FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     DeviceZoneScopedN("matmul_with_bias_block");
 
@@ -91,17 +105,19 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
 
     {
         DeviceZoneScopedN("matmul_tiles");
-        for (uint32_t k = 0; k < NumTilesK; k++) {
-            matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
+        if constexpr (UseCustomMM) {
+            custom_mm_block(CbA, CbB, 0, 0, MATMUL_ACC_REG_ID, false, NumTilesK);
+        } else {
+            for (uint32_t k = 0; k < NumTilesK; k++) {
+                matmul_tiles(CbA, CbB, k, k, MATMUL_ACC_REG_ID);
+            }
         }
     }
 
     {
         DeviceZoneScopedN("copy_tile_init");
 
-        // Minimal init to switch from matmul mode to copy mode.
-        // This is lighter than init_sfpu() - we skip pack init (already done by mm_block_init)
-        // and llk_math_pack_sync_init (also already done).
+        // Alternative to init_sfpu() + copy_tile_to_dst_init_short_with_dt()
         init_copy_tile_after_matmul<CbBias>();
         copy_tile(CbBias, bias_tile_index, BIAS_REG_ID);
     }
@@ -141,6 +157,7 @@ void MAIN {
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);
     constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(7);
     constexpr uint32_t num_layers = get_compile_time_arg_val(8);
+    constexpr bool use_custom_mm = get_compile_time_arg_val(9);
 
     const uint32_t bias_tile_index = get_arg_val<uint32_t>(0);
 
@@ -149,22 +166,32 @@ void MAIN {
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
 
-    mm_block_init(
-        mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+    if constexpr (use_custom_mm) {
+        custom_mm_block_init(mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, num_tiles_k);
+    } else {
+        mm_block_init(
+            mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+    }
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
     for (uint32_t layer = 0; layer < num_layers; layer++) {
-        // This doesn't work? We should be able to do this instead
-        // mm_block_init_short_with_dt(mm1_full_cb, weight0_cb, weight1_cb);
-
-        // This is a workaround since mm_block_init_short_with_dt doesn't work
-        mm_block_init(
-            mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-
+        if constexpr (use_custom_mm) {
+            custom_mm_block_init(mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, num_tiles_k);
+        } else {
+            mm_block_init(
+                mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+        }
         // MM1_FULL_CB -> matmul+relu -> INTERMEDIATE_PREGATHER_CB
         // Don't pop MM1 yet - needed for bias
-        matmul_with_relu_block<mm1_full_cb, weight0_cb, intermediate_pregather_cb, num_tiles_k, 0, false>();
+        matmul_with_relu_block<
+            mm1_full_cb,
+            weight0_cb,
+            intermediate_pregather_cb,
+            num_tiles_k,
+            0,
+            false,
+            use_custom_mm>();
 
         // MM2_FULL_CB (with MM1_FULL_CB bias) -> matmul+bias -> INTERMEDIATE_PREGATHER_CB
         // Pop both MM2 (input) and MM1 (bias/residual) after this
@@ -177,7 +204,8 @@ void MAIN {
             num_tiles_k,
             0,
             true,
-            true>(bias_tile_index);
+            true,
+            use_custom_mm>(bias_tile_index);
     }
 }
 }  // namespace NAMESPACE
