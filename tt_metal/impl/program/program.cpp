@@ -1027,6 +1027,12 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
             }
             initialized_cbs.insert(circular_buffer->id());
             auto remote_cb_index = *circular_buffer->remote_buffer_indices().begin();
+            TT_FATAL(
+                remote_cb_index >= max_cbs_ / 2,
+                "Remote CB index {} must be in upper half (>= {}) of {} total CBs to avoid local CB collision",
+                remote_cb_index,
+                max_cbs_ / 2,
+                max_cbs_);
             remote_cb_indices.insert(remote_cb_index);
 
             // We only need the first remote buffer index

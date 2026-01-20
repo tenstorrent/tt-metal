@@ -156,7 +156,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     uint32_t remote_cb_size = global_cb.size();
 
     auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
-    uint32_t remote_cb_index = tt::CBIndex::c_31;
+    uint32_t remote_cb_index = tt::tt_metal::hal::get_arch_num_circular_buffers() - 1;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)
         .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location

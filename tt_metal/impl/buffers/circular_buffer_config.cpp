@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;

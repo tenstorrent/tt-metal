@@ -64,20 +64,20 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 1024)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
-#define MEM_NCRISC_FIRMWARE_SIZE 1536
-#define MEM_TRISC0_FIRMWARE_SIZE 1536
-#define MEM_TRISC1_FIRMWARE_SIZE 1536
-#define MEM_TRISC2_FIRMWARE_SIZE 1536
+#define MEM_NCRISC_FIRMWARE_SIZE (2560)
+#define MEM_TRISC0_FIRMWARE_SIZE (2560)
+#define MEM_TRISC1_FIRMWARE_SIZE (2560)
+#define MEM_TRISC2_FIRMWARE_SIZE (2560)
 
 // Blackhole Architecture - No IRAM constraints
 // Per-kernel limits set to maximum available L1
 // These are enforced by the ELF loader in tt_elffile.cpp
 // The real constraint is the kernel_config_buffer aggregate limit, configurable via
 // worker_l1_size in MeshDevice::create_unit_meshes
-// 1503 KB = 1536 KB (L1 total) - 33 KB (MEM_MAP_END system reserved)
-#define MEM_MAX_KERNEL_SIZE (1503 * 1024)
+// Max kernel size = 1536 KB (L1 total) - MEM_MAP_END (system reserved)
+#define MEM_MAX_KERNEL_SIZE (1497 * 1024)
 
 #define MEM_BRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
 #define MEM_NCRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE

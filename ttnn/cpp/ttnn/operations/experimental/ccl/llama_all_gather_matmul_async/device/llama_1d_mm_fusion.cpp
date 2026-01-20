@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
@@ -204,7 +205,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     uint32_t src1_cb_index = base_cb_index + 1;
     tt::tt_metal::CBHandle cb_src1;
-    uint32_t remote_cb_index = tt::CBIndex::c_31;
+    uint32_t remote_cb_index = tt::tt_metal::hal::get_arch_num_circular_buffers() - 1;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
         tt_metal::CircularBufferConfig remote_cb_config =
