@@ -274,7 +274,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, ) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0) {
     auto mesh_device = get_mesh_device();
 
     // Parameters
