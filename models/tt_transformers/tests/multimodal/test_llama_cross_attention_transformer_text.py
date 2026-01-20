@@ -78,18 +78,18 @@ def test_cross_attention_transformer_text_inference(
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model."
-    partial_state_dict_meta = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    if model_args.is_90b and is_ci_env:
-        # removing extra cross attention layers from the state dict as the Ref model decrees
-        x_atten_prefix = "cross_attention_layers."
-        partial_state_dict = {
-            k: v
-            for k, v in partial_state_dict.items()
-            if (not k.startswith(x_atten_prefix))
-            or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
-        }
+    # partial_state_dict_meta = {
+    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    # }
+    # if model_args.is_90b and is_ci_env:
+    #     # removing extra cross attention layers from the state dict as the Ref model decrees
+    #     x_atten_prefix = "cross_attention_layers."
+    #     partial_state_dict = {
+    #         k: v
+    #         for k, v in partial_state_dict.items()
+    #         if (not k.startswith(x_atten_prefix))
+    #         or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
+    #     }
 
     # model_args.n_layers=2
     # model_args.vision_num_cross_attention_layers=1
