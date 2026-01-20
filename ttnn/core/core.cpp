@@ -5,10 +5,25 @@
 #include "ttnn/core.hpp"
 #include <tt_stl/caseless_comparison.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::core {
+
+// returns true if padded tensor have other physical shape
+bool is_padding_makes_sense(const ttnn::Tensor& tensor) {
+    auto round_up = [](size_t value, size_t multiple) -> size_t {
+        if (multiple == 0) {
+            return value;
+        }
+        return ((value + multiple - 1) / multiple) * multiple;
+    };
+
+    auto [h, w] = tensor.tensor_spec().physical_shape().attribute_values();
+    return (h > 0) && (w > 0) &&
+           (!(h == round_up(h, tt::constants::TILE_HEIGHT) && w == round_up(w, tt::constants::TILE_WIDTH)));
+}
 
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
     return tensor.storage_type() == storage_type;
