@@ -515,6 +515,7 @@ target_sources(
             api/ttnn/tensor/tensor.hpp
             api/ttnn/tensor/tensor_attributes.hpp
             api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_ops.hpp
             api/ttnn/tensor/tensor_spec.hpp
             api/ttnn/tensor/tensor_utils.hpp
             api/ttnn/tensor/to_string.hpp
@@ -552,6 +553,7 @@ target_sources(
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/typecast.cpp
 )

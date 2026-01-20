@@ -5,13 +5,13 @@
 #include "trace_buffer.hpp"
 
 #include <device.hpp>
+#include <fmt/ranges.h>
 #include <tt_metal.hpp>
 #include <utility>
 
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/core.h>
-#include <fmt/ranges.h>
 
 namespace tt::tt_metal {
 

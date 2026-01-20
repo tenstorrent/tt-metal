@@ -6,12 +6,10 @@
 #include "embedding_program_factory_common.hpp"
 #include <tt-metalium/tt_align.hpp>
 
-namespace ttnn::operations::embedding::program {
+namespace ttnn::prim {
 
 EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndicesProgramFactory::create(
-    const embedding::EmbeddingParams& operation_attributes,
-    const embedding::EmbeddingInputs& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
@@ -208,9 +206,9 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
 void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const embedding::EmbeddingParams& /*operation_attributes*/,
-    const embedding::EmbeddingInputs& tensor_args,
-    embedding::tensor_return_value_t& tensor_return_value) {
+    const EmbeddingParams& /*operation_attributes*/,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
@@ -238,4 +236,4 @@ void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::embedding::program
+}  // namespace ttnn::prim

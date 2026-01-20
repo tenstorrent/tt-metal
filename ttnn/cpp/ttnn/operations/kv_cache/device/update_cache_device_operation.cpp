@@ -5,16 +5,16 @@
 #include "update_cache_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
-        return program::FillCacheMultiCoreProgramFactory{};
+        return FillCacheMultiCoreProgramFactory{};
     }
-    return program::UpdateCacheMultiCoreProgramFactory{};
+    return UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
@@ -177,25 +177,22 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-}  // namespace ttnn::operations::kv_cache
-
-namespace ttnn::prim {
-ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(
+Tensor update_cache(
     const Tensor& cache,
     const Tensor& input,
     const uint32_t batch_idx,
     const uint32_t update_index,
     const uint32_t batch_offset,
-    const ttnn::operations::kv_cache::UpdateCacheOpType op_type,
+    const UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    using OperationType = ttnn::operations::kv_cache::UpdateKVCacheOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UpdateKVCacheOperation>(
+        KvCacheParams{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        OperationType::tensor_args_t{.cache = cache, .input = input});
+        KvCacheInputs{.cache = cache, .input = input});
 }
+
 }  // namespace ttnn::prim
