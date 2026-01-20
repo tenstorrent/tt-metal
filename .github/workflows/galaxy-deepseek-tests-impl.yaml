@@ -195,13 +195,13 @@ jobs:
           echo "Embedding fused op tests"
           echo "=============================================="
           echo "Running Embedding (decode, eager, program_cache)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "decode and 32 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "decode and 32 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
           echo "Running Embedding (decode, trace, program_cache)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "decode and 32 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "decode and 32 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
           echo "Running Embedding (prefill 128, eager, program_cache)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 128 and eager and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
           echo "Running Embedding (prefill 128, trace, program_cache)..."
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 128 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/embedding/test_ds_fused_embedding.py::test_ds_fused_embedding -k "prefill and 128 and trace and program_cache and not no_program_cache and real_weights" --timeout 600 --durations=0
 
           echo "=============================================="
           echo "Embedding all_gather fused op tests"
