@@ -108,7 +108,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_page_size = detail::get_page_size_st(input_tensor);
     auto indices_page_size = detail::get_page_size_st(indices_tensor);
     auto mapping_page_size = detail::get_page_size_st(mapping_tensor);
-    auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
+    // auto scores_page_size = detail::get_page_size_st(input_scores_tensor);
     auto output_page_size = detail::get_page_size_st(output_tensor);
 
     auto input_pages = detail::get_num_pages_st(input_tensor);
@@ -181,13 +181,13 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         aligned_output_page_size);
 
     uint32_t aligned_scores_page_size = detail::get_aligned_page_size_st(input_scores_tensor);
-    log_debug(
-        tt::LogOp,
-        "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
-        input_scores_tensor.logical_shape(),
-        scores_pages,
-        scores_page_size,
-        aligned_scores_page_size);
+    // log_debug(
+    //     tt::LogOp,
+    //     "scores shape: {}, scores_pages: {}, scores_page_size: {}, aligned_scores_page_size: {}",
+    //     input_scores_tensor.logical_shape(),
+    //     scores_pages,
+    //     scores_page_size,
+    //     aligned_scores_page_size);
 
     CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value();
 

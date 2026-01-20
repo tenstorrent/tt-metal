@@ -446,7 +446,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (1, 1, 1),
+        (1, 40, 10),
     ],
     ids=[
         "decode",

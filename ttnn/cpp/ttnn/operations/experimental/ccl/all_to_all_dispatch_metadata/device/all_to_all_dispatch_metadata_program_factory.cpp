@@ -147,16 +147,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         "Metadata tensor buffer address: {} size: {}",
         metadata_tensor.buffer()->address(),
         metadata_tensor.buffer()->size());
-    const auto& metadata_mem_config = metadata_tensor.memory_config();
-    if (metadata_mem_config.shard_spec().has_value()) {
-        const auto& shard_spec = metadata_mem_config.shard_spec().value();
-        log_debug(
-            tt::LogOp,
-            "Metadata shard spec - core_ranges: {}, shape: [{}, {}]",
-            shard_spec.grid.str(),
-            shard_spec.shape[0],
-            shard_spec.shape[1]);
-    }
+
     log_debug(
         tt::LogOp,
         "drain_sync_tilizer_core: ({}, {})",
@@ -288,17 +279,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_pages,
         metadata_page_size,
         aligned_metadata_page_size);
-
-    auto scores_out_page_size = detail::get_page_size(scores_out_tensor);
-    auto scores_out_pages = detail::get_num_pages(scores_out_tensor);
-    uint32_t aligned_scores_out_page_size = detail::get_aligned_page_size(scores_out_tensor);
-    log_debug(
-        tt::LogOp,
-        "scores_out shape: {}, scores_out_pages: {}, scores_out_page_size: {}, aligned_scores_out_page_size: {}",
-        scores_out_tensor.logical_shape(),
-        scores_out_pages,
-        scores_out_page_size,
-        aligned_scores_out_page_size);
 
     auto [cb_sizes, cb_page_sizes] = detail::get_cb_sizes(
         input_tensor, indices_tensor, scores_tensor, mapping_tensor, num_links, operation_attributes.axis);
