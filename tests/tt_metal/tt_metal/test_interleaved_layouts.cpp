@@ -82,7 +82,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::ID
         tt_metal::detail::ReadFromBuffer(sticks_buffer, dst_vec);
 
         pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
-            src_vec, dst_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
+            src_vec, dst_vec, [](const bfloat16& a, const bfloat16& b) { return a == b; });
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -213,7 +213,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
 
         pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
-            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
+            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a == b; });
 
         DeallocateBuffer(*dst_dram_buffer);
 
@@ -344,7 +344,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
 
         pass &= tt::test_utils::is_close_packed_vectors<bfloat16, uint32_t>(
-            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a.to_float() == b.to_float(); });
+            src_vec, result_vec, [](const bfloat16& a, const bfloat16& b) { return a == b; });
 
     } catch (const std::exception& e) {
         pass = false;
