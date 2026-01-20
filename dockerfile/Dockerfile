@@ -103,7 +103,24 @@ ENV PATH="/usr/local/bin:$PATH"
 
 #############################################################
 
-FROM ci-build AS ci-test
+FROM ci-build AS ci-test-minimal
+
+# Install minimal Python dependencies required for tests/ttnn/
+# - pytest: Testing framework
+# - torch: PyTorch (CPU version sufficient for unit tests)
+# - loguru: Logging library
+# - transformers: Used in tracer tests, integration tests, and distributed tests
+# - networkx: Used in tracer tests
+# - torchvision: Used in integration tests (mnist, vgg) and unit tests
+# - nbformat, nbconvert: Used in notebook_tests/test_tutorials.py
+# - numpy: Already installed in ci-build stage
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch torchvision==0.22.1 && \
+    uv pip install --no-cache pytest==8.4.2 loguru==0.6.0 transformers==4.53.0 networkx==3.1 nbformat nbconvert==7.16.6
+
+#############################################################
+
+FROM ci-test-minimal AS ci-test
 
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
@@ -122,8 +139,8 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 # Configure PyTorch CPU index and install Python packages using uv
 # index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
 # that are not explicitly listed in the requirements.txt files
+# Note: torch, pytest, and loguru are already installed in ci-test-minimal
 RUN umask 000 && \
-    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt

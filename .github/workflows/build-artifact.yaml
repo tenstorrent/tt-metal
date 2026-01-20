@@ -95,6 +95,9 @@ on:
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      ci-test-minimal-docker-image:
+        description: "Docker tag for the CI Test Minimal Docker image for minimal TTNN testing"
+        value: ${{ jobs.build-docker-image.outputs.ci-test-minimal-tag }}
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.dev-tag }}

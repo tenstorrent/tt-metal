@@ -22,6 +22,9 @@ on:
       ci-test-tag:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+      ci-test-minimal-tag:
+        description: "Docker tag for the CI Test Minimal Docker image for minimal TTNN testing"
+        value: ${{ jobs.check-docker-images.outputs.ci-test-minimal-tag }}
       dev-tag:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.dev-tag }}
@@ -59,6 +62,7 @@ on:
 env:
   CI_BUILD_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-build-${{ inputs.architecture }}
   CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
+  CI_TEST_MINIMAL_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-minimal-${{ inputs.architecture }}
   DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
   BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
   BASIC_TTNN_RUNTIME_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-ttnn-runtime-${{ inputs.architecture }}
@@ -72,6 +76,8 @@ jobs:
       ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
       ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
       ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
+      ci-test-minimal-exists: ${{ steps.images.outputs.ci-test-minimal-exists }}
+      ci-test-minimal-tag: ${{ steps.tags.outputs.ci-test-minimal-tag }}
       dev-exists: ${{ steps.images.outputs.dev-exists }}
       dev-tag: ${{ steps.tags.outputs.dev-tag }}
       basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
@@ -103,6 +109,7 @@ jobs:
             | sha1sum | cut -d' ' -f1)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-minimal-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_MINIMAL_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
@@ -132,11 +139,13 @@ jobs:
             echo "${{ steps.tags.outputs.dev-tag }} exists"
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
             echo "ci-test-exists=true" >> $GITHUB_OUTPUT
+            echo "ci-test-minimal-exists=true" >> $GITHUB_OUTPUT
             echo "dev-exists=true" >> $GITHUB_OUTPUT
           else
             echo "${{ steps.tags.outputs.dev-tag }} does not exist"
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
+            echo "ci-test-minimal-exists=false" >> $GITHUB_OUTPUT
             echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
@@ -167,7 +176,7 @@ jobs:
   build-docker-image:
     name: "🐳️ Build images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.ci-test-minimal-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -190,6 +199,18 @@ jobs:
           target: ci-build
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push CI Test Minimal image
+        if: needs.check-docker-images.outputs.ci-test-minimal-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: ci-test-minimal
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-test-minimal-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
@@ -276,6 +297,13 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest CI Test Minimal tag"
+        if: needs.check-docker-images.outputs.ci-test-minimal-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-test-minimal-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"

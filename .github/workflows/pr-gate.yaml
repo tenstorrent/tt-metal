@@ -114,7 +114,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-minimal-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
@@ -138,7 +138,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-minimal-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
@@ -286,7 +286,7 @@ jobs:
     uses: ./.github/workflows/ttsim.yaml
     with:
       basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-minimal-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
