@@ -205,7 +205,6 @@ create_program_dram_sharded(
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = tt::DataFormat::Float16_b;
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
