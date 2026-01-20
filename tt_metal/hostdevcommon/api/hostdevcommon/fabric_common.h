@@ -310,21 +310,24 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
 /**
  * Canonical 1D sparse multicast routing pattern encoder
  *
- * Generates bit pattern for multicast routing:
- *   - FORWARD_ONLY (0b10) before range
- *   - WRITE_AND_FORWARD (0b11) within range
- *   - WRITE_ONLY (0b01) at final hop
+ * Generates bit pattern for multicast routing based on a supplied hop mask
+ * Each bit in the hop mask represents a single hop in the target direction
+ * If the bit is 1, the router will perform the WRITE operation at that hop.
+ * If the bit is 0, the router will simply forward the packet to the next hop.
+ * This continues until the last set bit, which will perform a WRITE operation and not forward the packet any further.
+ * For instance, a hop mask of 0b1010 means that devices 2 and 4 hops away from sender will have the data written to
+ * them. This function converts the hop mask into a fabric multicast packet header routing field, following the 2-bit
+ * encoding shown in encode_1d_multicast.
  *
- * @param hops Bitmask of hops to write
- * @param buffer Output buffer (uint32_t array)
- * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
+ * @param hop_mask Bitmask of hops to write
+ * @param buffer Output buffer (uint32_t, will be expanded into array in future)
  *
- * Example: starting 3 hops away, multicasting to 2 chips (start_hop=3, range_hops=2)
- *   Hop 0 (bits 0-1): FORWARD_ONLY = 0b10
- *   Hop 1 (bits 2-3): FORWARD_ONLY = 0b10
- *   Hop 2 (bits 4-5): WRITE_AND_FORWARD = 0b11 (start of multicast range)
- *   Hop 3 (bits 6-7): WRITE_ONLY = 0b01 (end of range)
- *   Result: buffer[0] = 0b01'11'10'10 = 0x7A
+ * Example: hop mask 0b1010 would be converted into the following routing fields:
+ *   - Hop 0 (0): FORWARD_ONLY (0b10)
+ *   - Hop 1 (1): WRITE_AND_FORWARD (0b11)
+ *   - Hop 2 (0): FORWARD_ONLY (0b10)
+ *   - Hop 3 (1): WRITE_ONLY (0b01)
+ *   Resulting routing field: 0b01'10'11'10
  *
  * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
  */
@@ -334,13 +337,6 @@ inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
         buffer |= (field_value << bit_pos);
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-        DPRINT << "SET_HOP_FIELD" << ENDL();
-        DPRINT << "Hop Index: " << hop_index << ENDL();
-        DPRINT << "Field Value: " << field_value << ENDL();
-        DPRINT << "Bit Pos: " << bit_pos << ENDL();
-        DPRINT << "Buffer: " << buffer << ENDL();
-#endif
     };
 
     buffer = 0;
@@ -362,12 +358,6 @@ inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
         hop_index++;
         hop_mask >>= 1;
     }
-    // Unpack using helper
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-    DPRINT << "CALCULATE_CHIP_SPARSE_MULTICAST_ROUTING_FIELDS" << ENDL();
-    DPRINT << "Hops: " << hop_mask << ENDL();
-    DPRINT << "Buffer: " << buffer << ENDL();
-#endif
 }
 //=============================================================================
 // 2D Routing Encoders

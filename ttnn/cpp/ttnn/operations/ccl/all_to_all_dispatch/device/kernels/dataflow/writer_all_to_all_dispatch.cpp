@@ -8,7 +8,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "api/debug/dprint.h"
 
 namespace detail {
 
@@ -192,8 +191,6 @@ void kernel_main() {
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
 
-        uint32_t destination_count = 0;
-        DPRINT << "Token Index: " << local_token << ENDL();
         // get the expert that is chosen for the current token
         // find the devices that the expert lives on and dispatch the input tokens to them
         // if there is no tensor parallelism, then the token will only be sent to one device
@@ -207,8 +204,6 @@ void kernel_main() {
                 uint16_t expert_chosen = token_indices[k];
                 uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
                 uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
-                DPRINT << "Expert Index: " << k << ENDL();
-                DPRINT << "Expert Selected: " << expert_chosen << ENDL();
                 for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
                     if (devices_for_expert[d] == 1 &&
                         send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
@@ -222,15 +217,12 @@ void kernel_main() {
                             // if the expert lives on a remote device, we dispatch the input token to it
                             // Add the destination to the list of destinations
                             remote_token_destinations[num_remote_token_destinations++] = d;
-                            DPRINT << "Remote Token Destination: " << d << ENDL();
-                            DPRINT << "Num Remote Token Destinations: " << num_remote_token_destinations << ENDL();
                         }
                     }
                 }
             }
             // If there are any remote destinations, send the input token to them in a single multicast packet
             if (num_remote_token_destinations > 0) {
-                DPRINT << "Total Num Remote Token Destinations: " << num_remote_token_destinations << ENDL();
                 fabric_send_chip_sparse_multicast_noc_unicast_1d<
                     linearized_mesh_coord,
                     topology,
@@ -295,9 +287,6 @@ void kernel_main() {
         //     uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
 
         //     for (uint32_t d = device_begin_idx; d < device_end_idx; d += device_stride) {
-        //         if (devices_for_expert[d] == 1) {
-        //             DPRINT << "Device for destination Found: " << d << ENDL();
-        //         }
         //         if (devices_for_expert[d] == 1 &&
         //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
         //             send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
@@ -311,7 +300,6 @@ void kernel_main() {
         //                 // if axis is specified then we only send to the devices that are along the axis
         //                 // if axis is not specified then we send to all devices
         //                 if constexpr (is_1d_topology<topology>()) {
-        //                     destination_count++;
         //                     fabric_send_chip_unicast_noc_unicast_1d<
         //                         linearized_mesh_coord,
         //                         topology,

@@ -639,6 +639,26 @@ inline void send_init_semaphore_to_configured_targets(
     }
 }
 
+// Calculate the distance between two mesh coordinates, with the option to specify direction
+// Positive Polarity: Refers to going "forward" (ascending order of coordinates). Eg. Going East (0->3) or South (0->2)
+// Negative Polarity: Refers to going "backward" (descending order of coordinates). Eg. Going West (3->0) or North
+// (2->0)
+template <tt::tt_fabric::Topology Topology, uint32_t AxisSize>
+inline uint32_t calculate_hops_direction_enforced_1D(uint32_t src_coord, uint32_t dest_coord, Polarity polarity) {
+    if constexpr (has_wrap_around<Topology>()) {
+        return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
+    } else {
+        uint32_t distance = (polarity == Polarity::POSITIVE) ? (dest_coord - src_coord) : (src_coord - dest_coord);
+        // If wraparound is not enabled, then distance can never be negative.
+        // Eg. going "forward" from 3 to 2 is impossible.
+        // TODO: Add an actual error/assertion here
+        // if (distance < 0) {
+        //     ASSERT(false);
+        // }
+        return distance;
+    }
+}
+
 // Generate a mask of destinations relative to the source chip
 // Assumes that all destinations are along the same axis as the source chip
 template <
@@ -647,26 +667,45 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     uint32_t MaxNumDestinations>
-inline uint16_t generate_fabric_mcast_hop_mask(
-    uint32_t linearized_dest_mesh_coords[MaxNumDestinations],
-    uint32_t NumDestinations) {
+inline std::pair<uint16_t, uint32_t> get_fabric_mcast_hop_mask_and_direction(
+    uint32_t linearized_dest_mesh_coords[MaxNumDestinations], uint32_t NumDestinations) {
+    // Guard to make sure the number of destinations is not greater than the maximum number of destinations
+    ASSERT(NumDestinations <= MaxNumDestinations);
+
+    // Figure out direction of this multicast packet
+    // Direction will follow the path used for the first destination
+    uint32_t routing_direction =
+        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[0]);
+
+    // Determine polarity of the direction
+    // Positive polarity means going "forward" (ascending order of coordinates). Eg. Going East (0->3) or South (0->2)
+    // Negative polarity means going "backward" (descending order of coordinates). Eg. Going West (3->0) or North (2->0)
+    Polarity direction_polarity =
+        (routing_direction == eth_chan_directions::EAST || routing_direction == eth_chan_directions::SOUTH)
+            ? Polarity::POSITIVE
+            : Polarity::NEGATIVE;
+
+    // Determine the axis size based on packet direction
+    bool travelling_ew =
+        (routing_direction == eth_chan_directions::EAST || routing_direction == eth_chan_directions::WEST) ? true
+                                                                                                           : false;
+
+    // Generate the multicast packet's hop mask
     uint16_t fabric_mcast_hop_mask = 0;
-    DPRINT << "Inside generate_fabric_mcast_hop_mask" << ENDL();
-    DPRINT << "NumDestinations: " << NumDestinations << ENDL();
-    // DPRINT << "Src Coord: " << LinearizedSrcMeshCoord << ENDL();
-    // DPRINT << "Dest Coords: " << ENDL();
     for (uint32_t i = 0; i < NumDestinations; i++) {
         // Calculate the number of hops between source chip and destination
-        // Although manhattan_distance returns the number of row + col hops, since this is a 1D topology this will only
-        // ever return hops in 1 dimension DPRINT << "Dest Coord: " << linearized_dest_mesh_coords[i] << ENDL();
-        uint32_t num_hops =
-            manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i]);
-        // DPRINT << "Num Hops: " << num_hops << ENDL();
+        uint32_t num_hops;
+        if (travelling_ew) {
+            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshCols>(
+                LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i], direction_polarity);
+        } else {
+            num_hops = calculate_hops_direction_enforced_1D<Topology, MeshRows>(
+                LinearizedSrcMeshCoord, linearized_dest_mesh_coords[i], direction_polarity);
+        }
         // Set the corresponding bit in the fabric multicast hop mask
         fabric_mcast_hop_mask |= (1 << (num_hops - 1));
     }
-    // DPRINT << "Fabric Mcast Hop Mask: " << fabric_mcast_hop_mask << ENDL();
-    return fabric_mcast_hop_mask;
+    return std::make_pair(fabric_mcast_hop_mask, routing_direction);
 }
 
 // Send a sparse multicast packet to destinations along a specific direction
@@ -725,13 +764,14 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
     uint32_t offset = 0) {
 
     // Generate the fabric multicast hop mask
-    uint16_t fabric_mcast_hop_mask =
-        generate_fabric_mcast_hop_mask<LinearizedSrcMeshCoord, Topology, MeshRows, MeshCols, FabricMaxNumDestinations>(
-            linearized_dest_mesh_coords, NumDestinations);
-
-    // Determine the fabric direction based on the first destination coordinate
-    uint32_t routing_direction =
-        get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coords[0]);
+    uint16_t fabric_mcast_hop_mask;
+    uint32_t routing_direction;
+    std::tie(fabric_mcast_hop_mask, routing_direction) = get_fabric_mcast_hop_mask_and_direction<
+        LinearizedSrcMeshCoord,
+        Topology,
+        MeshRows,
+        MeshCols,
+        FabricMaxNumDestinations>(linearized_dest_mesh_coords, NumDestinations);
 
     // Send the packet
     fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
