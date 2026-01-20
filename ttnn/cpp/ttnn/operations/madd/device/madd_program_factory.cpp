@@ -19,6 +19,20 @@ constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 
 static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
+static inline auto get_tile_count(const Tensor& x) {
+    const uint32_t input_tensor_width = x.padded_shape()[-1];
+    const uint32_t input_tensor_height = x.physical_volume() / input_tensor_width;
+
+    const auto& tile_shape = x.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_height = tile_shape[0];
+    const uint32_t tile_width = tile_shape[1];
+
+    const uint32_t num_input_tiles_in_row = input_tensor_width / tile_width;
+    const uint32_t num_input_tiles_in_col = input_tensor_height / tile_height;
+
+    return std::make_pair(num_input_tiles_in_row, num_input_tiles_in_col);
+}
+
 MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -32,47 +46,36 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    // Use the sliding window config passed from upsample.cpp (contains original input dimensions)
-    TT_FATAL(
-        operation_attributes.sliding_window_config.has_value(),
-        "Bilinear upsample requires sliding_window_config to be provided");
-    const sliding_window::SlidingWindowConfig sliding_window_config =
-        operation_attributes.sliding_window_config.value();
-
     // Output dimensions
     const tt::tt_metal::Shape& output_shape = output.padded_shape();
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    // TODO: Verify that all inputs have the same data format
+
     const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     tt::tt_metal::IDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Declare variables that will be set based on layout
     uint32_t input_unit_size;
-    uint32_t output_unit_size;
     uint32_t input_cb_required_pages;
     uint32_t aligned_input_unit_size;  // Size used for CB creation
+
+    uint32_t output_unit_size;
+
     uint32_t work_units_to_split;
 
     const bool is_tiled_layout = (input.layout() == tt::tt_metal::Layout::TILE);
     if (is_tiled_layout) {
         // Tiled layout specific calculations
         input_unit_size = tt::tile_size(input_cb_data_format);
-        output_unit_size = tt::tile_size(output_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
-        const uint32_t input_tensor_width = a.padded_shape()[-1];
-        const uint32_t input_tensor_height = a.physical_volume() / input_tensor_width;
+        output_unit_size = tt::tile_size(output_cb_data_format);
 
-        const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
-        const uint32_t tile_height = tile_shape[0];
-        const uint32_t tile_width = tile_shape[1];
-
-        const uint32_t num_input_tiles_in_row = input_tensor_width / tile_width;
-        const uint32_t num_input_tiles_in_col = input_tensor_height / tile_height;
+        const auto [num_input_tiles_in_row, num_input_tiles_in_col] = get_tile_count(a);
 
         /*
         For tiled layout, a unit of work (input wise) is a row of tiles
@@ -90,26 +93,78 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     // Create circular buffers
     uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t num_pages_in_input_cb;
-
     num_pages_in_input_cb = input_cb_required_pages;
-    if (work_per_core_group_1 != 1) {
+    if (work_per_core_group_1 > 1) {
         // Double buffer if the core is processing 2+ blocks
         num_pages_in_input_cb *= 2;
     }
 
-    const auto [srcA_cb_index, cb_srcA] = tt::tt_metal::create_cb(
+    // Create circular buffers for inputs
+    const auto [cb_srcA_index, cb_srcA] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
 
-    uint32_t output_cb_index = 0;
-    if (is_tiled_layout) {
-        // Separate output CB for tiled
-        uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
-        const auto [out_cb_index, cb_output] = create_cb(
-            next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
-        output_cb_index = out_cb_index;
-    } else {
-        // Same CB for input and output for row-major
-        output_cb_index = src0_cb_index;
+    const auto [cb_srcB_index, cb_srcB] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
+
+    const auto [cb_srcC_index, cb_srcC] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
+
+    // Separate output CB for tiled
+    const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
+    const auto [cb_output_index, cb_output] =
+        create_cb(next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
+
+    auto* const a_buffer = a.buffer();
+    auto* const b_buffer = b.buffer();
+    auto* const c_buffer = c.buffer();
+    auto* const dst_buffer = output.buffer();
+
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)cb_srcA_index,
+        (std::uint32_t)cb_srcB_index,
+        (std::uint32_t)cb_srcC_index,
+        (std::uint32_t)aligned_input_unit_size,
+    };
+
+    tt::tt_metal::TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(c_buffer).append_to(reader_compile_time_args);
+
+    const tt::tt_metal::KernelHandle reader_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/madd/device/kernels/dataflow/"
+        "reader_madd_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // Set up runtime arguments
+    std::vector<uint32_t> reader_rt_arguments{
+        a_buffer->address(),
+        b_buffer->address(),
+        c_buffer->address(),
+        0,  // set in loop, num of units on core
+        0   // set in loop, start_id of unit in core
+    };
+
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    for (uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};  // x, y, looks like a bug.
+        uint32_t blocks_per_core = 0;
+        if (core_group_1.contains(core)) {
+            blocks_per_core = work_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            blocks_per_core = work_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        reader_rt_arguments[3] = blocks_per_core * input_cb_required_pages;   // reader goes page by page
+        reader_rt_arguments[4] = blocks_processed * input_cb_required_pages;  // offset in pages
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_arguments);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, writer_rt_arguments);
+
+        blocks_processed += blocks_per_core;
     }
 
     return cached_program_t{
@@ -120,7 +175,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
             .cb_srcA = cb_srcA,
             .cb_srcB = cb_srcB,
             .cb_srcC = cb_srcC,
-            .out_cb = out_cb,
+            .out_cb = cb_output,
         }};
 }
 
