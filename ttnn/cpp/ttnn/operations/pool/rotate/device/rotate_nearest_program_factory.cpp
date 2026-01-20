@@ -217,8 +217,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             } else if (is_block_sharded) {
                 uint32_t core_y = i / num_cores_x;
                 start_stick_id = core_y * input_nsticks_per_core;
-            } else if (is_nd_sharded) {
-                start_stick_id = i * input_nsticks_per_core;
             } else {
                 start_stick_id = i * input_nsticks_per_core;
             }
