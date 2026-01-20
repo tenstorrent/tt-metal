@@ -725,13 +725,14 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "stem.conv1",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=608),
+            # padded_output_height_ntiles_per_core=38
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=19 * 32),
             enable_weights_double_buffer=True,
         )
         self.config._register_multiple_layers(
             ["stem.conv2", "stem.conv3"],
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=608),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=2 * 32),
             enable_weights_double_buffer=True,
         )
         self.config.register_layer_override(
@@ -943,7 +944,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "aspp.convs.3",
             slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
             deallocate_activation=False,
             activation=None,
             enable_weights_double_buffer=True,
