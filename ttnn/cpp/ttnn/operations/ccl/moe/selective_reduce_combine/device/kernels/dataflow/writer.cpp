@@ -47,36 +47,33 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
 }  // namespace detail
 
 void kernel_main() {
-    constexpr uint32_t metadata_cb_id = get_named_ct_arg constexpr uint32_t data_cb_id = get_named_ct_arg
+    constexpr uint32_t metadata_cb_id = get_named_compile_time_arg_val("metadata_cb_id");
+    constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
 
-        constexpr uint32_t packet_header_cb_id = get_named_ct_arg constexpr uint32_t metadata_entry_size =
-            get_named_ct_arg
+    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
+    constexpr uint32_t metadata_entry_size = get_named_compile_time_arg_val("metadata_entry_size");
 
-        constexpr uint32_t sync_core_noc_x = get_named_ct_arg constexpr uint32_t sync_core_noc_y = get_named_ct_arg
+    constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
+    constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
 
-        // constexpr uint32_t token_parallel_core_id = get_named_ct_arg
-        // constexpr uint32_t data_parallel_core_id = get_named_ct_arg
+    constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
+    constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
+    constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
 
-        constexpr uint32_t num_token_parallel_cores = get_named_ct_arg constexpr uint32_t num_data_parallel_cores =
-            get_named_ct_arg
+    constexpr uint32_t source_token_segment_buffer_size_bytes =
+        get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
+    constexpr uint32_t source_expert_block_size_bytes =
+        get_named_compile_time_arg_val("source_expert_block_size_bytes");
 
-        constexpr uint32_t global_num_tokens = get_named_ct_arg;  // global token size
+    constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
 
-    constexpr uint32_t source_token_segment_size_bytes =
-        get_named_ct_arg constexpr uint32_t source_token_segment_buffer_size_bytes =
-            get_named_ct_arg constexpr uint32_t source_expert_block_size_bytes = get_named_ct_arg
-
-        constexpr uint32_t dest_token_segment_offset_bytes = get_named_ct_arg
-
-        constexpr uint32_t alignment = get_named_ct_arg
-
-        constexpr uint32_t num_devices = get_named_ct_arg;
-    constexpr uint32_t src_chip_id = get_named_ct_arg;
-    constexpr uint32_t mesh_rows = get_named_ct_arg;
-    constexpr uint32_t mesh_cols = get_named_ct_arg;  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_named_ct_arg;
-    constexpr uint32_t linearized_mesh_coord = get_named_ct_arg;
-    constexpr tt::tt_fabric::Topology topology = get_named_ct_arg;
+    constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
+    constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
+    constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
+    constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
+    constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
+    constexpr tt::tt_fabric::Topology topology = get_named_compile_time_arg_val("topology");
 
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
@@ -109,14 +106,16 @@ void kernel_main() {
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
 
     size_t rt_arg_count = 0;
-    const auto num_local_experts = get_arg_val<uint32_t>(rt_arg_count++);
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto source_token_segment_size_bytes = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto dest_token_segment_offset_bytes = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto dest_token_segment_size_bytes = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto is_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
     const auto termination_sync_address = get_arg_val<uint32_t>(rt_arg_count++);
     const auto termination_master_noc_x = get_arg_val<uint32_t>(rt_arg_count++);
     const auto termination_master_noc_y = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
 
     std::array<WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, Num_Directions> fabric_connections;
 
@@ -127,7 +126,7 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, data_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, data_size_bytes);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -191,7 +190,7 @@ void kernel_main() {
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     const uint64_t output_noc_addr =
-                        get_noc_addr(output_page_idx, dest_token_segment_offset_bytes output_addrgen);
+                        get_noc_addr(output_page_idx, dest_token_segment_offset_bytes, output_addrgen);
                     noc_async_write(src_data_l1_addr, output_noc_addr, token_segment_size_bytes);
                     needs_barrier = true;
                     noc_async_writes_flushed();
@@ -226,7 +225,7 @@ void kernel_main() {
                             dest_mesh_id,
                             src_data_l1_addr,
                             output_page_idx,
-                            data_size_bytes,
+                            token_segment_size_bytes,
                             alignment,
                             dest_token_segment_offset_bytes);
                     }
