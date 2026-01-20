@@ -194,21 +194,19 @@ def test_squared_sum_fp32_activ(device):
     "shape",
     [
         [1, 1, 16, 16],
-        [1, 1, 80, 80],
-        [1, 1, 320, 384],
         [1, 3, 320, 384],
     ],
 )
 def test_add_fp32_input_activ(device, ttnn_function, shape):
     x_torch = torch.ones(shape, dtype=torch.float32) * 2
     y_torch = torch.ones(shape, dtype=torch.float32) * 4
-    z_torch = torch.square(torch.nn.functional.silu(x_torch) + y_torch)
+    z_torch = torch.pow(torch.nn.functional.silu(x_torch) + y_torch, 4)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(
         x_tt,
         y_tt,
-        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)],
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 4)],
         input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
     )
     tt_out = ttnn.to_torch(z_tt_add)

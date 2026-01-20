@@ -348,7 +348,7 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Note: Uses iterative multiplication for positive integer exponents. Optimal for small exponents (0,1,2,3).
+ * Note: Unlike power_tile, power_iterative_tile() only supports positive integer scalars. It uses an iterative multiplication loop to compute values, and is faster than power_tile for small exponents (e.g. 1, 2, 3)
  *
  * Return value: None
  *
@@ -358,14 +358,14 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t | Must be a positive integer exponent                   | True     |
  */
 // clang-format on
-ALWI void power_tile_iterative(uint32_t idst, uint32_t param0) {
+ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_power_iterative<APPROX>(idst, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_tile_iterative_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init<APPROX>())); }
+ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_iterative_init<APPROX>())); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]

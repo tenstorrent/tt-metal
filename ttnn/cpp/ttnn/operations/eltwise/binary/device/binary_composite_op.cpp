@@ -809,10 +809,9 @@ Tensor ExecutePower::invoke(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    // For exponents 0, 1, 2, 3: use iterative approach
-    if (exponent == 0.0f || exponent == 1.0f || exponent == 2.0f || exponent == 3.0f) {
-        return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
-            invoke(input_a, exponent, output_mem_config, output_tensor);
+    float exponent_floor = std::floor(exponent);
+    if (static_cast<int32_t>(exponent_floor) == exponent) {
+        return ExecutePower::invoke(input_a, static_cast<int32_t>(exponent), output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input_a, exponent, output_mem_config, output_tensor);
@@ -821,11 +820,11 @@ Tensor ExecutePower::invoke(
 // power - integer exponent
 Tensor ExecutePower::invoke(
     const Tensor& input,
-    uint32_t exponent,
+    int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
     // For exponents 0, 1, 2, 3: use iterative approach
-    if (exponent <= 3) {
+    if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
             invoke(input, exponent, output_mem_config, output_tensor);
     }

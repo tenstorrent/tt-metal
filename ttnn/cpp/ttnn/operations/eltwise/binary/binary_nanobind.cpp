@@ -2089,7 +2089,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
-               uint32_t exponent,
+               int32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);

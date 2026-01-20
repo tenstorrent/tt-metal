@@ -1,24 +1,26 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp
-from tests.ttnn.unit_tests.operations.eltwise.test_expm1 import flush_subnormal_values
+from tests.ttnn.utils_for_testing import (
+    assert_with_ulp,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 
 
 def generate_clean_bf16_tensor(dtype=torch.bfloat16):
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)  # 65536 values
-    fp32 = input_tensor.to(torch.float32)
+    all_bf16 = generate_all_bfloat16_bitpatterns(torch.bfloat16).flatten()
+    fp32 = all_bf16.to(torch.float32)
 
     # Remove special values (NaN, -0.0, +inf, -inf, subnormals)
     neg_zero_mask = (fp32 == 0.0) & torch.signbit(fp32)
     tiny = torch.finfo(torch.bfloat16).tiny  # 2**-126
     good_mask = torch.isfinite(fp32) & ~neg_zero_mask & (fp32.abs() >= tiny)
-    fp32 = fp32[good_mask]  # 65024 values
+    fp32 = fp32[good_mask]  # ~65024 clean values
 
     return fp32.to(dtype)
 
@@ -41,7 +43,7 @@ def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
     tt_input = generate_clean_bf16_tensor(torch.bfloat16)
     # If input is subnormal then we assume hardware will flush it to 0.0
-    tt_input = flush_subnormal_values(tt_input)
+    tt_input = flush_subnormal_values_to_zero(tt_input)
 
     tt_in = ttnn.from_torch(
         tt_input,
@@ -57,7 +59,29 @@ def test_pow_arange_masking(exponent, device):
     tt_result = ttnn.pow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
     # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
-    result = flush_subnormal_values(result)
-    golden = flush_subnormal_values(golden)
+    result = flush_subnormal_values_to_zero(result)
+    golden = flush_subnormal_values_to_zero(golden)
 
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "op_type,exponent",
+    [
+        (ttnn.UnaryOpType.POWER_ITERATIVE, 0),
+        (ttnn.UnaryOpType.POWER_ITERATIVE, 2),
+        (ttnn.UnaryOpType.POWER, 0),
+        (ttnn.UnaryOpType.POWER, 2),
+        (ttnn.UnaryOpType.POWER, 1.5),
+        (ttnn.UnaryOpType.POWER, -1.9),
+    ],
+)
+def test_power_as_activation(device, op_type, exponent):
+    x_torch = torch.rand([16, 16], dtype=torch.bfloat16) + 1.5
+    z_torch = torch.pow(x_torch + x_torch, exponent)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.add(x_tt, x_tt, activations=[ttnn.UnaryWithParam(op_type, exponent)])
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert_with_ulp(z_torch, tt_out, 1)

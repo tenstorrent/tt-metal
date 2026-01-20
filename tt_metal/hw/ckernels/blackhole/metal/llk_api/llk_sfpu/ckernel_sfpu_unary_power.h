@@ -51,7 +51,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     sfpi::vFloat x = sfpi::setexp(abs_base, 127);  // set exp to exp bias (put base in range of 1-2)
 
     // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    vFloat series_result = PolynomialEvaluator::eval(x, -0x1.952992p+0f, 0x2.4f5388p+0f, -0xd.e712ap-4f, 0x2.44734p-4f);
 
     // Convert exponent to float
     sfpi::vInt exp = sfpi::exexp(base);
@@ -192,14 +192,14 @@ inline void calculate_unary_power(const uint32_t exponent) {
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
-    // Old iterative approach for integer exponents 0, 1, 2, 3
-    // exponent contains IEEE 754 float bits - convert to actual integer
+    // iterative approach for positive integer exponents
+    // exponent contains IEEE 754 float bits - convert to integer
     const float exp_float = Converter::as_float(exponent);
     const uint exp = (uint)exp_float;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat in = sfpi::dst_reg[0];
-        vFloat result = 1.0f;
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = 1.0f;
         uint e = exp;
         while (e > 0) {
             if (e & 1) {
