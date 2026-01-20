@@ -50,6 +50,7 @@ class FusedResblock:
             x = input @ weight0
             x = torch.nn.functional.relu(x)
             x = x @ weight1
+            print(f"second matmul output (expected): {x}")
             x = x + input
             return x
 

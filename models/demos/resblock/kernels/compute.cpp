@@ -63,17 +63,16 @@ template <
 FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     DeviceZoneScopedN("matmul_with_bias_block");
 
+    constexpr uint32_t num_output_tiles = 1;
+    cb_reserve_back(CbOut, num_output_tiles);
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     cb_wait_front(CbBias, NumTilesBias);
-    constexpr uint32_t num_output_tiles = 1;
-    cb_reserve_back(CbOut, num_output_tiles);
 
     tile_regs_acquire();
 
     {
         DeviceZoneScopedN("init_sfpu_and_mm_init_short");
-        init_sfpu(CbA, CbOut);  // Hangs if we put this at the beginning of the program
         mm_init_short(CbA, CbB);
     }
 
@@ -84,9 +83,11 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
         }
     }
 
+    init_sfpu(CbA, CbOut);  // Init SFPU for matmul after matmul tiles are computed
+
     {
         DeviceZoneScopedN("copy_tile_init");
-        copy_tile_init(CbBias);
+        copy_tile_to_dst_init_short_with_dt(CbB, CbBias);
         copy_tile(CbBias, bias_tile_index, BIAS_REG_ID);
     }
 

@@ -42,7 +42,7 @@ def create_random_tensor(shape, random_tensor_gen):
 )
 @pytest.mark.parametrize(
     "activation_dtype, weight_dtype",
-    [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.bfloat8_b, ttnn.bfloat8_b)],
+    [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.bfloat16, ttnn.bfloat8_b)],
 )
 @pytest.mark.parametrize(
     "generation_type",
@@ -51,8 +51,8 @@ def create_random_tensor(shape, random_tensor_gen):
 def test_resblock(device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype, num_layers):
     if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
         pytest.skip("bfloat8_b is only supported for tile height 32")
-    if activation_dtype != weight_dtype:
-        pytest.skip("activation and weight dtypes must be the same")
+    # if activation_dtype != weight_dtype:
+    # pytest.skip("activation and weight dtypes must be the same")
     if K >= 2048 and num_layers >= 8:
         pytest.skip("Test is too large for 8 layers")
 
