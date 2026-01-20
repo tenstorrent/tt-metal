@@ -440,8 +440,16 @@ Generic tile filling patterns (not reduction-specific but similar approach):
 - `fill_tile_with_first_column_bfloat16()` - Replicate first column
 - **Status:** Active, general-purpose tile filling utilities
 
+#### 4. Simplified uint16_t Scaler Overload
+Consider adding an overload signature that accepts `const uint16_t scaler` and performs the packing internally:
+```cpp
+uint32_t scaler_32 = scaler | (scaler << 16);
+```
+This would remove the packing burden from the caller and make the API more ergonomic.
+
 ### Future Considerations
 
 - Consider whether the partial reduce scaler from `custom_tiles.h` should be added to the main library
 - Evaluate if the fill tile utilities could benefit from consolidation with reduce scaler helpers
 - Monitor Deepseek implementation for potential unification if model-specific customizations become more common
+- Add `uint16_t` scaler overload to simplify caller usage (see point 4 above)
