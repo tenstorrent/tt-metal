@@ -528,6 +528,9 @@ jobs:
       inputs.enable-copilot-fix == true &&
       (needs.clang-static-analyzer.result == 'success' || needs.download-previous-results.result == 'success')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       pr-url: ${{ steps.create-pr.outputs.pr-url }}
       pr-created: ${{ steps.create-pr.outputs.pr-created }}
