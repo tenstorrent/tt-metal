@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "compute_kernel_api/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_policies.hpp"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -216,6 +217,49 @@ ALWI constexpr uint32_t get_binary_dst_index(const AccumT& accum) {
         return accum.dst_index;
     } else {
         return 0;
+    }
+}
+
+// =============================================================================
+// Broadcast-Based Tile Count Helpers
+// =============================================================================
+
+/**
+ * @brief Get the number of B tiles based on broadcast dimension
+ *
+ * The broadcast dimension determines how many B tiles are needed:
+ * - SCALAR: 1 tile (single value broadcasts to all)
+ * - ROW: Wt tiles (one row broadcasts across all rows)
+ * - COL: Ht tiles (one column broadcasts across all columns)
+ * - NONE: Ht * Wt tiles (element-wise, same shape as A)
+ *
+ * @tparam bcast_dim The broadcast dimension
+ * @param Ht Number of tile rows in A
+ * @param Wt Number of tile columns in A
+ * @return Number of B tiles needed
+ */
+template <BroadcastDim bcast_dim>
+ALWI constexpr uint32_t get_b_tile_count(uint32_t Ht, uint32_t Wt) {
+    if constexpr (bcast_dim == BroadcastDim::SCALAR) {
+        return 1;
+    } else if constexpr (bcast_dim == BroadcastDim::ROW) {
+        return Wt;
+    } else if constexpr (bcast_dim == BroadcastDim::COL) {
+        return Ht;
+    } else {
+        return Ht * Wt;  // NONE - element-wise
+    }
+}
+
+/**
+ * @brief Runtime version of get_b_tile_count for dynamic dispatch
+ */
+ALWI constexpr uint32_t get_b_tile_count_runtime(BroadcastDim bcast_dim, uint32_t Ht, uint32_t Wt) {
+    switch (bcast_dim) {
+        case BroadcastDim::SCALAR: return 1;
+        case BroadcastDim::ROW: return Wt;
+        case BroadcastDim::COL: return Ht;
+        default: return Ht * Wt;
     }
 }
 
@@ -1086,6 +1130,814 @@ ALWI void binary_op(
 }
 
 // =============================================================================
+// Policy-Based Binary Operation Implementation
+// =============================================================================
+
+/**
+ * @brief Policy-driven binary operation for BroadcastDim::NONE
+ *
+ * Element-wise operation: C[i] = A[i] op B[i]
+ * Both inputs have identical shape (Ht x Wt tiles).
+ *
+ * Policy behavior:
+ * - InputAPolicy controls when A tiles are waited/popped
+ * - InputBPolicy controls when B tiles are waited/popped (independent of A)
+ *
+ * Supported wait/pop patterns:
+ * - per_tile: wait/pop 1 tile at a time (streaming)
+ * - per_chunk: wait/pop DEST_LIMIT tiles at a time (batched)
+ * - upfront/at_end: wait all upfront, pop all at end
+ * - caller_managed/never: caller handles CB operations
+ *
+ * This differs from the enum-based implementation which couples A and B behavior.
+ */
+template <
+    BinaryOpType op_type,
+    typename InputAPolicy,
+    typename InputBPolicy,
+    typename OutputPolicy,
+    bool init,
+    typename AccumT,
+    typename PostOp>
+ALWI void binary_op_policy_none(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout,
+    AccumT accum,
+    PostOp post_op) {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+    constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t total_tiles = Ht * Wt;
+
+    // Initialization
+    if constexpr (init) {
+        binary_init_none<op_type>(icb_a, icb_b);
+    }
+
+    // Upfront waits based on policies
+    if constexpr (InputAPolicy::waits_upfront) {
+        cb_wait_front(icb_a, total_tiles);
+    }
+    if constexpr (!is_square && InputBPolicy::waits_upfront) {
+        cb_wait_front(icb_b, total_tiles);
+    }
+
+    // Upfront output reserve if bulk output
+    if constexpr (OutputPolicy::bulk) {
+        cb_reserve_back(ocb, total_tiles);
+    }
+
+    const uint32_t base_dst = get_binary_dst_index(accum);
+    const uint32_t effective_dest_limit = dest_limit - base_dst;
+    uint32_t tiles_processed = 0;
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Process row in chunks that fit within DEST limit
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+
+            // Per-chunk waits
+            if constexpr (InputAPolicy::waits_per_chunk) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+            if constexpr (!is_square && InputBPolicy::waits_per_chunk) {
+                cb_wait_front(icb_b, chunk_size);
+            }
+
+            // Per-chunk output reserve
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_reserve_back(ocb, chunk_size);
+            }
+
+            tile_regs_acquire();
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::NONE>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                // Per-tile waits (inside chunk loop for streaming)
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    cb_wait_front(icb_a, onetile);
+                }
+                if constexpr (!is_square && InputBPolicy::waits_per_tile) {
+                    cb_wait_front(icb_b, onetile);
+                }
+
+                // Determine tile indices based on policies
+                uint32_t tile_a, tile_b;
+                uint32_t dst_idx;
+
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_a = 0;
+                    dst_idx = base_dst;
+                } else if constexpr (InputAPolicy::waits_per_chunk) {
+                    tile_a = wt;  // Index within chunk
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = ht * Wt + wt_base + wt;  // Global index
+                    dst_idx = base_dst + wt;
+                }
+
+                if constexpr (is_square) {
+                    tile_b = tile_a;
+                } else if constexpr (InputBPolicy::waits_per_tile) {
+                    tile_b = 0;
+                } else if constexpr (InputBPolicy::waits_per_chunk) {
+                    tile_b = wt;
+                } else {
+                    tile_b = ht * Wt + wt_base + wt;
+                }
+
+                binary_exec_none<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
+
+                // Per-tile streaming: commit/pack/pop immediately
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_regs_commit();
+                    tile_regs_wait();
+
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst, ocb, wt);
+                    } else {
+                        pack_tile(base_dst, ocb, tiles_processed);
+                    }
+
+                    if constexpr (InputAPolicy::pops_per_tile) {
+                        cb_pop_front(icb_a, onetile);
+                    }
+                    if constexpr (!is_square && InputBPolicy::pops_per_tile) {
+                        cb_pop_front(icb_b, onetile);
+                    }
+
+                    tile_regs_release();
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
+
+                    ++tiles_processed;
+                }
+            }
+
+            // Per-chunk or bulk: commit/pack after processing chunk
+            if constexpr (!InputAPolicy::waits_per_tile) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst + i, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst + i, ocb, i);
+                    } else {
+                        pack_tile(base_dst + i, ocb, tiles_processed + i);
+                    }
+                }
+
+                tile_regs_release();
+                tiles_processed += chunk_size;
+            }
+
+            // Per-chunk pops
+            if constexpr (InputAPolicy::pops_per_chunk) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+            if constexpr (!is_square && InputBPolicy::pops_per_chunk) {
+                cb_pop_front(icb_b, chunk_size);
+            }
+
+            // Per-chunk output push
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_push_back(ocb, chunk_size);
+            }
+        }
+    }
+
+    // End-of-operation pops based on policies
+    if constexpr (InputAPolicy::pops_at_end) {
+        cb_pop_front(icb_a, total_tiles);
+    }
+    if constexpr (!is_square && InputBPolicy::pops_at_end) {
+        cb_pop_front(icb_b, total_tiles);
+    }
+
+    // Bulk output push
+    if constexpr (OutputPolicy::bulk) {
+        cb_push_back(ocb, total_tiles);
+    }
+}
+
+/**
+ * @brief Policy-driven binary operation for BroadcastDim::ROW
+ *
+ * Row broadcast: C[h,w] = A[h,w] op B[w]
+ * A has shape [Ht, Wt], B has shape [1, Wt] (broadcasts across rows).
+ *
+ * Key difference from enum-based:
+ * - InputBPolicy explicitly controls whether B tiles are popped at end
+ * - Old behavior: B tiles never popped (implicit persistent)
+ * - New behavior: User chooses - Streaming pops at end, Persistent doesn't
+ *
+ * Note: For ROW broadcast, B tiles must be available for entire row processing,
+ * so B is always waited upfront regardless of per_tile/per_chunk setting.
+ */
+template <
+    BinaryOpType op_type,
+    typename InputAPolicy,
+    typename InputBPolicy,
+    typename OutputPolicy,
+    bool init,
+    typename AccumT,
+    typename PostOp>
+ALWI void binary_op_policy_row(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout,
+    AccumT accum,
+    PostOp post_op) {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t total_tiles_a = Ht * Wt;
+    const uint32_t b_tile_count = Wt;  // ROW broadcast: B has Wt tiles
+
+    if constexpr (init) {
+        binary_init_row<op_type>(icb_a, icb_b);
+    }
+
+    // Upfront waits based on policies
+    if constexpr (InputAPolicy::waits_upfront) {
+        cb_wait_front(icb_a, total_tiles_a);
+    }
+    // For ROW broadcast, B tiles are always waited upfront (semantic requirement)
+    if constexpr (!InputBPolicy::waits_caller_managed) {
+        cb_wait_front(icb_b, b_tile_count);
+    }
+
+    if constexpr (OutputPolicy::bulk) {
+        cb_reserve_back(ocb, total_tiles_a);
+    }
+
+    const uint32_t base_dst = get_binary_dst_index(accum);
+    const uint32_t effective_dest_limit = dest_limit - base_dst;
+    uint32_t tiles_processed = 0;
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+
+            // Per-chunk waits for A
+            if constexpr (InputAPolicy::waits_per_chunk) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_reserve_back(ocb, chunk_size);
+            }
+
+            tile_regs_acquire();
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::ROW>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    cb_wait_front(icb_a, onetile);
+                }
+
+                uint32_t tile_a, dst_idx;
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_a = 0;
+                    dst_idx = base_dst;
+                } else if constexpr (InputAPolicy::waits_per_chunk) {
+                    tile_a = wt;
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = ht * Wt + wt_base + wt;
+                    dst_idx = base_dst + wt;
+                }
+                uint32_t tile_b = wt_base + wt;  // Index into persisted B tiles
+
+                binary_exec_row<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
+
+                // Per-tile streaming
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_regs_commit();
+                    tile_regs_wait();
+
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst, ocb, wt);
+                    } else {
+                        pack_tile(base_dst, ocb, tiles_processed);
+                    }
+
+                    if constexpr (InputAPolicy::pops_per_tile) {
+                        cb_pop_front(icb_a, onetile);
+                    }
+
+                    tile_regs_release();
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
+                    ++tiles_processed;
+                }
+            }
+
+            // Per-chunk or bulk: commit/pack after chunk
+            if constexpr (!InputAPolicy::waits_per_tile) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst + i, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst + i, ocb, i);
+                    } else {
+                        pack_tile(base_dst + i, ocb, tiles_processed + i);
+                    }
+                }
+
+                tile_regs_release();
+                tiles_processed += chunk_size;
+            }
+
+            if constexpr (InputAPolicy::pops_per_chunk) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_push_back(ocb, chunk_size);
+            }
+        }
+    }
+
+    // End-of-operation pops
+    if constexpr (InputAPolicy::pops_at_end) {
+        cb_pop_front(icb_a, total_tiles_a);
+    }
+    // KEY DIFFERENCE: B pop controlled by policy, not hardcoded
+    if constexpr (InputBPolicy::pops_at_end) {
+        cb_pop_front(icb_b, b_tile_count);
+    }
+
+    if constexpr (OutputPolicy::bulk) {
+        cb_push_back(ocb, total_tiles_a);
+    }
+}
+
+/**
+ * @brief Policy-driven binary operation for BroadcastDim::COL
+ *
+ * Column broadcast: C[h,w] = A[h,w] op B[h]
+ * A has shape [Ht, Wt], B has shape [Ht, 1] (broadcasts across columns).
+ *
+ * For COL broadcast:
+ * - B tiles are one per row (Ht total)
+ * - B per_tile means wait/pop one B tile per row iteration
+ * - B per_chunk for COL semantically means per-row (chunk = 1 B tile)
+ */
+template <
+    BinaryOpType op_type,
+    typename InputAPolicy,
+    typename InputBPolicy,
+    typename OutputPolicy,
+    bool init,
+    typename AccumT,
+    typename PostOp>
+ALWI void binary_op_policy_col(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout,
+    AccumT accum,
+    PostOp post_op) {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t total_tiles_a = Ht * Wt;
+    const uint32_t b_tile_count = Ht;  // COL broadcast: B has Ht tiles
+
+    if constexpr (init) {
+        binary_init_col<op_type>(icb_a, icb_b);
+    }
+
+    // Upfront waits based on policies
+    if constexpr (InputAPolicy::waits_upfront) {
+        cb_wait_front(icb_a, total_tiles_a);
+    }
+    if constexpr (InputBPolicy::waits_upfront) {
+        cb_wait_front(icb_b, b_tile_count);
+    }
+
+    // Upfront output reserve if bulk output
+    if constexpr (OutputPolicy::bulk) {
+        cb_reserve_back(ocb, total_tiles_a);
+    }
+
+    const uint32_t base_dst = get_binary_dst_index(accum);
+    const uint32_t effective_dest_limit = dest_limit - base_dst;
+    uint32_t tiles_processed = 0;
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // For COL broadcast, wait for one B tile per row (if streaming/per-chunk B)
+        if constexpr (InputBPolicy::waits_per_tile || InputBPolicy::waits_per_chunk) {
+            cb_wait_front(icb_b, onetile);
+        }
+
+        // Process row in chunks that fit within DEST limit
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+
+            // Per-chunk waits for A
+            if constexpr (InputAPolicy::waits_per_chunk) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+
+            // Per-chunk output reserve
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_reserve_back(ocb, chunk_size);
+            }
+
+            tile_regs_acquire();
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::COL>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                // Per-tile waits for A
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    cb_wait_front(icb_a, onetile);
+                }
+
+                // Determine tile indices
+                uint32_t tile_a, dst_idx;
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_a = 0;
+                    dst_idx = base_dst;
+                } else if constexpr (InputAPolicy::waits_per_chunk) {
+                    tile_a = wt;  // Index within chunk
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = ht * Wt + wt_base + wt;  // Global index
+                    dst_idx = base_dst + wt;
+                }
+                // B tile index: 0 if per-tile/per-chunk (single tile waited), else row index
+                uint32_t tile_b = (InputBPolicy::waits_per_tile || InputBPolicy::waits_per_chunk) ? 0 : ht;
+
+                binary_exec_col<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
+
+                // Per-tile streaming: commit/pack/pop immediately
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_regs_commit();
+                    tile_regs_wait();
+
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst, ocb, wt);
+                    } else {
+                        pack_tile(base_dst, ocb, tiles_processed);
+                    }
+
+                    if constexpr (InputAPolicy::pops_per_tile) {
+                        cb_pop_front(icb_a, onetile);
+                    }
+
+                    tile_regs_release();
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
+
+                    ++tiles_processed;
+                }
+            }
+
+            // Per-chunk or bulk: commit/pack after processing chunk
+            if constexpr (!InputAPolicy::waits_per_tile) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst + i, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst + i, ocb, i);
+                    } else {
+                        pack_tile(base_dst + i, ocb, tiles_processed + i);
+                    }
+                }
+
+                tile_regs_release();
+                tiles_processed += chunk_size;
+            }
+
+            // Per-chunk pops for A
+            if constexpr (InputAPolicy::pops_per_chunk) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+
+            // Per-chunk output push
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_push_back(ocb, chunk_size);
+            }
+        }
+
+        // Pop B tile after processing entire row (if streaming/per-chunk B)
+        if constexpr (InputBPolicy::pops_per_tile || InputBPolicy::pops_per_chunk) {
+            cb_pop_front(icb_b, onetile);
+        }
+    }
+
+    // End-of-operation pops
+    if constexpr (InputAPolicy::pops_at_end) {
+        cb_pop_front(icb_a, total_tiles_a);
+    }
+    if constexpr (InputBPolicy::pops_at_end) {
+        cb_pop_front(icb_b, b_tile_count);
+    }
+
+    // Bulk output push
+    if constexpr (OutputPolicy::bulk) {
+        cb_push_back(ocb, total_tiles_a);
+    }
+}
+
+/**
+ * @brief Policy-driven binary operation for BroadcastDim::SCALAR
+ *
+ * Scalar broadcast: C[h,w] = A[h,w] op B[0,0]
+ * A has shape [Ht, Wt], B has 1 tile (broadcasts to all elements).
+ *
+ * For SCALAR broadcast:
+ * - B is always 1 tile, waited upfront (semantic requirement - must persist for all A tiles)
+ * - B pop is controlled by policy (at_end or never)
+ */
+template <
+    BinaryOpType op_type,
+    typename InputAPolicy,
+    typename InputBPolicy,
+    typename OutputPolicy,
+    bool init,
+    typename AccumT,
+    typename PostOp>
+ALWI void binary_op_policy_scalar(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout,
+    AccumT accum,
+    PostOp post_op) {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+    constexpr uint32_t b_tile_count = 1;  // SCALAR: always 1 B tile
+
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t total_tiles_a = Ht * Wt;
+
+    if constexpr (init) {
+        binary_init_scalar<op_type>(icb_a, icb_b);
+    }
+
+    // Upfront waits based on policies
+    if constexpr (InputAPolicy::waits_upfront) {
+        cb_wait_front(icb_a, total_tiles_a);
+    }
+    // For SCALAR broadcast, B tile is always waited upfront (semantic requirement)
+    if constexpr (!InputBPolicy::waits_caller_managed) {
+        cb_wait_front(icb_b, b_tile_count);
+    }
+
+    // Upfront output reserve if bulk output
+    if constexpr (OutputPolicy::bulk) {
+        cb_reserve_back(ocb, total_tiles_a);
+    }
+
+    const uint32_t base_dst = get_binary_dst_index(accum);
+    const uint32_t effective_dest_limit = dest_limit - base_dst;
+    uint32_t tiles_processed = 0;
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Process row in chunks that fit within DEST limit
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
+            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+
+            // Per-chunk waits for A
+            if constexpr (InputAPolicy::waits_per_chunk) {
+                cb_wait_front(icb_a, chunk_size);
+            }
+
+            // Per-chunk output reserve
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_reserve_back(ocb, chunk_size);
+            }
+
+            tile_regs_acquire();
+            reload_accumulator_if_needed_binary<op_type, BroadcastDim::SCALAR>(icb_a, icb_b, accum);
+
+            for (uint32_t wt = 0; wt < chunk_size; ++wt) {
+                // Per-tile waits for A
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    cb_wait_front(icb_a, onetile);
+                }
+
+                // Determine tile indices
+                uint32_t tile_a, dst_idx;
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_a = 0;
+                    dst_idx = base_dst;
+                } else if constexpr (InputAPolicy::waits_per_chunk) {
+                    tile_a = wt;  // Index within chunk
+                    dst_idx = base_dst + wt;
+                } else {
+                    tile_a = ht * Wt + wt_base + wt;  // Global index
+                    dst_idx = base_dst + wt;
+                }
+                constexpr uint32_t tile_b = 0;  // Always same scalar tile
+
+                binary_exec_scalar<op_type>(icb_a, icb_b, tile_a, tile_b, dst_idx);
+
+                // Per-tile streaming: commit/pack/pop immediately
+                if constexpr (InputAPolicy::waits_per_tile) {
+                    tile_regs_commit();
+                    tile_regs_wait();
+
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst, ocb, wt);
+                    } else {
+                        pack_tile(base_dst, ocb, tiles_processed);
+                    }
+
+                    if constexpr (InputAPolicy::pops_per_tile) {
+                        cb_pop_front(icb_a, onetile);
+                    }
+
+                    tile_regs_release();
+                    if (wt < chunk_size - 1) {
+                        tile_regs_acquire();
+                    }
+
+                    ++tiles_processed;
+                }
+            }
+
+            // Per-chunk or bulk: commit/pack after processing chunk
+            if constexpr (!InputAPolicy::waits_per_tile) {
+                tile_regs_commit();
+                tile_regs_wait();
+
+                for (uint32_t i = 0; i < chunk_size; ++i) {
+                    if constexpr (OutputPolicy::per_tile) {
+                        cb_reserve_back(ocb, onetile);
+                        pack_tile(base_dst + i, ocb);
+                        cb_push_back(ocb, onetile);
+                    } else if constexpr (OutputPolicy::per_chunk) {
+                        pack_tile(base_dst + i, ocb, i);
+                    } else {
+                        pack_tile(base_dst + i, ocb, tiles_processed + i);
+                    }
+                }
+
+                tile_regs_release();
+                tiles_processed += chunk_size;
+            }
+
+            // Per-chunk pops for A
+            if constexpr (InputAPolicy::pops_per_chunk) {
+                cb_pop_front(icb_a, chunk_size);
+            }
+
+            // Per-chunk output push
+            if constexpr (OutputPolicy::per_chunk) {
+                cb_push_back(ocb, chunk_size);
+            }
+        }
+    }
+
+    // End-of-operation pops
+    if constexpr (InputAPolicy::pops_at_end) {
+        cb_pop_front(icb_a, total_tiles_a);
+    }
+    // KEY: B pop controlled by policy
+    if constexpr (InputBPolicy::pops_at_end) {
+        cb_pop_front(icb_b, b_tile_count);
+    }
+
+    // Bulk output push
+    if constexpr (OutputPolicy::bulk) {
+        cb_push_back(ocb, total_tiles_a);
+    }
+}
+
+// =============================================================================
+// Policy-Based Binary Operation (Main Entry Point)
+// =============================================================================
+
+/**
+ * @brief Policy-based binary operation with independent control over A and B inputs
+ *
+ * This API provides explicit control over circular buffer management for each input
+ * independently. Unlike the enum-based API where behavior is coupled to broadcast
+ * dimension, here the user specifies exactly when tiles should be waited and popped.
+ *
+ * Key design principle:
+ * - Policy = timing/pattern (WHEN to wait/pop)
+ * - Tile count = derived from broadcast dimension (HOW MANY tiles involved)
+ *
+ * Example: ROW broadcast with Streaming A + Persistent B
+ * - A: wait 1 tile per iteration, pop 1 tile per iteration
+ * - B: wait Wt tiles upfront (required for broadcast), never pop (reused later)
+ *
+ * @tparam op_type Binary operation type (ADD, SUB, MUL, SQUARE)
+ * @tparam bcast_dim Broadcast dimension (NONE, ROW, COL, SCALAR)
+ * @tparam InputAPolicy Policy for input A (default: Streaming)
+ * @tparam InputBPolicy Policy for input B (default: same as A)
+ * @tparam OutputPolicy Policy for output (default: OutputPerTile)
+ * @tparam reconfig Data format reconfiguration mode
+ * @tparam init If true, calls init before processing
+ * @tparam uninit Reserved for future use
+ * @tparam AccumT Accumulation type
+ * @tparam PostOp Post-operation callback type
+ */
+template <
+    BinaryOpType op_type,
+    BroadcastDim bcast_dim = BroadcastDim::NONE,
+    typename InputAPolicy = cb_policies::Streaming,
+    typename InputBPolicy = InputAPolicy,
+    typename OutputPolicy = cb_policies::OutputPerTile,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void binary_op_policy(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    // Static assertions for policy validity
+    static_assert(
+        cb_policies::is_input_policy_v<InputAPolicy>, "InputAPolicy must be a valid cb_policies::InputPolicy type");
+    static_assert(
+        cb_policies::is_input_policy_v<InputBPolicy>, "InputBPolicy must be a valid cb_policies::InputPolicy type");
+    static_assert(
+        cb_policies::is_output_policy_v<OutputPolicy>, "OutputPolicy must be a valid cb_policies output policy type");
+
+    // Apply data format reconfiguration
+    if constexpr (reconfig == BinaryDataFormatReconfig::INPUT || reconfig == BinaryDataFormatReconfig::BOTH) {
+        reconfig_data_format(icb_a, icb_b);
+    }
+    if constexpr (reconfig == BinaryDataFormatReconfig::OUTPUT || reconfig == BinaryDataFormatReconfig::BOTH) {
+        pack_reconfig_data_format(ocb);
+    }
+
+    // Dispatch to broadcast-specific implementation
+    if constexpr (bcast_dim == BroadcastDim::NONE) {
+        binary_op_policy_none<op_type, InputAPolicy, InputBPolicy, OutputPolicy, init, AccumT, PostOp>(
+            icb_a, icb_b, ocb, shape, layout, accum, post_op);
+    } else if constexpr (bcast_dim == BroadcastDim::ROW) {
+        binary_op_policy_row<op_type, InputAPolicy, InputBPolicy, OutputPolicy, init, AccumT, PostOp>(
+            icb_a, icb_b, ocb, shape, layout, accum, post_op);
+    } else if constexpr (bcast_dim == BroadcastDim::COL) {
+        binary_op_policy_col<op_type, InputAPolicy, InputBPolicy, OutputPolicy, init, AccumT, PostOp>(
+            icb_a, icb_b, ocb, shape, layout, accum, post_op);
+    } else {
+        binary_op_policy_scalar<op_type, InputAPolicy, InputBPolicy, OutputPolicy, init, AccumT, PostOp>(
+            icb_a, icb_b, ocb, shape, layout, accum, post_op);
+    }
+}
+
+// =============================================================================
 // Convenience Aliases
 // =============================================================================
 
@@ -1181,6 +2033,155 @@ ALWI void square(
     // icb_b is ignored for SQUARE, pass icb_a as placeholder
     binary_op<BinaryOpType::SQUARE, BroadcastDim::NONE, input_mode, reconfig, init, uninit, AccumT, PostOp>(
         icb_a, icb_a, ocb, shape, layout, accum, post_op);
+}
+
+// =============================================================================
+// Policy-Based Convenience Aliases (New API)
+// =============================================================================
+
+/**
+ * @brief Policy-based add - alias for binary_op_policy<ADD, ...>
+ *
+ * Usage:
+ *   // Simple: just broadcast dim
+ *   add_policy<BroadcastDim::ROW>(cb_a, cb_b, cb_out, shape);
+ *
+ *   // With explicit policies
+ *   add_policy<BroadcastDim::SCALAR, cb_policies::Streaming, cb_policies::Persistent>(
+ *       cb_a, cb_b, cb_out, shape);
+ */
+template <
+    BroadcastDim bcast_dim = BroadcastDim::NONE,
+    typename InputAPolicy = cb_policies::Streaming,
+    typename InputBPolicy = InputAPolicy,
+    typename OutputPolicy = cb_policies::OutputPerTile,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void add_policy(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    binary_op_policy<
+        BinaryOpType::ADD,
+        bcast_dim,
+        InputAPolicy,
+        InputBPolicy,
+        OutputPolicy,
+        reconfig,
+        init,
+        uninit,
+        AccumT,
+        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+}
+
+/**
+ * @brief Policy-based sub - alias for binary_op_policy<SUB, ...>
+ */
+template <
+    BroadcastDim bcast_dim = BroadcastDim::NONE,
+    typename InputAPolicy = cb_policies::Streaming,
+    typename InputBPolicy = InputAPolicy,
+    typename OutputPolicy = cb_policies::OutputPerTile,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void sub_policy(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    binary_op_policy<
+        BinaryOpType::SUB,
+        bcast_dim,
+        InputAPolicy,
+        InputBPolicy,
+        OutputPolicy,
+        reconfig,
+        init,
+        uninit,
+        AccumT,
+        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+}
+
+/**
+ * @brief Policy-based mul - alias for binary_op_policy<MUL, ...>
+ */
+template <
+    BroadcastDim bcast_dim = BroadcastDim::NONE,
+    typename InputAPolicy = cb_policies::Streaming,
+    typename InputBPolicy = InputAPolicy,
+    typename OutputPolicy = cb_policies::OutputPerTile,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void mul_policy(
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    binary_op_policy<
+        BinaryOpType::MUL,
+        bcast_dim,
+        InputAPolicy,
+        InputBPolicy,
+        OutputPolicy,
+        reconfig,
+        init,
+        uninit,
+        AccumT,
+        PostOp>(icb_a, icb_b, ocb, shape, layout, accum, post_op);
+}
+
+/**
+ * @brief Policy-based square - alias for binary_op_policy<SQUARE, ...>
+ *
+ * Single-input operation that squares each tile element-wise.
+ * Only icb_a is used; no second input CB is needed.
+ */
+template <
+    typename InputAPolicy = cb_policies::Streaming,
+    typename OutputPolicy = cb_policies::OutputPerTile,
+    BinaryDataFormatReconfig reconfig = BinaryDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostOp = NoOp>
+ALWI void square_policy(
+    uint32_t icb_a,
+    uint32_t ocb,
+    BinaryTileShape shape,
+    BinaryTileLayout layout = {},
+    AccumT accum = {},
+    PostOp post_op = {}) {
+    // icb_b is ignored for SQUARE, pass icb_a as placeholder
+    binary_op_policy<
+        BinaryOpType::SQUARE,
+        BroadcastDim::NONE,
+        InputAPolicy,
+        InputAPolicy,  // B policy doesn't matter for SQUARE
+        OutputPolicy,
+        reconfig,
+        init,
+        uninit,
+        AccumT,
+        PostOp>(icb_a, icb_a, ocb, shape, layout, accum, post_op);
 }
 
 }  // namespace compute_kernel_lib
