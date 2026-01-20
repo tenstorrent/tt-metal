@@ -489,6 +489,11 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
+    // Early return if fabric is disabled (num_used_riscs_per_tensix_ == 0)
+    if (num_used_riscs_per_tensix_ == 0) {
+        return;
+    }
+
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
