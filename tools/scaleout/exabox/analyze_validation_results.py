@@ -12,16 +12,15 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-TROUBLESHOOTING_FILE = SCRIPT_DIR / "TROUBLESHOOTING.md"
 
-# Troubleshooting section line numbers (update if file changes)
-TROUBLESHOOTING_LINES = {
-    "tensix_stall": 288,
-    "gddr_issue": 304,
-    "fw_mismatch": 347,
-    "missing_connections": 391,
-    "data_mismatch": 501,
-    "ssh_agent": 126,
+# Troubleshooting section titles (stable references)
+TROUBLESHOOTING_SECTIONS = {
+    "tensix_stall": "Tensix Stall Issue",
+    "gddr_issue": "GDDR Issue on Chip",
+    "fw_mismatch": "UMD Firmware Version Mismatch",
+    "missing_connections": "QSFP Connections Missing Between Hosts",
+    "data_mismatch": "Data Mismatch During Traffic Tests",
+    "ssh_agent": "SSH Agent Forwarding for MPI",
 }
 
 
@@ -41,11 +40,10 @@ class Colors:
             setattr(cls, attr, "")
 
 
-def ts_link(section: str) -> str:
-    """Generate clickable troubleshooting link."""
-    if TROUBLESHOOTING_FILE.exists():
-        return f"{TROUBLESHOOTING_FILE}:{TROUBLESHOOTING_LINES.get(section, 1)}"
-    return "TROUBLESHOOTING.md"
+def ts_ref(section: str) -> str:
+    """Generate troubleshooting reference using section title."""
+    title = TROUBLESHOOTING_SECTIONS.get(section, section)
+    return f"'{title}' in TROUBLESHOOTING.md"
 
 
 def clean_line(line: str) -> str:
@@ -182,12 +180,49 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
 
         if header_seen and re.match(r"^[a-zA-Z][\w\-]+", c):
             parts = c.split()
-            if len(parts) >= 12:
+            if len(parts) >= 11:
                 try:
                     # Handle port_type glued to unique_id (e.g., "TRACE0x...")
-                    pt = parts[5]
-                    if "0x" in pt and not pt.startswith("0x"):
-                        pt = pt[: pt.find("0x")]
+                    # This shifts all subsequent indices, so we need to rebuild parts
+                    port_type_raw = parts[5]
+                    if "0x" in port_type_raw and not port_type_raw.startswith("0x"):
+                        idx = port_type_raw.find("0x")
+                        port_type = port_type_raw[:idx]
+                        unique_id = port_type_raw[idx:]
+                        # Rebuild parts with unique_id inserted at correct position
+                        parts = parts[:6] + [unique_id] + parts[6:]
+                    else:
+                        port_type = port_type_raw
+
+                    # Columns: Host(0) Tray(1) ASIC(2) Ch(3) PortID(4) PortType(5) UniqueID(6)
+                    #          Retrains(7) CRC(8) CorrectedCW(9) UncorrectedCW(10) [MismatchWords] FailureType...
+                    # Note: MismatchWords column is often missing - detect if parts[11] is numeric or failure type
+                    # Find where failure type starts (first non-numeric after parts[10])
+                    ft_start = 11
+                    mismatch = 0
+                    for i in range(11, min(13, len(parts))):
+                        val = parts[i] if i < len(parts) else ""
+                        if val.isdigit() or (val.startswith("0x") and len(val) > 2):
+                            mismatch = parse_int(val)
+                            ft_start = i + 1
+                        else:
+                            break
+
+                    # Capture failure type (until we hit packet size like "64 B" or "64B")
+                    failure_parts = []
+                    for i in range(ft_start, min(ft_start + 10, len(parts))):
+                        p = parts[i]
+                        # Stop at packet size indicators
+                        if p == "B" or re.match(r"^\d+$", p):
+                            break
+                        # Clean up concatenated strings like "Mismatch64"
+                        if re.match(r"^[A-Za-z]+\d+$", p):
+                            p = re.sub(r"\d+$", "", p)
+                        failure_parts.append(p)
+                    failure_type = " ".join(failure_parts)
+                    # If failure type mentions "Mismatch" but count is 0, set to 1 (indicates mismatch occurred)
+                    if mismatch == 0 and "Mismatch" in failure_type:
+                        mismatch = 1
 
                     links.append(
                         FaultyLink(
@@ -196,12 +231,12 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
                             asic=int(parts[2]),
                             channel=int(parts[3]),
                             port_id=int(parts[4]),
-                            port_type=pt,
-                            retrains=parse_int(parts[7]),
-                            crc_errors=parse_int(parts[8]),
+                            port_type=port_type,
+                            retrains=parse_int(parts[7]) if len(parts) > 7 else 0,
+                            crc_errors=parse_int(parts[8]) if len(parts) > 8 else 0,
                             uncorrected_cw=parse_int(parts[10]) if len(parts) > 10 else 0,
-                            mismatch_words=parse_int(parts[11]) if len(parts) > 11 else 0,
-                            failure_type=" ".join(parts[12:15]) if len(parts) > 12 else "",
+                            mismatch_words=mismatch,
+                            failure_type=failure_type,
                         )
                     )
                 except (ValueError, IndexError):
@@ -583,7 +618,7 @@ def print_recommendations(analyses: list[LogAnalysis]):
     # Timeout issues
     if cats["timeout"]:
         recs.append(
-            f"- {Colors.YELLOW}Timeout issues:{Colors.NC} Power cycle the cluster. See {ts_link('tensix_stall')}"
+            f"- {Colors.YELLOW}Timeout issues:{Colors.NC} Power cycle the cluster. See {ts_ref('tensix_stall')}"
         )
 
     # Missing connections
@@ -592,12 +627,12 @@ def print_recommendations(analyses: list[LogAnalysis]):
         if port_count and chan_count:
             recs.append(
                 f"- {Colors.BLUE}Missing connections:{Colors.NC} Port ({port_count} logs) + "
-                f"Channel ({chan_count} logs). Check cables. See {ts_link('missing_connections')}"
+                f"Channel ({chan_count} logs). Check cables. See {ts_ref('missing_connections')}"
             )
         else:
             recs.append(
                 f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cable seating. "
-                f"Verify correct FSD. See {ts_link('missing_connections')}"
+                f"Verify correct FSD. See {ts_ref('missing_connections')}"
             )
 
     # PCIe errors
@@ -653,7 +688,7 @@ def print_recommendations(analyses: list[LogAnalysis]):
     # DRAM failures
     if cats["dram_failure"]:
         recs.append(
-            f"- {Colors.RED}DRAM failures:{Colors.NC} Hardware issue. Contact syseng. See {ts_link('gddr_issue')}"
+            f"- {Colors.RED}DRAM failures:{Colors.NC} Hardware issue. Contact syseng. See {ts_ref('gddr_issue')}"
         )
 
     # Unhealthy links - check for repeat offenders
@@ -671,7 +706,7 @@ def print_recommendations(analyses: list[LogAnalysis]):
     # Firmware mismatch
     if cats["fw_mismatch"]:
         recs.append(
-            f"- {Colors.MAGENTA}Firmware mismatch:{Colors.NC} UMD may ignore some links. See {ts_link('fw_mismatch')}"
+            f"- {Colors.MAGENTA}Firmware mismatch:{Colors.NC} UMD may ignore some links. See {ts_ref('fw_mismatch')}"
         )
 
     # Stack trace/crash
@@ -685,12 +720,12 @@ def print_recommendations(analyses: list[LogAnalysis]):
     if cats["mpi_error"]:
         recs.append(
             f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. "
-            f"Check SSH agent and network. See {ts_link('ssh_agent')}"
+            f"Check SSH agent and network. See {ts_ref('ssh_agent')}"
         )
     if cats["ssh_error"]:
         recs.append(
             f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. "
-            f"Ensure ssh-agent running and keys added. See {ts_link('ssh_agent')}"
+            f"Ensure ssh-agent running and keys added. See {ts_ref('ssh_agent')}"
         )
 
     # Overall health assessment
