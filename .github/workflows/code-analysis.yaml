@@ -589,12 +589,18 @@ jobs:
           set -euo pipefail
 
           ISSUE_COUNT="${{ steps.select-issue.outputs.issue-count }}"
-          ISSUE_LIST=$(cat /tmp/issue_list.txt)
 
-          # Construct the prompt - let Copilot choose which issue to fix
-          PROMPT="The Clang Static Analyzer found $ISSUE_COUNT issues in this repository. Here are some of them:
+          # Write prompt to a file to avoid shell escaping issues
+          cat > /tmp/copilot_prompt.md << 'PROMPT_EOF'
+          The Clang Static Analyzer found issues in this repository. Here are some of them:
 
-          $ISSUE_LIST
+          PROMPT_EOF
+
+          # Append the issue list
+          cat /tmp/issue_list.txt >> /tmp/copilot_prompt.md
+
+          # Append instructions
+          cat >> /tmp/copilot_prompt.md << 'PROMPT_EOF'
 
           Please:
           1. Review these issues and choose ONE that is:
@@ -606,7 +612,13 @@ jobs:
           4. Ensure the fix follows the project's coding standards
           5. Create a PR with a clear title like: fix(clangsa): Fix [checker] in [filename]
 
-          Note: Some of these may be false positives. Use your judgment to pick a genuine issue that can be safely fixed."
+          Note: Some of these may be false positives. Use your judgment to pick a genuine issue that can be safely fixed.
+          PROMPT_EOF
+
+          echo "=== Prompt file contents ==="
+          cat /tmp/copilot_prompt.md
+          echo ""
+          echo "=== End of prompt ==="
 
           # Determine base branch
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -615,14 +627,15 @@ jobs:
             BASE_BRANCH="${{ github.ref_name }}"
           fi
 
+          echo ""
           echo "=== Creating Copilot coding agent task ==="
           echo "Repository: ${{ github.repository }}"
           echo "Base branch: $BASE_BRANCH"
           echo ""
 
-          # Use gh agent-task create to start a Copilot coding agent session
-          # Capture output to get the session URL
-          RESULT=$(gh agent-task create "$PROMPT" \
+          # Use gh agent-task create with --from-file to avoid escaping issues
+          RESULT=$(gh agent-task create \
+            --from-file /tmp/copilot_prompt.md \
             --repo "${{ github.repository }}" \
             --base "$BASE_BRANCH" 2>&1) || {
             echo "Failed to create agent task: $RESULT"
@@ -634,7 +647,6 @@ jobs:
           echo "task-created=true" >> "$GITHUB_OUTPUT"
 
           # Try to extract URL from the output (format may vary)
-          # The output typically contains a URL to the session or PR
           SESSION_URL=$(echo "$RESULT" | grep -oE 'https://github\.com/[^[:space:]]+' | head -1 || true)
           if [ -n "$SESSION_URL" ]; then
             echo "session-url=$SESSION_URL" >> "$GITHUB_OUTPUT"
