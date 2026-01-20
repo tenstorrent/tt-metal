@@ -35,7 +35,7 @@ enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_WR = 1,
     COMPLETION_Q_WR = 2,
     COMPLETION_Q_RD = 3,
-    UNRESERVED = 4,
+    UNRESERVED = 4
 };
 
 // used in system_memory_manager.cpp and command_queue_interface.cpp
