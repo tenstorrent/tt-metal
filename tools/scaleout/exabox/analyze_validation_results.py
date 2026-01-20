@@ -97,28 +97,50 @@ class LogAnalysis:
     matched_lines: dict = field(default_factory=dict)  # category -> list of matching lines
 
 
-# Pattern definitions
+# Pattern definitions - matching C++ validation tool output
 PATTERNS = {
+    # Success indicators
     "healthy": re.compile(r"All Detected Links are healthy"),
+    # Failure indicators
     "unhealthy": re.compile(r"Found Unhealthy Links|FAULTY LINKS REPORT"),
     "timeout": re.compile(r"Timeout \(\d+ ms\) waiting for physical cores to finish"),
-    # Match both "Physical Discovery found X missing" and "found in FSD but missing in GSD"
+    "workload_timeout": re.compile(
+        r"Workload execution timed out|" r"cluster is not in a healthy state|" r"ERROR:.*timed out after \d+ seconds"
+    ),
+    # Missing connection patterns (both formats from C++ tool)
     "missing_connections": re.compile(
         r"Physical Discovery found (\d+) missing port/cable connections|"
-        r"missing port/cable connections|"
-        r"found in FSD but missing in GSD"
+        r"Port Connections found in FSD but missing in GSD"
     ),
     "missing_channels": re.compile(
         r"Physical Discovery found (\d+) missing channel connections|"
         r"Channel Connections found in FSD but missing in GSD"
     ),
-    "extra_connections": re.compile(r"Physical Discovery found (\d+) extra port/cable connections"),
-    "dram_failure": re.compile(r"DRAM training failed"),
-    "fw_mismatch": re.compile(r"Firmware bundle version .* is newer than the latest fully tested version"),
-    # Additional patterns from real-world logs
-    "pcie_error": re.compile(r"PCIe error|AER:.*aer_status"),
-    "arc_timeout": re.compile(r"ARC.*[Tt]imeout|timeout.*ARC"),
-    "link_retrain": re.compile(r"Link retrains detected|link_retrain_count"),
+    "extra_connections": re.compile(
+        r"Physical Discovery found (\d+) extra port/cable connections|"
+        r"extra port/cable connections|"
+        r"Connections found in GSD but not in FSD"
+    ),
+    # Hardware issues
+    "dram_failure": re.compile(r"DRAM training failed|gddr issue", re.IGNORECASE),
+    "pcie_error": re.compile(r"PCIe error|AER:.*aer_status|\[Hardware Error\]"),
+    "arc_timeout": re.compile(r"ARC.*[Tt]imeout|timeout.*ARC|ARC message timed out"),
+    "device_startup_error": re.compile(r"Error starting devices|Error details:"),
+    # Firmware and compatibility
+    "fw_mismatch": re.compile(
+        r"Firmware bundle version .* is newer than the latest fully tested version|"
+        r"FW Bundle version mismatch|"
+        r"ERISC FW version.*mismatch"
+    ),
+    # Link health indicators (from C++ link_unhealthy logic)
+    "link_retrain": re.compile(r"Retrain.*detected|retrain_count.*increasing|Link retrains detected"),
+    "crc_error": re.compile(r"CRC Error|crc_error_count > 0"),
+    "uncorrected_cw": re.compile(r"Uncorrected CW|uncorrected_codeword"),
+    "data_mismatch": re.compile(r"Data Mismatch|mismatched_words|num_mismatched"),
+    # Discovery and validation status
+    "discovery_failed": re.compile(r"Physical Discovery.*failed|Discovery Complete.*0 chips"),
+    "unrecoverable_state": re.compile(r"Encountered unrecoverable state|unrecoverable.*state"),
+    "validation_failed": re.compile(r"Cluster validation failed|validation.*failed", re.IGNORECASE),
 }
 
 
@@ -494,19 +516,34 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
         print(f"{Colors.YELLOW}Warning: Expected 50 iterations, found {total}{Colors.NC}")
     print()
 
-    # Category breakdown
+    # Category breakdown - grouped by severity
     category_display = [
+        # Success
         ("healthy", Colors.GREEN, "Healthy links"),
+        # Critical failures
         ("unhealthy", Colors.RED, "Unhealthy links"),
-        ("timeout", Colors.YELLOW, "Timeout issues"),
+        ("unrecoverable_state", Colors.RED, "Unrecoverable state"),
+        ("validation_failed", Colors.RED, "Validation failed"),
+        ("dram_failure", Colors.RED, "DRAM/GDDR failures"),
+        ("pcie_error", Colors.RED, "PCIe errors"),
+        ("device_startup_error", Colors.RED, "Device startup errors"),
+        # Timeout issues
+        ("timeout", Colors.YELLOW, "Physical core timeout"),
+        ("workload_timeout", Colors.YELLOW, "Workload timeout"),
+        ("arc_timeout", Colors.YELLOW, "ARC timeout"),
+        # Connectivity issues
         ("missing_connections", Colors.BLUE, "Missing port connections"),
         ("missing_channels", Colors.BLUE, "Missing channel connections"),
         ("extra_connections", Colors.YELLOW, "Extra connections"),
-        ("dram_failure", Colors.RED, "DRAM training failures"),
-        ("fw_mismatch", Colors.MAGENTA, "Firmware mismatch warnings"),
-        ("pcie_error", Colors.RED, "PCIe errors"),
-        ("arc_timeout", Colors.YELLOW, "ARC timeout"),
-        ("link_retrain", Colors.YELLOW, "Link retrains detected"),
+        ("discovery_failed", Colors.RED, "Discovery failed"),
+        # Link health
+        ("link_retrain", Colors.YELLOW, "Link retrains"),
+        ("crc_error", Colors.YELLOW, "CRC errors"),
+        ("uncorrected_cw", Colors.YELLOW, "Uncorrected codewords"),
+        ("data_mismatch", Colors.RED, "Data mismatch"),
+        # Warnings
+        ("fw_mismatch", Colors.MAGENTA, "Firmware mismatch"),
+        # Unknown
         ("indeterminate", Colors.CYAN, "Indeterminate/incomplete"),
     ]
 
@@ -741,7 +778,7 @@ def print_recommendations(analyses: list[LogAnalysis]):
     if category_counts["pcie_error"] > 0:
         recommendations.append(
             f"- {Colors.RED}PCIe errors detected:{Colors.NC} Hardware issue. Machine may have rebooted. "
-            "Check dmesg/syslog for details."
+            "Check dmesg/syslog for details. May need power cycle."
         )
 
     if category_counts["arc_timeout"] > 0:
@@ -753,6 +790,41 @@ def print_recommendations(analyses: list[LogAnalysis]):
         recommendations.append(
             f"- {Colors.YELLOW}Link retrains:{Colors.NC} Some links are unstable. "
             "Check cables and connections on affected trays."
+        )
+
+    if category_counts["workload_timeout"] > 0:
+        recommendations.append(
+            f"- {Colors.RED}Workload timeout:{Colors.NC} Cluster hung during traffic test. "
+            "Power cycle required. Check for GDDR/hardware issues."
+        )
+
+    if category_counts["device_startup_error"] > 0:
+        recommendations.append(
+            f"- {Colors.RED}Device startup error:{Colors.NC} Failed to initialize devices. "
+            "Try tt-smi reset. If persists, power cycle and check tt-smi status."
+        )
+
+    if category_counts["unrecoverable_state"] > 0 or category_counts["validation_failed"] > 0:
+        recommendations.append(
+            f"- {Colors.RED}Unrecoverable/validation failure:{Colors.NC} "
+            "Cluster is in bad state. Full power cycle required. Contact syseng if issue persists."
+        )
+
+    if category_counts["discovery_failed"] > 0:
+        recommendations.append(
+            f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips. "
+            "Check PCIe connections, tt-smi status. May need reboot."
+        )
+
+    if category_counts["data_mismatch"] > 0 and category_counts["unhealthy"] == 0:
+        # Data mismatch without being flagged as unhealthy - might be transient
+        link = troubleshooting_link("data_mismatch", "Data Mismatch During Traffic Tests")
+        recommendations.append(f"- {Colors.YELLOW}Data mismatch detected:{Colors.NC} See {link}")
+
+    if category_counts["crc_error"] > 0 or category_counts["uncorrected_cw"] > 0:
+        recommendations.append(
+            f"- {Colors.YELLOW}CRC/codeword errors:{Colors.NC} Link quality issues. "
+            "Check cable seating. For Wormhole: may indicate bad cable."
         )
 
     if category_counts["dram_failure"] > 0:
@@ -809,15 +881,23 @@ def print_verbose(analyses: list[LogAnalysis]):
     category_labels = {
         "healthy": "Healthy",
         "unhealthy": "Unhealthy Links",
-        "timeout": "Timeout Issues",
+        "unrecoverable_state": "Unrecoverable State",
+        "validation_failed": "Validation Failed",
+        "timeout": "Physical Core Timeout",
+        "workload_timeout": "Workload Timeout",
         "missing_connections": "Missing Port Connections",
         "missing_channels": "Missing Channel Connections",
         "extra_connections": "Extra Connections",
-        "dram_failure": "DRAM Failures",
-        "fw_mismatch": "Firmware Mismatch",
+        "discovery_failed": "Discovery Failed",
+        "dram_failure": "DRAM/GDDR Failures",
         "pcie_error": "PCIe Errors",
         "arc_timeout": "ARC Timeout",
+        "device_startup_error": "Device Startup Error",
+        "fw_mismatch": "Firmware Mismatch",
         "link_retrain": "Link Retrains",
+        "crc_error": "CRC Errors",
+        "uncorrected_cw": "Uncorrected Codewords",
+        "data_mismatch": "Data Mismatch",
     }
 
     for category, label in category_labels.items():
