@@ -169,6 +169,81 @@ void kernel_main() {
 
         // Skip barrier semaphore in minimal version (no fabric multicast to increment it)
 
+        // Let's set some particular values for the params used
+        const uint32_t M_blocks_per_core = 1;
+        const uint32_t chunk_counts_per_width = 1;
+        const uint32_t mm_N_blocks_per_slice = 1;
+        const uint32_t batch_size = input_tensor_B;
+        const uint32_t chunks_per_mm_N_block = 1;
+
+        for (uint32_t b = 0; b < batch_size; b++) {
+            for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+                for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                    int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+                    for (uint32_t i = 0; i < ring_size; i++) {
+                        uint32_t actual_slice_idx;
+                        if (direction) {
+                            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                        } else {
+                            actual_slice_idx =
+                                slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                        }
+                        uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
+
+                        if (i < (ring_size - 1)) {
+                            uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                            for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
+                                 chunk_piece_idx++) {
+                                uint32_t tiles_to_read_in_current_direction = 1;
+                                uint32_t direction_offset = direction ? 0 : 1;
+                                uint32_t input_row_offset = start_row_offset;
+
+                                cb_wait_front(cb_output_id, tile_granularity);
+                                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                                    uint32_t intermediate_tile_id =
+                                        intermediate_tile_id_start + input_row_offset + direction_offset;
+                                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                        intermediate_addrgen, intermediate_tile_one_id, 0);
+                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                        &mux_connection_handle,
+                                        pkt_unicast_hdr,
+                                        l1_read_addr,
+                                        NocUnicastCommandHeader{noc_address0});
+                                    l1_read_addr += page_size;
+                                    noc_async_writes_flushed();
+                                }
+                                cb_pop_front(cb_output_id, tile_granularity);
+                            }
+                        } else {
+                            uint32_t output_tile_id_start = b * output_batch_num_pages;
+                            uint32_t tiles_to_read_in_current_direction = 1;
+                            uint32_t direction_offset = direction ? 0 : 1;
+                            cb_wait_front(cb_output_id, tile_granularity);
+                            size_t l1_read_addr = get_read_ptr(cb_output_id);
+                            for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
+                                uint32_t output_tile_id = output_tile_id_start + tiles_read;
+                                uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                l1_read_addr += page_size;
+                            }
+                            noc_async_write_barrier();
+                            cb_pop_front(cb_output_id, tile_granularity);
+                        }
+
+                        // TODO: mcast half batch ready semaphore
+
+                        if (direction) {
+                            slice_idx--;
+                        } else {
+                            slice_idx++;
+                        }
+                    }
+                    // TODO:Reset the global semaphore before the next batch
+                }
+            }
+        }
+
         noc_async_write_barrier();
         noc_async_atomic_barrier();
 

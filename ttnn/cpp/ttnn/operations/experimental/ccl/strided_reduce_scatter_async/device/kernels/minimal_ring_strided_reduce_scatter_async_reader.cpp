@@ -175,6 +175,7 @@ void kernel_main() {
                                 l1_write_addr += page_size;
                                 DPRINT << "--------------------------------" << ENDL();
                             }
+                            // TODO: can move it outside after removing the if (reduce)
                             noc_async_read_barrier();
                             cb_push_back(cb_in0, tile_granularity);
                         }
