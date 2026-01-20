@@ -51,8 +51,9 @@ LayernormFusedRmProgramFactory::cached_program_t LayernormFusedRmProgramFactory:
     const CoreRangeSet all_cores = CoreRangeSet({CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0})});
     const uint32_t num_cores = 1;
 
-    // Stick size for row-major data
-    const uint32_t stick_size = W * input.element_size();  // Size of one RM stick in bytes
+    // Stick sizes for row-major data (aligned for NoC efficiency)
+    const uint32_t input_stick_size = W * input.element_size();
+    const uint32_t input_stick_size_aligned = tt::round_up(input_stick_size, src_buffer->alignment());
 
     // ============================================================
     // 2. Create program
@@ -63,68 +64,102 @@ LayernormFusedRmProgramFactory::cached_program_t LayernormFusedRmProgramFactory:
     // 3. Circular Buffer Configuration (modern API)
     // ============================================================
 
-    // CB c_0: Input RM sticks (32 sticks per tile row, each stick is W elements)
-    // Reader pushes input TWICE per tile row (for mean+center+square+var, then for re-center+normalize)
-    // Double-buffered: 2 * 32 sticks
+    // CB c_0: Input RM sticks - Reader pushes input TWICE per tile row
+    // (for mean+center+square+var, then for re-center+normalize)
     constexpr uint32_t cb_in_rm_idx = tt::CBIndex::c_0;
-    const uint32_t cb_in_rm_pages = buffering_factor * tt::constants::TILE_HEIGHT;
-    tt::tt_metal::create_cb(cb_in_rm_idx, program, all_cores, stick_size, cb_in_rm_pages, cb_data_format);
+    const uint32_t cb_in_rm_page_size = input_stick_size_aligned;
+    const uint32_t cb_in_rm_num_pages = buffering_factor * tt::constants::TILE_HEIGHT;  // 2 * 32 sticks
+    tt::tt_metal::create_cb(cb_in_rm_idx, program, all_cores, cb_in_rm_page_size, cb_in_rm_num_pages, cb_data_format);
 
-    // CB c_1: Tiled input (double-buffered, 2*Wt tiles)
+    // CB c_1: Tiled input (double-buffered)
     constexpr uint32_t cb_in_tiled_idx = tt::CBIndex::c_1;
-    tt::tt_metal::create_cb(cb_in_tiled_idx, program, all_cores, tile_size, buffering_factor * Wt, cb_data_format);
+    const uint32_t cb_in_tiled_page_size = tile_size;
+    const uint32_t cb_in_tiled_num_pages = buffering_factor * Wt;
+    tt::tt_metal::create_cb(
+        cb_in_tiled_idx, program, all_cores, cb_in_tiled_page_size, cb_in_tiled_num_pages, cb_data_format);
 
-    // CB c_2: Scaler (1/W) - 1 tile (read once, used many times)
+    // CB c_2: Scaler (1/W) - read once, used many times
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
-    tt::tt_metal::create_cb(cb_scaler_idx, program, all_cores, tile_size, 1, cb_data_format);
+    const uint32_t cb_scaler_page_size = tile_size;
+    const uint32_t cb_scaler_num_pages = 1;
+    tt::tt_metal::create_cb(
+        cb_scaler_idx, program, all_cores, cb_scaler_page_size, cb_scaler_num_pages, cb_data_format);
 
-    // CB c_3: Epsilon tile - 1 tile
+    // CB c_3: Epsilon tile
     constexpr uint32_t cb_eps_idx = tt::CBIndex::c_3;
-    tt::tt_metal::create_cb(cb_eps_idx, program, all_cores, tile_size, 1, cb_data_format);
+    const uint32_t cb_eps_page_size = tile_size;
+    const uint32_t cb_eps_num_pages = 1;
+    tt::tt_metal::create_cb(cb_eps_idx, program, all_cores, cb_eps_page_size, cb_eps_num_pages, cb_data_format);
 
-    // CB c_4: Gamma RM sticks (one stick, gamma is 1D with width W)
+    // CB c_4: Gamma RM sticks (1D with width W)
     constexpr uint32_t cb_gamma_rm_idx = tt::CBIndex::c_4;
-    tt::tt_metal::create_cb(cb_gamma_rm_idx, program, all_cores, stick_size, 1, cb_data_format);
+    const uint32_t cb_gamma_rm_page_size = input_stick_size_aligned;
+    const uint32_t cb_gamma_rm_num_pages = 1;
+    tt::tt_metal::create_cb(
+        cb_gamma_rm_idx, program, all_cores, cb_gamma_rm_page_size, cb_gamma_rm_num_pages, cb_data_format);
 
-    // CB c_5: Beta RM sticks (one stick, beta is 1D with width W)
+    // CB c_5: Beta RM sticks (1D with width W)
     constexpr uint32_t cb_beta_rm_idx = tt::CBIndex::c_5;
-    tt::tt_metal::create_cb(cb_beta_rm_idx, program, all_cores, stick_size, 1, cb_data_format);
+    const uint32_t cb_beta_rm_page_size = input_stick_size_aligned;
+    const uint32_t cb_beta_rm_num_pages = 1;
+    tt::tt_metal::create_cb(
+        cb_beta_rm_idx, program, all_cores, cb_beta_rm_page_size, cb_beta_rm_num_pages, cb_data_format);
 
-    // CB c_6: Tiled gamma (persistent, Wt tiles)
+    // CB c_6: Tiled gamma (persistent, holds full row)
     constexpr uint32_t cb_gamma_tiled_idx = tt::CBIndex::c_6;
-    tt::tt_metal::create_cb(cb_gamma_tiled_idx, program, all_cores, tile_size, Wt, cb_data_format);
+    const uint32_t cb_gamma_tiled_page_size = tile_size;
+    const uint32_t cb_gamma_tiled_num_pages = Wt;
+    tt::tt_metal::create_cb(
+        cb_gamma_tiled_idx, program, all_cores, cb_gamma_tiled_page_size, cb_gamma_tiled_num_pages, cb_data_format);
 
-    // CB c_7: Tiled beta (persistent, Wt tiles)
+    // CB c_7: Tiled beta (persistent, holds full row)
     constexpr uint32_t cb_beta_tiled_idx = tt::CBIndex::c_7;
-    tt::tt_metal::create_cb(cb_beta_tiled_idx, program, all_cores, tile_size, Wt, cb_data_format);
+    const uint32_t cb_beta_tiled_page_size = tile_size;
+    const uint32_t cb_beta_tiled_num_pages = Wt;
+    tt::tt_metal::create_cb(
+        cb_beta_tiled_idx, program, all_cores, cb_beta_tiled_page_size, cb_beta_tiled_num_pages, cb_data_format);
 
-    // CB c_16: Output RM sticks (Wt tile-sized pages to match untilize helper)
+    // CB c_16: Output RM sticks (tile-sized pages for untilize helper compatibility)
     constexpr uint32_t cb_out_rm_idx = tt::CBIndex::c_16;
-    tt::tt_metal::create_cb(cb_out_rm_idx, program, all_cores, tile_size, Wt, cb_data_format);
+    const uint32_t cb_out_rm_page_size = tile_size;
+    const uint32_t cb_out_rm_num_pages = Wt;
+    tt::tt_metal::create_cb(
+        cb_out_rm_idx, program, all_cores, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // Intermediate CBs for layernorm compute
-    // CB c_24: Centered (x - mean), Wt tiles
+
+    // CB c_24: Centered data (x - mean), holds full row
     constexpr uint32_t cb_centered_idx = tt::CBIndex::c_24;
-    tt::tt_metal::create_cb(cb_centered_idx, program, all_cores, tile_size, Wt, cb_data_format);
+    const uint32_t cb_centered_page_size = tile_size;
+    const uint32_t cb_centered_num_pages = Wt;
+    tt::tt_metal::create_cb(
+        cb_centered_idx, program, all_cores, cb_centered_page_size, cb_centered_num_pages, cb_data_format);
 
-    // CB c_25: Mean tile, 1 tile
+    // CB c_25: Mean tile
     constexpr uint32_t cb_mean_idx = tt::CBIndex::c_25;
-    tt::tt_metal::create_cb(cb_mean_idx, program, all_cores, tile_size, 1, cb_data_format);
+    const uint32_t cb_mean_page_size = tile_size;
+    const uint32_t cb_mean_num_pages = 1;
+    tt::tt_metal::create_cb(cb_mean_idx, program, all_cores, cb_mean_page_size, cb_mean_num_pages, cb_data_format);
 
-    // CB c_26: Variance tile, 1 tile
+    // CB c_26: Variance tile
     constexpr uint32_t cb_var_idx = tt::CBIndex::c_26;
-    tt::tt_metal::create_cb(cb_var_idx, program, all_cores, tile_size, 1, cb_data_format);
+    const uint32_t cb_var_page_size = tile_size;
+    const uint32_t cb_var_num_pages = 1;
+    tt::tt_metal::create_cb(cb_var_idx, program, all_cores, cb_var_page_size, cb_var_num_pages, cb_data_format);
 
-    // CB c_27: Inverse std (1/sqrt(var+eps)), 1 tile
+    // CB c_27: Inverse std (1/sqrt(var+eps))
     constexpr uint32_t cb_invstd_idx = tt::CBIndex::c_27;
-    tt::tt_metal::create_cb(cb_invstd_idx, program, all_cores, tile_size, 1, cb_data_format);
+    const uint32_t cb_invstd_page_size = tile_size;
+    const uint32_t cb_invstd_num_pages = 1;
+    tt::tt_metal::create_cb(
+        cb_invstd_idx, program, all_cores, cb_invstd_page_size, cb_invstd_num_pages, cb_data_format);
 
     // ============================================================
     // 4. Create kernels
     // ============================================================
 
     // Compile-time arguments for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {stick_size, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {input_stick_size_aligned, Wt};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*gamma_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*beta_buffer).append_to(reader_compile_time_args);
@@ -149,7 +184,8 @@ LayernormFusedRmProgramFactory::cached_program_t LayernormFusedRmProgramFactory:
             .compile_args = compute_compile_time_args});
 
     // Compile-time arguments for writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {cb_out_rm_idx, stick_size, tt::constants::TILE_HEIGHT, Wt};
+    std::vector<uint32_t> writer_compile_time_args = {
+        cb_out_rm_idx, input_stick_size_aligned, tt::constants::TILE_HEIGHT, Wt};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
