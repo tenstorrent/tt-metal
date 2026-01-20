@@ -130,8 +130,6 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        static_config_.host_dispatch_progress_ptr =
-            my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::DISPATCH_PROGRESS);
         static_config_.dev_dispatch_progress_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
     } else if (static_config_.is_h_variant.value()) {
@@ -175,8 +173,6 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        static_config_.host_dispatch_progress_ptr =
-            my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::DISPATCH_PROGRESS);
         static_config_.dev_dispatch_progress_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
     } else if (static_config_.is_d_variant.value()) {
@@ -218,8 +214,6 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        static_config_.host_dispatch_progress_ptr =
-            my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::DISPATCH_PROGRESS);
         static_config_.dev_dispatch_progress_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
     } else {
@@ -495,7 +489,6 @@ void DispatchKernel::CreateKernel() {
         {"HOST_COMPLETION_Q_WR_PTR", std::to_string(static_config_.host_completion_q_wr_ptr.value())},
         {"DEV_COMPLETION_Q_WR_PTR", std::to_string(static_config_.dev_completion_q_wr_ptr.value())},
         {"DEV_COMPLETION_Q_RD_PTR", std::to_string(static_config_.dev_completion_q_rd_ptr.value())},
-        {"HOST_DISPATCH_PROGRESS_PTR", std::to_string(static_config_.host_dispatch_progress_ptr.value())},
         {"DEV_DISPATCH_PROGRESS_PTR", std::to_string(static_config_.dev_dispatch_progress_ptr.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"VIRTUALIZE_UNICAST_CORES", std::to_string(virtualize_num_eth_cores)},
@@ -538,20 +531,6 @@ void DispatchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
-
-    // Calculate dispatch progress update cycles based on device frequency and configured period
-    // Device frequency is in MHz, progress update period is in milliseconds
-    // cycles = (frequency_MHz * 1e6) * (period_ms / 1000)
-    uint64_t dispatch_progress_update_cycles = 0;
-    auto& rtoptions = MetalContext::instance().rtoptions();
-    uint32_t progress_update_ms = rtoptions.get_dispatch_progress_update_ms();
-    auto timeout_duration = rtoptions.get_timeout_duration_for_operations();
-    if (progress_update_ms > 0 && timeout_duration > std::chrono::duration<float>(0)) {
-        int device_freq_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id());
-        // Convert: MHz * ms = (freq * 1e6 Hz) * (ms / 1000) = freq * 1000 * ms
-        dispatch_progress_update_cycles = static_cast<uint64_t>(device_freq_mhz) * 1000 * progress_update_ms;
-    }
-    defines["DISPATCH_PROGRESS_UPDATE_CYCLES"] = std::to_string(dispatch_progress_update_cycles);
 
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";

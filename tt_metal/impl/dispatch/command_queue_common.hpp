@@ -35,8 +35,7 @@ enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_WR = 1,
     COMPLETION_Q_WR = 2,
     COMPLETION_Q_RD = 3,
-    DISPATCH_PROGRESS = 4,
-    UNRESERVED = 5,
+    UNRESERVED = 4,
 };
 
 // used in system_memory_manager.cpp and command_queue_interface.cpp
@@ -73,7 +72,7 @@ uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
-uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
 // Return the expected number of workers to be in the finished state
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);

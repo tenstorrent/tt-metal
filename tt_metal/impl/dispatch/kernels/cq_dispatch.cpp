@@ -14,7 +14,6 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
-#include "internal/tt-1xx/risc_common.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
@@ -55,7 +54,6 @@ constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
 constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
 constexpr uint32_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
-constexpr uint32_t host_dispatch_progress_ptr = HOST_DISPATCH_PROGRESS_PTR;
 constexpr uint32_t dev_dispatch_progress_ptr = DEV_DISPATCH_PROGRESS_PTR;
 
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
@@ -98,11 +96,6 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
-
-// Dispatch progress update configuration
-// Number of cycles between progress updates, configured by host based on device frequency
-// Default: 0 means disabled
-constexpr uint64_t dispatch_progress_update_cycles = DISPATCH_PROGRESS_UPDATE_CYCLES;
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -266,23 +259,6 @@ void notify_host_of_completion_queue_write_pointer() {
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
 #endif
-}
-
-// Notify host of dispatch kernel progress for timeout detection
-// Only called when progress tracking is enabled (dispatch_progress_update_cycles > 0)
-FORCE_INLINE
-void notify_host_of_dispatch_progress() {
-    uint32_t dispatch_progress_addr = command_queue_base_addr + host_dispatch_progress_ptr;
-    // Write progress value to host memory via PCIe, reading from L1
-#if defined(FABRIC_RELAY)
-    noc_async_write(dev_dispatch_progress_ptr, pcie_noc_xy | dispatch_progress_addr, 4);
-#else
-    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
-    cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_dispatch_progress_ptr, dispatch_progress_addr, 4);
-    noc_nonposted_writes_num_issued[noc_index]++;
-    noc_nonposted_writes_acked[noc_index]++;
-#endif
-    noc_async_writes_flushed();
 }
 
 FORCE_INLINE
@@ -1331,14 +1307,10 @@ void kernel_main() {
     }
     bool done = false;
     uint32_t heartbeat = 0;
-    uint32_t dispatch_progress = 0;            // Track number of commands processed for progress updates
-    uint64_t next_progress_update_cycles = 0;  // Track when to send next progress update
+    uint32_t dispatch_progress = 0;  // Track number of commands processed for tracking dispatch progress updates
 
-    // Initialize next update time and progress counter if progress tracking is enabled
-    if constexpr (dispatch_progress_update_cycles > 0 && is_h_variant) {
-        *get_dispatch_progress_ptr() = dispatch_progress;
-        next_progress_update_cycles = get_timestamp() + dispatch_progress_update_cycles;
-    }
+    // Initialize progress counter in L1 memory
+    *get_dispatch_progress_ptr() = dispatch_progress;
 
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
@@ -1348,16 +1320,9 @@ void kernel_main() {
 
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
 
-        // Increment dispatch progress counter and send update if enough time has passed
-        if constexpr (dispatch_progress_update_cycles > 0 && is_h_variant) {
-            dispatch_progress++;
-            *get_dispatch_progress_ptr() = dispatch_progress;
-            uint64_t current_cycles = get_timestamp();
-            if (current_cycles >= next_progress_update_cycles) {
-                notify_host_of_dispatch_progress();
-                next_progress_update_cycles = current_cycles + dispatch_progress_update_cycles;
-            }
-        }
+        // Increment dispatch progress counter and write to L1 memory
+        dispatch_progress++;
+        *get_dispatch_progress_ptr() = dispatch_progress;
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);

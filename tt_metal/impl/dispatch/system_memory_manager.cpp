@@ -60,27 +60,33 @@ void loop_and_wait_with_timeout(
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
-    const GetProgress& get_progress = nullptr) {
+    const GetProgress& get_progress) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
-
-        // Initialize progress tracking if get_progress is provided
-        last_progress_value = get_progress();
+        // We won't read progress value initially as most of the waits are expected to be shorter than progress update
+        // interval. Only long running operations will read progress value updates.
+        auto last_progress_update_time = std::chrono::high_resolution_clock::now();
+        auto progress_update_interval = std::chrono::milliseconds(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
             func_body();
 
-            // Check if progress was made (if progress tracking is enabled)
-            uint32_t current_progress = get_progress();
-            if (current_progress != last_progress_value) {
-                last_progress_value = current_progress;
-                last_progress_time = std::chrono::high_resolution_clock::now();
-            }
-
             // Check if operation is finished
             if (!wait_condition()) {
                 break;
+            }
+
+            // Check if progress should be updated
+            if (std::chrono::high_resolution_clock::now() - last_progress_update_time >= progress_update_interval) {
+                uint32_t current_progress = get_progress();
+
+                last_progress_update_time = std::chrono::high_resolution_clock::now();
+                if (current_progress != last_progress_value) {
+                    last_progress_value = current_progress;
+                    last_progress_time = std::chrono::high_resolution_clock::now();
+                }
             }
 
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -567,9 +573,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Get dispatch progress for timeout detection
-        auto get_dispatch_progress = [&]() -> uint32_t {
-            return get_cq_dispatch_progress(this->device_id, cq_id, this->cq_size);
-        };
+        auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
 
         auto timeout_duration =
             tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
@@ -625,7 +629,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Get dispatch progress for timeout detection
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
-        return get_cq_dispatch_progress(this->device_id, cq_id, this->cq_size);
+        return get_cq_dispatch_progress(this->device_id, cq_id);
     };
 
     loop_and_wait_with_timeout(
