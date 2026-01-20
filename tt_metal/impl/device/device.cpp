@@ -243,7 +243,8 @@ void Device::init_command_queue_host() {
     // Initialize pinned memory for dispatch cores' D2H sockets
     // This enables realtime device-to-host data transfer from dispatch cores
     dispatch_d2h_data_buffer_ = std::make_shared<vector_aligned<uint32_t>>(kDispatchD2HFifoSize / sizeof(uint32_t), 0);
-    dispatch_d2h_bytes_sent_buffer_ = std::make_shared<vector_aligned<uint32_t>>(4, 0);  // 16 bytes for signaling
+    dispatch_d2h_bytes_sent_buffer_ = std::make_shared<vector_aligned<uint32_t>>(4, 0);   // 16 bytes for signaling
+    dispatch_d2h_bytes_acked_buffer_ = std::make_shared<vector_aligned<uint32_t>>(4, 0);  // 16 bytes for flow control
 
     std::vector<IDevice*> devices = {this};
     dispatch_d2h_data_pinned_memory_ = experimental::PinnedMemory::Create(
@@ -258,32 +259,44 @@ void Device::init_command_queue_host() {
         dispatch_d2h_bytes_sent_buffer_->size() * sizeof(uint32_t),
         true  // map_to_noc for direct device access
     );
+    dispatch_d2h_bytes_acked_pinned_memory_ = experimental::PinnedMemory::Create(
+        devices,
+        dispatch_d2h_bytes_acked_buffer_->data(),
+        dispatch_d2h_bytes_acked_buffer_->size() * sizeof(uint32_t),
+        true  // map_to_noc for direct device access
+    );
 }
 
 Device::DispatchD2HSocketConfig Device::get_dispatch_d2h_socket_config() const {
     DispatchD2HSocketConfig config;
 
-    if (!dispatch_d2h_data_pinned_memory_ || !dispatch_d2h_bytes_sent_pinned_memory_) {
+    if (!dispatch_d2h_data_pinned_memory_ || !dispatch_d2h_bytes_sent_pinned_memory_ ||
+        !dispatch_d2h_bytes_acked_pinned_memory_) {
         config.valid = false;
         return config;
     }
 
     auto data_noc_addr_opt = dispatch_d2h_data_pinned_memory_->get_noc_addr(id_);
     auto bytes_sent_noc_addr_opt = dispatch_d2h_bytes_sent_pinned_memory_->get_noc_addr(id_);
+    auto bytes_acked_noc_addr_opt = dispatch_d2h_bytes_acked_pinned_memory_->get_noc_addr(id_);
 
-    if (!data_noc_addr_opt.has_value() || !bytes_sent_noc_addr_opt.has_value()) {
+    if (!data_noc_addr_opt.has_value() || !bytes_sent_noc_addr_opt.has_value() ||
+        !bytes_acked_noc_addr_opt.has_value()) {
         config.valid = false;
         return config;
     }
 
     const auto& data_noc_addr = data_noc_addr_opt.value();
     const auto& bytes_sent_noc_addr = bytes_sent_noc_addr_opt.value();
+    const auto& bytes_acked_noc_addr = bytes_acked_noc_addr_opt.value();
 
     config.pcie_xy_enc = data_noc_addr.pcie_xy_enc;
     config.data_addr_lo = static_cast<uint32_t>(data_noc_addr.addr & 0xFFFFFFFFull);
     config.data_addr_hi = static_cast<uint32_t>(data_noc_addr.addr >> 32);
     config.bytes_sent_addr_lo = static_cast<uint32_t>(bytes_sent_noc_addr.addr & 0xFFFFFFFFull);
     config.bytes_sent_addr_hi = static_cast<uint32_t>(bytes_sent_noc_addr.addr >> 32);
+    config.bytes_acked_addr_lo = static_cast<uint32_t>(bytes_acked_noc_addr.addr & 0xFFFFFFFFull);
+    config.bytes_acked_addr_hi = static_cast<uint32_t>(bytes_acked_noc_addr.addr >> 32);
     config.fifo_size = kDispatchD2HFifoSize;
     config.valid = true;
 

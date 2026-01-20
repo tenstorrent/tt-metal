@@ -31,6 +31,8 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> d2h_data_addr_hi;
     std::optional<uint32_t> d2h_bytes_sent_addr_lo;
     std::optional<uint32_t> d2h_bytes_sent_addr_hi;
+    std::optional<uint32_t> d2h_bytes_acked_addr_lo;
+    std::optional<uint32_t> d2h_bytes_acked_addr_hi;
     std::optional<uint32_t> d2h_fifo_size;
     std::optional<uint32_t> d2h_enabled;
 };

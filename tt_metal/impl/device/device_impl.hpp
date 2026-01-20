@@ -245,8 +245,10 @@ private:
     static constexpr uint32_t kDispatchD2HFifoSize = 1024;  // FIFO size in bytes
     std::shared_ptr<vector_aligned<uint32_t>> dispatch_d2h_data_buffer_ = nullptr;
     std::shared_ptr<vector_aligned<uint32_t>> dispatch_d2h_bytes_sent_buffer_ = nullptr;
+    std::shared_ptr<vector_aligned<uint32_t>> dispatch_d2h_bytes_acked_buffer_ = nullptr;
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_data_pinned_memory_ = nullptr;
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_sent_pinned_memory_ = nullptr;
+    std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_acked_pinned_memory_ = nullptr;
 
 public:
     // D2H socket configuration for dispatch cores
@@ -256,6 +258,8 @@ public:
         uint32_t data_addr_hi = 0;
         uint32_t bytes_sent_addr_lo = 0;
         uint32_t bytes_sent_addr_hi = 0;
+        uint32_t bytes_acked_addr_lo = 0;
+        uint32_t bytes_acked_addr_hi = 0;
         uint32_t fifo_size = 0;
         bool valid = false;
     };

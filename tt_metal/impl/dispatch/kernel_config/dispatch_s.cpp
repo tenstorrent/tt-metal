@@ -94,6 +94,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
                 static_config_.d2h_data_addr_hi = d2h_config.data_addr_hi;
                 static_config_.d2h_bytes_sent_addr_lo = d2h_config.bytes_sent_addr_lo;
                 static_config_.d2h_bytes_sent_addr_hi = d2h_config.bytes_sent_addr_hi;
+                static_config_.d2h_bytes_acked_addr_lo = d2h_config.bytes_acked_addr_lo;
+                static_config_.d2h_bytes_acked_addr_hi = d2h_config.bytes_acked_addr_hi;
                 static_config_.d2h_fifo_size = d2h_config.fifo_size;
             } else {
                 static_config_.d2h_enabled = 0;
@@ -195,6 +197,8 @@ void DispatchSKernel::CreateKernel() {
         {"D2H_DATA_ADDR_HI", std::to_string(static_config_.d2h_data_addr_hi.value_or(0))},
         {"D2H_BYTES_SENT_ADDR_LO", std::to_string(static_config_.d2h_bytes_sent_addr_lo.value_or(0))},
         {"D2H_BYTES_SENT_ADDR_HI", std::to_string(static_config_.d2h_bytes_sent_addr_hi.value_or(0))},
+        {"D2H_BYTES_ACKED_ADDR_LO", std::to_string(static_config_.d2h_bytes_acked_addr_lo.value_or(0))},
+        {"D2H_BYTES_ACKED_ADDR_HI", std::to_string(static_config_.d2h_bytes_acked_addr_hi.value_or(0))},
         {"D2H_FIFO_SIZE", std::to_string(static_config_.d2h_fifo_size.value_or(0))},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);

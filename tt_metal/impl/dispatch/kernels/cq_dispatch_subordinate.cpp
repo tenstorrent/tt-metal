@@ -52,6 +52,8 @@ constexpr uint32_t d2h_data_addr_lo = D2H_DATA_ADDR_LO;
 constexpr uint32_t d2h_data_addr_hi = D2H_DATA_ADDR_HI;
 constexpr uint32_t d2h_bytes_sent_addr_lo = D2H_BYTES_SENT_ADDR_LO;
 constexpr uint32_t d2h_bytes_sent_addr_hi = D2H_BYTES_SENT_ADDR_HI;
+constexpr uint32_t d2h_bytes_acked_addr_lo = D2H_BYTES_ACKED_ADDR_LO;
+constexpr uint32_t d2h_bytes_acked_addr_hi = D2H_BYTES_ACKED_ADDR_HI;
 constexpr uint32_t d2h_fifo_size = D2H_FIFO_SIZE;
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -160,6 +162,11 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 // Write wait_count and wait_stream to host pinned memory via D2H socket
 // Data format: [wait_count (4 bytes), wait_stream (4 bytes)]
+//
+// Flow control note: The host has a bytes_acked buffer in pinned memory at
+// (d2h_bytes_acked_addr_hi:d2h_bytes_acked_addr_lo). For non-blocking telemetry,
+// we don't wait for the host to acknowledge - data may be overwritten if host is slow.
+// Host can use bytes_sent vs bytes_acked to detect if it fell behind.
 FORCE_INLINE
 void d2h_write_wait_info(uint32_t wait_count, uint32_t wait_stream) {
     if constexpr (d2h_socket_enabled == 0) {
