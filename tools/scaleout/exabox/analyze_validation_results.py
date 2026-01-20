@@ -412,33 +412,146 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
 
 
 def print_details(analyses: list[LogAnalysis]):
-    """Print detailed faulty links and missing connections."""
-    # Faulty links
+    """Print detailed faulty links and missing connections with proper formatting."""
+    # Faulty links with table formatting
     all_links = [(os.path.basename(a.filepath), l) for a in analyses for l in a.faulty_links]
     if all_links:
-        print("=" * 50 + "\nFaulty Links Detail\n" + "=" * 50 + "\n")
+        print("=" * 120)
+        print("Faulty Links Detail")
+        print("=" * 120 + "\n")
+
+        # Calculate dynamic column widths
+        host_w = max(len("Host"), max(len(l.host) for _, l in all_links))
+        type_w = max(len("Type"), max(len(l.port_type) for _, l in all_links))
+
+        # Header
+        print(
+            f"{'Log':<25}  {'Host':<{host_w}}  {'Tray':>4}  {'ASIC':>4}  {'Ch':>2}  "
+            f"{'Type':<{type_w}}  {'Port':>4}  {'Retrains':>8}  {'CRC':>8}  {'Uncorr':>6}  {'Mismatch':>8}"
+        )
+        print("-" * 120)
+
         for log, l in all_links:
             short = log.replace("cluster_validation_iteration_", "iter_").replace(".log", "")
             print(
-                f"  {short}: {l.host} tray {l.tray} ASIC {l.asic} ch {l.channel} "
-                f"| CRC:{l.crc_errors} Uncorr:{l.uncorrected_cw} Mismatch:{l.mismatch_words}"
+                f"{short:<25}  {l.host:<{host_w}}  {l.tray:>4}  {l.asic:>4}  {l.channel:>2}  "
+                f"{l.port_type:<{type_w}}  {l.port_id:>4}  {l.retrains:>8}  {l.crc_errors:>8}  "
+                f"{l.uncorrected_cw:>6}  {l.mismatch_words:>8}"
             )
         print()
 
-    # Missing connections
+        # Failure type breakdown
+        failure_types: dict[str, int] = {}
+        for _, l in all_links:
+            failure_types[l.failure_type] = failure_types.get(l.failure_type, 0) + 1
+        if failure_types:
+            print("Failure Type Breakdown:")
+            for ftype, count in sorted(failure_types.items(), key=lambda x: -x[1]):
+                print(f"  {count:>3}x  {ftype}")
+            print()
+
+    # Missing connections grouped by type
     all_missing = [(os.path.basename(a.filepath), c) for a in analyses for c in a.missing_connections]
     if all_missing:
-        print("=" * 50 + "\nMissing Connections\n" + "=" * 50 + "\n")
-        for log, (ctype, ep1, ep2) in all_missing:
-            short = log.replace("cluster_validation_iteration_", "iter_").replace(".log", "")
-            if ctype == "port":
+        print("=" * 100)
+        print("Missing Connections")
+        print("=" * 100 + "\n")
+
+        # Group by connection type
+        port_conns = [(log, c) for log, c in all_missing if c[0] == "port"]
+        chan_conns = [(log, c) for log, c in all_missing if c[0] == "channel"]
+
+        if port_conns:
+            print(f"Port/Cable Connections ({len(port_conns)}):")
+            for log, (_, ep1, ep2) in port_conns:
+                short = log.replace("cluster_validation_iteration_", "iter_").replace(".log", "")
                 print(f"  {short}: {ep1[0]} tray {ep1[1]} {ep1[2]} <-> {ep2[0]} tray {ep2[1]} {ep2[2]}")
-            else:
+            print()
+
+        if chan_conns:
+            print(f"Channel Connections ({len(chan_conns)}):")
+            for log, (_, ep1, ep2) in chan_conns:
+                short = log.replace("cluster_validation_iteration_", "iter_").replace(".log", "")
                 print(
                     f"  {short}: {ep1[0]} tray {ep1[1]} ASIC {ep1[2]} ch {ep1[3]} <-> "
                     f"{ep2[0]} tray {ep2[1]} ASIC {ep2[2]} ch {ep2[3]}"
                 )
-        print()
+            print()
+
+        # Host pair summary
+        host_pairs: dict[tuple, int] = {}
+        for _, (_, ep1, ep2) in all_missing:
+            pair = tuple(sorted([ep1[0], ep2[0]]))
+            host_pairs[pair] = host_pairs.get(pair, 0) + 1
+        if host_pairs:
+            print("Affected Host Pairs:")
+            for (h1, h2), count in sorted(host_pairs.items(), key=lambda x: -x[1]):
+                print(f"  {count:>3}x  {h1} <-> {h2}")
+            print()
+
+
+def print_link_histogram(analyses: list[LogAnalysis]):
+    """Print histogram of failing links by frequency."""
+    link_stats, _ = aggregate_stats(analyses)
+    if not link_stats:
+        return
+
+    print("=" * 100)
+    print("Faulty Link Histogram (by frequency)")
+    print("=" * 100 + "\n")
+
+    sorted_links = sorted(link_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:20]
+    if not sorted_links:
+        return
+
+    # Dynamic column widths
+    host_w = max(len("Host"), max(len(k[0]) for k, _ in sorted_links))
+    type_w = max(len("Type"), max(len(k[3]) for k, _ in sorted_links))
+
+    # Header
+    header = f"{'Host':<{host_w}}  {'Tray':>4}  {'Ch':>2}  {'Type':<{type_w}}  {'Fails':>5}  {'Retrains':>8}  {'CRC Err':>8}  {'Mismatch':>8}"
+    print(header)
+    print("-" * len(header))
+
+    for (host, tray, channel, port_type), stats in sorted_links:
+        print(
+            f"{host:<{host_w}}  {tray:>4}  {channel:>2}  {port_type:<{type_w}}  "
+            f"{stats['count']:>5}  {stats['retrains']:>8}  {stats['crc']:>8}  {stats['mismatch']:>8}"
+        )
+
+    if len(link_stats) > 20:
+        print(f"... and {len(link_stats) - 20} more")
+    print()
+
+
+def print_verbose(analyses: list[LogAnalysis]):
+    """Print verbose output with matched log lines as evidence."""
+    print("=" * 50)
+    print("Matched Log Lines (Evidence)")
+    print("=" * 50 + "\n")
+
+    category_labels = {cat: info[2] for cat, info in CATEGORIES.items()}
+
+    for a in analyses:
+        if not a.matched_lines:
+            continue
+        log_name = os.path.basename(a.filepath)
+        printed_header = False
+
+        for cat, matches in a.matched_lines.items():
+            if cat in ["healthy", "truncated"]:
+                continue
+            if not printed_header:
+                print(f"{Colors.BOLD}{log_name}{Colors.NC}")
+                printed_header = True
+
+            label = category_labels.get(cat, cat)
+            print(f"  {Colors.CYAN}{label}:{Colors.NC}")
+            for line_num, content in matches[:3]:  # Show up to 3 matches per category
+                print(f"    L{line_num}: {content[:120]}{'...' if len(content) > 120 else ''}")
+
+        if printed_header:
+            print()
 
 
 def print_host_summary(analyses: list[LogAnalysis]):
@@ -622,12 +735,7 @@ def main():
         if args.all:
             print_details(analyses)
         if args.histogram:
-            link_stats, _ = aggregate_stats(analyses)
-            if link_stats:
-                print("=" * 50 + "\nLink Histogram\n" + "=" * 50 + "\n")
-                for (h, t, c, pt), s in sorted(link_stats.items(), key=lambda x: -x[1]["count"])[:15]:
-                    print(f"  {h} tray {t} ch {c} {pt}: {s['count']}x")
-                print()
+            print_link_histogram(analyses)
         if args.hosts or args.all:
             print_host_summary(analyses)
         if args.all:
@@ -637,12 +745,7 @@ def main():
         if args.errors or args.all:
             print_errors(analyses)
         if args.verbose:
-            print("=" * 50 + "\nMatched Lines\n" + "=" * 50 + "\n")
-            for a in analyses:
-                for cat, matches in a.matched_lines.items():
-                    if cat not in ["healthy", "truncated"]:
-                        for ln, content in matches[:2]:
-                            print(f"  {a.filepath}:{ln}: {content[:100]}")
+            print_verbose(analyses)
 
 
 if __name__ == "__main__":
