@@ -16,34 +16,64 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::ccl::moe {
 
-struct AllToAllCombineDeviceOperation {
+struct SelectiveReduceCombineDeviceOperation {
     struct operation_attributes_t {
-        const MemoryConfig output_mem_config;
-        const std::optional<uint32_t> axis;
+        const uint32_t hidden_size;
+        const uint32_t batch_size;
+        const uint32_t seq_size;
+        const uint32_t select_experts_k;
+        const uint32_t experts;
         const uint32_t num_links;
-        const tt::tt_fabric::Topology topology;
-        const bool locally_reduced;
+
+        const std::optional<uint32_t> axis;
+        tt::tt_fabric::Topology topology;
+
+        const uint32_t num_token_parallel_cores;
+        const uint32_t num_data_parallel_cores;
         const CoreRangeSet worker_core_range_set;
-        const uint32_t output_shard_dim;
+        const CoreRangeSet mux_core_range_set;
+        const std::vector<ttnn::GlobalSemaphore> active_token_count_semaphores;
+        const ttnn::MemoryConfig output_memory_config;
+
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "output_mem_config",
-            "axis",
+            "hidden_size",
+            "batch_size",
+            "seq_size",
+            "select_experts_k",
+            "experts",
             "num_links",
+            "axis",
             "topology",
-            "locally_reduced",
+            "num_token_parallel_cores",
+            "num_data_parallel_cores",
             "worker_core_range_set",
-            "output_shard_dim");
+            "mux_core_range_set",
+            "active_token_count_semaphores",
+            "output_memory_config");
+
         auto attribute_values() const {
             return std::forward_as_tuple(
-                output_mem_config, axis, num_links, topology, locally_reduced, worker_core_range_set, output_shard_dim);
+                hidden_size,
+                batch_size,
+                seq_size,
+                select_experts_k,
+                experts,
+                num_links,
+                axis,
+                topology,
+                num_token_parallel_cores,
+                num_data_parallel_cores,
+                worker_core_range_set,
+                mux_core_range_set,
+                active_token_count_semaphores,
+                output_memory_config);
         };
     };
     struct tensor_args_t {
-        const ttnn::Tensor input_tensor;
-        const ttnn::Tensor mapping_tensor;
-        const ttnn::Tensor metadata_tensor;
+        const ttnn::Tensor dense_input_tensor;
+        const ttnn::Tensor dense_metadata_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
@@ -51,11 +81,11 @@ struct AllToAllCombineDeviceOperation {
 
     using tensor_return_value_t = ttnn::Tensor;
 
-    struct AllToAllCombineFromSparse {
+    struct UnifiedSelectReduce {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle ternary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::vector<CoreCoord> cores;
             const GlobalSemaphore init_semaphore;
             const GlobalSemaphore cross_device_semaphore;
@@ -84,7 +114,7 @@ struct AllToAllCombineDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<AllToAllCombineFromSparse>;
+    using program_factory_t = std::variant<UnifiedSelectReduce>;
 
     // Mandatory methods
 
@@ -103,19 +133,25 @@ struct AllToAllCombineDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::ccl::moe
 
 namespace ttnn::prim {
-ttnn::Tensor all_to_all_combine(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& expert_mapping_tensor,
-    const ttnn::Tensor& expert_metadata_tensor,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology,
-    const ttnn::MemoryConfig& memory_config,
+ttnn::Tensor selective_reduce_combine(
+    const ttnn::Tensor& dense_input_tensor,
+    const ttnn::Tensor& dense_metadata_tensor,
+    const uint32_t hidden_size,
+    const uint32_t batch_size,
+    const uint32_t seq_size,
+    const uint32_t select_experts_k,
+    const uint32_t experts,
     const std::optional<uint32_t>& axis,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    bool locally_reduced,
-    const CoreRangeSet& worker_core_range_set,
-    uint32_t output_shard_dim);
+    tt::tt_fabric::Topology topology,
+    const uint32_t num_links,
+    const uint32_t num_token_parallel_cores,
+    const uint32_t num_data_parallel_cores,
+    const CoreRangeSet worker_core_range_set,
+    const CoreRangeSet mux_core_range_set,
+    const std::vector<ttnn::GlobalSemaphore> active_token_count_semaphores,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor);
 }  // namespace ttnn::prim

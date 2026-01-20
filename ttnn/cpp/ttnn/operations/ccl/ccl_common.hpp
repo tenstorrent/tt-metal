@@ -775,7 +775,8 @@ void fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
-    std::vector<uint32_t>& worker_rt_args);
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> = std::nullopt);
 
 
 }  // namespace ttnn::ccl
