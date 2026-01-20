@@ -18,6 +18,11 @@ run-name: >-
 
 on:
   workflow_dispatch:
+    inputs:
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service-dedicated-merge-gate"
   pull_request:
     types:
       - opened
@@ -142,7 +147,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.extra-tag }}",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -164,7 +169,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.extra-tag }}",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
