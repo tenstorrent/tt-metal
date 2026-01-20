@@ -141,17 +141,15 @@ void bind_binary_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -280,7 +278,7 @@ void bind_binary_gcd_lcm_operation(
         {9}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -372,17 +370,15 @@ void bind_binary_unary_max_operation(
         {5}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             {4}
         )doc",
@@ -500,17 +496,15 @@ void bind_binary_unary_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -627,17 +621,15 @@ void bind_binary_with_float_param(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -701,17 +693,15 @@ void bind_bitwise_binary_ops_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -823,17 +813,15 @@ void bind_logical_binary_ops_operation(
         {7}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -911,7 +899,7 @@ void bind_binary_composite(
         {9}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -980,17 +968,15 @@ void bind_binary_composite_with_rtol_atol(
         {4}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
         )doc",
 
         operation.base_name(),
@@ -1056,7 +1042,7 @@ void bind_binary_composite_overload(
         {8}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -1139,7 +1125,7 @@ void bind_prelu(
         {8}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -1234,17 +1220,15 @@ void bind_div(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
 
         )doc",
 
@@ -1377,17 +1361,15 @@ void bind_binary_operation_with_fast_approx(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -1511,17 +1493,15 @@ void bind_polyval(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -1579,17 +1559,15 @@ void bind_binary_overload_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -1665,17 +1643,15 @@ void bind_inplace_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                 :header-rows: 1
 
                 * - Dtypes
                   - Layouts
-                  - Ranks
                 * - {4}
                   - TILE
-                  - 2, 3, 4
 
             {5}
         )doc",
@@ -1779,17 +1755,15 @@ void bind_inplace_operation_with_fast_approx(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -1895,17 +1869,15 @@ void bind_logical_inplace_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -1979,17 +1951,15 @@ void bind_binary_inplace_operation(
         {6}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -2089,17 +2059,15 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
         {3}
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
 
             {2}
         )doc",

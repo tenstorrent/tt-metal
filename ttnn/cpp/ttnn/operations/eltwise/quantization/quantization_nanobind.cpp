@@ -41,17 +41,15 @@ void bind_quantize_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
@@ -116,17 +114,15 @@ void bind_requantize_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
@@ -229,17 +225,15 @@ void bind_dequantize_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 

@@ -124,7 +124,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::polar_bw,
         R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes and layouts:
 
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -153,7 +153,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::angle_bw,
         R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes and layouts:
 
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |

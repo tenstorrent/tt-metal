@@ -44,17 +44,15 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
                  - TILE
-                 - 2, 3, 4
 
             INT32 is supported only for Tensor-scalar-scalar version.
         )doc",
@@ -127,17 +125,15 @@ void bind_unary_composite_optional_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {9}
                  - TILE
-                 - 2, 3, 4
 
             {10}
         )doc",
@@ -213,17 +209,15 @@ void bind_unary_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
 
@@ -281,17 +275,15 @@ void bind_unary_operation_subcoregrids(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - 2, 3, 4
 
             {5}
 
@@ -348,17 +340,15 @@ void bind_unary_sqrt_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {2}
                  - TILE
-                 - 2, 3, 4
 
             {3}
         )doc",
@@ -411,17 +401,15 @@ void bind_unary_operation_overload_complex(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             {4}
         )doc",
@@ -480,17 +468,15 @@ void bind_unary_operation_overload_complex_return_complex(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {2}
                  - TILE
-                 - 2, 3, 4
 
             {3}
             More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
@@ -552,17 +538,15 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             {4}
         )doc",
@@ -623,17 +607,15 @@ void bind_unary_operation_with_float_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -694,7 +676,7 @@ void bind_unary_operation_with_scalar_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -766,17 +748,15 @@ void bind_unary_operation_with_float_parameter_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 2, 3, 4
 
             {7}
         )doc",
@@ -832,17 +812,15 @@ void bind_unary_composite_with_default_float(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -903,17 +881,15 @@ void bind_unary_operation_with_int_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -973,7 +949,7 @@ void bind_unary_operation_with_dim_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -1039,17 +1015,15 @@ void bind_unary_rdiv(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
                  - TILE
-                 - 2, 3, 4
 
             {9}
         )doc",
@@ -1107,17 +1081,15 @@ void bind_softplus(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -1164,17 +1136,15 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
-                 - 2, 3, 4
 
             BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
         )doc",
@@ -1219,17 +1189,15 @@ void bind_sigmoid_accurate(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -1275,17 +1243,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::sigmoid.base_name(),
         ttnn::sigmoid.python_fully_qualified_name());
@@ -1332,17 +1298,15 @@ void bind_unary_chain(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
@@ -1386,17 +1350,15 @@ void bind_identity(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::identity.base_name(),
         ttnn::identity.python_fully_qualified_name());
@@ -1444,7 +1406,7 @@ void bind_unary_composite(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -1510,17 +1472,15 @@ void bind_unary_composite_int_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 2, 3, 4
 
             {7}
         )doc",
@@ -1579,17 +1539,15 @@ void bind_unary_composite_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
                  - TILE
-                 - 2, 3, 4
 
             {9}
         )doc",
@@ -1646,17 +1604,15 @@ void bind_unary_composite_int(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1710,17 +1666,15 @@ void bind_unary_threshold(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 2, 3, 4
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1777,17 +1731,15 @@ void bind_unary_composite_float_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
 
             {6}
         )doc",
@@ -1833,17 +1785,15 @@ void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, cons
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - FLOAT32, BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
 
 
         Example:
@@ -1894,17 +1844,15 @@ void bind_unary_composite_rpow(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 2, 3, 4
 
             {7}
         )doc",
@@ -2562,17 +2510,15 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
                  - TILE
-                 - 2, 3, 4
         )doc",
         ttnn::bitcast.base_name());
 

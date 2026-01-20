@@ -46,17 +46,15 @@ void bind_ternary_composite_float(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
@@ -105,7 +103,7 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -202,17 +200,15 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                 :header-rows: 1
 
                 * - Dtypes
                   - Layouts
-                  - Ranks
                 * - BFLOAT16, BFLOAT8_B
                   - TILE
-                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
@@ -271,17 +267,15 @@ void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
                  - TILE
-                 - 2, 3, 4
 
             Only TTT (tensor-tensor-tensor) variant is supported.
         )doc",
@@ -330,17 +324,15 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
