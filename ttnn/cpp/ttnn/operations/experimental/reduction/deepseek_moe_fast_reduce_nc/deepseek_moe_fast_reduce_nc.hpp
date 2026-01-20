@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -14,12 +15,12 @@ namespace ttnn {
 namespace operations::experimental::reduction {
 
 struct DeepseekMoEFastReduceNCOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input,
-        tt::stl::Span<const int32_t> dims,
-        const std::optional<const ttnn::Tensor>& output,
-        const ttnn::MemoryConfig& memory_config,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    static std::vector<ttnn::Tensor> invoke(
+        const ttnn::Tensor& input_tensor,
+        int32_t reduction_dim,
+        int32_t split_dim,
+        const ttnn::MemoryConfig& output_memory_config,
+        const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace operations::experimental::reduction

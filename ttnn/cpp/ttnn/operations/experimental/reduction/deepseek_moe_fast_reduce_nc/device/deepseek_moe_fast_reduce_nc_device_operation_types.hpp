@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -13,17 +14,17 @@
 namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
 struct operation_attributes_t {
-    const int32_t dim;
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    uint32_t reduction_dim;
+    uint32_t split_dim;
+    tt::tt_metal::MemoryConfig output_memory_config;
+    ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct tensor_args_t {
-    const Tensor input;
-    std::optional<Tensor> preallocated_output;
+    ttnn::Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
+using spec_return_value_t = ttnn::TensorSpec;
+using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
 }  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail

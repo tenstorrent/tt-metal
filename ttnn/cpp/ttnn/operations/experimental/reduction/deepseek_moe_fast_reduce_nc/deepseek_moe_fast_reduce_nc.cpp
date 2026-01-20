@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
@@ -14,33 +15,24 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-ttnn::Tensor DeepseekMoEFastReduceNCOperation::invoke(
-    const ttnn::Tensor& input,
-    tt::stl::Span<const int32_t> dims,
-    const std::optional<const ttnn::Tensor>& output,
-    const ttnn::MemoryConfig& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    TT_FATAL(
-        input.storage_type() == StorageType::DEVICE,
-        "Input tensor storage type must be DEVICE but got {}",
-        input.storage_type());
+std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
+    const ttnn::Tensor& input_tensor,
+    int32_t reduction_dim,
+    int32_t split_dim,
+    const ttnn::MemoryConfig& output_memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig config = init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /* default_approx_mode */ false,
+        /* default_fp32_acc */ true);
 
-    TT_FATAL(!dims.empty(), "deepseek_moe_fast_reduce_nc dims should not be empty");
-
-    auto kernel_config_val =
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
-
-    ttnn::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
-    std::sort(sorted_dims.begin(), sorted_dims.end());
-
-    auto temp_input = input;
-    for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        auto temp_output = ttnn::prim::deepseek_moe_fast_reduce_nc(
-            temp_input, sorted_dims[i], std::nullopt, memory_config, kernel_config_val);
-        temp_input = temp_output;
-    }
+    uint32_t rank = input_tensor.padded_shape().rank();
+    uint32_t normalized_reduction_dim = (reduction_dim < 0) ? reduction_dim + rank : (uint32_t)reduction_dim;
+    uint32_t normalized_split_dim = (split_dim < 0) ? split_dim + rank : (uint32_t)split_dim;
     return ttnn::prim::deepseek_moe_fast_reduce_nc(
-        temp_input, sorted_dims.front(), output, memory_config, kernel_config_val);
+        input_tensor, normalized_reduction_dim, normalized_split_dim, output_memory_config, config);
 }
 
 }  // namespace ttnn::operations::experimental::reduction

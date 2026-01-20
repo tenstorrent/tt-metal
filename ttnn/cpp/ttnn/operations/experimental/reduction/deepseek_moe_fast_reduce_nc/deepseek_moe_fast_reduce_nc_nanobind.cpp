@@ -26,18 +26,18 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
         )doc",
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const ttnn::SmallVector<int32_t>& dims,
-               const std::optional<const Tensor>& output,
-               const ttnn::MemoryConfig& memory_config,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(input, dims, output, memory_config, compute_kernel_config);
+               const ttnn::Tensor& input_tensor,
+               int32_t reduction_dim,
+               int32_t split_dim,
+               const ttnn::MemoryConfig& output_memory_config,
+               const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+                return self(input_tensor, reduction_dim, split_dim, output_memory_config, compute_kernel_config);
             },
-            nb::arg("input").noconvert(),
+            nb::arg("input_tensor"),
+            nb::arg("reduction_dim"),
+            nb::arg("split_dim"),
             nb::kw_only(),
-            nb::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
-            nb::arg("output").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            nb::arg("output_memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 }
 

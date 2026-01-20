@@ -39,10 +39,10 @@ namespace ttnn::prim {
 ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::DeepseekMoEFastReduceNCDeviceOperation::
     tensor_return_value_t
     deepseek_moe_fast_reduce_nc(
-        const ttnn::Tensor& input,
-        const int32_t& dim,
-        const std::optional<const ttnn::Tensor>& output,
-        const ttnn::MemoryConfig& output_mem_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
+        const ttnn::Tensor& input_tensor,
+        uint32_t reduction_dim,
+        uint32_t split_dim,
+        const ttnn::MemoryConfig& output_memory_config,
+        const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::prim
