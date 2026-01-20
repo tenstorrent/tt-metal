@@ -440,7 +440,7 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
+    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=None):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
@@ -480,6 +480,20 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
+
+            # Apply bitmask for structured outputs
+            if self.bitmask is not None:
+                bitmask_unpacked = self.unpack_bitmask(self.bitmask)
+                if isinstance(user_id, list):
+                    # batched prefill - slice for user_id[i]
+                    current_user_id = user_id[i]
+                    bitmask_unpacked = bitmask_unpacked[current_user_id : current_user_id + 1, :]
+                elif user_id is not None:
+                    # single user prefill
+                    bitmask_unpacked = bitmask_unpacked[user_id : user_id + 1, :]
+                tt_logits = ttnn.add(tt_logits, bitmask_unpacked)
+                bitmask_unpacked.deallocate(True)
+
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]

@@ -158,6 +158,9 @@ class Generator:
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
+        if bitmask is not None:
+            self.model.bitmask_to_device(bitmask)
+
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
         output_toks = torch.zeros(batch, 1, 1)
@@ -290,7 +293,7 @@ class Generator:
         )
 
         tt_toks = self.model.process_output_prefill(
-            tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+            tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
         )
 
         return tt_toks
@@ -331,7 +334,7 @@ class Generator:
             batch_size=batch_size,
         )
         toks = self.model.process_output_prefill(
-            tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+            tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
         )
         return toks
 
