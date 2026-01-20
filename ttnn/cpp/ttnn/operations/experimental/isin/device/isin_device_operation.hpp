@@ -7,13 +7,13 @@
 #include "isin_device_operation_types.hpp"
 #include "isin_program_factory.hpp"
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::experimental::prim {
 
 struct IsInDeviceOperation {
     using operation_attributes_t = IsinParams;
     using tensor_args_t = IsinInputs;
-    using spec_return_value_t = ttnn::operations::experimental::isin::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::experimental::isin::tensor_return_value_t;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<IsInProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -27,11 +27,7 @@ struct IsInDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::isin
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::isin::tensor_return_value_t isin(
+Tensor isin(
     const Tensor& elements,
     const Tensor& test_elements,
     uint32_t single_fetch_subchunk_size,
@@ -39,4 +35,4 @@ ttnn::operations::experimental::isin::tensor_return_value_t isin(
     bool invert = false,
     const std::optional<Tensor>& optional_out = std::nullopt);
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::experimental::prim

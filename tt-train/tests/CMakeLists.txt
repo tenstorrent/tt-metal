@@ -108,3 +108,22 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
+
+############################################################################################################################
+# Benchmark tests (using Google Benchmark)
+# Only available when building via tt-metal (Build from tt-train would require adding new dependency)
+############################################################################################################################
+
+if(TARGET benchmark::benchmark)
+    set(BENCHMARK_SOURCES benchmark/matmuls_benchmark.cpp)
+
+    add_executable(ttml_benchmarks ${BENCHMARK_SOURCES})
+    target_link_libraries(
+        ttml_benchmarks
+        PUBLIC
+            ttml
+            TTNN::TTNN
+            benchmark::benchmark
+    )
+    target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+endif()
