@@ -942,45 +942,117 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     });
 }
 
-TEST_F(TopologyMapperTest, MockPSDGraphTopologyStrictPolicyTest) {
-    // Test that STRICT graph topology policy throws when channels are insufficient
-    // Note: This test uses a single mesh per host to avoid multi-mesh-per-host limitation
-    const std::filesystem::path mgd_path =
+TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_graph_topology_strict_mgd.textproto";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd_relaxed_test.textproto";
 
-    const std::filesystem::path psd_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_graph_topology_insufficient_channels.textproto";
-
-    auto mesh_graph = MeshGraph(mgd_path.string());
-    tt::tt_metal::PhysicalSystemDescriptor mock_psd(psd_path.string());
-
-    // Create a local mesh binding for testing - only mesh 0 on this host
-    // The inter-mesh validation will still be tested via the graph topology policy
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+    // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
-    local_mesh_binding.mesh_ids = {MeshId{0}};
-    local_mesh_binding.host_rank = MeshHostRankId{0};
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{1}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{2}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{3}};
+    }
 
-    // With STRICT policy requiring 8 channels but only 2 channels available,
-    // TopologyMapper should throw an exception during inter-mesh mapping
-    EXPECT_THROW(TopologyMapper(mesh_graph, mock_psd, local_mesh_binding), std::exception)
-        << "TopologyMapper should throw when STRICT graph topology policy requires more channels than available";
-}
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
 
-TEST_F(TopologyMapperTest, MockPSDGraphTopologyRelaxedPolicyTest) {
-    // Test that RELAXED graph topology policy is correctly read from MGD
-    // Note: Full inter-mesh mapping requires multi-host setup, so we just verify the policy is read correctly
-    const std::filesystem::path mgd_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_graph_topology_relaxed_mgd.textproto";
+    // Verify that the topology mapper was created successfully
+    auto current_rank = *tt::tt_metal::MetalContext::instance().global_distributed_context().rank();
+    MeshId expected_mesh_id{static_cast<uint32_t>(current_rank)};
 
-    auto mesh_graph = MeshGraph(mgd_path.string());
-
-    // Verify that the RELAXED policy is correctly read from the graph topology
-    // The is_inter_mesh_policy_relaxed() method should return true for RELAXED policy
+    // Verify RELAXED policy is read correctly from graph_topology
     EXPECT_TRUE(mesh_graph.is_inter_mesh_policy_relaxed())
         << "MeshGraph should correctly read RELAXED policy from graph_topology";
+
+    // Verify mesh shape matches expected (2x4)
+    EXPECT_EQ(topology_mapper.get_mesh_shape(expected_mesh_id), MeshShape(2, 4))
+        << "TopologyMapper should have correct mesh shape for mesh " << expected_mesh_id.get();
+    EXPECT_EQ(mesh_graph.get_mesh_shape(expected_mesh_id), MeshShape(2, 4))
+        << "MeshGraph should have correct mesh shape for mesh " << expected_mesh_id.get();
+
+    // Verify that mappings exist for this mesh
+    const auto& host_ranks = topology_mapper.get_host_ranks(expected_mesh_id);
+    EXPECT_GT(host_ranks.size(), 0u) << "TopologyMapper should have at least one host rank for mesh "
+                                     << expected_mesh_id.get();
+
+    // Verify chip IDs are mapped correctly
+    auto chip_ids = topology_mapper.get_chip_ids(expected_mesh_id);
+    EXPECT_EQ(chip_ids.size(), 8u) << "TopologyMapper should have 8 chip IDs for mesh " << expected_mesh_id.get();
+
+    // Get all ASICs connected to the current host
+    auto my_host_name = physical_system_descriptor_->my_host_name();
+    auto host_asics = physical_system_descriptor_->get_asics_connected_to_host(my_host_name);
+
+    // Verify that fabric nodes can be mapped to ASIC IDs and that all mapped ASICs exist on this host
+    for (ChipId chip_id = 0; chip_id < 8; ++chip_id) {
+        FabricNodeId fabric_node_id(expected_mesh_id, chip_id);
+        auto asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
+        EXPECT_NE(asic_id.get(), 0u) << "ASIC ID should be valid for fabric node " << fabric_node_id;
+
+        // Verify bidirectional mapping
+        EXPECT_EQ(topology_mapper.get_fabric_node_id_from_asic_id(asic_id), fabric_node_id)
+            << "Bidirectional mapping should work for ASIC " << asic_id.get();
+
+        // Verify that the mapped ASIC ID exists on the current host
+        bool asic_found_on_host = std::find(host_asics.begin(), host_asics.end(), asic_id) != host_asics.end();
+        EXPECT_TRUE(asic_found_on_host) << "ASIC " << asic_id.get() << " mapped from fabric node " << fabric_node_id
+                                        << " should exist on host " << my_host_name;
+
+        // Verify that the host name for the ASIC matches the current host
+        EXPECT_EQ(physical_system_descriptor_->get_host_name_for_asic(asic_id), my_host_name)
+            << "ASIC " << asic_id.get() << " should be on host " << my_host_name;
+    }
+}
+
+TEST_F(TopologyMapperTest, ClosetBoxSuperpodStrictInvalidPolicyTest) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_superpod_mgd_strict_invalid.textproto";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Verify STRICT policy is read correctly from graph_topology
+    EXPECT_FALSE(mesh_graph.is_inter_mesh_policy_relaxed())
+        << "MeshGraph should correctly read STRICT policy from graph_topology";
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{1}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{2}};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{3}};
+    }
+
+    auto current_rank = *tt::tt_metal::MetalContext::instance().global_distributed_context().rank();
+    MeshId expected_mesh_id{static_cast<uint32_t>(current_rank)};
+
+    // Verify mesh shape matches expected (2x4)
+    EXPECT_EQ(mesh_graph.get_mesh_shape(expected_mesh_id), MeshShape(2, 4))
+        << "MeshGraph should have correct mesh shape for mesh " << expected_mesh_id.get();
+
+    // Get all ASICs connected to the current host
+    auto my_host_name = physical_system_descriptor_->my_host_name();
+    auto host_asics = physical_system_descriptor_->get_asics_connected_to_host(my_host_name);
+
+    // Verify that the host has ASICs (pre-condition for the test)
+    EXPECT_GT(host_asics.size(), 0u) << "Host " << my_host_name << " should have at least one ASIC";
+
+    // With STRICT policy and invalid mapping conditions (e.g., insufficient channels for inter-mesh connections),
+    // TopologyMapper should throw an exception during mapping
+    // This test verifies that the STRICT policy correctly enforces validation and fails when conditions are not met
+    EXPECT_THROW(TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding), std::exception)
+        << "TopologyMapper should throw with STRICT policy when mapping conditions are invalid (e.g., insufficient "
+           "channels for inter-mesh connections)";
 }
 
 }  // namespace tt::tt_fabric
