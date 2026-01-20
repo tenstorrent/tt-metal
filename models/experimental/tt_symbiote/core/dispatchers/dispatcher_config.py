@@ -57,10 +57,12 @@ def get_active_dispatcher() -> Any:
         Dispatcher module with can_dispatch_to_ttnn and dispatch_to_ttnn functions
     """
     # Check environment variable first (similar to run_config)
-    env_dispatcher = os.environ.get("TT_SYMBIOTE_DISPATCHER", "CPU")
+    env_dispatcher = os.environ.get("TT_SYMBIOTE_DISPATCHER", None)
+    global _current_dispatcher
     if env_dispatcher is not None and env_dispatcher in _DISPATCHER_REGISTRY:
         return _DISPATCHER_REGISTRY[env_dispatcher]
-
+    elif env_dispatcher is None and _current_dispatcher is None:
+        return _DISPATCHER_REGISTRY["CPU"]
     # Fall back to programmatically set dispatcher
     if _current_dispatcher not in _DISPATCHER_REGISTRY:
         raise RuntimeError(
