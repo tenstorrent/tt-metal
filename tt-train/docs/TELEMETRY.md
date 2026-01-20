@@ -19,7 +19,7 @@ This guide shows how to correlate training performance with device telemetry (te
 ./scripts/poll_telemetry.sh stop
 ```
 
-### 3. Generate Plots
+### 2. Generate Plots
 
 ```bash
 python3 scripts/plot_telemetry.py \
