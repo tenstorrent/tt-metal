@@ -265,6 +265,79 @@ void Device::init_command_queue_host() {
         dispatch_d2h_bytes_acked_buffer_->size() * sizeof(uint32_t),
         true  // map_to_noc for direct device access
     );
+
+    // Start the D2H receiver thread
+    start_dispatch_d2h_receiver();
+}
+
+void Device::dispatch_d2h_receiver_thread_func() {
+    constexpr uint32_t payload_size = 8;  // wait_count (4) + wait_stream (4)
+
+    log_info(tt::LogMetal, "Device {}: D2H receiver thread started", id_);
+
+    while (dispatch_d2h_receiver_running_ && dispatch_d2h_receiver_running_->load(std::memory_order_relaxed)) {
+        // Read bytes_sent from pinned memory (volatile read)
+        volatile uint32_t* bytes_sent_ptr = dispatch_d2h_bytes_sent_buffer_->data();
+        uint32_t bytes_sent = *bytes_sent_ptr;
+
+        // Calculate how many bytes are available
+        uint32_t bytes_available = bytes_sent - dispatch_d2h_bytes_acked_;
+
+        if (bytes_available >= payload_size) {
+            // Read the data from the FIFO
+            uint32_t* data_ptr = dispatch_d2h_data_buffer_->data();
+            uint32_t read_offset_words = dispatch_d2h_read_ptr_ / sizeof(uint32_t);
+
+            uint32_t wait_count = data_ptr[read_offset_words];
+            uint32_t wait_stream = data_ptr[read_offset_words + 1];
+
+            // Print the telemetry data
+            log_info(
+                tt::LogMetal,
+                "Device {}: dispatch wait_for_workers - wait_count={}, wait_stream={}",
+                id_,
+                wait_count,
+                wait_stream);
+
+            // Update read pointer with wrap-around
+            dispatch_d2h_read_ptr_ += payload_size;
+            if (dispatch_d2h_read_ptr_ >= kDispatchD2HFifoSize) {
+                dispatch_d2h_read_ptr_ = 0;
+            }
+
+            // Update bytes_acked
+            dispatch_d2h_bytes_acked_ += payload_size;
+
+            // Write bytes_acked to pinned memory so device can see it (for future flow control)
+            dispatch_d2h_bytes_acked_buffer_->at(0) = dispatch_d2h_bytes_acked_;
+        } else {
+            // No data available, yield to avoid busy spinning
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+
+    log_info(tt::LogMetal, "Device {}: D2H receiver thread stopped", id_);
+}
+
+void Device::start_dispatch_d2h_receiver() {
+    if (!dispatch_d2h_data_pinned_memory_ || !dispatch_d2h_bytes_sent_pinned_memory_) {
+        log_debug(tt::LogMetal, "Device {}: D2H socket not available, skipping receiver thread", id_);
+        return;
+    }
+
+    dispatch_d2h_receiver_running_ = std::make_unique<std::atomic<bool>>(true);
+    dispatch_d2h_receiver_thread_ = std::make_unique<std::thread>(&Device::dispatch_d2h_receiver_thread_func, this);
+}
+
+void Device::stop_dispatch_d2h_receiver() {
+    if (dispatch_d2h_receiver_running_) {
+        dispatch_d2h_receiver_running_->store(false, std::memory_order_relaxed);
+    }
+    if (dispatch_d2h_receiver_thread_ && dispatch_d2h_receiver_thread_->joinable()) {
+        dispatch_d2h_receiver_thread_->join();
+        dispatch_d2h_receiver_thread_.reset();
+    }
+    dispatch_d2h_receiver_running_.reset();
 }
 
 Device::DispatchD2HSocketConfig Device::get_dispatch_d2h_socket_config() const {
@@ -515,6 +588,9 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
+
+    // Stop the D2H receiver thread before cleaning up resources
+    stop_dispatch_d2h_receiver();
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);

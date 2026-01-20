@@ -5,6 +5,8 @@
 #pragma once
 
 #include <memory>
+#include <atomic>
+#include <thread>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -249,6 +251,16 @@ private:
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_data_pinned_memory_ = nullptr;
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_sent_pinned_memory_ = nullptr;
     std::unique_ptr<experimental::PinnedMemory> dispatch_d2h_bytes_acked_pinned_memory_ = nullptr;
+
+    // Background thread for D2H socket receiver
+    std::unique_ptr<std::thread> dispatch_d2h_receiver_thread_ = nullptr;
+    std::unique_ptr<std::atomic<bool>> dispatch_d2h_receiver_running_ = nullptr;
+    uint32_t dispatch_d2h_bytes_acked_ = 0;
+    uint32_t dispatch_d2h_read_ptr_ = 0;
+
+    void dispatch_d2h_receiver_thread_func();
+    void start_dispatch_d2h_receiver();
+    void stop_dispatch_d2h_receiver();
 
 public:
     // D2H socket configuration for dispatch cores
