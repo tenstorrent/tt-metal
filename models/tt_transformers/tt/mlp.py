@@ -183,11 +183,14 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
+                # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
+                # to avoid any performance regressions.
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
                     self.tt_ccl,
                     cluster_axis=1,
+                    num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
@@ -197,6 +200,7 @@ class MLP(LightweightModule):
                     self.mesh_device,
                     self.tt_ccl,
                     cluster_axis=1,
+                    num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
