@@ -1660,7 +1660,7 @@ bool process_cmd(
 }
 
 /* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d */
-static uint32_t relay_linear_to_downstream(
+static void relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
     uint32_t page_residual_space = (downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1))) &
                                    (downstream_cb_page_size - 1);
@@ -1682,10 +1682,10 @@ static uint32_t relay_linear_to_downstream(
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-    // consider calling relay_client.write_atomic_inc_any_len instead
-    relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(scratch_write_addr, noc_addr, amt_to_write);
+    relay_client
+        .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+            scratch_write_addr, noc_addr, amt_to_write, npages);
     downstream_data_ptr += amt_to_write;
-    return npages;
 }
 
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
@@ -1742,8 +1742,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
             read_addr += amt_to_read;
 
             // Third step - write from DB
-            uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
-            relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+            relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
             read_length -= amt_to_read;
 
             // TODO(pgk); we can do better on WH w/ tagging
@@ -1754,9 +1753,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
