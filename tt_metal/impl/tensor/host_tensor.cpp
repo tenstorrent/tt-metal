@@ -17,11 +17,13 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
 // Special Member Functions
 
+// TODO: inspect these, the defaults doesn't seem like a good idea.
 HostTensor::HostTensor() = default;
 HostTensor::~HostTensor() = default;
 
@@ -78,22 +80,10 @@ HostTensor::volumn_type HostTensor::padded_volume() const { return padded_shape(
 // Host tensors are never sharded
 bool HostTensor::is_sharded() const { return false; }
 
-// Following tensor_impl.cpp:54-66
-std::size_t HostTensor::element_size() const {
-    switch (dtype()) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return sizeof(std::byte);
-        default: TT_THROW("Unsupported data type");
-    }
-}
+std::size_t HostTensor::element_size() const { return data_type_size(dtype()); }
 
 // Storage Access (following tensor.cpp:629-632 pattern)
+// TODO: figure out if we're doing DistributedHostBuffer, hardcoding (0,0) is horrifying.
 HostBuffer HostTensor::get_host_buffer() const {
     const auto& storage = std::get<HostStorage>(impl->get_storage());
     // Get shard at (0,0) for single-device tensor - always exists for HostTensor

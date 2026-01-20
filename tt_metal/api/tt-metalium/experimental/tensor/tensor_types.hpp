@@ -9,6 +9,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -54,6 +55,20 @@ consteval DataType convert_to_data_type() {
         return DataType::BFLOAT16;
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
+    }
+}
+
+constexpr std::size_t data_type_size(DataType type) {
+    switch (type) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        default: TT_THROW("Unsupported data type");
     }
 }
 
