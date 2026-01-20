@@ -76,7 +76,8 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
             return TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mem_config));
-        } else if (operation_attributes.memory_config.nd_shard_spec().has_value()) {
+        }
+        if (operation_attributes.memory_config.nd_shard_spec().has_value()) {
             return TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(
