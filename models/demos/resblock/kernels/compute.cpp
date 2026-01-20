@@ -31,6 +31,7 @@ FORCE_INLINE void matmul_with_relu_block() {
     }
     {
         DeviceZoneScopedN("relu_tile");
+        relu_tile_init();
         relu_tile(0);
     }
     tile_regs_commit();
@@ -70,11 +71,6 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     cb_wait_front(CbBias, NumTilesBias);
 
     tile_regs_acquire();
-
-    {
-        DeviceZoneScopedN("init_sfpu_and_mm_init_short");
-        mm_init_short(CbA, CbB);
-    }
 
     {
         DeviceZoneScopedN("matmul_tiles");
@@ -134,12 +130,18 @@ void MAIN {
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
 
+    mm_block_init(
+        mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
+
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
     for (uint32_t layer = 0; layer < num_layers; layer++) {
+        // This doesn't work? We should be able to do this instead
+        // mm_block_init_short_with_dt(mm1_full_cb, weight0_cb, weight1_cb);
+
+        // This is a workaround since mm_block_init_short_with_dt doesn't work
         mm_block_init(
             mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-        relu_tile_init();
 
         // MM1_FULL_CB -> matmul+relu -> INTERMEDIATE_PREGATHER_CB
         // Don't pop MM1 yet - needed for bias
