@@ -43,7 +43,8 @@ class SyntheticStateDict(dict):
 
     def clear_cache(self):
         """No-op for synthetic state dict since we don't have a cache"""
-        pass
+
+
 def generate_synthetic_state_dict(hf_config: PretrainedConfig, layer_idx: int, seed: int = 42) -> SyntheticStateDict:
     """
     Generate synthetic weights for DeepseekV3 MLA module.
