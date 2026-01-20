@@ -297,7 +297,7 @@ def decode_forward(
     # Add down projection bias
     # expert_output shape: [num_sparse_blocks, num_experts_per_device, block_size, hidden]
     # Bias shape: [1, num_experts_per_device, 1, hidden] - broadcasts correctly after squeeze
-    # expert_output = ttnn.add(expert_output, weights.w2_bias)
+    expert_output_sparse = ttnn.add(expert_output_sparse, weights.w2_bias)
 
     # ==========================================================================
     # STEP 6: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
