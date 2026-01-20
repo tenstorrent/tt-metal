@@ -27,6 +27,10 @@ struct MinimalMatmulParams {
     std::optional<operations::unary::UnaryWithParam> fused_activation;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
+
+    // For fused_ternary scalar * tensor_a * matmul_output + tensor_c
+    std::optional<float> fused_ternary_scalar;
+
     DeviceComputeKernelConfig compute_kernel_config;
     int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
     int32_t dim = -1;    // Dimension to split along (default -1)
@@ -37,6 +41,10 @@ struct MinimalMatmulInputs {
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
     std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
+
+    // For fused_ternary scalar * tensor_a * matmul_output + tensor_c (fused-addcmul)
+    std::optional<Tensor> fused_ternary_input_a;
+    std::optional<Tensor> fused_ternary_input_c;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -20,17 +20,16 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     // TODO: Full fusion will modify minimal_matmul kernels to compute addcmul inline
-    // For now, we only call minimal_matmul and ignore the addcmul parameters
+    // For now, parameters are passed to minimal_matmul but kernels don't use them yet
     // The full implementation will compute: output = addcmul_input_tensor1 + (scalar * matmul_output *
     // addcmul_input_tensor2) where matmul_output = minimal_matmul(matmul_input_tensor, matmul_weight_tensor)
 
-    // Unused parameters in skeleton implementation
-    (void)scalar;
-    (void)addcmul_input_tensor1;
-    (void)addcmul_input_tensor2;
-
-    // Call minimal_matmul with the provided parameters
-    return ttnn::prim::minimal_matmul(
+    // Call minimal_matmul with all parameters including fused ternary
+    // Note: Parameter mapping for addcmul semantics:
+    // addcmul(input_c, matmul_out, input_a, value=scalar) → input_c + (scalar * matmul_out * input_a)
+    // So: fused_ternary_input_a = addcmul_input_tensor2 (gate/multiplier)
+    //     fused_ternary_input_c = addcmul_input_tensor1 (residual/base)
+    auto outputs = ttnn::prim::minimal_matmul(
         matmul_input_tensor,
         matmul_weight_tensor,
         bias_tensor,
@@ -38,7 +37,15 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
         config,
         memory_config,
         dtype,
-        compute_kernel_config);
+        compute_kernel_config,
+        1,                       // no splitting
+        -1,                      // dim
+        scalar,                  // fused_ternary_scalar
+        addcmul_input_tensor2,   // fused_ternary_input_a (gate/multiplier)
+        addcmul_input_tensor1);  // fused_ternary_input_c (residual/base)
+
+    TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
+    return outputs[0];
 }
 
 }  // namespace ttnn::operations::experimental::transformer
