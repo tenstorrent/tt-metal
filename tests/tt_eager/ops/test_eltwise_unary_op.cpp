@@ -128,10 +128,10 @@ void test_operation_infrastructure() {
     auto input_tensor =
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
-    ttnn::operations::unary::operation_attributes_t op_args{
+    ttnn::prim::UnaryParams op_args{
         {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
-    ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
-    auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
+    ttnn::prim::UnaryInputs tensor_args{input_tensor};
+    auto program_hash = ttnn::prim::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
 }
 

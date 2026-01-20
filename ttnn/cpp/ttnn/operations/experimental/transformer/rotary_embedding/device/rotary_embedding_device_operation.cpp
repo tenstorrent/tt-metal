@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -10,11 +11,11 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding {
+namespace ttnn::experimental::prim {
 
 RotaryEmbeddingDeviceOperation::program_factory_t RotaryEmbeddingDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return rotary_embedding::program::RotaryEmbeddingProgramFactory{};
+    return RotaryEmbeddingProgramFactory{};
 }
 
 void RotaryEmbeddingDeviceOperation::validate_on_program_cache_hit(
@@ -95,7 +96,7 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
+TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.padded_shape();
@@ -136,7 +137,7 @@ spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t RotaryEmbeddingDeviceOperation::create_output_tensors(
+Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
@@ -154,11 +155,11 @@ tt::stl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     return hash;
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::rotary_embedding::tensor_return_value_t rotary_embedding(
+Tensor rotary_embedding(
     const Tensor& input,
     const Tensor& cos,
     const Tensor& sin,
@@ -166,7 +167,7 @@ ttnn::operations::experimental::transformer::rotary_embedding::tensor_return_val
     std::optional<uint32_t> token_idx,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    using OperationType = ttnn::operations::experimental::transformer::rotary_embedding::RotaryEmbeddingDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RotaryEmbeddingDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .seq_len = seq_len,

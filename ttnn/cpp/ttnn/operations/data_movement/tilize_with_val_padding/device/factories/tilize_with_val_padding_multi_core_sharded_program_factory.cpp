@@ -17,16 +17,14 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddingMultiCoreShardedFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const Tensor& a = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const Tensor& a = input_tensor;
+    const Tensor& output = output_tensor;
     auto pad_value = operation_attributes.pad_value;
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
@@ -148,16 +146,16 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
 void TilizeWithValPaddingMultiCoreShardedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output) {
+    const Tensor& input_tensor,
+    const Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = output.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim
