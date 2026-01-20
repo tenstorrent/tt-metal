@@ -227,6 +227,7 @@ template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::POWER>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER_ITERATIVE>;
 
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;

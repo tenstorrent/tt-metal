@@ -328,7 +328,7 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The float exponent reinterpreted as uint32_t                               | uint32_t |                                                       | True     |
+ * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t |                                                       | True     |
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
@@ -340,8 +340,7 @@ ALWI void power_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
 
-// Iterative approach for power operation
-// POWER : y = x^(const param0)
+// POWER_ITERATIVE : y = x^(const param0)
 // clang-format off
 /**
  * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
@@ -349,14 +348,14 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Note: This version of power tile performs iterative approach for power operation for exponents 0,1,2,3.
+ * Note: Uses iterative multiplication for positive integer exponents. Optimal for small exponents (0,1,2,3).
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The float exponent reinterpreted as uint32_t                               | uint32_t | Must be a positive, non fractional float value        | True     |
+ * | param0          | The exponent as IEEE 754 float bits                                        | uint32_t | Must be a positive integer exponent                   | True     |
  */
 // clang-format on
 ALWI void power_tile_iterative(uint32_t idst, uint32_t param0) {
