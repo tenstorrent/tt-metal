@@ -38,11 +38,7 @@ Tensor rms_norm(
             input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
 
         if (weight.has_value()) {
-            result = ttnn::multiply(
-                result,
-                weight.value(),
-                /*alpha=*/std::nullopt,
-                output_memory_config);
+            result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);
         }
         if (bias.has_value()) {
             result = ttnn::add(result, bias.value(), /*alpha=*/std::nullopt, output_memory_config);
