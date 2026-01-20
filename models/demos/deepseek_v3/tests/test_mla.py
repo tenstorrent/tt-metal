@@ -267,10 +267,7 @@ def generate_reference_io(
                 else:
                     # Keep layernorm weights as-is
                     prefixed_synthetic[full_name] = tensor
-            # Add other required keys from original state_dict that might be needed
-            for key in state_dict.keys():
-                if key not in prefixed_synthetic and not key.startswith(module_path + "."):
-                    prefixed_synthetic[key] = state_dict[key]
+            # For synthetic weights, we rely solely on the newly constructed prefixed_synthetic dict
             state_dict = prefixed_synthetic
     else:
         # Original code for downloaded weights
