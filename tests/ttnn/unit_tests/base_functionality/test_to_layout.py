@@ -693,14 +693,15 @@ def test_shard_untilize2(device):
         pytest.param((1, 1, 513, 513), id="513x513"),
     ],
 )
-def test_tensor_padding(device, shape):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_tensor_padding(device, shape, layout):
     if shape is None:
         pt_tensor = torch.empty(0, dtype=torch.bfloat16, requires_grad=False)
     else:
         pt_tensor = torch.rand(torch.Size(shape), requires_grad=False).bfloat16()
 
-    tt_tensor_one = ttnn.to_layout(ttnn.Tensor(pt_tensor, ttnn.bfloat16), layout=ttnn.TILE_LAYOUT).to(device)
-    tt_tensor_two = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    tt_tensor_one = ttnn.to_layout(ttnn.Tensor(pt_tensor, ttnn.bfloat16), layout=layout).to(device)
+    tt_tensor_two = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(layout).to(device)
     tt_tensor_one_torch = ttnn.to_torch(tt_tensor_one)
     tt_tensor_two_torch = ttnn.to_torch(tt_tensor_two)
     assert torch.allclose(tt_tensor_one_torch, tt_tensor_two_torch, 0.9999)
