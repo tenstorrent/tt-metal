@@ -349,7 +349,7 @@ def run_reference_with_attention(
             )
         else:
             input_cache = transformers_cache_from_torch(
-                tuple(torch.empty((batch_size, 1, 0, dim), dtype=tdtype) for _ in range(num_layers))
+                tuple(torch.empty((batch_size, 1, 0, dim), dtype=dtype) for _ in range(num_layers))
             )
     else:
         assert mode == "decode"
