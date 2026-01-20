@@ -6,9 +6,11 @@ Timestep embedding module for diffusion process
 Converts scalar timestep to embedding vector using sinusoidal encoding
 """
 
-import ttnn
-import torch
 import math
+
+import torch
+
+import ttnn
 
 
 class TtTimestepEmbedding:
@@ -62,16 +64,13 @@ class TtTimestepEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Linear projection 1 (if weights loaded)
         if self.linear1_weight is not None:
             emb_ttnn = ttnn.linear(
-                emb_ttnn,
-                self.linear1_weight,
-                bias=self.linear1_bias,
-                memory_config=ttnn.L1_MEMORY_CONFIG
+                emb_ttnn, self.linear1_weight, bias=self.linear1_bias, memory_config=ttnn.L1_MEMORY_CONFIG
             )
 
             # SiLU activation
@@ -79,10 +78,7 @@ class TtTimestepEmbedding:
 
             # Linear projection 2
             emb_ttnn = ttnn.linear(
-                emb_ttnn,
-                self.linear2_weight,
-                bias=self.linear2_bias,
-                memory_config=ttnn.L1_MEMORY_CONFIG
+                emb_ttnn, self.linear2_weight, bias=self.linear2_bias, memory_config=ttnn.L1_MEMORY_CONFIG
             )
 
         return emb_ttnn
@@ -106,7 +102,7 @@ class TtTimestepEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.linear1_bias = ttnn.from_torch(
@@ -114,7 +110,7 @@ class TtTimestepEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.linear2_weight = ttnn.from_torch(
@@ -122,7 +118,7 @@ class TtTimestepEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.linear2_bias = ttnn.from_torch(
@@ -130,5 +126,5 @@ class TtTimestepEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

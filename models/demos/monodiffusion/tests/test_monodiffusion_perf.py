@@ -6,13 +6,14 @@ Performance benchmarking tests for MonoDiffusion
 Target: 10+ FPS at 640x192 resolution
 """
 
-import pytest
-import torch
-import ttnn
 import time
-import numpy as np
 from typing import Dict
 
+import numpy as np
+import pytest
+import torch
+
+import ttnn
 from models.demos.monodiffusion.tt import (
     create_monodiffusion_from_parameters,
     create_monodiffusion_preprocessor,
@@ -21,10 +22,7 @@ from models.demos.monodiffusion.tt import (
 
 
 def measure_inference_time(
-    model,
-    input_tensor: ttnn.Tensor,
-    num_iterations: int = 10,
-    warmup_iterations: int = 3
+    model, input_tensor: ttnn.Tensor, num_iterations: int = 10, warmup_iterations: int = 3
 ) -> Dict[str, float]:
     """
     Measure inference time with warmup
@@ -53,7 +51,7 @@ def measure_inference_time(
         "min": times.min(),
         "max": times.max(),
         "median": np.median(times),
-        "fps": 1.0 / times.mean()
+        "fps": 1.0 / times.mean(),
     }
 
 
@@ -99,7 +97,7 @@ def test_monodiffusion_perf_device(device_id, resolution, num_inference_steps):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Measure performance
@@ -116,7 +114,7 @@ def test_monodiffusion_perf_device(device_id, resolution, num_inference_steps):
 
         # Check target
         target_fps = 10.0
-        if stats['fps'] >= target_fps:
+        if stats["fps"] >= target_fps:
             print(f"\n✓ Performance target met: {stats['fps']:.2f} FPS >= {target_fps} FPS")
         else:
             print(f"\n⚠ Performance below target: {stats['fps']:.2f} FPS < {target_fps} FPS")

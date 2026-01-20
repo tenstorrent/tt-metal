@@ -6,14 +6,15 @@ MonoDiffusion Demo Script
 Run monocular depth estimation on sample images
 """
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 import torch
-import ttnn
-import numpy as np
-from pathlib import Path
 from PIL import Image
-import matplotlib.pyplot as plt
 
+import ttnn
 from models.demos.monodiffusion.tt import (
     create_monodiffusion_from_parameters,
     create_monodiffusion_preprocessor,
@@ -33,7 +34,7 @@ def load_sample_image(image_path: str, target_size: tuple = (192, 640)) -> torch
     Returns:
         Preprocessed image tensor (1, 3, H, W)
     """
-    img = Image.open(image_path).convert('RGB')
+    img = Image.open(image_path).convert("RGB")
 
     # Resize
     img = img.resize((target_size[1], target_size[0]), Image.BILINEAR)
@@ -51,10 +52,7 @@ def load_sample_image(image_path: str, target_size: tuple = (192, 640)) -> torch
 
 
 def visualize_results(
-    input_image: torch.Tensor,
-    depth_map: torch.Tensor,
-    uncertainty_map: torch.Tensor,
-    save_path: str
+    input_image: torch.Tensor, depth_map: torch.Tensor, uncertainty_map: torch.Tensor, save_path: str
 ):
     """
     Visualize depth and uncertainty predictions
@@ -64,26 +62,26 @@ def visualize_results(
     # Input image
     img = input_image[0].permute(1, 2, 0).cpu().numpy()
     axes[0].imshow(img)
-    axes[0].set_title('Input Image')
-    axes[0].axis('off')
+    axes[0].set_title("Input Image")
+    axes[0].axis("off")
 
     # Depth map
     depth = depth_map[0, 0].cpu().numpy()
-    im1 = axes[1].imshow(depth, cmap='plasma')
-    axes[1].set_title('Predicted Depth')
-    axes[1].axis('off')
+    im1 = axes[1].imshow(depth, cmap="plasma")
+    axes[1].set_title("Predicted Depth")
+    axes[1].axis("off")
     plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
     # Uncertainty map
     if uncertainty_map is not None:
         uncertainty = uncertainty_map[0, 0].cpu().numpy()
-        im2 = axes[2].imshow(uncertainty, cmap='hot')
-        axes[2].set_title('Uncertainty')
-        axes[2].axis('off')
+        im2 = axes[2].imshow(uncertainty, cmap="hot")
+        axes[2].set_title("Uncertainty")
+        axes[2].axis("off")
         plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"Saved visualization to {save_path}")
     plt.close()
 
@@ -144,7 +142,7 @@ def test_monodiffusion_demo_single_image(device_id):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Run inference

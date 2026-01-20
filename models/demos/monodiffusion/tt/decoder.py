@@ -6,10 +6,11 @@ Multi-scale decoder for MonoDiffusion
 Following vanilla_unet decoder pattern with transpose convolutions
 """
 
-import ttnn
 from typing import List
-from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
+
+import ttnn
 from models.demos.monodiffusion.tt.common import concatenate_skip_connection
+from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
 from models.tt_cnn.tt.builder import TtConv2d
 
 
@@ -54,10 +55,7 @@ def transpose_conv2d(
     x_upsampled = ttnn.upsample(x_reshaped, (2, 2), memory_config=input_tensor.memory_config())
 
     # Reshape back to (1, 1, N, C) format
-    output = ttnn.reshape(
-        x_upsampled,
-        (1, 1, batch_size * input_height * 2 * input_width * 2, in_channels)
-    )
+    output = ttnn.reshape(x_upsampled, (1, 1, batch_size * input_height * 2 * input_width * 2, in_channels))
 
     return output
 
@@ -81,11 +79,7 @@ class TtMonoDiffusionDecoder:
         # Final depth prediction layer
         self.final_conv = TtConv2d(configs.final_depth_conv, device)
 
-    def __call__(
-        self,
-        coarse_depth: ttnn.Tensor,
-        encoder_features: List[ttnn.Tensor]
-    ) -> ttnn.Tensor:
+    def __call__(self, coarse_depth: ttnn.Tensor, encoder_features: List[ttnn.Tensor]) -> ttnn.Tensor:
         """
         Forward pass through decoder
 

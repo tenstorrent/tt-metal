@@ -6,19 +6,20 @@ Main MonoDiffusion model for monocular depth estimation
 Following vanilla_unet model pattern
 """
 
-import ttnn
-import torch
-from typing import Tuple, List, Optional
+from typing import List, Optional, Tuple
 
+import torch
+
+import ttnn
 from models.demos.monodiffusion.tt.config import (
     TtMonoDiffusionLayerConfigs,
     create_monodiffusion_configs_from_parameters,
 )
-from models.demos.monodiffusion.tt.encoder import TtMonoDiffusionEncoder
-from models.demos.monodiffusion.tt.diffusion_unet import TtDiffusionUNet
 from models.demos.monodiffusion.tt.decoder import TtMonoDiffusionDecoder
-from models.demos.monodiffusion.tt.uncertainty_head import TtUncertaintyHead
+from models.demos.monodiffusion.tt.diffusion_unet import TtDiffusionUNet
+from models.demos.monodiffusion.tt.encoder import TtMonoDiffusionEncoder
 from models.demos.monodiffusion.tt.timestep_embedding import TtTimestepEmbedding
+from models.demos.monodiffusion.tt.uncertainty_head import TtUncertaintyHead
 
 
 class TtMonoDiffusion:
@@ -57,11 +58,7 @@ class TtMonoDiffusion:
             ttnn.deallocate(x)
         return output
 
-    def diffusion_process(
-        self,
-        encoder_features: List[ttnn.Tensor],
-        num_steps: Optional[int] = None
-    ) -> ttnn.Tensor:
+    def diffusion_process(self, encoder_features: List[ttnn.Tensor], num_steps: Optional[int] = None) -> ttnn.Tensor:
         """
         Run diffusion process to generate depth map
         Simplified implementation for initial bring-up
@@ -88,12 +85,7 @@ class TtMonoDiffusion:
             timestep_emb = self.timestep_embedding(timestep)
 
             # Denoise step
-            depth_map = self.diffusion_unet.denoise_step(
-                depth_map,
-                t,
-                timestep_emb,
-                encoder_features
-            )
+            depth_map = self.diffusion_unet.denoise_step(depth_map, t, timestep_emb, encoder_features)
 
         return depth_map
 
@@ -102,7 +94,7 @@ class TtMonoDiffusion:
         input_tensor: ttnn.Tensor,
         return_uncertainty: bool = True,
         num_inference_steps: Optional[int] = None,
-        deallocate_input_activation: bool = True
+        deallocate_input_activation: bool = True,
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
         """
         Forward pass through MonoDiffusion model
@@ -125,10 +117,7 @@ class TtMonoDiffusion:
         encoded_features, multi_scale_features = self.encoder(input_tensor)
 
         # 2. Diffusion process to generate coarse depth
-        coarse_depth = self.diffusion_process(
-            multi_scale_features,
-            num_steps=num_inference_steps
-        )
+        coarse_depth = self.diffusion_process(multi_scale_features, num_steps=num_inference_steps)
 
         # 3. Multi-scale refinement
         refined_depth = self.decoder(coarse_depth, multi_scale_features)
@@ -141,10 +130,7 @@ class TtMonoDiffusion:
         return refined_depth, uncertainty_map
 
 
-def create_monodiffusion_from_configs(
-    configs: TtMonoDiffusionLayerConfigs,
-    device: ttnn.Device
-) -> TtMonoDiffusion:
+def create_monodiffusion_from_configs(configs: TtMonoDiffusionLayerConfigs, device: ttnn.Device) -> TtMonoDiffusion:
     """
     Factory function to create MonoDiffusion model from configs
     Following vanilla_unet pattern

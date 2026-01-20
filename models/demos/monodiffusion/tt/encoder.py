@@ -6,8 +6,9 @@ Feature encoder for MonoDiffusion
 ResNet-like architecture following vanilla_unet encoder pattern
 """
 
-import ttnn
 from typing import List, Tuple
+
+import ttnn
 from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 

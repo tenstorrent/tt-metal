@@ -6,10 +6,11 @@ PyTorch reference implementation of MonoDiffusion
 Used for accuracy validation (PCC comparison)
 """
 
+from typing import List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional
 
 
 class TimestepEmbedding(nn.Module):
@@ -140,10 +141,7 @@ class DiffusionUNet(nn.Module):
         self.up_reduce = nn.Conv2d(1024, 512, 1)
 
     def forward(
-        self,
-        x: torch.Tensor,
-        time_emb: torch.Tensor,
-        encoder_features: Optional[List[torch.Tensor]] = None
+        self, x: torch.Tensor, time_emb: torch.Tensor, encoder_features: Optional[List[torch.Tensor]] = None
     ) -> torch.Tensor:
         # Down
         skip1 = self.down1(x, time_emb)
@@ -228,11 +226,7 @@ class MonoDiffusionPyTorch(nn.Module):
 
         self.num_inference_steps = num_inference_steps
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        return_uncertainty: bool = True
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, x: torch.Tensor, return_uncertainty: bool = True) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         # Encode
         encoded, features = self.encoder(x)
 

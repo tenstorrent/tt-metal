@@ -7,9 +7,10 @@ Following vanilla_unet pattern for consistency
 """
 
 import os
+
 import torch
+
 import ttnn
-from typing import Dict
 
 # Performance constants
 MONODIFFUSION_PCC_TARGET = 0.99
@@ -65,9 +66,8 @@ def create_monodiffusion_preprocessor(device, mesh_mapper=None):
                 # Fold batch norm into conv if present
                 if hasattr(conv_layer, "bn"):
                     from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
-                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
-                        conv_layer.conv, conv_layer.bn
-                    )
+
+                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer.conv, conv_layer.bn)
                 else:
                     conv_weight = conv_layer.weight
                     conv_bias = conv_layer.bias if hasattr(conv_layer, "bias") else None
@@ -77,9 +77,7 @@ def create_monodiffusion_preprocessor(device, mesh_mapper=None):
                 )
                 if conv_bias is not None:
                     parameters["encoder"][layer_name]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
-                        mesh_mapper=mesh_mapper
+                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                     )
 
         # Diffusion U-Net parameters
@@ -109,30 +107,21 @@ def create_monodiffusion_preprocessor(device, mesh_mapper=None):
 
 
 def concatenate_skip_connection(
-    upsampled: ttnn.Tensor,
-    skip: ttnn.Tensor,
-    use_row_major_layout: bool = True
+    upsampled: ttnn.Tensor, skip: ttnn.Tensor, use_row_major_layout: bool = True
 ) -> ttnn.Tensor:
     """
     Concatenate upsampled tensor with skip connection along channel dimension
     Directly from vanilla_unet implementation
     """
-    assert upsampled.shape[0:3] == skip.shape[0:3], \
-        f"Spatial dimensions must match: {upsampled.shape} vs {skip.shape}"
+    assert upsampled.shape[0:3] == skip.shape[0:3], f"Spatial dimensions must match: {upsampled.shape} vs {skip.shape}"
 
     # Reshard skip connection to match upsampled tensor's memory config
     if not skip.is_sharded():
         input_core_grid = upsampled.memory_config().shard_spec.grid
         input_shard_shape = upsampled.memory_config().shard_spec.shape
-        input_shard_spec = ttnn.ShardSpec(
-            input_core_grid,
-            input_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR
-        )
+        input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         input_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            input_shard_spec
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
         skip = ttnn.to_memory_config(skip, input_memory_config)
 
@@ -142,15 +131,9 @@ def concatenate_skip_connection(
         upsampled.memory_config().shard_spec.shape[0],
         upsampled.memory_config().shard_spec.shape[1] * 2,
     )
-    output_shard_spec = ttnn.ShardSpec(
-        output_core_grid,
-        output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR
-    )
+    output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        output_shard_spec
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
     )
 
     if use_row_major_layout:
@@ -159,11 +142,7 @@ def concatenate_skip_connection(
         ttnn.deallocate(upsampled)
         ttnn.deallocate(skip)
 
-        concatenated = ttnn.concat(
-            [upsampled_rm, skip_rm],
-            dim=3,
-            memory_config=output_memory_config
-        )
+        concatenated = ttnn.concat([upsampled_rm, skip_rm], dim=3, memory_config=output_memory_config)
         ttnn.deallocate(upsampled_rm)
         ttnn.deallocate(skip_rm)
 
@@ -171,11 +150,7 @@ def concatenate_skip_connection(
         ttnn.deallocate(concatenated)
         return concat_tiled
     else:
-        concatenated = ttnn.concat(
-            [upsampled, skip],
-            dim=3,
-            memory_config=output_memory_config
-        )
+        concatenated = ttnn.concat([upsampled, skip], dim=3, memory_config=output_memory_config)
         ttnn.deallocate(upsampled)
         ttnn.deallocate(skip)
         return concatenated
@@ -193,9 +168,7 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
     mean2 = tensor2_flat.mean()
 
     numerator = ((tensor1_flat - mean1) * (tensor2_flat - mean2)).sum()
-    denominator = torch.sqrt(
-        ((tensor1_flat - mean1) ** 2).sum() * ((tensor2_flat - mean2) ** 2).sum()
-    )
+    denominator = torch.sqrt(((tensor1_flat - mean1) ** 2).sum() * ((tensor2_flat - mean2) ** 2).sum())
 
     pcc = numerator / (denominator + 1e-8)
     return pcc.item()
