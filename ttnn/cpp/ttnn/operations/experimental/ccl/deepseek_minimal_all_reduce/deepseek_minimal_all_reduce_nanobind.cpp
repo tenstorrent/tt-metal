@@ -49,18 +49,17 @@ void bind_deepseek_minimal_all_reduce(nb::module_& mod) {
         mod,
         ttnn::experimental::deepseek_minimal_all_reduce,
         R"doc(
-        Performs a all_reduce operation from a sender device to all other mesh devices across a cluster axis.
+        Performs an all-reduce collective operation across devices in a mesh along the specified cluster axis.
 
         Args:
             input_tensor (ttnn.Tensor)
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.
-            mesh_device (MeshDevice): Device mesh to perform the operation on.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-all_reduce operation. Defaults to `1`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `2`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Defaults to `ttnn.Topology.Linear`.
 
         Returns:
             ttnn.Tensor of the output on the mesh device.
@@ -71,6 +70,9 @@ void bind_deepseek_minimal_all_reduce(nb::module_& mod) {
             >>> num_links = 2
             >>> cluster_axis = 0
             >>> topology = ttnn.Topology.Linear
+            >>> input_shape = (1, 7168)
+            >>> input_dtype = ttnn.DType.BFLOAT16
+            >>> layout = ttnn.TILE_LAYOUT
             >>> device_tensors = []
             >>> for device_idx in range(num_devices):
                     tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -87,7 +89,7 @@ void bind_deepseek_minimal_all_reduce(nb::module_& mod) {
                             layout=layout,
                             memory_config=mem_config,
                             mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
-            >>> output = ttnn.experimental.all_reduce(ttnn_tensor, cluster_axis=cluster_axis, num_links=num_links, topology=topology)
+            >>> output = ttnn.experimental.experimental.deepseek_minimal_all_reduce(ttnn_tensor, cluster_axis=cluster_axis, num_links=num_links, topology=topology)
 
         )doc");
 }

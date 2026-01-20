@@ -117,11 +117,12 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const auto tile_height = input_tensor.tensor_spec().tile().get_height();
     TT_FATAL(
         tilized,
-        "all_reduce_batch1 op currently only supports TILE_LAYOUT input tensors. Got layout: {}",
+        "deepseek_minimal_all_reduce op currently only supports TILE_LAYOUT input tensors. Got layout: {}",
         input_tensor.layout());
     TT_FATAL(
         tile_width == 32 && tile_height == 1,
-        "all_reduce_batch1 op currently only supports TILE_LAYOUT input tensors with tile size (1, 32). Got tile size: "
+        "deepseek_minimal_all_reduce op currently only supports TILE_LAYOUT input tensors with tile size (1, 32). Got "
+        "tile size: "
         "({}, {})",
         tile_height,
         tile_width);
@@ -145,7 +146,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     // Link 0 : Device 0 sends → Device 1 receives
     // Link 1 : Device 1 sends → Device 0 receives
 
-    // Divide cmpute acrodd 28 cores
+    // Divide compute across 28 cores
     constexpr uint32_t num_compute_cores = 28;
 
     CoreCoord data_core = cores[0];
