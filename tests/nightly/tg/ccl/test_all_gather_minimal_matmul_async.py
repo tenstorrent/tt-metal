@@ -39,6 +39,14 @@ from tracy.process_model_log import (
     [(8, 8, 8, 2, 2)],
 )
 @pytest.mark.parametrize(
+    "use_non_fused",
+    [
+        True,
+        False,
+    ],
+    ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
     "device_params, topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -61,6 +69,7 @@ def test_linear(
     core_grid_y,
     num_workers_per_link,
     num_links,
+    use_non_fused,
 ):
     check_result = run_test_linear(
         mesh_device,
@@ -76,6 +85,7 @@ def test_linear(
         core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
         num_workers_per_link=num_workers_per_link,
         num_links=num_links,
+        use_non_fused=use_non_fused,
     )
     for i in range(mesh_device.get_num_devices()):
         assert check_result[i]["pcc"] > 0.999_500
