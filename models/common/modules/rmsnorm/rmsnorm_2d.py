@@ -223,9 +223,9 @@ class RMSNorm2D(LightweightModule):
             x, compute_kernel_config=cfg.compute_kernel_config_prefill, dtype=ttnn.bfloat16
         )
 
-        # Reshape stats for all_gather
-        padded_shape = (1, 1, x.shape[-2], 32)
-        # todo)) maybe we can get rid of this reshape here by now?
+        # Reshape stats for all_gather (preserve batch dimension for multi-batch prefill)
+        batch = x.shape[0]
+        padded_shape = (batch, 1, x.shape[-2], 32)
         tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape))
 
         # All gather stats along cluster axis 1 (columns)

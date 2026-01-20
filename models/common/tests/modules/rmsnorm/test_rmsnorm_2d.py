@@ -146,8 +146,10 @@ def test_rmsnorm_2d_rejects_non_tg():
         ("decode", 32, 1),
         ("prefill", 1, 128),
         ("prefill", 1, 512),
+        ("prefill", 2, 128),  # Regression test: prefill with batch > 1
+        ("prefill", 4, 64),  # Regression test: prefill with batch > 1
     ],
-    ids=["decode-b1_s1", "decode-b32_s1", "prefill-b1_s128", "prefill-b1_s512"],
+    ids=["decode-b1_s1", "decode-b32_s1", "prefill-b1_s128", "prefill-b1_s512", "prefill-b2_s128", "prefill-b4_s64"],
 )
 def test_rmsnorm_2d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
