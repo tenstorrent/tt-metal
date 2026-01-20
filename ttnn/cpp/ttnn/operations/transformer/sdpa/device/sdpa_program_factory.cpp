@@ -93,7 +93,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
-    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : true;
+    const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
+    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -363,6 +364,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)broadcast_provided_mask_batch,
                                                       (std::uint32_t)broadcast_provided_mask_heads,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
