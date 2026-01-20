@@ -121,6 +121,7 @@ enum class HighLevelTrafficPattern {
     HalfRing,
     AllDevicesUniformPattern,
     NeighborExchange,
+    SequentialNeighborExchange,
     SequentialAllToAll,
 };
 

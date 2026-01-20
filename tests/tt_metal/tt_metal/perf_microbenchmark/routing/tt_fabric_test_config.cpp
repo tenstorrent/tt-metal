@@ -1018,7 +1018,17 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
                     num_pairs,
                     p_config.name);
+            } else if (p.type == "sequential_neighbor_exchange"){
+                auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+                uint32_t num_pairs = static_cast<uint32_t>(neighbor_pairs.size());
+                max_iterations = std::max(max_iterations, num_pairs);
+                log_info(
+                    LogTest,
+                    "Auto-detected {} iterations for sequential_neighbor_exchange pattern in test '{}'",
+                    num_pairs,
+                    p_config.name);
             }
+
         }
     }
 
@@ -1369,7 +1379,9 @@ void TestConfigBuilder::expand_patterns_into_test(
             expand_neighbor_exchange(test, defaults);
         } else if (pattern.type == "sequential_all_to_all") {
             expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
-        } else {
+        } else if (pattern.type == "sequential_neighbor_exchange"){ 
+            expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
+        }else {
             TT_THROW("Unsupported pattern type: {}", pattern.type);
         }
     }
@@ -1562,6 +1574,32 @@ void TestConfigBuilder::expand_neighbor_exchange(
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
     if (!neighbor_pairs.empty()) {
         add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+    }
+}
+
+void TestConfigBuilder::expand_sequential_neighbor_exchange(
+    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+    log_debug(
+        LogTest,
+        "Expanding sequential_neighbor_exchange pattern for test: {} (iteration {})",
+        test.name,
+        iteration_idx);
+    auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+
+    if (neighbor_pairs.empty()) {
+        log_warning(LogTest, "No valid pairs found for sequential_neighbor_exchange pattern");
+        return;
+    }
+
+    // Select only the pair for this iteration
+    if (iteration_idx < neighbor_pairs.size()) {
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {neighbor_pairs[iteration_idx]};
+        add_senders_from_pairs(test, single_pair, base_pattern);
+    } else {
+        TT_THROW(
+            "Iteration index {} exceeds number of available device pairs {} for sequential_neighbor_exchange pattern",
+            iteration_idx,
+            neighbor_pairs.size());
     }
 }
 

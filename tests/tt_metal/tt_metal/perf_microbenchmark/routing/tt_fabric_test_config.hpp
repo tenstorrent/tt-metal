@@ -124,6 +124,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
     {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
+    {"sequential_neighbor_exchange", HighLevelTrafficPattern::SequentialNeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 
@@ -438,6 +439,9 @@ private:
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+
+    void expand_sequential_neighbor_exchange(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
