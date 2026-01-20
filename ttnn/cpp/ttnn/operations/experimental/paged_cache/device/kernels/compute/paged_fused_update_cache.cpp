@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -33,45 +33,40 @@ void MAIN {
     constexpr uint32_t num_heads = get_compile_time_arg_val(8);
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
-    pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
-    cb_wait_front(in_cb, Wt);
-    cb_reserve_back(untilized_in_cb, Wt);
-    pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
-    cb_push_back(untilized_in_cb, Wt);
-    cb_pop_front(in_cb, Wt);
+    // Configs for untilizing new input tokens (from either input buffer, skip uninit since done once)
+    using UntilizeInput1 =
+        UntilizeConfig<WidthInTiles<Wt>, InputCB<in1_cb>, OutputCB<untilized_in_cb>, UntilizeFlags::SKIP_UNINIT>;
+    using UntilizeInput2 =
+        UntilizeConfig<WidthInTiles<Wt>, InputCB<in2_cb>, OutputCB<untilized_in_cb>, UntilizeFlags::SKIP_UNINIT>;
+
+    // Config for untilizing existing cache blocks
+    using UntilizeCacheBlock = UntilizeConfig<WidthInTiles<Wt>, InputCB<cache_cb>, OutputCB<untilized_cache_cb>>;
+
+    // Config for re-tilizing the updated cache (with data format reconfig)
+    using RetilizeUpdatedCache =
+        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, PreviousCB<cache_cb>, TilizeFlags::DT_RECONFIG>;
+
+    // Untilize the new input token from the active input buffer
+    if (!is_input1) {
+        compute_kernel_lib::untilize<UntilizeInput2>(1);
+    } else {
+        compute_kernel_lib::untilize<UntilizeInput1>(1);
+    }
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
+
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
-
-        // Untilize a block from the cache
-        cb_wait_front(cache_cb, Wt);
-        cb_reserve_back(untilized_cache_cb, Wt);
-
-        pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
-
-        cb_push_back(untilized_cache_cb, Wt);
-        cb_pop_front(cache_cb, Wt);
-
-        pack_untilize_uninit(untilized_cache_cb);
+        // Untilize cache block to be updated
+        compute_kernel_lib::untilize<UntilizeCacheBlock>(1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init(untilized_cache2_cb, Wt, out_cb);
+        // Writer updates the untilized cache with new token. Re-tilize the result.
+        compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, 1, 1, 0, 0);
 
-        // Wait on writer to update block. Tilize.
-        cb_wait_front(untilized_cache2_cb, Wt);
-
-        cb_reserve_back(out_cb, Wt);
-
-        tilize_block(untilized_cache2_cb, Wt, out_cb);
-
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }

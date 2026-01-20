@@ -7,12 +7,14 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
 namespace NAMESPACE {
+
 void MAIN {
     uint32_t i = 0;
 
@@ -53,6 +55,10 @@ void MAIN {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
+
+    // Config for re-tilizing accumulated rows back to tile format for output
+    using RetilizeAccumulatedRows = TilizeConfig<
+        InputCB<cb_intermed1>, OutputCB<out_cb_id>, PreviousCB<cb_in1>, TilizeFlags::DT_RECONFIG>;
 
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
@@ -152,20 +158,12 @@ void MAIN {
                 }  // in1_num_blocks loop
             } // in0_num_blocks_w
 
-            // cb_intermed1 comes from reader; untilized row-major tile
+            // Reader has accumulated rows into cb_intermed1 (row-major)
             reconfig_data_format_srca(cb_in1, cb_intermed1);
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
-            cb_wait_front(cb_intermed1, out_num_tiles);
 
-            cb_reserve_back(out_cb_id, out_num_tiles);
-
-            // tilize CB::intermed1 and write to CBIndex::c_16
-            tilize_init_short_with_dt(cb_in1, cb_intermed1, out_num_tiles, out_cb_id);
-            tilize_block(cb_intermed1, out_num_tiles, out_cb_id);
-            cb_push_back(out_cb_id, out_num_tiles);
-
-            cb_pop_front(cb_intermed1, out_num_tiles);
-            tilize_uninit(cb_intermed1, out_cb_id);
+            // Re-tilize accumulated rows to tile format for output
+            compute_kernel_lib::tilize<RetilizeAccumulatedRows>(out_num_tiles, 1, 1, 0, 0);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

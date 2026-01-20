@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -19,6 +16,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
@@ -169,23 +168,15 @@ void MAIN {
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>>>(per_core_N, per_core_M, 1, 0, 0);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>, PreviousCB<0>, TilizeFlags::SKIP_WAIT>>(
+        per_core_N, per_core_M, 1, 0, 0);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_in0, cb_in0);
@@ -530,16 +521,12 @@ void MAIN {
             }
 
 #ifdef UNTILIZE_OUT
-            // untilize
-            untilize_init(cb_untilize_in);
-            cb_wait_front(cb_untilize_in, per_core_MN);
-            for (uint32_t m = 0; m < per_core_M; ++m) {
-                cb_reserve_back(cb_untilize_out, per_core_N);
-                untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-                cb_push_back(cb_untilize_out, per_core_N);
-                cb_pop_front(cb_untilize_in, per_core_N);
-            }
-            untilize_uninit(cb_untilize_in);
+            // untilize - DEST capacity auto-detected
+            compute_kernel_lib::untilize<UntilizeConfig<
+                WidthInTiles<per_core_N>,
+                InputCB<cb_untilize_in>,
+                OutputCB<cb_untilize_out>,
+                UntilizeFlags::WAIT_UPFRONT>>(per_core_M, 1, per_core_MN);
 #endif
         }
         // End Final Normalization

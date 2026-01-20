@@ -9,6 +9,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -40,28 +42,17 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 #endif
 }
 
-ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
-    untilize_init(in0_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-    untilize_block(in0_cb, num_tiles, out_cb);
-    cb_push_back(out_cb, num_tiles);
-    cb_pop_front(in0_cb, num_tiles);
-    untilize_uninit(in0_cb);
+template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
+ALWI void UNTILIZE_TILES() {
+    compute_kernel_lib::untilize<
+        UntilizeConfig<WidthInTiles<num_tiles>, InputCB<in0_cb>, OutputCB<out_cb>, UntilizeFlags::WAIT_UPFRONT>>(1);
 }
 
-ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init(in0_cb, num_tiles, out_cb);
-    cb_wait_front(in0_cb, num_tiles);
+template <uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb>
+ALWI void TILIZE_ROWS(uint32_t num_tiles) {
     cb_wait_front(sync_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-    tilize_block(in0_cb, num_tiles, out_cb);
-    cb_push_back(out_cb, num_tiles);
-
-    // Pop shared cbs after tilize
-    cb_pop_front(in0_cb, num_tiles);
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<in0_cb>, OutputCB<out_cb>>>(num_tiles, 1, 1, 0, 0);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb, out_cb);
 }
 
 namespace NAMESPACE {
@@ -94,12 +85,12 @@ void MAIN {
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
     binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
-    UNTILIZE_TILES(sin_cb, untilized_sin_cb, Wt);
-    UNTILIZE_TILES(cos_cb, untilized_cos_cb, Wt);
+    UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
+    UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
-    TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
-    TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
+    TILIZE_ROWS<untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb>(Wt);
+    TILIZE_ROWS<untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb>(Wt);
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
 #else

@@ -5,9 +5,8 @@
 #include <cstdint>
 
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -23,72 +22,47 @@ void MAIN {
     constexpr uint32_t u_count = get_compile_time_arg_val(9);
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
-    if constexpr (Wt > 8) {
-        untilize_init(in_cb);
-    } else {
-        pack_untilize_init<Wt>(in_cb, untilized_in_cb);
-    }
+
+    // Config for untilizing new input tokens - used for init/reinit between heads
+    using UntilizeNewTokenSetup = UntilizeConfig<WidthInTiles<Wt>, InputCB<in_cb>, OutputCB<untilized_in_cb>>;
+
+    // Config for untilizing new input tokens in the loop (init/uninit handled outside)
+    using UntilizeNewTokenInLoop = UntilizeConfig<
+        WidthInTiles<Wt>,
+        InputCB<in_cb>,
+        OutputCB<untilized_in_cb>,
+        UntilizeFlags::SKIP_INIT | UntilizeFlags::SKIP_UNINIT>;
+
+    // Config for untilizing existing cache blocks
+    using UntilizeCacheBlock = UntilizeConfig<WidthInTiles<Wt>, InputCB<cache_cb>, OutputCB<untilized_cache_cb>>;
+
+    // Config for re-tilizing the updated cache (with data format reconfig from previous cache read)
+    using RetilizeUpdatedCache =
+        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, PreviousCB<cache_cb>, TilizeFlags::DT_RECONFIG>;
+
+    compute_kernel_lib::untilize_init<UntilizeNewTokenSetup>();
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
-        cb_wait_front(in_cb, Wt);
-        cb_reserve_back(untilized_in_cb, Wt);
-        if constexpr (Wt > 8) {
-            untilize_block(in_cb, Wt, untilized_in_cb);
-        } else {
-            pack_untilize_block<Wt>(in_cb, Wt, untilized_in_cb);
-        }
-        cb_push_back(untilized_in_cb, Wt);
-        cb_pop_front(in_cb, Wt);
+        // Untilize new input token for this head
+        compute_kernel_lib::untilize<UntilizeNewTokenInLoop>(1);
 
         reconfig_data_format_srca(in_cb, cache_cb);
         for (uint32_t u = 0; u < u_count; ++u) {
-            if constexpr (Wt > 8) {
-                untilize_init(cache_cb);
-            } else {
-                pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
-            }
-
-            for (uint32_t g = 0; g < granularity; ++g) {
-                // Untilize a block from the cache
-                cb_wait_front(cache_cb, Wt);
-                cb_reserve_back(untilized_cache_cb, Wt);
-                if constexpr (Wt > 8) {
-                    untilize_block(cache_cb, 1, untilized_cache_cb);
-                } else {
-                    pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
-                }
-                cb_push_back(untilized_cache_cb, Wt);
-                cb_pop_front(cache_cb, Wt);
-            }
-            if constexpr (Wt > 8) {
-                untilize_uninit(untilized_cache_cb);
-            } else {
-                pack_untilize_uninit(untilized_cache_cb);
-            }
+            // Untilize cache block to be updated
+            compute_kernel_lib::untilize<UntilizeCacheBlock>(granularity);
 
             reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
             pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-            tilize_init(untilized_cache2_cb, Wt, out_cb);
+            // Writer updates the untilized cache with new token. Re-tilize the result.
+            compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, granularity, 1, 0, 0);
 
-            for (uint32_t g = 0; g < granularity; ++g) {
-                // Wait on writer to update block. Tilize.
-                cb_wait_front(untilized_cache2_cb, Wt);
-                cb_reserve_back(out_cb, Wt);
-                tilize_block(untilized_cache2_cb, Wt, out_cb);
-                cb_push_back(out_cb, Wt);
-                cb_pop_front(untilized_cache2_cb, Wt);
-            }
-
-            tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         reconfig_data_format_srca(cache_cb, in_cb);
-        if constexpr (Wt > 8) {
-            untilize_init(in_cb);
-        } else {
-            pack_untilize_init<Wt>(in_cb, untilized_in_cb);
-        }
+
+        // Re-initialize for next head
+        compute_kernel_lib::untilize_init<UntilizeNewTokenSetup>();
     }
 }
 }  // namespace NAMESPACE

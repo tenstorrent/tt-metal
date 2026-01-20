@@ -12,6 +12,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // #include "api/debug/dprint.h"
 
@@ -25,18 +27,21 @@ template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(
 #endif
     uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    if constexpr (init_tilize) {
-        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-    }
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        cb_wait_front(in_cb_id, in_block_w);
-        cb_reserve_back(out_cb_id, in_block_w);
-        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-        cb_push_back(out_cb_id, in_block_w);
-        cb_pop_front(in_cb_id, in_block_w);
-    }
-    if constexpr (uninit_tilize) {
-        fast_tilize_uninit(in_cb_id, out_cb_id);
+    // Uses fast tilize with DT variant (FAST | DT_RECONFIG)
+    // SKIP_INIT/SKIP_UNINIT are conditionally set based on template params
+    if constexpr (!init_tilize && !uninit_tilize) {
+        compute_kernel_lib::tilize<
+            TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_INIT | TilizeFlags::SKIP_UNINIT>(
+            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
+    } else if constexpr (!init_tilize) {
+        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_INIT>(
+            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
+    } else if constexpr (!uninit_tilize) {
+        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_UNINIT>(
+            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
+    } else {
+        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG>(
+            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
     }
 }  // tilize_in()
 
@@ -600,17 +605,10 @@ void MAIN {
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
-                    untilize_init(matmul_partials_cb);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                        for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
-                            cb_wait_front(matmul_partials_cb, out_block_w);
-                            cb_reserve_back(out_cb_id, out_block_w);
-                            untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
-                            cb_push_back(out_cb_id, out_block_w);
-                            cb_pop_front(matmul_partials_cb, out_block_w);
-                        }
-                    }
-                    untilize_uninit(matmul_partials_cb);
+                    // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
+                    compute_kernel_lib::untilize<
+                        UntilizeConfig<WidthInTiles<out_block_w>, InputCB<matmul_partials_cb>, OutputCB<out_cb_id>>>(
+                        in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {

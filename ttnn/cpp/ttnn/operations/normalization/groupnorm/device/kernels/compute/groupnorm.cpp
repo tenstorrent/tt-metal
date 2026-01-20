@@ -18,6 +18,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -120,7 +122,8 @@ void MAIN {
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
+        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
@@ -209,23 +212,15 @@ void MAIN {
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>>>(per_core_N, per_core_M, 1, 0, 0);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>, PreviousCB<0>, TilizeFlags::SKIP_WAIT>>(
+        per_core_N, per_core_M, 1, 0, 0);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_input_mask, cb_x);
@@ -291,7 +286,7 @@ void MAIN {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                        mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                            mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
 #else
                             mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
 #endif
@@ -770,16 +765,12 @@ void MAIN {
                 // End Optional Beta
 
 #ifdef UNTILIZE_OUT
-                // untilize
-                untilize_init(cb_untilize_in);
-                cb_wait_front(cb_untilize_in, per_core_MN);
-                for (uint32_t m = 0; m < per_core_M; ++m) {
-                    cb_reserve_back(cb_untilize_out, per_core_N);
-                    untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-                    cb_push_back(cb_untilize_out, per_core_N);
-                    cb_pop_front(cb_untilize_in, per_core_N);
-                }
-                untilize_uninit(cb_untilize_in);
+                // untilize - DEST capacity auto-detected
+                compute_kernel_lib::untilize<UntilizeConfig<
+                    WidthInTiles<per_core_N>,
+                    InputCB<cb_untilize_in>,
+                    OutputCB<cb_untilize_out>,
+                    UntilizeFlags::WAIT_UPFRONT>>(per_core_M, 1, per_core_MN);
 #endif
             }
             // End Final Val Calc
