@@ -575,7 +575,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
-    state_dict,
+    state_dict_1l,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
     if mode == "prefill" and seq_len != 128:
@@ -602,7 +602,7 @@ def test_forward_pass(
         model_path,
         module_path,
         force_recalculate_weight_config,
-        state_dict,
+        state_dict_1l,
         decode_position_ids,
     )
 

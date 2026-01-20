@@ -23,6 +23,13 @@ def load_tokenizer(model_path: str):
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
 
+def random_weights_enabled() -> bool:
+    value = os.getenv("DEEPSEEK_V3_RANDOM_WEIGHTS")
+    if value is None:
+        return False
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
 def load_model_uninitialized(model_path: str = os.path.dirname(os.path.dirname(__file__)) + "/reference"):
     model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 

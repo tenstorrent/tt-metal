@@ -11,6 +11,8 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict, random_weights_enabled
 from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, load_state_dict, system_name_to_mesh_shape
 from tests.scripts.common import get_updated_device_params
 
@@ -155,9 +157,35 @@ def hf_config(model_path):
     return config
 
 
+def _get_state_dict_with_num_layers(state_dict, num_layers: int):
+    if hasattr(state_dict, "view_with_prefix"):
+        return state_dict.view_with_prefix("", num_layers=num_layers)
+    return sub_state_dict(state_dict, "", num_layers=num_layers)
+
+
 @pytest.fixture(scope="session")
-def state_dict(model_path):
-    yield load_state_dict(model_path, "")
+def state_dict_full(model_path, hf_config):
+    if random_weights_enabled():
+        return prepare_model_state_dict(hf_config=hf_config, random_weights=True)
+    return load_state_dict(model_path, "")
+
+
+@pytest.fixture(scope="session")
+def state_dict_1l(state_dict_full, hf_config):
+    if random_weights_enabled():
+        hf_config_1l = deepcopy(hf_config)
+        hf_config_1l.num_hidden_layers = 1
+        return prepare_model_state_dict(hf_config=hf_config_1l, random_weights=True)
+    return _get_state_dict_with_num_layers(state_dict_full, num_layers=1)
+
+
+@pytest.fixture(scope="session")
+def state_dict_4l(state_dict_full, hf_config):
+    if random_weights_enabled():
+        hf_config_4l = deepcopy(hf_config)
+        hf_config_4l.num_hidden_layers = 4
+        return prepare_model_state_dict(hf_config=hf_config_4l, random_weights=True)
+    return _get_state_dict_with_num_layers(state_dict_full, num_layers=4)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -166,14 +194,18 @@ def clear_state_dict_cache(request):
     Clear the LazyStateDict cache after each test to prevent memory accumulation.
     This preserves file handles (mmap benefits) while freeing tensor memory.
     """
-    # Check if state_dict is requested by this test
-    if "state_dict" not in request.fixturenames:
+    # Check if any state_dict fixture is requested by this test
+    if not any(
+        fixture_name in request.fixturenames
+        for fixture_name in ("state_dict_full", "state_dict_1l", "state_dict_4l")
+    ):
         yield
         return
 
-    state_dict = request.getfixturevalue("state_dict")
+    state_dict = request.getfixturevalue("state_dict_full")
     yield
-    state_dict.clear_cache()
+    if hasattr(state_dict, "clear_cache"):
+        state_dict.clear_cache()
 
 
 @pytest.fixture(scope="session")

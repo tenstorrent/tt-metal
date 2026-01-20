@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import random_weights_enabled
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -59,13 +60,15 @@ def test_embedding_forward_pass(
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict,
+    state_dict_1l,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
     if mode == "prefill" and batch_size_or_seq_len != 128:
         pytest.skip(
             f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
         )
+    if random_weights_enabled() and not generate_reference_io:
+        pytest.skip("Random weights enabled; skipping precomputed reference IO path.")
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 
@@ -81,7 +84,7 @@ def test_embedding_forward_pass(
         reference_output = reference_model(torch_input)
 
     else:
-        state_dict = sub_state_dict(state_dict, module_path + ".")
+        state_dict = sub_state_dict(state_dict_1l, module_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, module_path, batch_size_or_seq_len, 1
         )

@@ -95,7 +95,7 @@ def test_forward_pass(
     model_path: Path,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    state_dict_4l: dict[str, torch.Tensor],
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
     if mode == "prefill" and seq_len != 128:
@@ -116,7 +116,7 @@ def test_forward_pass(
         )
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
+        state_dict = create_combined_state_dict(module_path, model_path, state_dict_4l)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
 
     weight_config = get_test_weight_config(

@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer, random_weights_enabled
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 
@@ -232,6 +232,9 @@ def run_demo(
         - tokens: List[int] of generated token IDs
         - text: Optional[str] decoded text (only when a tokenizer is present)
     """
+    if not random_weights and random_weights_enabled():
+        random_weights = True
+
     if model_path is None:
         raise SystemExit("Missing model path. Provide --model-path.")
     model_path = Path(model_path)

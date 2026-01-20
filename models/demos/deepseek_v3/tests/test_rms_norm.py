@@ -57,7 +57,7 @@ def test_forward_pass(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    state_dict_1l: dict[str, torch.Tensor],
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
     if mode == "prefill" and seq_len != 128:
@@ -77,7 +77,7 @@ def test_forward_pass(
 
     if reference_layernorm_path is not None:
         # Use real weights from the model
-        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+        state_dict = sub_state_dict(state_dict_1l, reference_layernorm_path + ".")
         reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
         state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
     else:
