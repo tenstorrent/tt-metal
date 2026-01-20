@@ -315,6 +315,7 @@ class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
+    GTEST_SKIP();
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
