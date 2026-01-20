@@ -137,9 +137,10 @@ spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
     const auto& intermediate_shape = input_tensors.at(0).logical_shape();
-    ttnn::MemoryConfig intermediate_memory_config = input_tensors.at(0).memory_config();
+    const ttnn::MemoryConfig& intermediate_memory_config = input_tensors.at(0).memory_config();
 
     const auto& output_shape = input_tensors.at(0).logical_shape();
+    const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     return {
         TensorSpec(
@@ -151,9 +152,7 @@ spec_return_value_t DeepseekReduceScatterDeviceOperation::compute_output_specs(
         TensorSpec(
             output_shape,
             TensorLayout(
-                input_tensors.at(0).dtype(),
-                input_tensors.at(0).tensor_spec().page_config(),
-                operation_attributes.output_memory_config)),
+                input_tensors.at(0).dtype(), input_tensors.at(0).tensor_spec().page_config(), output_memory_config)),
     };
 }
 
