@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pandas as pd
 import pytest
-import re
 import torch
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.perf_tests.utils import extract_ops_between_signposts
 from tracy import signpost
 from tracy.common import clear_profiler_runtime_artifacts
 from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
@@ -86,50 +85,6 @@ THRESHOLD_PERCENT = 0.05
 # Build performance targets per architecture (in us) from global config
 PERF_TARGETS_WH = {config["test_name"]: config["perf_targets"]["wh"] for config in CONV_PERF_CONFIGS}
 PERF_TARGETS_BH_P150 = {config["test_name"]: config["perf_targets"]["bh_p150"] for config in CONV_PERF_CONFIGS}
-
-
-def extract_ops_between_signposts(csv_path, op_name):
-    """
-    Extract operation durations between signpost pairs from a Tracy CSV file.
-
-    Parses a Tracy profiler CSV file and extracts operation durations that occur between
-    "test-name-start" and "test-name-end" signpost markers. The test name is extracted
-    from the signpost OP CODE.
-
-    Args:
-        csv_path (str): Path to the Tracy profiler CSV file.
-        op_name (str): Name of the operation to extract.
-
-    Returns:
-        dict: Dictionary mapping test names to lists of durations in nanoseconds.
-              Format: {test_name: [duration_ns, ...]}
-
-    Example:
-        results = extract_ops_between_signposts("ops_perf_results_2025_01_15.csv", "Conv2dDeviceOperation")
-        # Returns: {"test_conv1": [12345.0, 12456.0], "test_conv2": [23456.0]}
-    """
-    df = pd.read_csv(csv_path)
-    results = {}
-    current_region = None
-
-    for _, row in df.iterrows():
-        if row["OP TYPE"] == "signpost":
-            op_code = row["OP CODE"]
-            if op_code.endswith("-start"):
-                current_region = op_code[:-6]  # Remove "-start" suffix to get test_name
-            elif op_code.endswith("-end"):
-                current_region = None
-        elif current_region:
-            op_code = row["OP CODE"]
-            # Match op_name as a complete word, even if part of a larger string (e.g.,
-            # "MeshDeviceOperationAdapter<ttnn::operations::conv::conv2d::Conv2dDeviceOperation>"
-            # which is the current format possibly prone to changes)
-            if pd.notna(op_code) and re.search(rf"\b{re.escape(op_name)}(?:<|$|\W)", op_code):
-                if current_region not in results:
-                    results[current_region] = []
-                results[current_region].append(float(row["DEVICE KERNEL DURATION [ns]"]))
-
-    return results
 
 
 def test_run_conv2d_ops(device):
