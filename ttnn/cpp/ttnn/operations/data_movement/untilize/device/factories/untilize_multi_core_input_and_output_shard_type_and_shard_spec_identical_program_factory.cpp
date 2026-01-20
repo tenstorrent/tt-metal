@@ -80,17 +80,22 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
         // Estimate shard distribution across cores (round-robin strategy)
-        uint32_t total_shards = 1;
-        auto tensor_shape = a.padded_shape();
-        for (int i = 0; i < nd_shard_spec.shard_shape.rank();
-             ++i) {  // This part assumes that the shard shape has the same rank as the tensor (i.e., no
-                     // lower-dimensional squashing like in the 2D sharding case takes place).
-            total_shards *= tt::div_up(tensor_shape[i], nd_shard_spec.shard_shape[i]);
-        }
 
+        auto distribution_spec = BufferDistributionSpec::from_shard_spec(
+            a.padded_shape(),
+            nd_shard_spec.shard_shape,
+            tile_shape,
+            nd_shard_spec.grid,
+            nd_shard_spec.orientation,
+            nd_shard_spec.shard_distribution_strategy);
+
+        uint32_t total_shards = distribution_spec.num_shards();
         uint32_t num_cores = grid.num_cores();
-        num_shards_per_core = total_shards / num_cores;
-        num_cores_with_extra_shard = total_shards % num_cores;
+        const auto& groups = distribution_spec.core_groups();
+
+        num_shards_per_core = groups.cores_in_group_2.num_cores() ? groups.num_shards_per_core_in_group_2
+                                                                  : groups.num_shards_per_core_in_group_1;
+        num_cores_with_extra_shard = groups.cores_in_group_2.num_cores() ? groups.cores_in_group_1.num_cores() : 0;
         log_debug(
             tt::LogOp,
             "ND sharding: total_shards={}, cores={}, base_shards_per_core={}, extra={} (first extra cores get +1 "
