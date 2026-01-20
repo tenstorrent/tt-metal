@@ -11,8 +11,10 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <functional>
 #include <future>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <unistd.h>
@@ -220,7 +222,7 @@ static size_t update_metrics_with_exception_handling(
     return failed_count;
 }
 
-static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+static void update(const std::unique_ptr<tt::umd::Cluster>& cluster, int watchdog_timeout_seconds) {
     log_info(tt::LogAlways, "Starting telemetry readout...");
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
@@ -258,6 +260,54 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
             tt::LogAlways,
             "Skipped {} metrics due to read failures (likely device busy or inaccessible)",
             failed_metrics);
+    }
+
+    // Track failed metrics history to detect consecutive failures after reset
+    // If watchdog is enabled, monitor for continuous failures over the watchdog window
+    if (watchdog_timeout_seconds > 0) {
+        static std::deque<size_t> failed_metrics_history;
+        static std::deque<size_t> total_metrics_history;
+        const size_t history_window_size = watchdog_timeout_seconds / MONITOR_INTERVAL_SECONDS.count();
+
+        // Track both failed metrics and total metrics for this cycle
+        size_t total_metrics =
+            bool_metrics_.size() + uint_metrics_.size() + double_metrics_.size() + string_metrics_.size();
+
+        failed_metrics_history.push_back(failed_metrics);
+        total_metrics_history.push_back(total_metrics);
+
+        // Maintain sliding window
+        while (failed_metrics_history.size() > history_window_size) {
+            failed_metrics_history.pop_front();
+            total_metrics_history.pop_front();
+        }
+
+        // Check if we have enough history and all cycles had failures
+        if (failed_metrics_history.size() >= history_window_size) {
+            // Check if there wasn't a single "clean" cycle (where all metrics succeeded)
+            bool no_clean_cycles = true;
+            for (size_t i = 0; i < failed_metrics_history.size(); ++i) {
+                // A clean cycle is one where no metrics failed (assuming total_metrics > 0)
+                if (failed_metrics_history[i] == 0 && total_metrics_history[i] > 0) {
+                    no_clean_cycles = false;
+                    break;
+                }
+            }
+
+            if (no_clean_cycles) {
+                // Calculate total failures for logging
+                size_t total_failures =
+                    std::accumulate(failed_metrics_history.begin(), failed_metrics_history.end(), size_t(0));
+                log_fatal(
+                    tt::LogAlways,
+                    "Detected {} consecutive failed metric reads across {} cycles ({}s window). "
+                    "Likely corrupted state after reset. Killing telemetry to allow orchestrator restart.",
+                    total_failures,
+                    history_window_size,
+                    watchdog_timeout_seconds);
+                throw std::runtime_error("Too many consecutive metric read failures - telemetry data likely corrupted");
+            }
+        }
     }
 
     std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
@@ -302,7 +352,6 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
         }
     }
 }
-
 
 // Constants for Ethernet metric path validation
 static constexpr size_t TRAY_PREFIX_LEN = 4;     // "tray".length()
@@ -626,7 +675,7 @@ static void telemetry_thread(
 
         // Get initial telemetry reading
         if (telemetry_enabled) {
-            update(cluster);
+            update(cluster, watchdog_timeout_seconds);
             send_initial_snapshot(subscribers, topology_translation);
             log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
         }
@@ -646,7 +695,7 @@ static void telemetry_thread(
 
                 if (telemetry_enabled) {
                     // Collect local telemetry
-                    update(cluster);
+                    update(cluster, watchdog_timeout_seconds);
                 }
 
                 // Aggregate from remotes and produce delta snapshot
