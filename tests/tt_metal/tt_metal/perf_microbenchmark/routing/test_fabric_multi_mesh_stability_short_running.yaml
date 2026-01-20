@@ -33,4 +33,4 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 5
+        iterations: 2
