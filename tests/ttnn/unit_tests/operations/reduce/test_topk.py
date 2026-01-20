@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+UINT16_MAX = 65535
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
@@ -23,7 +25,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
         for i in range(W):
             indices_tensor_torch[:, :, :, i] = i
-        if W > 65535:
+        if W > UINT16_MAX:
             dtype = ttnn.uint32
         else:
             dtype = ttnn.uint16
@@ -97,8 +99,8 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 2048, 1, 64, 1, 8),  # passed
         (1, 1, 32, 32768, 3, 3000),  # passed
         (1, 1, 32, 18992, 3, 3000),  # passed
-        # (1, 1, 32, 18992, 3, 32),
-        # (1, 1, 32, 10000, 3, 32),
+        (1, 1, 32, 18992, 3, 32),
+        (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 32 * 514, 3, 32),
         (1, 1, 32, 32 * 4, 3, 32),
         (1, 1, 32, 32 * 8, 3, 32),
@@ -132,12 +134,6 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     ],
 )
 def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
-    # if dim == 0 or dim == 1:
-    #     # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
-    #     # input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32
-    #     # this is because, transpose.cpp always typecasts bf8 to bf16
-    #     # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
-    #     pytest.skip()
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
 
 
@@ -285,32 +281,3 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
-
-
-# @pytest.mark.parametrize(
-#     "shape, dim, descending",
-#     [
-#         ([64, 64], -1, False),
-#         ([32, 128], -1, False),
-#         ([1, 1, 32, 64], -1, True),
-#         ([1, 1, 64, 32, 64], -1, True),
-#     ],
-# )
-# def test_sort_prealocated_output(shape, dim, descending, device):
-#     torch.manual_seed(0)
-
-#     torch_dtype = torch.bfloat16
-#     input = torch.randn(shape, dtype=torch_dtype)
-#     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-
-#     torch_topk_values, torch_topk_indices = torch.topk(input, k=32, dim=dim)
-#     dest = ttnn.from_torch(torch_topk_values, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-
-#     ttnn_topk_values = ttnn.zeros_like(dest)
-#     ttnn_topk_indices = ttnn.zeros_like(dest, dtype=ttnn.uint16)
-#     ttnn.topk(ttnn_input, k=32, dim=dim, output_tensor=(ttnn_topk_values, ttnn_topk_indices))
-
-#     assert torch_topk_values.shape == ttnn_topk_values.shape
-#     assert torch_topk_indices.shape == ttnn_topk_indices.shape
-
-#     assert_with_pcc(torch_topk_values, ttnn.to_torch(ttnn_topk_values))

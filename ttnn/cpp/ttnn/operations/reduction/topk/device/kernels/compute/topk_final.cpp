@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <cstdint>
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api.h"
@@ -12,6 +10,8 @@
 #include "compute_kernel_api/pack.h"
 
 #include "topk_common_funcs.hpp"
+
+#include <cstdint>
 
 namespace NAMESPACE {
 
@@ -75,12 +75,11 @@ void MAIN {
     init_sfpu(input_cb_index, values_cb_index);
     ckernel::topk_tile_init();
 
-    // MAIN PROCESSING LOOP: Aggregate results from all local cores for each height row
+    // Aggregate results from all local cores for each height row
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         cb_wait_front(input_cb_index, Wt);  // Wait for all local TopK results (values)
         cb_wait_front(index_cb_index, Wt);  // Wait for all local TopK results (indices)
 
-        // STEP 1: COPY RECEIVED DATA TO TRANSPOSED BUFFERS
         // Use separate buffers to avoid racing conditions with reader kernel.
         // The reader kernel manages input_cb_index/index_cb_index, while compute
         // operations require separate staging buffers for in-place bitonic operations.
@@ -93,7 +92,7 @@ void MAIN {
             copy_tile(input_cb_index, wt, 0);         // Copy tile from local core wt
             pack_tile(0, input_transposed_cb_index);  // Pack to staging buffer
             release_dst();
-        }
+        }  // wt loop
         cb_push_back(input_transposed_cb_index, Wt);
         cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_cb_index, Wt);  // Release input buffer space
@@ -108,13 +107,13 @@ void MAIN {
             pack_tile(0, index_transposed_cb_index);  // Pack to staging buffer
             cb_push_back(index_transposed_cb_index, 1);
             release_dst();
-        }
+        }  // wt loop
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_cb_index, Wt);  // Release input buffer space
 
         uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
 
-        // STEP 2: BITONIC MERGE ACROSS ALL LOCAL RESULTS
+        // Bitonic merge iterations to compute global TopK
         // Apply the same log(Wt_final) bitonic merge iterations as local cores,
         // but now operating on the aggregated results from all cores.
         // This produces the globally optimal TopK from all local TopK results.
@@ -143,7 +142,6 @@ void MAIN {
                 largest);                   // Find largest vs smallest
         }
 
-        // STEP 3: OUTPUT FINAL GLOBAL TopK RESULTS
         // Extract the globally optimal TopK values and indices and prepare
         // for final output. Transpose back to WH format as required.
 
@@ -152,6 +150,6 @@ void MAIN {
 
         // Extract and output final TopK indices (corresponding to global optimum values)
         transpose_and_pack(index_transposed_cb_index, output_ind_cb_index, Kt, Wt);
-    }
+    }  // ht loop
 }
 }  // namespace NAMESPACE

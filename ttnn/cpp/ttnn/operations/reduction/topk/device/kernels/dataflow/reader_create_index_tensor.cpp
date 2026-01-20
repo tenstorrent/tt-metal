@@ -61,6 +61,6 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_intermed_index, onetile);
 #endif  // GENERATE_INDICES
-        }
-    }
+        }  // j loop
+    }  // core_loop loop
 }
