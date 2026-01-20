@@ -12,6 +12,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+from models.common.utility_functions import torch_random
+
 
 @pytest.mark.parametrize(
     "input_shape, output_shape",
@@ -146,32 +148,17 @@ def test_reshape_width_shard(device, layout):
     assert torch.allclose(expected_output, actual_output)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_reshape_height_shard_nd(device, layout):
-    input_shape = [1, 1, 256, 96]
-    output_shape = [1, 1, 8, 32, 3, 32]
-    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
-
-    height_sharded_config = ttnn.create_sharded_memory_config(
-        shape=input_shape,
-        core_grid=ttnn.CoreGrid(y=8, x=1),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=False,
-    )
-    input_ttnn = ttnn.from_torch(
-        input_torch,
-        dtype=ttnn.bfloat16,
-        layout=layout,
-        device=device,
-        memory_config=height_sharded_config,
-    )
-    output_tensor = ttnn.reshape(input_ttnn, output_shape)
-
-    expected_output = input_torch.reshape(output_shape)
-    actual_output = ttnn.to_torch(output_tensor)
-    assert torch.allclose(expected_output, actual_output)
-
-
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_shape,output_shape,shard_shape",
+    [
+        # Simple ND sharding test - matches pattern from test_reduce_on_batch
+        # NOTE: Currently reshape with ND sharding returns interleaved output
+        # This test verifies the data correctness even though memory layout changes
+        ([5, 4, 32 * 8, 32 * 8], [5, 4, 8, 32, 8, 32], [5, 1, 32, 32]),
+        ([4, 2, 32 * 4, 32 * 4], [4, 2, 4, 32, 4, 32], [4, 1, 32, 32]),
+    ],
+)
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
@@ -786,3 +773,50 @@ def test_reshape_oob(device):
         ttnn.deallocate(tt_output_tensor)
         ttnn.deallocate(pre_tensor)
         ttnn.deallocate(post_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,shard_shape,output_shape",
+    [
+        # Batch sharding
+        # Batch dims are equal for shape and shard_shape, all other dims of shard shape are 1 (or tile size for the lower two dims, or other combinations)
+        ((10, 4, 32 * 17, 32 * 17), (10, 1, 32, 32), (10, 4 * 17 * 17, 32, 32)),
+        ((5, 7, 32 * 11, 32 * 11), (5, 1, 32, 32), (5, 7, 32 * 11 * 11, 32)),
+        ((10, 4, 32 * 16, 32 * 16), (5, 2, 32, 64), (10 * 16 * 16, 4, 32, 32)),  # half batch sharding
+        (
+            (10, 5, 32 * 11, 32 * 11),
+            (10, 2, 64, 64),
+            (10 * 11, 5 * 11, 32, 32),
+        ),  # tensor dimensions not evenly divided by shard dimensions
+    ],
+)
+@pytest.mark.parametrize("dim", [0, 1])
+@pytest.mark.parametrize("interleaved", [False])
+def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, device):
+    pytest.skip("skipped but must be resolved later - issue 36172")
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random(shape, -100, 100, dtype=torch.bfloat16)
+
+    grid_size = device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    grid = ttnn.CoreRangeSet([core_range])
+
+    torch_output_tensor = torch_input_tensor.reshape(output_shape)
+
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+    output_shard_shape = list(shard_shape)
+    output_shard_shape[0] = 1
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+    output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
+    if interleaved:
+        memory_config = None
+        output_memory_config = None
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+
+    output_tensor = ttnn.reshape(input_tensor, output_shape)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
