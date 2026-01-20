@@ -21,6 +21,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch DeepSeek model."""
+"""
+Original (?) link - https://huggingface.co/deepseek-ai/DeepSeek-R1-0528/blob/main/modeling_deepseek.py
+Changes:
+- added meta_style parameter for meta-style RoPE
+- added bitonic sort to MoEGate and force topk(sorted=True)
+- big changes in Attention
+--- <yalrawwash@tenstorrent.com>: main difference is that K and V are independent in huggingface implementation, but in TT implementation KV is a shared tensor.
+                                  Q is also no longer independent of KV in TT implementation. Leads to fewer matrix multiplications.
+--- send empty value_cache to DynamicCache.update
+- DeepseekV3PreTrainedModel now inherits GenerationMixin
+- removed weights initialization in DeepseekV3ForCausalLM
+- RMSNorm initialized with randn (vs ones)
+- small transformers version compatibility fixes
+"""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
