@@ -157,6 +157,11 @@ PATTERNS = {
     "discovery_failed": re.compile(r"Physical Discovery.*failed|Discovery Complete.*0 chips"),
     "unrecoverable_state": re.compile(r"Encountered unrecoverable state|unrecoverable.*state"),
     "validation_failed": re.compile(r"Cluster validation failed|validation.*failed", re.IGNORECASE),
+    # Stack trace/crash indicators
+    "stack_trace": re.compile(r"<stderr>:.*\[\s*\d+\].*0x[a-fA-F0-9]+|TT_FATAL|TT_THROW|std::runtime_error"),
+    # MPI/communication errors
+    "mpi_error": re.compile(r"PRTE has lost communication|MPI_ABORT|mpi.*error", re.IGNORECASE),
+    "ssh_error": re.compile(r"Permission denied \(publickey\)|ssh.*connection.*refused", re.IGNORECASE),
 }
 
 
@@ -665,6 +670,10 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
         ("data_mismatch", Colors.RED, "Data mismatch"),
         # Warnings
         ("fw_mismatch", Colors.MAGENTA, "Firmware mismatch"),
+        # Communication/infrastructure
+        ("stack_trace", Colors.RED, "Stack trace/crash"),
+        ("mpi_error", Colors.RED, "MPI communication error"),
+        ("ssh_error", Colors.YELLOW, "SSH connection error"),
         # Unknown
         ("indeterminate", Colors.CYAN, "Indeterminate/incomplete"),
     ]
@@ -976,6 +985,26 @@ def print_recommendations(analyses: list[LogAnalysis]):
             f"- {Colors.MAGENTA}Firmware mismatch:{Colors.NC} " f"UMD may ignore some links. See {link}"
         )
 
+    if category_counts["stack_trace"] > 0:
+        recommendations.append(
+            f"- {Colors.RED}Stack trace/crash detected:{Colors.NC} "
+            "Review full log for root cause. May indicate software bug or hardware issue."
+        )
+
+    if category_counts["mpi_error"] > 0:
+        link = troubleshooting_link("ssh_agent", "SSH Agent Forwarding")
+        recommendations.append(
+            f"- {Colors.RED}MPI communication error:{Colors.NC} Lost connection between hosts. "
+            f"Check SSH agent forwarding and network. See {link}"
+        )
+
+    if category_counts["ssh_error"] > 0:
+        link = troubleshooting_link("ssh_agent", "SSH Agent Forwarding")
+        recommendations.append(
+            f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. "
+            f"Ensure ssh-agent running and keys added. See {link}"
+        )
+
     healthy_rate = category_counts["healthy"] / total * 100
     if healthy_rate >= 100:
         recommendations.append(f"- {Colors.GREEN}Cluster is healthy.{Colors.NC} Ready for workloads.")
@@ -1020,6 +1049,9 @@ def print_verbose(analyses: list[LogAnalysis]):
         "crc_error": "CRC Errors",
         "uncorrected_cw": "Uncorrected Codewords",
         "data_mismatch": "Data Mismatch",
+        "stack_trace": "Stack Trace/Crash",
+        "mpi_error": "MPI Communication Error",
+        "ssh_error": "SSH Connection Error",
     }
 
     for category, label in category_labels.items():
