@@ -169,15 +169,21 @@ void create_cb(Program& program, const std::variant<CoreCoord, CoreRange, CoreRa
  * This function assumes that TILE_HEIGHT == TILE_WIDTH, and that M, N and K are divisible
  * by TILE_HEIGHT.
  *
- * | Argument  | Description                                                         |
- * |-----------|---------------------------------------------------------------------|
- * | a         | Input matrix A in row-major format, size MxK                        |
- * | b         | Input matrix B in row-major format, size KxN                        |
- * | output    | Output matrix C in row-major format, size MxN (will be overwritten) |
- * | M         | Number of rows in matrix A and output matrix C                      |
- * | N         | Number of columns in matrix B and output matrix C                   |
- * | K         | Number of columns in matrix A and rows in matrix B                  |
- * | prog_state| Program state containing device, program, and execution context     |
+ * | Argument              | Description                                                         |
+ * |-----------------------|---------------------------------------------------------------------|
+ * | a                     | Input matrix A in row-major format, size MxK                        |
+ * | b                     | Input matrix B in row-major format, size KxN                        |
+ * | output                | Output matrix C in row-major format, size MxN (will be overwritten) |
+ * | M                     | Number of rows in matrix A and output matrix C                      |
+ * | N                     | Number of columns in matrix B and output matrix C                   |
+ * | K                     | Number of columns in matrix A and rows in matrix B                  |
+ * | core_reduction_factor | Reduction factor for core usage                                     |
+ * |                         (e.g. 3 for 1/3 of cores, 1 for all cores)                          |
+ * |                         Integer division is applied to the y dimension of the core grid,    |
+ * |                         so that the number of cores is reduced by the factor specified.     |
+ * |                         However, integer division means that the number of cores is rounded |
+ * |                         down                                                                |
+ * | prog_state            | Program state containing device, program, and execution context     |
  */
 // clang-format on
 void matmul_multi_core(
@@ -187,6 +193,7 @@ void matmul_multi_core(
     const uint32_t M,
     const uint32_t N,
     const uint32_t K,
+    const uint32_t core_reduction_factor,
     ProgramState& prog_state) {
     // Calculate the number of tiles along each dimension.
     const uint32_t Mt = M / TILE_HEIGHT;
@@ -209,7 +216,12 @@ void matmul_multi_core(
     // Create output tensor on device (no initialization needed - kernel will write into it).
     Tensor dst_tensor = create_device_tensor(dst_spec, prog_state.mesh_device.get());
 
-    const CoreCoord core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
+    CoreCoord core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
+
+    // Divide y dimension of core grid by core_reduction_factor to get the number of cores to use.
+    core_grid.y /= core_reduction_factor;
+
+    log_info(tt::LogAlways, "Using {} ({} x {}) cores for computation", core_grid.x * core_grid.y, core_grid.x, core_grid.y);
 
     uint32_t num_output_tiles = (Mt * Nt);
 
@@ -378,7 +390,7 @@ int main() {
 
         // Initialize program state (includes device creation)
         ProgramState prog_state = init_program();
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, prog_state);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, 5, prog_state);
 
         log_info(tt::LogAlways, "Output vector of size {}", result_vec.size());
 
