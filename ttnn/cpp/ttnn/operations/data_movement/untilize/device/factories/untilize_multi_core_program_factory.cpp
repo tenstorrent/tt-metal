@@ -148,6 +148,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             input_cb_num_tiles = num_tiles_per_input_block * 2;
         }
     }
+    std::cout << "BEFORE CB input_cb_num_tiles: " << input_cb_num_tiles << std::endl;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -156,6 +157,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_cb_num_tiles,
         input_cb_data_format,
         input_is_sharded ? src0_buffer : nullptr);
+    std::cout << "AFTER CB input_cb_num_tiles: " << input_cb_num_tiles << std::endl;
 
     // Output CB
     uint32_t output_cb_num_tiles;

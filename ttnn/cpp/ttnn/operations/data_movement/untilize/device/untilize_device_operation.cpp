@@ -153,6 +153,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         }
         // Check for output uneven sharding
         if (output_is_sharded) {
+            // TODO: Add check for uneven sharding in ND shard spec
             uint32_t output_shard_width;
             uint32_t output_shard_height;
             TT_FATAL(
@@ -299,15 +300,21 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return program::UntilizeMultiCoreBlockProgramFactory{};
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
-        output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout &&
-        (input_tensor_a.shard_spec() == output_tensor.shard_spec() ||
-         input_tensor_a.nd_shard_spec() == output_tensor.nd_shard_spec())) {
+        output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout) {
         // Optimized special case implementation for when both input and output are sharded, both are located in L1,
         // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
         // specs
-        std::cout << "selecting UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory"
-                  << std::endl;
-        return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        bool identical_shard_specs = false;
+        identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
+                                 output_tensor.nd_shard_spec().has_value() &&
+                                 input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
+        identical_shard_specs |= input_tensor_a.shard_spec().has_value() && output_tensor.shard_spec().has_value() &&
+                                 input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
+        if (identical_shard_specs) {
+            std::cout << "selecting UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory"
+                      << std::endl;
+            return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        }
     }
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
