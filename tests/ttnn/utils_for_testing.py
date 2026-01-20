@@ -18,8 +18,8 @@ import numpy as np
 # Dictionaries for converting dtypes
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,13 +29,16 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
 }
+
+TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
+NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
@@ -434,7 +437,7 @@ def maybe_trace(op_func, enable_trace, device):
 
 
 def is_unsigned_tensor(py_tensor):
-    return py_tensor.dtype in [torch.uint16, torch.uint32, np.uint16, np.uint32, torch.uint8, np.ubyte]
+    return py_tensor.dtype in TORCH_INTEGER_DTYPES
 
 
 def match_type_post_conversion(roundtrip_tensor, py_tensor):
