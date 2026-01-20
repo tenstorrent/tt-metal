@@ -9,11 +9,12 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+
 PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     Program program{};
@@ -142,9 +143,9 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
 
 void PadRmReaderWriterProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
@@ -162,4 +163,4 @@ void PadRmReaderWriterProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim
