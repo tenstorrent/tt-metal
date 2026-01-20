@@ -15,6 +15,7 @@ public:
     std::vector<std::string> defines(const Params& params) const override;
     std::vector<std::string> srcs(const Params& params) const override;
     std::string target_name(const Params& params) const override;
+    std::string weakened_firmware_target_name(const Params& params) const override;
 };
 
 }  // namespace tt::tt_metal::hal_1xx
