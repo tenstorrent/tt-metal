@@ -7,10 +7,11 @@ Conditional denoising network with timestep embedding
 Following vanilla_unet U-Net pattern
 """
 
-import ttnn
 from typing import List, Optional
-from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
+
+import ttnn
 from models.demos.monodiffusion.tt.common import concatenate_skip_connection
+from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
 from models.tt_cnn.tt.builder import TtConv2d
 
 
@@ -95,10 +96,7 @@ class TtDiffusionUNet:
         x_upsampled = ttnn.upsample(x_reshaped, (2, 2), memory_config=x.memory_config())
 
         # Reshape back to (1, 1, N, C)
-        x_upsampled = ttnn.reshape(
-            x_upsampled,
-            (1, 1, batch_size * target_height * target_width, channels)
-        )
+        x_upsampled = ttnn.reshape(x_upsampled, (1, 1, batch_size * target_height * target_width, channels))
 
         return x_upsampled
 
@@ -106,7 +104,7 @@ class TtDiffusionUNet:
         self,
         x: ttnn.Tensor,
         timestep_emb: Optional[ttnn.Tensor] = None,
-        encoder_features: Optional[List[ttnn.Tensor]] = None
+        encoder_features: Optional[List[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         """
         Forward pass through diffusion U-Net
@@ -135,7 +133,7 @@ class TtDiffusionUNet:
         x = self.upsample(
             x,
             target_height=self.configs.unet_up1_conv1.input_height,
-            target_width=self.configs.unet_up1_conv1.input_width
+            target_width=self.configs.unet_up1_conv1.input_width,
         )
 
         # Concatenate with skip connection
@@ -151,7 +149,7 @@ class TtDiffusionUNet:
         noisy_depth: ttnn.Tensor,
         timestep: int,
         timestep_emb: Optional[ttnn.Tensor] = None,
-        encoder_features: Optional[List[ttnn.Tensor]] = None
+        encoder_features: Optional[List[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         """
         Single denoising step in the diffusion process
@@ -166,11 +164,7 @@ class TtDiffusionUNet:
 
         # Compute: x_t-1 = x_t - (1 - alpha_t) * noise_pred
         scaled_noise = ttnn.multiply(noise_pred, 1.0 - alpha_t, memory_config=noise_pred.memory_config())
-        denoised = ttnn.subtract(
-            noisy_depth,
-            scaled_noise,
-            memory_config=noisy_depth.memory_config()
-        )
+        denoised = ttnn.subtract(noisy_depth, scaled_noise, memory_config=noisy_depth.memory_config())
 
         ttnn.deallocate(scaled_noise)
 

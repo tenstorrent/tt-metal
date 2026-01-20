@@ -6,8 +6,9 @@ Uncertainty estimation head for MonoDiffusion
 Following vanilla_unet pattern with TtConv2d
 """
 
-import ttnn
 from typing import List, Optional
+
+import ttnn
 from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
 from models.tt_cnn.tt.builder import TtConv2d
 
@@ -26,11 +27,7 @@ class TtUncertaintyHead:
         self.conv1 = TtConv2d(configs.uncertainty_conv1, device)
         self.conv2 = TtConv2d(configs.uncertainty_conv2, device)
 
-    def __call__(
-        self,
-        depth_map: ttnn.Tensor,
-        encoder_features: Optional[List[ttnn.Tensor]] = None
-    ) -> ttnn.Tensor:
+    def __call__(self, depth_map: ttnn.Tensor, encoder_features: Optional[List[ttnn.Tensor]] = None) -> ttnn.Tensor:
         """
         Predict uncertainty map for depth predictions
 

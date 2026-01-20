@@ -8,16 +8,15 @@ Validates PCC > 0.99 against PyTorch reference
 
 import pytest
 import torch
-import ttnn
-import numpy as np
 
+import ttnn
+from models.demos.monodiffusion.reference.pytorch_model import create_reference_model
 from models.demos.monodiffusion.tt import (
+    compute_pcc,
     create_monodiffusion_from_parameters,
     create_monodiffusion_preprocessor,
     load_reference_model,
-    compute_pcc,
 )
-from models.demos.monodiffusion.reference.pytorch_model import create_reference_model
 
 
 @pytest.mark.parametrize("device_id", [0])
@@ -66,7 +65,7 @@ def test_monodiffusion_accuracy_vs_pytorch(device_id, batch_size, resolution):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_depth_ttnn, tt_uncertainty_ttnn = tt_model(input_tensor, return_uncertainty=True)
 
@@ -103,9 +102,8 @@ def test_encoder_accuracy(device_id):
     device = ttnn.open_device(device_id=device_id)
 
     try:
-        from models.demos.monodiffusion.tt.config import TtMonoDiffusionLayerConfigs
-        from models.demos.monodiffusion.tt.encoder import TtMonoDiffusionEncoder
         from models.demos.monodiffusion.tt import create_monodiffusion_preprocessor, load_reference_model
+        from models.demos.monodiffusion.tt.encoder import TtMonoDiffusionEncoder
 
         # Load reference and create configs
         reference_model = load_reference_model()
@@ -113,6 +111,7 @@ def test_encoder_accuracy(device_id):
         parameters = preprocessor(reference_model, "monodiffusion", {})
 
         from models.demos.monodiffusion.tt.config import create_monodiffusion_configs_from_parameters
+
         configs = create_monodiffusion_configs_from_parameters(
             parameters=parameters,
             batch_size=1,
@@ -129,7 +128,7 @@ def test_encoder_accuracy(device_id):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Preprocess to HWC
