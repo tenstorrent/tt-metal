@@ -184,6 +184,7 @@ When implementing compute phases, read the relevant helper in `ttnn/cpp/ttnn/ker
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
 - `reduce_helpers.hpp` - reduce(), TileShape, Accumulation
+- `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim
 - `dest_helpers.hpp` - DEST_AUTO_LIMIT
 
 The code is self-documenting with Doxygen comments and @example blocks.
