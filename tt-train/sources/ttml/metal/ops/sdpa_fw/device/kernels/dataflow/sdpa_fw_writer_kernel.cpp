@@ -20,15 +20,13 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // number of tiles in inner dimension
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);   // number of tiles in sequence dimension
-    [[maybe_unused]] constexpr uint32_t block_size = get_compile_time_arg_val(2);
-    constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // num of heads in query
-    [[maybe_unused]] constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // number of tiles in inner dimension
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
+    constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<5>();
+    constexpr auto output_args = TensorAccessorArgs<3>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
 #ifdef RETURN_INTERMEDIATES

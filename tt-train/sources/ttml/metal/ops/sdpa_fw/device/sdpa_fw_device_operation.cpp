@@ -133,6 +133,13 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             qSt);
     }
 
+    // CAUSAL_MASK and USE_ATTN_MASK are mutually exclusive
+    TT_FATAL(
+        !(args.is_mask_causal && tensor_args.mask.has_value()),
+        "Cannot use both causal mask and attention mask simultaneously. "
+        "Set is_mask_causal=false when providing an explicit attention mask tensor, "
+        "or remove the mask tensor when using causal masking.");
+
     if (preallocated_output.has_value()) {
         check_tensor(
             preallocated_output.value(),

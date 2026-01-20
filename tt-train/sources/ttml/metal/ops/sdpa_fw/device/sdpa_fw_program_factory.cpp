@@ -351,15 +351,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
         qWt,              // num tile in inner dim in query(d/TILE_W)
-        kWt,              // num tile in inner dim in key and value (d/TILE_W)
         St,               // num tile in seq len dim (S/TILE_H)
-        block_size,       // block size (dst_reg_count)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
-        qB,               // num of batches
-        scaler,           // sqrt(Et) - sdpa scale factor
-        minus_one,        // used to transform mask from 1/0 to 0/-1
-        custom_inf,       // used to transform mask from 0/-1 to 0/-1e9F
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -374,11 +368,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,              // num tile in inner dim in query(d/TILE_W)
-        St,               // num tile in seq len dim (S/TILE_H)
-        block_size,       // block size (dst_reg_count)
-        qNH,              // number of heads in query
-        heads_per_group,  // number of heads per group
+        qWt,  // num tile in inner dim in query(d/TILE_W)
+        St,   // num tile in seq len dim (S/TILE_H)
+        qNH,  // number of heads in query
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -394,10 +386,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
         qWt,                        // num tile in inner dim in query(d/TILE_W)
-        kWt,                        // num tile in inner dim in key and value (d/TILE_W)
         St,                         // num_seq_len / TILE_H
-        qNH,                        // number of heads in query
-        heads_per_group,            // number of heads per group
         scaler,                     // sqrt(Et) - sdpa scaler factor
         minus_one,                  // used to transform mask from 1/0 to 0/-1
         custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
@@ -412,10 +401,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             qWt,                        // num tile in inner dim in query(d/TILE_W)
-            kWt,                        // num tile in inner dim in key and value (d/TILE_W)
             St,                         // num_seq_len / TILE_H
-            qNH,                        // number of heads in query
-            heads_per_group,            // number of heads per group
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F

@@ -39,75 +39,6 @@ protected:
     }
 };
 
-// Error analysis utility function (static to avoid multiple definition with sdpa_bw_op_test.cpp)
-static void print_error_analysis(
-    const xt::xarray<float>& result,
-    const xt::xarray<float>& groundtruth,
-    const std::pair<float, float> threshold,  // {atol, rtol}
-    const size_t num_elements_to_print,
-    const std::string& name) {
-    assert(result.shape() == groundtruth.shape() && "Tensors must have the same shape");
-
-    const double atol = static_cast<double>(threshold.first);
-    const double rtol = static_cast<double>(threshold.second);
-    const size_t total_elements = result.size();
-    const auto shape = result.shape();
-
-    // Compute statistics using vectorized operations
-    const xt::xarray<float> abs_diff = xt::abs(result - groundtruth);
-    const float mean_error = xt::mean(abs_diff)();
-    const float mse = xt::mean(xt::square(abs_diff))();
-    const float max_diff = xt::amax(abs_diff)();
-
-    // Print statistics
-    fmt::print("=== Error Analysis: {} ===\n", name);
-    fmt::print("Shape: {}\n", shape);
-    fmt::print("Total elements: {}\n", total_elements);
-    fmt::print("Mean Absolute Error: {:.6e}\n", mean_error);
-    fmt::print("Mean Squared Error (MSE): {:.6e}\n", mse);
-    fmt::print("Max absolute difference: {:.6e}\n", max_diff);
-    fmt::print("Threshold: atol={:.6e}, rtol={:.6e}\n\n", atol, rtol);
-
-    // Find and print first k elements where error exceeds threshold
-    fmt::print("First {} elements where error exceeds threshold:\n", num_elements_to_print);
-    fmt::print("(index: result_val, groundtruth_val, abs_diff, threshold)\n");
-
-    size_t error_count = 0;
-
-    for (size_t b = 0; b < shape[0]; ++b) {
-        for (size_t h = 0; h < shape[1]; ++h) {
-            for (size_t s = 0; s < shape[2]; ++s) {
-                for (size_t d = 0; d < shape[3]; ++d) {
-                    const double result_val = static_cast<double>(result(b, h, s, d));
-                    const double gt_val = static_cast<double>(groundtruth(b, h, s, d));
-                    const double diff = std::abs(result_val - gt_val);
-                    const double tolerance = std::max(atol, rtol * std::abs(gt_val));
-                    const bool is_close =
-                        (diff <= atol || diff <= rtol * std::max(std::abs(result_val), std::abs(gt_val)));
-                    if (!is_close) {
-                        if (error_count <= num_elements_to_print) {
-                            fmt::print(
-                                "[{},{},{},{}]: {:.3e}, {:.3e}, {:.3e}, {:.3e}\n",
-                                b,
-                                h,
-                                s,
-                                d,
-                                result_val,
-                                gt_val,
-                                diff,
-                                tolerance);
-                        }
-                        error_count++;
-                    }
-                }
-            }
-        }
-    }
-
-    fmt::print(" Total elements exceeding threshold: {}\n", error_count);
-    fmt::print("=== End Error Analysis ===\n\n");
-}
-
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
     size_t S = shape[2];
@@ -625,12 +556,6 @@ void run_sdpa_test(const SDPATestConfig& config) {
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
     float mse_kernel_vs_composite_interm = compute_mse(interm_xtensor, composite_interm_xtensor);
 
-    // Print error analysis for debugging
-    const auto threshold = std::make_pair(config.result_atol, config.result_rtol);
-    print_error_analysis(result_xtensor, float_result, threshold, 50, config.test_name + " Kernel vs Float");
-    print_error_analysis(
-        result_xtensor, composite_result_xtensor, threshold, 50, config.test_name + " Kernel vs Composite");
-
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
         << "Kernel vs Composite comparison failed in " << config.test_name << " (MSE: " << mse_kernel_vs_composite
@@ -694,9 +619,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
     // Simple causal mask test with small shapes
     SDPATestConfig config{
         .batch_size = 1U,
-        .sequence_length = 64U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
         .num_query_heads = 2U,
         .num_key_heads = 2U,
         .is_mask_causal = true,
@@ -707,9 +632,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleHead) {
     SDPATestConfig config{
         .batch_size = 1U,
-        .sequence_length = 64U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
         .num_query_heads = 1U,
         .num_key_heads = 1U,
         .is_mask_causal = true,
@@ -728,6 +653,36 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
         .num_key_heads = 1U,
         .is_mask_causal = true,
         .test_name = "CausalMask_SingleTile"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+    // Multi-head attention with equal query and KV heads (standard MHA)
+    // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 256U,
+        .query_dim = 768U,  // 6 heads * 128 dim per head
+        .key_value_dim = 768U,
+        .num_query_heads = 6U,
+        .num_key_heads = 6U,
+        .is_mask_causal = true,
+        .test_name = "CausalMask_MHA_4B_256S_6H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+    // Grouped Query Attention with different query and KV heads
+    // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
+    SDPATestConfig config{
+        .batch_size = 16U,
+        .sequence_length = 512U,
+        .query_dim = 1024U,     // 8 heads * 128 dim per head
+        .key_value_dim = 512U,  // 4 heads * 128 dim per head
+        .num_query_heads = 8U,
+        .num_key_heads = 4U,
+        .is_mask_causal = true,
+        .test_name = "CausalMask_GQA_16B_512S_8Q_4KV"};
     run_sdpa_test(config);
 }
 

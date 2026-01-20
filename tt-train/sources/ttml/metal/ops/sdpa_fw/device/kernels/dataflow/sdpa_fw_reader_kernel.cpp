@@ -29,20 +29,11 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
 #endif
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // num tile in inner dim in query (d/TILE_W)
-    [[maybe_unused]] constexpr uint32_t kWt =
-        get_compile_time_arg_val(1);                      // num tile in inner dim in key/value (d/TILE_W)
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);  // (S / TILE_H)
-    [[maybe_unused]] constexpr uint32_t block_size = get_compile_time_arg_val(3);
-    constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // num of heads in query
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // num of heads per group
-    [[maybe_unused]] constexpr uint32_t num_of_batches = get_compile_time_arg_val(6);  // num of batches
-    [[maybe_unused]] constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);     // sdpa scaler factor
-    [[maybe_unused]] constexpr uint32_t minus_one_bits =
-        get_compile_time_arg_val(8);  // used to transform mask from 1/0 to 0/-1
-    [[maybe_unused]] constexpr uint32_t custom_inf_bits =
-        get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
-    constexpr auto query_args = TensorAccessorArgs<10>();
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // num tile in inner dim in query (d/TILE_W)
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);               // (S / TILE_H)
+    constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // num of heads in query
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // num of heads per group
+    constexpr auto query_args = TensorAccessorArgs<4>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
 

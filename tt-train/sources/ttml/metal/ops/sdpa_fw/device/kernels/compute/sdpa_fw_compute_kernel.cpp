@@ -34,14 +34,10 @@ namespace NAMESPACE {
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
 constexpr uint32_t qWt = get_compile_time_arg_val(2);                // num tile in inner dim in query(d/TILE_W)
-[[maybe_unused]] constexpr uint32_t kWt =
-    get_compile_time_arg_val(3);                                   // num tile in inner dim in key and value (d/TILE_W)
-constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
-[[maybe_unused]] constexpr uint32_t q_heads = get_compile_time_arg_val(5);          // number of heads in query
-[[maybe_unused]] constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);  // number of heads per group
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) - sdpa scaler factor
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t Ht = get_compile_time_arg_val(3);                 // num_seq_len / TILE_H
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);        // sqrt(Et) - sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);     // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);    // used to transform mask from 0/-1 to 0/-1e9F
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -107,7 +103,6 @@ void MAIN {
         uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
         const uint32_t matmul_accum_reg = 0;
-        [[maybe_unused]] const uint32_t mask_register = 1U;  // mask register should be next to data register
         for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
             cb_wait_front(cb_key, qWt);
 
