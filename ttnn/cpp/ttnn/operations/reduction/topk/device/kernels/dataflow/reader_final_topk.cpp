@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,7 +48,7 @@ void kernel_main() {
     const uint64_t mcast_receiver_semaphore_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_semaphore);
 
-    // MAIN AGGREGATION LOOP: Collect local TopK results from all cores
+    // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
         // STEP 1: PREPARE RECEPTION BUFFERS
         // Reserve space for incoming data from all local cores

@@ -61,16 +61,12 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
     const ttnn::Shape input_shape = input_tensor.padded_shape();
 
-    // Check requirement #2: Output data type constraint
-    // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
-    const bool uint16_output = (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
-
     // Check requirement #1: Minimum dimension size for multi-core efficiency
     bool multicore_supported = (input_tensor.padded_shape()[args.dim] >= ttnn::prim::constants::multi_core_min_width);
 
     // Apply requirement #2: Multi-core implementation constraint
-    // Current multi-core implementation does not support UInt32 indices
-    multicore_supported &= uint16_output;
+    // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
+    multicore_supported &= (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
 
     // Apply requirement #3: K value limitation for multi-core optimization
     multicore_supported &= (args.k <= 64);
@@ -81,12 +77,13 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
         auto* device = input_tensor.device();
 
         // Determine data formats for memory cost calculation
-        tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;  // Multi-core always uses UInt16
+        const tt::DataFormat value_cb_data_format =
+            tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+        const tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;  // Multi-core always uses UInt16
 
         // Calculate tile sizes for memory cost analysis
-        uint32_t value_tile_size = tile_size(value_cb_data_format);
-        uint32_t index_tile_size = tile_size(index_cb_data_format);
+        const uint32_t value_tile_size = tile_size(value_cb_data_format);
+        const uint32_t index_tile_size = tile_size(index_cb_data_format);
 
         const auto core_range = args.sub_core_grids.ranges().at(0);
 
@@ -106,6 +103,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
     // Select program factory based on feasibility analysis
     if (multicore_supported) {
+        std::cout << "USING MULTI-CORE TOPK IMPLEMENTATION" << std::endl;
         return TopKMultiCoreProgramFactory{};
     }
 
