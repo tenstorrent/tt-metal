@@ -64,7 +64,7 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             cached_program_proxy,
             attributes.matmul_struct,
             {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
-            {output_tensor.at(1)});
+            output_tensor.at(1));
     }
 }
 
