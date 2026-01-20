@@ -150,7 +150,7 @@ def load_throughput_expert_weights(
     # So before sharding: [1, 1, 1, num_experts, 1, dim]
     w1_bias = w1_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
     w3_bias = w3_bias.reshape(1, 1, 1, num_experts, 1, intermediate_size)
-    # w2_bias = w2_bias.reshape(1, 1, 1, num_experts, 1, hidden_size)
+    w2_bias = w2_bias.reshape(1, 1, 1, num_experts, 1, hidden_size)
 
     # Load and shard weights
     w1_tt = _shard_experts_by_device(
