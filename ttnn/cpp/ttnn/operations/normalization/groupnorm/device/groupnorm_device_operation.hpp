@@ -14,7 +14,7 @@
 #include "groupnorm_mcast_program_factory.hpp"
 #include "groupnorm_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization::group_norm {
+namespace ttnn::prim {
 
 struct GroupNormDeviceOperation {
     using operation_attributes_t = GroupNormParams;
@@ -34,15 +34,12 @@ struct GroupNormDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::normalization::group_norm
-
-namespace ttnn::prim {
-ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_return_value_t group_norm(
+Tensor group_norm(
     const Tensor& input,
     float eps,
     uint32_t num_groups,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::group_norm::GroupNormProgramConfig& program_config,
+    const GroupNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_welford,
     std::optional<Tensor> gamma,
@@ -50,4 +47,5 @@ ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_re
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals);
+
 }  // namespace ttnn::prim

@@ -11,10 +11,11 @@
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::concat {
+namespace ttnn::prim {
 
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -26,7 +27,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool is_sharded = input_tensors[0].is_sharded();
 
     if (!is_sharded) {
-        return program::ConcatProgramFactory{};
+        return ConcatProgramFactory{};
     }
 
     // Sharded cases - determine which specific factory to use
@@ -41,15 +42,15 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
                 "Expected all input tensors to have the same layout for 2-tensor sharded concat");
 
             if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return program::ConcatS2SRMProgramFactory{};
+                return ConcatS2SRMProgramFactory{};
             }
-            return program::ConcatS2STiledProgramFactory{};
+            return ConcatS2STiledProgramFactory{};
 
         }  // Multi-tensor s2s case
-        return program::ConcatS2SMultiProgramFactory{};
+        return ConcatS2SMultiProgramFactory{};
     }
     // Sharded-to-interleaved (s2i) case
-    return program::ConcatS2IProgramFactory{};
+    return ConcatS2IProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_hit(
@@ -178,13 +179,14 @@ ConcatDeviceOperation::create_op_performance_model(
     const auto& output_tensor = output_tensors.at(0);
 
     // Use common_tm_bw_model with concat_op=true for concat-specific bandwidth modeling
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, 0, false, false, false, true);
+    int ideal_dev_clock_cycles =
+        operations::data_movement::common_tm_bw_model(input_tensor, output_tensor, false, 0, false, false, false, true);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
 }
-}  // namespace ttnn::operations::data_movement::concat
+}  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {
 
@@ -394,12 +396,12 @@ Tensor concat_impl(
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::concat::ConcatDeviceOperation::tensor_return_value_t concat(
+ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    using OperationType = ttnn::operations::data_movement::concat::ConcatDeviceOperation;
+    using OperationType = ttnn::prim::ConcatDeviceOperation;
     uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

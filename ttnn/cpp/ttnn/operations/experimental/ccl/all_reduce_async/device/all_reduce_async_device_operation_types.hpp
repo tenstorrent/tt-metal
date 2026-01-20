@@ -15,9 +15,9 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_reduce_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllReduceAsyncParams {
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     DataType dtype = DataType::BFLOAT16;
@@ -30,7 +30,7 @@ struct operation_attributes_t {
     uint32_t cluster_axis = 0;
     distributed::MeshDevice* mesh_device = nullptr;
 
-    operation_attributes_t(
+    AllReduceAsyncParams(
         uint32_t num_links,
         uint32_t ring_size,
         DataType dtype,
@@ -72,9 +72,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllReduceAsyncInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+}  // namespace ttnn::experimental::prim
