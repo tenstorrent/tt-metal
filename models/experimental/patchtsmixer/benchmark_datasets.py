@@ -18,16 +18,15 @@ import pandas as pd
 import torch
 
 import ttnn
-from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import PatchTSMixerModelForForecasting
+
+# Models will be imported dynamically based on task_mode
 from models.experimental.patchtsmixer.tt.model_processing import (
     preprocess_embedding_proj,
-    preprocess_forecast_head,
     preprocess_gated_attention,
     preprocess_layernorm,
     preprocess_linear,
     preprocess_positional_encoding,
 )
-from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerModelForForecasting
 
 
 def download_ett_dataset(dataset_name="ETTh2", data_dir="./data"):
@@ -124,9 +123,9 @@ def compute_metrics(predictions, targets):
     }
 
 
-def load_or_create_model(config, checkpoint_path=None):
+def load_or_create_model(model_class, config, checkpoint_path=None):
     """Load a trained model or create a new one"""
-    model = PatchTSMixerModelForForecasting(**config).eval()
+    model = model_class(**config).eval()
 
     if checkpoint_path and Path(checkpoint_path).exists():
         print(f"Loading checkpoint from {checkpoint_path}")
@@ -142,84 +141,155 @@ def load_or_create_model(config, checkpoint_path=None):
     return model
 
 
-def preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn):
+def preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn, task_mode="forecasting"):
     """Convert PyTorch model parameters to TTNN format"""
     base = "model"
     sd = torch_model.state_dict()
     state_dict = {}
 
+    # Determine the correct base prefix based on task mode
+    if task_mode == "forecasting":
+        embedding_key = "patch_embed"
+        pos_enc_key = "pos_enc"
+        encoder_key = "mixer_block"
+        head_key = "head"
+    else:  # regression, classification, pretraining
+        embedding_key = "embedding"
+        pos_enc_key = "pos_encoder"
+        encoder_key = "encoder"
+        head_key = "head"
+
     # Embedding
-    state_dict[f"{base}.patch_embed.proj.weight"] = sd["patch_embed.proj.weight"]
-    state_dict[f"{base}.patch_embed.proj.bias"] = sd["patch_embed.proj.bias"]
+    state_dict[f"{base}.{embedding_key}.proj.weight"] = sd[f"{embedding_key}.proj.weight"]
+    state_dict[f"{base}.{embedding_key}.proj.bias"] = sd[f"{embedding_key}.proj.bias"]
 
     # Positional encoding
-    state_dict[f"{base}.pos_enc.pe"] = sd["pos_enc.pe"]
+    state_dict[f"{base}.{pos_enc_key}.pe"] = sd[f"{pos_enc_key}.pe"]
 
-    # Mixer layers
+    # Encoder/Mixer layers
     for i in range(num_layers):
-        prefix = f"{base}.mixer_block.layers.{i}"
+        prefix = f"{base}.{encoder_key}.layers.{i}"
 
         for mixer in ["patch_mixer", "feature_mixer"]:
-            state_dict[f"{prefix}.{mixer}.norm.norm.weight"] = sd[f"mixer_block.layers.{i}.{mixer}.norm.norm.weight"]
-            state_dict[f"{prefix}.{mixer}.norm.norm.bias"] = sd[f"mixer_block.layers.{i}.{mixer}.norm.norm.bias"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc1.weight"] = sd[f"mixer_block.layers.{i}.{mixer}.mlp.fc1.weight"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc1.bias"] = sd[f"mixer_block.layers.{i}.{mixer}.mlp.fc1.bias"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc2.weight"] = sd[f"mixer_block.layers.{i}.{mixer}.mlp.fc2.weight"]
-            state_dict[f"{prefix}.{mixer}.mlp.fc2.bias"] = sd[f"mixer_block.layers.{i}.{mixer}.mlp.fc2.bias"]
+            state_dict[f"{prefix}.{mixer}.norm.norm.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.norm.norm.weight"]
+            state_dict[f"{prefix}.{mixer}.norm.norm.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.norm.norm.bias"]
+            state_dict[f"{prefix}.{mixer}.mlp.fc1.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc1.weight"]
+            state_dict[f"{prefix}.{mixer}.mlp.fc1.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc1.bias"]
+            state_dict[f"{prefix}.{mixer}.mlp.fc2.weight"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc2.weight"]
+            state_dict[f"{prefix}.{mixer}.mlp.fc2.bias"] = sd[f"{encoder_key}.layers.{i}.{mixer}.mlp.fc2.bias"]
 
             if use_gated_attn:
                 state_dict[f"{prefix}.{mixer}.gate.attn_layer.weight"] = sd[
-                    f"mixer_block.layers.{i}.{mixer}.gate.attn_layer.weight"
+                    f"{encoder_key}.layers.{i}.{mixer}.gate.attn_layer.weight"
                 ]
                 state_dict[f"{prefix}.{mixer}.gate.attn_layer.bias"] = sd[
-                    f"mixer_block.layers.{i}.{mixer}.gate.attn_layer.bias"
+                    f"{encoder_key}.layers.{i}.{mixer}.gate.attn_layer.bias"
                 ]
 
     # Head
-    state_dict[f"{base}.head.proj.weight"] = sd["head.proj.weight"]
-    state_dict[f"{base}.head.proj.bias"] = sd["head.proj.bias"]
+    state_dict[f"{base}.{head_key}.proj.weight"] = sd[f"{head_key}.proj.weight"]
+    state_dict[f"{base}.{head_key}.proj.bias"] = sd[f"{head_key}.proj.bias"]
 
     # Convert to TTNN
     parameters = {}
 
-    w_tt, b_tt = preprocess_embedding_proj(state_dict, f"{base}.patch_embed", device=device)
-    parameters[f"{base}.patch_embed.proj.weight"] = w_tt
-    parameters[f"{base}.patch_embed.proj.bias"] = b_tt
+    # Helper to extract sub-state_dict for a component
+    def extract_component_state(prefix):
+        """Extract state dict for a specific component, removing the prefix"""
+        component_dict = {}
+        prefix_with_dot = f"{prefix}."
+        for key, value in state_dict.items():
+            if key.startswith(prefix_with_dot):
+                # Remove the prefix from the key
+                new_key = key[len(prefix_with_dot) :]
+                component_dict[new_key] = value
+        return component_dict
 
-    tt_pe = preprocess_positional_encoding(state_dict, f"{base}.pos_enc", device=device)
-    parameters[f"{base}.pos_enc.pe"] = tt_pe
+    # Embedding
+    embed_state = extract_component_state(f"{base}.{embedding_key}")
+    embed_params = preprocess_embedding_proj(embed_state, f"{base}.{embedding_key}", device=device)
+    parameters.update(embed_params)
+
+    # Positional encoding
+    pos_enc_state = extract_component_state(f"{base}.{pos_enc_key}")
+    pos_enc_params = preprocess_positional_encoding(pos_enc_state, f"{base}.{pos_enc_key}", device=device)
+    parameters.update(pos_enc_params)
 
     for i in range(num_layers):
-        prefix = f"{base}.mixer_block.layers.{i}"
+        prefix = f"{base}.{encoder_key}.layers.{i}"
 
         for mixer_name in ["patch_mixer", "feature_mixer"]:
             mixer_path = f"{prefix}.{mixer_name}"
 
-            gamma, beta = preprocess_layernorm(state_dict, f"{mixer_path}.norm", device=device)
-            parameters[f"{mixer_path}.norm.norm.weight"] = gamma
-            parameters[f"{mixer_path}.norm.norm.bias"] = beta
+            # Extract sub-state for this mixer
+            mixer_state = extract_component_state(mixer_path)
 
-            w1, b1 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc1", device=device)
-            w2, b2 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc2", device=device)
-            parameters[f"{mixer_path}.mlp.fc1.weight"] = w1
-            parameters[f"{mixer_path}.mlp.fc1.bias"] = b1
-            parameters[f"{mixer_path}.mlp.fc2.weight"] = w2
-            parameters[f"{mixer_path}.mlp.fc2.bias"] = b2
+            # For layernorm, extract the norm component and pass empty base
+            norm_state = {}
+            for key, value in mixer_state.items():
+                if key.startswith("norm."):
+                    # Remove "norm." prefix: "norm.norm.weight" -> "norm.weight"
+                    norm_state[key[5:]] = value
+
+            norm_params = preprocess_layernorm(norm_state, f"{mixer_path}.norm", device=device)
+            parameters.update(norm_params)
+
+            # MLP layers - extract mlp component
+            mlp_state = {}
+            for key, value in mixer_state.items():
+                if key.startswith("mlp."):
+                    # Remove "mlp." prefix
+                    mlp_state[key[4:]] = value
+
+            # Extract fc1 and fc2 separately
+            fc1_state = {}
+            fc2_state = {}
+            for key, value in mlp_state.items():
+                if key.startswith("fc1."):
+                    fc1_state[key[4:]] = value  # "fc1.weight" -> "weight"
+                elif key.startswith("fc2."):
+                    fc2_state[key[4:]] = value  # "fc2.weight" -> "weight"
+
+            fc1_params = preprocess_linear(fc1_state, f"{mixer_path}.mlp.fc1", device=device)
+            fc2_params = preprocess_linear(fc2_state, f"{mixer_path}.mlp.fc2", device=device)
+            parameters.update(fc1_params)
+            parameters.update(fc2_params)
 
             if use_gated_attn:
-                gw, gb = preprocess_gated_attention(state_dict, f"{mixer_path}.gate", device=device)
-                parameters[f"{mixer_path}.gate.attn_layer.weight"] = gw
-                parameters[f"{mixer_path}.gate.attn_layer.bias"] = gb
+                gate_state = {}
+                for key, value in mixer_state.items():
+                    if key.startswith("gate."):
+                        # Remove "gate." prefix
+                        gate_state[key[5:]] = value
+                gate_params = preprocess_gated_attention(gate_state, f"{mixer_path}.gate", device=device)
+                parameters.update(gate_params)
 
-    hw_tt, hb_tt = preprocess_forecast_head(state_dict, f"{base}.head", device=device)
-    parameters[f"{base}.head.proj.weight"] = hw_tt
-    parameters[f"{base}.head.proj.bias"] = hb_tt
+    # Head preprocessing based on task mode
+    head_state = extract_component_state(f"{base}.{head_key}")
+
+    if task_mode == "forecasting":
+        from models.experimental.patchtsmixer.tt.model_processing import preprocess_forecast_head
+
+        head_params = preprocess_forecast_head(head_state, f"{base}.{head_key}", device=device)
+    elif task_mode in ["regression", "classification"]:
+        from models.experimental.patchtsmixer.tt.model_processing import preprocess_linear_head
+
+        head_params = preprocess_linear_head(head_state, f"{base}.{head_key}", device=device)
+    elif task_mode == "pretraining":
+        from models.experimental.patchtsmixer.tt.model_processing import preprocess_pretrain_head
+
+        head_params = preprocess_pretrain_head(head_state, f"{base}.{head_key}", device=device)
+    else:
+        raise ValueError(f"Unknown task_mode: {task_mode}")
+
+    parameters.update(head_params)
 
     return parameters
 
 
 def run_benchmark(
     dataset_name="ETTh2",
+    task_mode="forecasting",  # "forecasting", "regression", "classification", "pretraining"
     checkpoint_path=None,
     device_id=0,
     context_length=512,
@@ -234,11 +304,48 @@ def run_benchmark(
     num_samples=100,
     batch_size=32,
     data_dir="./data",
+    # Task-specific parameters
+    num_targets=None,  # for regression
+    num_classes=None,  # for classification
+    head_aggregation="avg_pool",  # for regression/classification
+    output_range=None,  # for regression
 ):
     """Run full benchmark on dataset"""
 
+    # Import models based on task mode
+    if task_mode == "forecasting":
+        from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import PatchTSMixerModelForForecasting
+        from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerModelForForecasting
+
+        PyTorchModel = PatchTSMixerModelForForecasting
+        TTNNModel = TtPatchTSMixerModelForForecasting
+    elif task_mode == "regression":
+        from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import PatchTSMixerForRegression
+        from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerForRegression
+
+        PyTorchModel = PatchTSMixerForRegression
+        TTNNModel = TtPatchTSMixerForRegression
+    elif task_mode == "classification":
+        from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import (
+            PatchTSMixerForTimeSeriesClassification,
+        )
+        from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerForTimeSeriesClassification
+
+        PyTorchModel = PatchTSMixerForTimeSeriesClassification
+        TTNNModel = TtPatchTSMixerForTimeSeriesClassification
+    elif task_mode == "pretraining":
+        from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import PatchTSMixerForPretraining
+        from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerForPretraining
+
+        PyTorchModel = PatchTSMixerForPretraining
+        TTNNModel = TtPatchTSMixerForPretraining
+    else:
+        raise ValueError(
+            f"Unknown task_mode: {task_mode}. Choose from: forecasting, regression, classification, pretraining"
+        )
+
     print("=" * 80)
-    print(f"PatchTSMixer Dataset Benchmark: {dataset_name}")
+    print(f"PatchTSMixer Dataset Benchmark: {dataset_name} ({task_mode})")
     print("=" * 80)
 
     # Prepare data
@@ -259,7 +366,6 @@ def run_benchmark(
     # Model config
     config = {
         "context_length": context_length,
-        "prediction_length": prediction_length,
         "patch_length": patch_length,
         "patch_stride": patch_stride,
         "num_channels": num_channels,
@@ -273,9 +379,26 @@ def run_benchmark(
         "eps": 1e-5,
     }
 
+    # Add task-specific config parameters
+    if task_mode == "forecasting":
+        config["prediction_length"] = prediction_length
+    elif task_mode == "regression":
+        if num_targets is None:
+            num_targets = num_channels  # default: predict all channels
+        config["num_targets"] = num_targets
+        config["head_aggregation"] = head_aggregation
+        if output_range is not None:
+            config["output_range"] = output_range
+    elif task_mode == "classification":
+        if num_classes is None:
+            raise ValueError("num_classes must be specified for classification task")
+        config["num_classes"] = num_classes
+        config["head_aggregation"] = head_aggregation
+    # pretraining has no extra params
+
     # Load PyTorch model
-    print(f"\n3. Loading PyTorch model...")
-    torch_model = load_or_create_model(config, checkpoint_path)
+    print(f"\n3. Loading PyTorch {task_mode} model...")
+    torch_model = load_or_create_model(PyTorchModel, config, checkpoint_path)
 
     # PyTorch inference
     print(f"\n4. Running PyTorch inference...")
@@ -302,25 +425,37 @@ def run_benchmark(
 
     try:
         # Convert parameters
-        parameters = preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn)
+        parameters = preprocess_parameters_for_ttnn(torch_model, device, num_layers, use_gated_attn, task_mode)
 
         # Create TTNN model
-        tt_model = TtPatchTSMixerModelForForecasting(
-            device=device,
-            base_address="model",
-            parameters=parameters,
-            context_length=context_length,
-            prediction_length=prediction_length,
-            patch_length=patch_length,
-            patch_stride=patch_stride,
-            num_channels=num_channels,
-            d_model=d_model,
-            num_layers=num_layers,
-            mode=mode,
-            expansion=expansion,
-            use_gated_attn=use_gated_attn,
-            eps=1e-5,
-        )
+        ttnn_model_config = {
+            "device": device,
+            "base_address": "model",
+            "parameters": parameters,
+            "context_length": context_length,
+            "patch_length": patch_length,
+            "patch_stride": patch_stride,
+            "num_channels": num_channels,
+            "d_model": d_model,
+            "num_layers": num_layers,
+            "mode": mode,
+            "expansion": expansion,
+            "use_gated_attn": use_gated_attn,
+        }
+
+        # Add task-specific parameters
+        if task_mode == "forecasting":
+            ttnn_model_config["prediction_length"] = prediction_length
+        elif task_mode == "regression":
+            ttnn_model_config["num_targets"] = num_targets
+            ttnn_model_config["head_aggregation"] = head_aggregation
+            if output_range is not None:
+                ttnn_model_config["output_range"] = output_range
+        elif task_mode == "classification":
+            ttnn_model_config["num_classes"] = num_classes
+            ttnn_model_config["head_aggregation"] = head_aggregation
+
+        tt_model = TTNNModel(**ttnn_model_config)
 
         # TTNN inference
         print(f"\n6. Running TTNN inference...")
@@ -330,8 +465,11 @@ def run_benchmark(
         for i in range(0, len(samples), batch_size):
             batch = torch.from_numpy(samples[i : i + batch_size])
 
+            # Convert torch tensor to TTNN tensor
+            batch_tt = ttnn.from_torch(batch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
             start = time.time()
-            tt_out = tt_model(batch, dtype=ttnn.bfloat16)
+            tt_out = tt_model(batch_tt, dtype=ttnn.bfloat16)
             tt_out_torch = ttnn.to_torch(tt_out).squeeze(2).float().numpy()
             ttnn_time += time.time() - start
 
@@ -421,9 +559,18 @@ def main():
     parser.add_argument("--data-dir", type=str, default="./data", help="Directory to store datasets")
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to trained model checkpoint (optional)")
 
+    # Task mode
+    parser.add_argument(
+        "--task-mode",
+        type=str,
+        default="forecasting",
+        choices=["forecasting", "regression", "classification", "pretraining"],
+        help="Task mode: forecasting, regression, classification, or pretraining",
+    )
+
     # Model options
     parser.add_argument("--context-length", type=int, default=512)
-    parser.add_argument("--prediction-length", type=int, default=96)
+    parser.add_argument("--prediction-length", type=int, default=96, help="For forecasting task")
     parser.add_argument("--patch-length", type=int, default=16)
     parser.add_argument("--patch-stride", type=int, default=8)
     parser.add_argument("--d-model", type=int, default=64)
@@ -432,6 +579,19 @@ def main():
     parser.add_argument("--expansion", type=int, default=2)
     parser.add_argument("--gated-attn", action="store_true")
 
+    # Task-specific options
+    parser.add_argument("--num-targets", type=int, default=None, help="For regression task (default: num_channels)")
+    parser.add_argument("--num-classes", type=int, default=None, help="For classification task (required)")
+    parser.add_argument(
+        "--head-aggregation",
+        type=str,
+        default="avg_pool",
+        choices=["avg_pool", "max_pool", "use_last"],
+        help="For regression/classification",
+    )
+    parser.add_argument("--output-range-min", type=float, default=None, help="For regression task output range")
+    parser.add_argument("--output-range-max", type=float, default=None, help="For regression task output range")
+
     # Inference options
     parser.add_argument("--num-samples", type=int, default=100, help="Number of test samples to evaluate")
     parser.add_argument("--batch-size", type=int, default=32)
@@ -439,8 +599,14 @@ def main():
 
     args = parser.parse_args()
 
+    # Build output_range tuple if specified
+    output_range = None
+    if args.output_range_min is not None and args.output_range_max is not None:
+        output_range = (args.output_range_min, args.output_range_max)
+
     results = run_benchmark(
         dataset_name=args.dataset,
+        task_mode=args.task_mode,
         checkpoint_path=args.checkpoint,
         device_id=args.device,
         context_length=args.context_length,
@@ -455,6 +621,10 @@ def main():
         num_samples=args.num_samples,
         batch_size=args.batch_size,
         data_dir=args.data_dir,
+        num_targets=args.num_targets,
+        num_classes=args.num_classes,
+        head_aggregation=args.head_aggregation,
+        output_range=output_range,
     )
 
     return 0 if results["passed"] else 1
