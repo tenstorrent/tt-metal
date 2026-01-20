@@ -137,14 +137,6 @@ def test_binary_mul_div_bf16(device):
     tt_out_mul = ttnn.to_torch(z_tt_mul)
     tt_out_div = ttnn.to_torch(z_tt_div)
 
-    torch.set_printoptions(linewidth=200, threshold=10000, precision=15, sci_mode=False, edgeitems=17)
-    print("z_tt_mul", z_tt_mul)
-    print("tt_out_mul", tt_out_mul)
-    print("z_torch_mul", z_torch_mul)
-    # print("z_tt_div", z_tt_div)
-    # print("tt_out_div", tt_out_div)
-    # print("z_torch_div", z_torch_div)
-
     assert_with_ulp(z_torch_mul, tt_out_mul, 0)
     assert_with_ulp(z_torch_div, tt_out_div, 0)
 

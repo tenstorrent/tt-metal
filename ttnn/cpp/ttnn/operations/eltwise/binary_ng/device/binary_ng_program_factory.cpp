@@ -549,13 +549,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto a_dtype = a.dtype();
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    /* For BFLOAT8_B inputs with scalar operations, the scalar is always packed as BFLOAT16
-       for better precision, so b_dtype should be BFLOAT16 to match the actual data format */
     const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
-                         //  : is_sfpu_op  ? (is_block_float(a_dtype) ? DataType::BFLOAT16 : a_dtype)
-                         : is_sfpu_op ? a_dtype
-                                      : DataType::BFLOAT16;
+                         : is_sfpu_op  ? a_dtype
+                                       : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
@@ -643,11 +640,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         a_sharded ? a_buffer : nullptr);
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
-        // Determine intermediate formats (needed for both CB creation and unpack mode)
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : a_data_format;
-        // log_info(tt::LogAlways, "a_intermediate_format {}", a_intermediate_format);
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         create_cb(
             tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
@@ -689,7 +684,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_num_tiles_per_shard.value_or(2),
         c_data_format,
         c_sharded ? c_buffer : nullptr);
-    // log_info(tt::LogAlways, "c_data_format {}", c_data_format);
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
@@ -739,7 +733,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     if (is_sfpu_op) {
-        // SFPU always operates on float32 internally, so unpack to FP32 for non-POWER ops
         if (op_type != BinaryOpType::POWER) {
             unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
