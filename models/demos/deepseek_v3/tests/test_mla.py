@@ -672,9 +672,13 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 # Override state_dict fixture when using synthetic weights
 if USE_SYNTHETIC_WEIGHTS:
 
-    @pytest.fixture(scope="function")
+    @pytest.fixture(scope="session")
     def state_dict(hf_config_short):
-        """Generate synthetic state_dict for testing when USE_SYNTHETIC_WEIGHTS is True"""
+        """Generate synthetic state_dict for testing when USE_SYNTHETIC_WEIGHTS is True.
+
+        Note: We use session scope here to match the original state_dict fixture in conftest.py
+        and avoid regenerating synthetic weights for every individual test.
+        """
         logger.info("Using synthetic weights for testing")
         layer_idx = 0  # Using layer 0 for testing
         return generate_synthetic_state_dict(hf_config_short, layer_idx, seed=42)
