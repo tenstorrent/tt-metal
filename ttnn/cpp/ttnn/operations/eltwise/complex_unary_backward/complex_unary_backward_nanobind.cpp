@@ -126,11 +126,13 @@ void py_module(nb::module_& mod) {
         R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes and layouts:
 
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
 
         )doc");
 
@@ -155,11 +157,13 @@ void py_module(nb::module_& mod) {
         R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes and layouts:
 
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
 
         )doc");
 }
