@@ -238,7 +238,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     if constexpr (tBcastOp == ELWMUL) {
         MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
     } else {
-        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim>()));
+        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MathFidelity::LoFi>()));
     }
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
@@ -342,7 +342,7 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
-    MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>()));
+    MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL, MathFidelity::LoFi>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
 }
