@@ -26,7 +26,7 @@ def pytest_collection_modifyitems(config, items):
         auto_ctx.open_device()
         auto_ctx.close_device()
         device_available = True
-    except Exception:
+    except Exception:  # noqa: S110 - intentionally ignore device check failures
         pass
 
     if not device_available:

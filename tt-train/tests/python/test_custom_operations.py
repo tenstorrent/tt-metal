@@ -171,15 +171,13 @@ class TestCustomOperationsWithDevice:
             def forward(ctx, input, scale_factor):
                 ctx.save_for_backward(input)
                 ctx.scale_factor = scale_factor
-                output_value = ttnn.multiply(input.get_value(), scale_factor)
-                return ttml.autograd.create_tensor(output_value, True)
+                # Return ttnn tensor directly - auto-wrapped
+                return ttnn.multiply(input.get_value(), scale_factor)
 
             @staticmethod
             def backward(ctx, grad_output):
-                ctx.saved_tensors  # Access to verify it works
-                # Return gradient w.r.t. input
-                grad_value = ttnn.multiply(grad_output, ctx.scale_factor)
-                return ttml.autograd.create_tensor(grad_value, False)
+                # Return gradient for input tensor
+                return ttnn.multiply(grad_output, ctx.scale_factor)
 
         # Create input tensor
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
@@ -260,15 +258,13 @@ class TestCustomOperationsWithDevice:
             @staticmethod
             def forward(ctx, input):
                 ctx.save_for_backward(input)
-                output_value = ttnn.multiply(input.get_value(), 2.0)
-                return ttml.autograd.create_tensor(output_value, True)
+                # Return ttnn tensor directly - auto-wrapped
+                return ttnn.multiply(input.get_value(), 2.0)
 
             @staticmethod
             def backward(ctx, grad_output):
                 # Gradient of 2*x w.r.t. x is 2
-                # grad_output is tt::tt_metal::Tensor (raw gradient)
-                grad_value = ttnn.multiply(grad_output, 2.0)
-                return ttml.autograd.create_tensor(grad_value, False)
+                return ttnn.multiply(grad_output, 2.0)
 
         # Create input tensor with shape suitable for tile layout
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
@@ -280,9 +276,14 @@ class TestCustomOperationsWithDevice:
         # Trigger backward
         output.backward(retain_graph=False)
 
-        # Check gradient was accumulated
+        # Check gradient was accumulated and has correct value
         assert input_tensor.is_grad_initialized()
+        grad_tensor = input_tensor.get_grad_tensor()
         # Gradient should be 2.0 everywhere (since d/dx(2x) = 2)
+        expected_grad = np.full_like(input_data, 2.0)
+        np.testing.assert_array_almost_equal(
+            grad_tensor.to_numpy(), expected_grad, decimal=5
+        )
 
     def test_multiple_inputs(self):
         """Test custom operation with multiple inputs."""
@@ -292,16 +293,13 @@ class TestCustomOperationsWithDevice:
             @staticmethod
             def forward(ctx, a, b):
                 ctx.save_for_backward(a, b)
-                output_value = ttnn.add(a.get_value(), b.get_value())
-                return ttml.autograd.create_tensor(output_value, True)
+                # Return ttnn tensor directly - auto-wrapped
+                return ttnn.add(a.get_value(), b.get_value())
 
             @staticmethod
             def backward(ctx, grad_output):
                 # Gradient of a + b is 1 for both inputs
-                # Return tuple of gradients (one per input tensor)
-                grad_a = ttml.autograd.create_tensor(grad_output, False)
-                grad_b = ttml.autograd.create_tensor(grad_output, False)
-                return grad_a, grad_b
+                return grad_output, grad_output
 
         # Create input tensors
         a_data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
@@ -327,16 +325,14 @@ class TestCustomOperationsWithDevice:
             def forward(ctx, input, scale, shift):
                 ctx.save_for_backward(input)
                 ctx.scale = scale
-                # input * scale + shift
+                # input * scale + shift - return ttnn tensor directly
                 scaled = ttnn.multiply(input.get_value(), scale)
-                output_value = ttnn.add(scaled, shift)
-                return ttml.autograd.create_tensor(output_value, True)
+                return ttnn.add(scaled, shift)
 
             @staticmethod
             def backward(ctx, grad_output):
                 # d/d(input) of (input * scale + shift) = scale
-                grad_value = ttnn.multiply(grad_output, ctx.scale)
-                return ttml.autograd.create_tensor(grad_value, False)
+                return ttnn.multiply(grad_output, ctx.scale)
 
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
@@ -359,10 +355,9 @@ class TestCustomOperationsWithDevice:
             def forward(ctx, input):
                 ctx.save_for_backward(input)
                 value = input.get_value()
-                out1_value = ttnn.multiply(value, 2.0)
-                out2_value = ttnn.multiply(value, 3.0)
-                out1 = ttml.autograd.create_tensor(out1_value, True)
-                out2 = ttml.autograd.create_tensor(out2_value, True)
+                # Return tuple of ttnn tensors - both auto-wrapped
+                out1 = ttnn.multiply(value, 2.0)
+                out2 = ttnn.multiply(value, 3.0)
                 return out1, out2
 
             @staticmethod
@@ -370,8 +365,7 @@ class TestCustomOperationsWithDevice:
                 # Gradient is 2 * grad_out1 + 3 * grad_out2
                 grad1 = ttnn.multiply(grad_out1, 2.0)
                 grad2 = ttnn.multiply(grad_out2, 3.0)
-                grad_input_value = ttnn.add(grad1, grad2)
-                return ttml.autograd.create_tensor(grad_input_value, False)
+                return ttnn.add(grad1, grad2)
 
         # Create input tensor
         input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
@@ -389,6 +383,112 @@ class TestCustomOperationsWithDevice:
         # Verify both outputs have nodes set (for backward graph)
         assert out1.get_node() is not None, "First output should have node set"
         assert out2.get_node() is not None, "Second output should have node set"
+
+    def test_case1_compose_with_autograd_ops(self):
+        """Test Case 1: Compose with ttml autograd ops - backward is automatic."""
+
+        class AddAndScale(Function):
+            @staticmethod
+            def forward(ctx, x, y, scale):
+                # Using ttml autograd ops - graph builds automatically
+                result = x + y  # Uses ttml tensor __add__ which has autograd
+                return result * scale  # Uses ttml tensor __mul__ which has autograd
+
+            # No backward needed - graph already built by autograd ops
+
+        # Create input tensors
+        x_data = np.ones((1, 1, 32, 32), dtype=np.float32) * 2.0
+        y_data = np.ones((1, 1, 32, 32), dtype=np.float32) * 3.0
+
+        x_tensor = ttml.autograd.Tensor.from_numpy(x_data)
+        y_tensor = ttml.autograd.Tensor.from_numpy(y_data)
+
+        # Forward pass: (x + y) * scale = (2 + 3) * 2 = 10
+        output = AddAndScale.apply(x_tensor, y_tensor, 2.0)
+
+        # Verify forward output
+        output_data = output.to_numpy()
+        expected = (x_data + y_data) * 2.0
+        np.testing.assert_array_almost_equal(output_data, expected, decimal=5)
+
+        # Output should have node set (from autograd ops)
+        assert (
+            output.get_node() is not None
+        ), "Output should have node from autograd ops"
+
+        # Backward should work automatically
+        output.backward(retain_graph=False)
+
+        # Check gradients were accumulated
+        # d/dx((x+y)*s) = s = 2.0
+        # d/dy((x+y)*s) = s = 2.0
+        assert x_tensor.is_grad_initialized(), "x should have gradient"
+        assert y_tensor.is_grad_initialized(), "y should have gradient"
+
+    def test_case2_ttnn_primitives_explicit_backward(self):
+        """Test Case 2: Build from ttnn primitives - explicit backward with add_grad."""
+        import ttnn
+
+        class ScaleOp(Function):
+            @staticmethod
+            def forward(ctx, input, scale_factor):
+                ctx.save_for_backward(input)
+                ctx.scale_factor = scale_factor
+                # Using raw ttnn ops - returns ttnn tensor (auto-wrapped)
+                return ttnn.multiply(input.get_value(), scale_factor)
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                # Return gradient for input tensor
+                return ttnn.multiply(grad_output, ctx.scale_factor)
+
+        # Create input tensor
+        input_data = np.ones((1, 1, 32, 32), dtype=np.float32) * 3.0
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+
+        # Forward pass: input * scale = 3.0 * 2.0 = 6.0
+        output = ScaleOp.apply(input_tensor, 2.0)
+
+        # Verify forward output
+        output_data = output.to_numpy()
+        expected = input_data * 2.0
+        np.testing.assert_array_almost_equal(output_data, expected, decimal=5)
+
+        # Backward pass
+        output.backward(retain_graph=False)
+
+        # Check gradient was accumulated
+        # d/dx(x * s) = s = 2.0
+        assert input_tensor.is_grad_initialized(), "Input should have gradient"
+        grad_tensor = input_tensor.get_grad_tensor()
+        expected_grad = np.full_like(input_data, 2.0)
+        np.testing.assert_array_almost_equal(
+            grad_tensor.to_numpy(), expected_grad, decimal=5
+        )
+
+    def test_auto_wrap_ttnn_tensor(self):
+        """Test that ttnn tensors returned from forward are auto-wrapped."""
+
+        class IdentityOp(Function):
+            @staticmethod
+            def forward(ctx, input):
+                ctx.save_for_backward(input)
+                # Return raw ttnn tensor - should be auto-wrapped
+                return input.get_value()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                # Return gradient as-is for identity
+                return grad_output
+
+        input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+
+        output = IdentityOp.apply(input_tensor)
+
+        # Output should be ttml tensor (auto-wrapped), not raw ttnn
+        assert hasattr(output, "get_requires_grad"), "Output should be ttml tensor"
+        assert hasattr(output, "backward"), "Output should have backward method"
 
 
 class TestCustomOperationsNoDevice:
@@ -457,8 +557,10 @@ class TestCustomOperationsNoDevice:
 
             @staticmethod
             def backward(ctx, grad_output):
-                _x, _y = ctx.saved_tensors  # Retrieve to verify API works
-                _alpha = ctx.alpha  # Retrieve to verify API works
+                x, y = ctx.saved_tensors
+                alpha = ctx.alpha
+                assert x is not None and y is not None
+                assert alpha == 0.5
                 # Return gradients for x and y (None would mean no gradient needed)
                 return grad_output, grad_output
 

@@ -11,18 +11,8 @@ integrating with the existing C++ autograd system.
 
 from typing import Any, List, Sequence, Tuple
 
-# Import C++ bindings lazily to avoid circular import issues
-_cpp_bindings = None
-
-
-def _get_cpp_bindings():
-    """Lazily import C++ bindings to avoid circular import issues."""
-    global _cpp_bindings
-    if _cpp_bindings is None:
-        from ttml import _ttml
-
-        _cpp_bindings = _ttml.autograd
-    return _cpp_bindings
+# Import C++ bindings
+from .. import _ttml as cpp
 
 
 class FunctionContext:
@@ -66,6 +56,32 @@ class FunctionContext:
         return tuple(self._saved_tensors)
 
 
+def _is_ttnn_tensor(obj: Any) -> bool:
+    """Check if object is a ttnn tensor (tt::tt_metal::Tensor)."""
+    # ttnn tensors have these attributes but not get_requires_grad (which ttml tensors have)
+    return (
+        hasattr(obj, "shape")
+        and hasattr(obj, "dtype")
+        and not hasattr(obj, "get_requires_grad")
+    )
+
+
+def _wrap_output(output: Any) -> Any:
+    """Wrap ttnn tensor in ttml autograd tensor if needed."""
+    if output is None:
+        return None
+    if _is_ttnn_tensor(output):
+        return cpp.autograd.create_tensor(output, True)
+    return output
+
+
+def _wrap_outputs(outputs: Any) -> Any:
+    """Wrap outputs, handling both single tensors and tuples."""
+    if isinstance(outputs, tuple):
+        return tuple(_wrap_output(out) for out in outputs)
+    return _wrap_output(outputs)
+
+
 def get_links(tensors: Sequence[Any]) -> List[Any]:
     """Extract computation graph links from tensors.
 
@@ -94,28 +110,31 @@ class Function:
     Subclass this and implement static forward() and backward() methods
     to create custom operations that integrate with TTML's autograd system.
 
-    The API follows PyTorch's torch.autograd.Function:
-    - forward() computes the output and saves tensors/values for backward
-    - backward() receives grad_outputs and RETURNS grad_inputs (one per input tensor)
+    There are two usage patterns:
 
-    Example:
-        import ttml
-        import ttnn
+    1. Compose with ttml autograd ops (backward is automatic):
+        class MyOp(Function):
+            @staticmethod
+            def forward(ctx, x, y):
+                # Using ttml ops builds the graph automatically
+                return x + y  # or ttml.ops.binary.add(x, y)
 
-        class Scale(ttml.autograd.Function):
+            # No backward needed - graph already built by autograd ops
+
+    2. Build from ttnn primitives (return gradients like PyTorch):
+        class Scale(Function):
             @staticmethod
             def forward(ctx, input, scale_factor):
                 ctx.save_for_backward(input)
                 ctx.scale_factor = scale_factor
-                output_value = ttnn.multiply(input.get_value(), scale_factor)
-                return ttml.autograd.create_tensor(output_value, requires_grad=True)
+                # Return ttnn tensor - will be auto-wrapped
+                return ttnn.multiply(input.get_value(), scale_factor)
 
             @staticmethod
             def backward(ctx, grad_output):
-                input, = ctx.saved_tensors
-                # Return gradient w.r.t. input (None for scale_factor since it's not a tensor)
-                grad_value = ttnn.multiply(grad_output, ctx.scale_factor)
-                return ttml.autograd.create_tensor(grad_value, requires_grad=False)
+                # Return gradient for each tensor input (None for non-tensors)
+                grad_input = ttnn.multiply(grad_output, ctx.scale_factor)
+                return grad_input  # Single tensor input -> single return
 
         # Use:
         output = Scale.apply(input_tensor, 2.0)
@@ -141,8 +160,14 @@ class Function:
     def backward(ctx: FunctionContext, *grad_outputs) -> Any:
         """Compute backward pass of the operation.
 
-        Override this method to compute gradients. Unlike the imperative style,
-        this method should RETURN the gradients (like PyTorch).
+        Override this method when using ttnn primitives in forward().
+        Not required when forward() uses ttml autograd ops (graph is automatic).
+
+        Returns gradients in the same order as tensor inputs to forward():
+            def backward(ctx, grad_output):
+                # Return one gradient per tensor input
+                grad_input = ttnn.multiply(grad_output, ctx.scale)
+                return grad_input  # or (grad_a, grad_b) for multiple inputs
 
         Args:
             ctx: Context object with saved tensors/values from forward.
@@ -150,10 +175,9 @@ class Function:
                           One for each output from forward().
 
         Returns:
-            Gradients w.r.t. each tensor input from forward(). Return a single
-            tensor/value if forward() had one tensor input, or a tuple if multiple.
-            Use None for inputs that don't need gradients (non-tensors or tensors
-            with requires_grad=False).
+            Gradient(s) w.r.t. tensor inputs. Must return same number of
+            gradients as there were tensor inputs to forward().
+            Use None for inputs that don't need gradients.
         """
         raise NotImplementedError("Subclasses must implement backward()")
 
@@ -170,18 +194,20 @@ class Function:
         Returns:
             Output tensor(s) from forward().
         """
-        cpp = _get_cpp_bindings()
         ctx = FunctionContext()
 
         # Get the AutoContext instance
-        auto_context = cpp.AutoContext.get_instance()
+        auto_context = cpp.autograd.AutoContext.get_instance()
 
         # Check if gradient mode is enabled
         grad_mode = auto_context.get_gradient_mode()
-        grad_enabled = grad_mode == cpp.GradMode.ENABLED
+        grad_enabled = grad_mode == cpp.autograd.GradMode.ENABLED
 
         # Call forward
         outputs = cls.forward(ctx, *inputs)
+
+        # Auto-wrap ttnn tensors to ttml autograd tensors
+        outputs = _wrap_outputs(outputs)
 
         # If gradients are disabled, just return the outputs
         if not grad_enabled:
@@ -194,6 +220,16 @@ class Function:
         else:
             outputs_tuple = outputs
             single_output = False
+
+        # Check if outputs already have nodes from autograd ops
+        # If so, the graph is already built and we don't need custom backward
+        outputs_have_nodes = all(
+            out is not None and out.get_node() is not None
+            for out in outputs_tuple
+            if hasattr(out, "get_node")
+        )
+        if outputs_have_nodes:
+            return outputs if not single_output else outputs
 
         # Collect input tensors (objects with get_requires_grad method)
         input_tensors = [inp for inp in inputs if hasattr(inp, "get_requires_grad")]
@@ -218,11 +254,12 @@ class Function:
                             else:
                                 raise RuntimeError(
                                     f"Output tensor gradient not initialized in "
-                                    f"{bwd_cls.__name__}.backward()"
+                                    f"{bwd_cls.__name__}.backward(). "
+                                    f"Gradients are initialized lazily via add_grad()."
                                 )
                         grad_outputs = tuple(grad_outputs)
 
-                        # Call user's backward - returns gradients
+                        # Call user's backward - returns gradients (PyTorch style)
                         if len(grad_outputs) == 1:
                             grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
                         else:
@@ -234,10 +271,18 @@ class Function:
                         elif not isinstance(grad_inputs, tuple):
                             grad_inputs = (grad_inputs,)
 
+                        # Validate: number of returned gradients must match number of tensor inputs
+                        if len(grad_inputs) != len(bwd_inputs):
+                            raise RuntimeError(
+                                f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
+                                f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
+                                f"Return None for inputs that don't need gradients."
+                            )
+
                         # Accumulate gradients to input tensors
                         for tensor, grad in zip(bwd_inputs, grad_inputs):
                             if grad is not None and tensor.get_requires_grad():
-                                # Handle both Tensor wrapper and raw tt::tt_metal::Tensor
+                                # Handle both ttml Tensor and raw ttnn tensor
                                 if hasattr(grad, "get_value"):
                                     tensor.add_grad(grad.get_value())
                                 else:
