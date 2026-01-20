@@ -36,6 +36,7 @@ You do NOT write kernel code. You design HOW kernels should be implemented.
    - `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp`
+   - `ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`
 3. **Reference analyses** (optional) - Patterns from similar operations
 4. **Program factory** (optional) - CB configuration details
@@ -64,6 +65,7 @@ You MUST produce a structured Kernel Design Document saved to:
 - [ ] tilize_helpers.hpp - {relevant? yes/no}
 - [ ] untilize_helpers.hpp - {relevant? yes/no}
 - [ ] reduce_helpers.hpp - {relevant? yes/no}
+- [ ] binary_op_helpers.hpp - {relevant? yes/no}
 - [ ] dest_helpers.hpp - {relevant? yes/no}
 
 ### Helper Functions Applicable to This Operation
@@ -103,6 +105,7 @@ When designing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
 - `reduce_helpers.hpp` - reduce(), TileShape, ReduceInputMode, Accumulation types
+- `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim, BinaryInputMode types
 - `dest_helpers.hpp` - DEST register limits (DEST_AUTO_LIMIT)
 
 The code is self-documenting with Doxygen comments and @example blocks.
