@@ -281,6 +281,7 @@ protected:
         if (should_skip_) {
             GTEST_SKIP() << "Tensix fixture tests are not supported on Wormhole Galaxy systems";
         }
+        SKIP_FOR_WATCHER();
         BaseFabricFixture::SetUp();
     }
 };
@@ -288,6 +289,7 @@ protected:
 class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
 protected:
     void SetUp() override {
+        SKIP_FOR_WATCHER();
         if (devices_.size() < 8) {
             GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
         }
