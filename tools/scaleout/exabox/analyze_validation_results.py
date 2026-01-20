@@ -100,12 +100,25 @@ class LogAnalysis:
 # Pattern definitions
 PATTERNS = {
     "healthy": re.compile(r"All Detected Links are healthy"),
-    "unhealthy": re.compile(r"Found Unhealthy Links"),
+    "unhealthy": re.compile(r"Found Unhealthy Links|FAULTY LINKS REPORT"),
     "timeout": re.compile(r"Timeout \(\d+ ms\) waiting for physical cores to finish"),
-    "missing_connections": re.compile(r"Physical Discovery found (\d+) missing port/cable connections"),
+    # Match both "Physical Discovery found X missing" and "found in FSD but missing in GSD"
+    "missing_connections": re.compile(
+        r"Physical Discovery found (\d+) missing port/cable connections|"
+        r"missing port/cable connections|"
+        r"found in FSD but missing in GSD"
+    ),
+    "missing_channels": re.compile(
+        r"Physical Discovery found (\d+) missing channel connections|"
+        r"Channel Connections found in FSD but missing in GSD"
+    ),
     "extra_connections": re.compile(r"Physical Discovery found (\d+) extra port/cable connections"),
     "dram_failure": re.compile(r"DRAM training failed"),
     "fw_mismatch": re.compile(r"Firmware bundle version .* is newer than the latest fully tested version"),
+    # Additional patterns from real-world logs
+    "pcie_error": re.compile(r"PCIe error|AER:.*aer_status"),
+    "arc_timeout": re.compile(r"ARC.*[Tt]imeout|timeout.*ARC"),
+    "link_retrain": re.compile(r"Link retrains detected|link_retrain_count"),
 }
 
 
@@ -320,7 +333,14 @@ def parse_faulty_links_report(content: str) -> list[FaultyLink]:
 
 
 def parse_missing_connections(content: str) -> list[tuple]:
-    """Parse missing connection endpoints from log content (both port and channel types)."""
+    """Parse missing connection endpoints from log content (both port and channel types).
+
+    Handles multiple formats:
+    - "Physical Discovery found X missing port/cable connections:"
+    - "Port Connections found in FSD but missing in GSD (X connections):"
+    - "Physical Discovery found X missing channel connections:"
+    - "Channel Connections found in FSD but missing in GSD (X connections):"
+    """
     connections = []
     in_missing_port = False
     in_missing_channel = False
@@ -329,12 +349,14 @@ def parse_missing_connections(content: str) -> list[tuple]:
         # Remove MPI stdout prefix if present
         clean_line = line.split("<stdout>:")[-1].strip() if "<stdout>:" in line else line.strip()
 
-        # Detect start of missing sections
-        if "missing port/cable connections" in line:
+        # Detect start of missing port sections (multiple formats)
+        if "missing port/cable connections" in line or "Port Connections found in FSD but missing in GSD" in line:
             in_missing_port = True
             in_missing_channel = False
             continue
-        if "missing channel connections" in line:
+
+        # Detect start of missing channel sections (multiple formats)
+        if "missing channel connections" in line or "Channel Connections found in FSD but missing in GSD" in line:
             in_missing_channel = True
             in_missing_port = False
             continue
@@ -347,7 +369,12 @@ def parse_missing_connections(content: str) -> list[tuple]:
                     # Format: (hostname, tray_id, port_type, port_id)
                     connections.append(("port", matches[0], matches[1]))
             elif clean_line and not clean_line.startswith("-") and "PhysicalPortEndpoint" not in clean_line:
-                in_missing_port = False
+                # End of section - but check for section headers
+                if "Channel Connections" in clean_line or "missing channel" in clean_line.lower():
+                    in_missing_port = False
+                    in_missing_channel = True
+                elif clean_line and not clean_line.startswith("Total"):
+                    in_missing_port = False
 
         # Parse channel connections
         if in_missing_channel:
@@ -357,7 +384,12 @@ def parse_missing_connections(content: str) -> list[tuple]:
                     # Format: (hostname, tray_id, asic_location, channel_id)
                     connections.append(("channel", matches[0], matches[1]))
             elif clean_line and not clean_line.startswith("-") and "PhysicalChannelEndpoint" not in clean_line:
-                in_missing_channel = False
+                # End of section - but check for section headers
+                if "Port Connections" in clean_line or "missing port" in clean_line.lower():
+                    in_missing_channel = False
+                    in_missing_port = True
+                elif clean_line and not clean_line.startswith("Total"):
+                    in_missing_channel = False
 
     return connections
 
@@ -390,8 +422,8 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     if "unhealthy" in result.categories:
         result.faulty_links = parse_faulty_links_report(content)
 
-    # Parse missing connections
-    if "missing_connections" in result.categories:
+    # Parse missing connections (check both patterns)
+    if "missing_connections" in result.categories or "missing_channels" in result.categories:
         result.missing_connections = parse_missing_connections(content)
 
     # If no categories matched, mark as indeterminate
@@ -467,10 +499,14 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True):
         ("healthy", Colors.GREEN, "Healthy links"),
         ("unhealthy", Colors.RED, "Unhealthy links"),
         ("timeout", Colors.YELLOW, "Timeout issues"),
-        ("missing_connections", Colors.BLUE, "Missing connections"),
+        ("missing_connections", Colors.BLUE, "Missing port connections"),
+        ("missing_channels", Colors.BLUE, "Missing channel connections"),
         ("extra_connections", Colors.YELLOW, "Extra connections"),
         ("dram_failure", Colors.RED, "DRAM training failures"),
         ("fw_mismatch", Colors.MAGENTA, "Firmware mismatch warnings"),
+        ("pcie_error", Colors.RED, "PCIe errors"),
+        ("arc_timeout", Colors.YELLOW, "ARC timeout"),
+        ("link_retrain", Colors.YELLOW, "Link retrains detected"),
         ("indeterminate", Colors.CYAN, "Indeterminate/incomplete"),
     ]
 
@@ -687,11 +723,36 @@ def print_recommendations(analyses: list[LogAnalysis]):
             f"- {Colors.YELLOW}Timeout issues detected:{Colors.NC} Power cycle the cluster. " f"See {link}"
         )
 
-    if category_counts["missing_connections"] > 0:
+    if category_counts["missing_connections"] > 0 or category_counts["missing_channels"] > 0:
         link = troubleshooting_link("missing_connections", "Missing Connections")
+        port_count = category_counts["missing_connections"]
+        channel_count = category_counts["missing_channels"]
+        if port_count and channel_count:
+            recommendations.append(
+                f"- {Colors.BLUE}Missing connections:{Colors.NC} Port ({port_count} logs) + Channel ({channel_count} logs). "
+                f"Check cable seating. See {link}"
+            )
+        else:
+            recommendations.append(
+                f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cable seating. "
+                f"Verify correct FSD file. See {link}"
+            )
+
+    if category_counts["pcie_error"] > 0:
         recommendations.append(
-            f"- {Colors.BLUE}Missing connections:{Colors.NC} Check cable seating. "
-            f"Verify correct FSD file. See {link}"
+            f"- {Colors.RED}PCIe errors detected:{Colors.NC} Hardware issue. Machine may have rebooted. "
+            "Check dmesg/syslog for details."
+        )
+
+    if category_counts["arc_timeout"] > 0:
+        recommendations.append(
+            f"- {Colors.YELLOW}ARC timeout:{Colors.NC} Try tt-smi reset. If persists, power cycle may be needed."
+        )
+
+    if category_counts["link_retrain"] > 0:
+        recommendations.append(
+            f"- {Colors.YELLOW}Link retrains:{Colors.NC} Some links are unstable. "
+            "Check cables and connections on affected trays."
         )
 
     if category_counts["dram_failure"] > 0:
@@ -749,10 +810,14 @@ def print_verbose(analyses: list[LogAnalysis]):
         "healthy": "Healthy",
         "unhealthy": "Unhealthy Links",
         "timeout": "Timeout Issues",
-        "missing_connections": "Missing Connections",
+        "missing_connections": "Missing Port Connections",
+        "missing_channels": "Missing Channel Connections",
         "extra_connections": "Extra Connections",
         "dram_failure": "DRAM Failures",
         "fw_mismatch": "Firmware Mismatch",
+        "pcie_error": "PCIe Errors",
+        "arc_timeout": "ARC Timeout",
+        "link_retrain": "Link Retrains",
     }
 
     for category, label in category_labels.items():
