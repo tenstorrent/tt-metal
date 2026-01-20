@@ -20,8 +20,12 @@ from tracy.process_model_log import (
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "M, K, N, core_grid_x, core_grid_y",
-    [(4096, 4096, 4096, 4, 4)],
+    "M, K, N, core_grid_x, core_grid_y, num_workers_per_link, num_links",
+    [(4096, 4096, 4096, 4, 4, 4, 1), (4096, 4096, 4096, 8, 8, 8, 1)],
+    ids=[
+        "4K4K4Ksmallgrid",
+        "4K4K4Kfullgrid",
+    ],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
@@ -48,6 +52,8 @@ def test_linear(
     topology,
     core_grid_x,
     core_grid_y,
+    num_workers_per_link,
+    num_links,
 ):
     check_result = run_test_linear(
         mesh_device,
@@ -61,6 +67,8 @@ def test_linear(
         subblock_w,
         topology,
         core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
     )
     for i in range(mesh_device.get_num_devices()):
         assert check_result[i]["pcc"] > 0.999_500
