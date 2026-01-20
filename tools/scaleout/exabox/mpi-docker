@@ -233,11 +233,7 @@ default() {
         fi
 
         # Build docker command
-<<<<<<< HEAD
         local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
-=======
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/local-syseng-manual:/data/local-syseng-manual -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
->>>>>>> a72bb141ab (Add Validation Scripts for BH Exabox)
 
         # Single segment without per-rank args
         mpirun_segments+=("bash -c '$docker_cmd'")
@@ -310,11 +306,7 @@ default() {
             fi
 
             # Build docker command for this group
-<<<<<<< HEAD
             local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/scaleout_configs:/data/scaleout_configs -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
-=======
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /data/local-syseng-manual:/data/local-syseng-manual -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro $entrypoint_opt $image $executable"
->>>>>>> a72bb141ab (Add Validation Scripts for BH Exabox)
 
             # Combine this group's MPI args with docker command
             mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
