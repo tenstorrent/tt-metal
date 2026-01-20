@@ -322,18 +322,24 @@ install_llvm() {
         return
     fi
 
-    LLVM_VERSION="17"
-    echo "[INFO] Checking if LLVM $LLVM_VERSION is already installed..."
-    if command -v clang-$LLVM_VERSION &> /dev/null; then
-        echo "[INFO] LLVM $LLVM_VERSION is already installed. Skipping installation."
-    else
-        echo "[INFO] Installing LLVM $LLVM_VERSION..."
-        TEMP_DIR=$(mktemp -d)
-        wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-        chmod u+x $TEMP_DIR/llvm.sh
-        $TEMP_DIR/llvm.sh $LLVM_VERSION
-        rm -rf "$TEMP_DIR"
-    fi
+    # Install both LLVM 17 and 20:
+    # - clang-17: required by tt-train
+    # - clang-20: default toolchain for tt-metal (build_metal.sh)
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
+    chmod u+x $TEMP_DIR/llvm.sh
+
+    for LLVM_VERSION in 17 20; do
+        echo "[INFO] Checking if LLVM $LLVM_VERSION is already installed..."
+        if command -v clang-$LLVM_VERSION &> /dev/null; then
+            echo "[INFO] LLVM $LLVM_VERSION is already installed. Skipping installation."
+        else
+            echo "[INFO] Installing LLVM $LLVM_VERSION..."
+            $TEMP_DIR/llvm.sh $LLVM_VERSION
+        fi
+    done
+
+    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {
