@@ -4,11 +4,11 @@
 
 #include <filesystem>
 #include <memory>
-#include <cstdlib>
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -303,6 +303,756 @@ TEST_F(TopologySolverTest, MappingConstraintsConflictHandling) {
     EXPECT_THROW(
         (MappingConstraints<TestTargetNode, TestGlobalNode>(conflicting_required, empty_preferred)),
         std::runtime_error);
+}
+
+TEST_F(TopologySolverTest, GraphIndexDataBasic) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple target graph: 1 -> 2 -> 3 (path)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2};  // Node 1 connected to 2 (twice for multi-edge)
+    target_adj_map[2] = {1, 3};  // Node 2 connected to 1 and 3
+    target_adj_map[3] = {2};     // Node 3 connected to 2
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create simple global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Build index data (CTAD deduces types from constructor arguments)
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Verify node counts
+    EXPECT_EQ(graph_data.n_target, 3u);
+    EXPECT_EQ(graph_data.n_global, 4u);
+
+    // Verify node vectors
+    EXPECT_EQ(graph_data.target_nodes.size(), 3u);
+    EXPECT_EQ(graph_data.global_nodes.size(), 4u);
+
+    // Verify index mappings
+    EXPECT_EQ(graph_data.target_to_idx.size(), 3u);
+    EXPECT_EQ(graph_data.global_to_idx.size(), 4u);
+    EXPECT_EQ(graph_data.target_to_idx.at(1), 0u);
+    EXPECT_EQ(graph_data.target_to_idx.at(2), 1u);
+    EXPECT_EQ(graph_data.target_to_idx.at(3), 2u);
+
+    // Verify adjacency indices (deduplicated)
+    EXPECT_EQ(graph_data.target_adj_idx[0].size(), 1u);  // Node 1 -> Node 2 (deduplicated)
+    EXPECT_EQ(graph_data.target_adj_idx[1].size(), 2u);  // Node 2 -> Nodes 1, 3
+    EXPECT_EQ(graph_data.target_adj_idx[2].size(), 1u);  // Node 3 -> Node 2
+
+    // Verify connection counts (multi-edge support)
+    EXPECT_EQ(graph_data.target_conn_count[0].at(1), 2u);  // Node 1 -> Node 2: 2 connections
+    EXPECT_EQ(graph_data.target_conn_count[1].at(0), 1u);  // Node 2 -> Node 1: 1 connection
+    EXPECT_EQ(graph_data.target_conn_count[1].at(2), 1u);  // Node 2 -> Node 3: 1 connection
+
+    // Verify degrees
+    EXPECT_EQ(graph_data.target_deg[0], 1u);
+    EXPECT_EQ(graph_data.target_deg[1], 2u);
+    EXPECT_EQ(graph_data.target_deg[2], 1u);
+}
+
+TEST_F(TopologySolverTest, GraphIndexDataEmpty) {
+    using namespace tt::tt_fabric::detail;
+
+    // Empty graphs
+    AdjacencyGraph<TestTargetNode> target_graph;
+    AdjacencyGraph<TestGlobalNode> global_graph;
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    EXPECT_EQ(graph_data.n_target, 0u);
+    EXPECT_EQ(graph_data.n_global, 0u);
+    EXPECT_TRUE(graph_data.target_nodes.empty());
+    EXPECT_TRUE(graph_data.global_nodes.empty());
+}
+
+TEST_F(TopologySolverTest, GraphIndexDataSelfConnections) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create graph with self-connections
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {1, 1, 2};  // Node 1 has self-connections and connection to 2
+    target_adj_map[2] = {1, 2};     // Node 2 has connection to 1 and self-connection
+    target_adj_map[3] = {3, 3, 3};  // Node 3 only has self-connections
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Node 1: should have degree 1 (only neighbor is 2, self-connections ignored)
+    EXPECT_EQ(graph_data.target_deg[0], 1u);
+    EXPECT_EQ(graph_data.target_adj_idx[0].size(), 1u);
+    EXPECT_EQ(graph_data.target_adj_idx[0][0], 1u);  // Index of node 2
+
+    // Node 2: should have degree 1 (only neighbor is 1, self-connection ignored)
+    EXPECT_EQ(graph_data.target_deg[1], 1u);
+    EXPECT_EQ(graph_data.target_adj_idx[1].size(), 1u);
+    EXPECT_EQ(graph_data.target_adj_idx[1][0], 0u);  // Index of node 1
+
+    // Node 3: should have degree 0 (only self-connections, all ignored)
+    EXPECT_EQ(graph_data.target_deg[2], 0u);
+    EXPECT_TRUE(graph_data.target_adj_idx[2].empty());
+
+    // Verify connection counts don't include self-connections
+    // Node 1 -> Node 2: should have 1 connection (not counting self-connections)
+    EXPECT_EQ(graph_data.target_conn_count[0].at(1), 1u);
+    // Node 1 should not have connection count to itself (index 0)
+    EXPECT_EQ(graph_data.target_conn_count[0].count(0), 0u);
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataBasic) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 12};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Create constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);   // Target 1 must map to Global 10
+    constraints.add_preferred_constraint(2, 11);  // Target 2 prefers Global 11
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Verify restricted mappings
+    // Target 1 (index 0) should be restricted to Global 10 (index 0)
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Index of Global 10
+
+    // Target 2 (index 1) should have no restrictions (empty = all valid)
+    EXPECT_TRUE(constraint_data.restricted_global_indices[1].empty());
+
+    // Verify preferred mappings
+    // Target 2 (index 1) should prefer Global 11 (index 1)
+    EXPECT_EQ(constraint_data.preferred_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.preferred_global_indices[1][0], 1u);  // Index of Global 11
+
+    // Verify is_valid_mapping
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 0));   // Target 1 -> Global 10: valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 1));  // Target 1 -> Global 11: invalid
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 0));   // Target 2 -> Global 10: valid (no restrictions)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));   // Target 2 -> Global 11: valid (no restrictions)
+
+    // Verify get_candidates
+    const auto& candidates_0 = constraint_data.get_candidates(0);
+    EXPECT_EQ(candidates_0.size(), 1u);
+    EXPECT_EQ(candidates_0[0], 0u);
+
+    const auto& candidates_1 = constraint_data.get_candidates(1);
+    EXPECT_TRUE(candidates_1.empty());  // Empty means all are valid
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[20] = {};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Create trait constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::map<TestTargetNode, std::string> target_traits = {{1, "host0"}, {2, "host1"}};
+    std::map<TestGlobalNode, std::string> global_traits = {{10, "host0"}, {11, "host0"}, {20, "host1"}};
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Target 1 (index 0) should be restricted to Global 10, 11 (indices 0, 1)
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 2u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Global 10
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][1], 1u);  // Global 11
+
+    // Target 2 (index 1) should be restricted to Global 20 (index 2)
+    EXPECT_EQ(constraint_data.restricted_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[1][0], 2u);  // Global 20
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataEmpty) {
+    using namespace tt::tt_fabric::detail;
+
+    // Empty graphs
+    AdjacencyGraph<TestTargetNode> target_graph;
+    AdjacencyGraph<TestGlobalNode> global_graph;
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Empty constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    EXPECT_TRUE(constraint_data.restricted_global_indices.empty());
+    EXPECT_TRUE(constraint_data.preferred_global_indices.empty());
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicBasic) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Build index data (CTAD deduces types from constructor arguments)
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Empty constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Empty mapping (no nodes assigned yet)
+    std::vector<int> mapping(2, -1);
+    std::vector<bool> used(3, false);
+
+    // Test selection (uses ConstraintIndexData for fast lookups)
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select one of the target nodes (both have same cost when no neighbors mapped)
+    EXPECT_LT(result.target_idx, 2u);
+
+    // Should have candidates (all global nodes are valid)
+    EXPECT_GT(result.candidates.size(), 0u);
+    EXPECT_LE(result.candidates.size(), 3u);
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicNodeSelection) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Map node 1 to 10
+    std::vector<int> mapping(3, -1);
+    std::vector<bool> used(4, false);
+    mapping[0] = 0;  // target node 1 (idx 0) -> global node 10 (idx 0)
+    used[0] = true;
+
+    // Now node 2 should be selected (has mapped neighbor)
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select node 2 (index 1) because it has a mapped neighbor
+    EXPECT_EQ(result.target_idx, 1u);
+
+    // Candidates for node 2 should only include neighbors of global node 10 (which is 11)
+    EXPECT_EQ(result.candidates.size(), 1u);
+    EXPECT_EQ(result.candidates[0], 1u);  // global node 11 (idx 1)
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicHardConstraints) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {13};  // Disconnected from 10-11
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Add required constraint: node 1 must map to 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(2, -1);
+    std::vector<bool> used(4, false);
+
+    // Map node 1 to 10
+    mapping[0] = 0;
+    used[0] = true;
+
+    // Select candidates for node 2
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select node 2
+    EXPECT_EQ(result.target_idx, 1u);
+
+    // Candidates should only include neighbors of 10 (which is 11)
+    // Node 12 and 13 are filtered out because they're not connected to 10
+    EXPECT_EQ(result.candidates.size(), 1u);
+    EXPECT_EQ(result.candidates[0], 1u);  // global node 11
+}
+
+TEST_F(TopologySolverTest, ConstraintIndexDataMissingNodes) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create graphs with only some nodes
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global graph only has nodes 10 and 11, but NOT 20 or 30
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    // Note: nodes 20 and 30 are NOT in the global graph
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Create constraints using trait constraints that reference nodes NOT in the global graph
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Use trait constraints to allow multiple valid mappings
+    // Target 1: can map to nodes with trait "group1" (which includes 10 (exists) and 20 (missing))
+    std::map<TestTargetNode, std::string> target_traits = {{1, "group1"}, {2, "group2"}};
+    std::map<TestGlobalNode, std::string> global_traits = {
+        {10, "group1"},   // Exists in graph
+        {20, "group1"},   // Missing from graph
+        {11, "group2"},   // Exists in graph
+        {30, "group2"}};  // Missing from graph
+    constraints.add_required_trait_constraint<std::string>(target_traits, global_traits);
+
+    // Add preferred constraints with missing nodes
+    constraints.add_preferred_constraint(1, 20);  // Node 20 is NOT in global graph
+    constraints.add_preferred_constraint(2, 11);  // Node 11 exists
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Target 1 (index 0): should only have node 10 (index 0) in restricted indices
+    // Node 20 should be filtered out since it's not in the global graph
+    EXPECT_EQ(constraint_data.restricted_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[0][0], 0u);  // Global 10 (index 0)
+
+    // Target 1 preferred: should be empty since node 20 is missing
+    EXPECT_TRUE(constraint_data.preferred_global_indices[0].empty());
+
+    // Target 2 (index 1): should only have node 11 (index 1) in restricted indices
+    // Node 30 should be filtered out since it's not in the global graph
+    EXPECT_EQ(constraint_data.restricted_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.restricted_global_indices[1][0], 1u);  // Global 11 (index 1)
+
+    // Target 2 preferred: should only have node 11 (index 1)
+    EXPECT_EQ(constraint_data.preferred_global_indices[1].size(), 1u);
+    EXPECT_EQ(constraint_data.preferred_global_indices[1][0], 1u);  // Global 11 (index 1)
+
+    // Verify is_valid_mapping behavior
+    // Target 1 can only map to Global 10 (index 0)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 0));   // Target 1 -> Global 10: valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 1));  // Target 1 -> Global 11: invalid (restricted to 10 only)
+
+    // Target 2 can only map to Global 11 (index 1)
+    EXPECT_FALSE(constraint_data.is_valid_mapping(1, 0));  // Target 2 -> Global 10: invalid (restricted to 11 only)
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));   // Target 2 -> Global 11: valid
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicPreferredConstraints) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {};
+    target_adj_map[2] = {};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {};
+    global_adj_map[11] = {};
+    global_adj_map[12] = {};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Add preferred constraint: node 1 prefers 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_preferred_constraint(1, 10);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(2, -1);
+    std::vector<bool> used(3, false);
+
+    // Select candidates for node 1
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select node 1
+    EXPECT_EQ(result.target_idx, 0u);
+
+    // Preferred candidate (10) should come first
+    EXPECT_EQ(result.candidates.size(), 3u);
+    EXPECT_EQ(result.candidates[0], 0u);  // global node 10 (preferred) should be first
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicDegreeFiltering) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: node 1 (degree 2) -> node 2 (degree 1)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 3};
+    target_adj_map[2] = {1};
+    target_adj_map[3] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph with nodes of different degrees
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};  // degree 1
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {13, 14};  // degree 2
+    global_adj_map[13] = {12};
+    global_adj_map[14] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(3, -1);
+    std::vector<bool> used(5, false);
+
+    // Select candidates for node 1 (degree 2)
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select node 1
+    EXPECT_EQ(result.target_idx, 0u);
+
+    // Only nodes with degree >= 2 should be candidates (node 12)
+    // Nodes 10 and 11 have degree 1, so they're filtered out
+    bool found_12 = false;
+    for (size_t cand : result.candidates) {
+        if (cand == 2) {  // global node 12 (idx 2)
+            found_12 = true;
+        }
+        // Should not include nodes 10 or 11 (indices 0, 1) - they have degree 1
+        EXPECT_NE(cand, 0u);
+        EXPECT_NE(cand, 1u);
+    }
+    EXPECT_TRUE(found_12);
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicAllAssigned) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // All nodes assigned
+    std::vector<int> mapping = {0, 1};
+    std::vector<bool> used = {true, true};
+
+    // Should handle gracefully (no unassigned nodes)
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // target_idx will be SIZE_MAX if no unassigned nodes found
+    // This is acceptable behavior - caller should check for this case
+    EXPECT_EQ(result.target_idx, SIZE_MAX);
+    // Verify that calling select_and_generate_candidates in this state is safe
+    // and that the candidates list is empty (no out-of-bounds access occurred)
+    EXPECT_EQ(result.candidates.size(), 0u);
+}
+
+TEST_F(TopologySolverTest, SearchHeuristicRelaxedModeChannelPreference) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 (requires 2 channels), 1 -> 3 (requires 1 channel)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 3};  // 2 connections to node 2, 1 connection to node 3
+    target_adj_map[2] = {1, 1};  // 2 connections to node 1
+    target_adj_map[3] = {1};  // 1 connection to node 1
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph where node 10 is connected to node 11 with 3 channels
+    // This tests that in relaxed mode, we prefer connections closer to required count
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11, 11};  // 3 connections to node 11
+    global_adj_map[11] = {10, 10, 10};  // 3 connections to node 10
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Map node 1 to 10
+    std::vector<int> mapping(3, -1);
+    std::vector<bool> used(2, false);
+    mapping[0] = 0;  // target node 1 (index 0) -> global node 10 (index 0)
+    used[0] = true;  // 10 is used
+
+    // Select candidates - should select node 2 (index 1) deterministically
+    // Both nodes 2 and 3 have the same cost (same candidate count, same mapped neighbors),
+    // so we break ties by selecting the node with the lower index
+    auto result = SearchHeuristic::select_and_generate_candidates(
+        graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+
+    // Should select node 2 (index 1) deterministically (lower index when costs are equal)
+    EXPECT_EQ(result.target_idx, 1u);
+    EXPECT_GT(result.candidates.size(), 0u);
+    EXPECT_EQ(result.candidates[0], 1u);  // global node 11 (index 1) should be the candidate
+
+    // Now verify the channel preference by checking connection counts
+    // Node 2 requires 2 channels to node 1, node 3 requires 1 channel to node 1
+    // Global node 11 has 3 channels to node 10 (which is mapped from node 1)
+
+    // Check connection count from candidate (11, index 1) to mapped node (10, index 0)
+    auto it = graph_data.global_conn_count[1].find(0);
+    EXPECT_NE(it, graph_data.global_conn_count[1].end());
+    EXPECT_EQ(it->second, 3u);  // Should have 3 channels
+}
+
+TEST_F(TopologySolverTest, ConsistencyCheckerLocalConsistency) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+    global_adj_map[13] = {};  // Disconnected node
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(3, -1);
+
+    // Map node 1 to 10, node 2 to 11 - should be consistent
+    mapping[0] = 0;  // 1 -> 10
+    mapping[1] = 1;  // 2 -> 11
+    bool result1 = ConsistencyChecker::check_local_consistency(
+        1, 1, graph_data, mapping, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(result1);
+
+    // Map node 2 to 13 (disconnected) - should be inconsistent
+    mapping[1] = 3;  // 2 -> 13
+    bool result2 = ConsistencyChecker::check_local_consistency(
+        1, 0, graph_data, mapping, ConnectionValidationMode::RELAXED);
+    EXPECT_FALSE(result2);
+}
+
+TEST_F(TopologySolverTest, ConsistencyCheckerLocalConsistencyStrictMode) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 (requires 2 channels)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2};  // 2 connections
+    target_adj_map[2] = {1, 1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 (has 1 channel) and 10 -> 12 (has 2 channels)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 12, 12};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {10, 10};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(2, -1);
+
+    // Map node 1 to 10, node 2 to 12 (has 2 channels) - should pass in strict mode
+    mapping[0] = 0;  // 1 -> 10
+    mapping[1] = 2;  // 2 -> 12
+    bool result1 = ConsistencyChecker::check_local_consistency(
+        0, 0, graph_data, mapping, ConnectionValidationMode::STRICT);
+    EXPECT_TRUE(result1);
+
+    // Map node 2 to 11 (has only 1 channel) - should fail in strict mode
+    mapping[1] = 1;  // 2 -> 11
+    bool result2 = ConsistencyChecker::check_local_consistency(
+        0, 0, graph_data, mapping, ConnectionValidationMode::STRICT);
+    EXPECT_FALSE(result2);
+
+    // But should pass in relaxed mode
+    bool result3 = ConsistencyChecker::check_local_consistency(
+        0, 0, graph_data, mapping, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(result3);
+}
+
+TEST_F(TopologySolverTest, ConsistencyCheckerForwardConsistency) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    std::vector<int> mapping(3, -1);
+    std::vector<bool> used(3, false);
+
+    // Map node 1 to 10
+    mapping[0] = 0;
+    used[0] = true;
+
+    // Check forward consistency for node 2 -> 11
+    // Node 2's unassigned neighbor is node 3, which should be able to map to 12
+    bool result1 = ConsistencyChecker::check_forward_consistency(
+        1, 1, graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(result1);
+
+    // If we use up node 12, forward consistency should fail
+    used[2] = true;
+    bool result2 = ConsistencyChecker::check_forward_consistency(
+        1, 1, graph_data, constraint_data, mapping, used, ConnectionValidationMode::RELAXED);
+    EXPECT_FALSE(result2);
+}
+
+TEST_F(TopologySolverTest, ConsistencyCheckerCountReachableUnused) {
+    using namespace tt::tt_fabric::detail;
+
+    // Create a simple path graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+    global_adj_map[14] = {};  // Disconnected
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap empty_target_map;
+    AdjacencyGraph<TestTargetNode> target_graph(empty_target_map);  // Empty target, only need global
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    std::vector<bool> used(5, false);
+
+    // All nodes unused, starting from 10 should reach 4 nodes (10, 11, 12, 13)
+    size_t count1 = ConsistencyChecker::count_reachable_unused(
+        0, graph_data, used);
+    EXPECT_EQ(count1, 4u);
+
+    // Mark 11 as used, should reach 3 nodes (10, 12, 13)
+    used[1] = true;
+    size_t count2 = ConsistencyChecker::count_reachable_unused(
+        0, graph_data, used);
+    EXPECT_EQ(count2, 3u);
+
+    // Disconnected node 14 should only reach itself
+    used[1] = false;  // Reset
+    size_t count3 = ConsistencyChecker::count_reachable_unused(
+        4, graph_data, used);
+    EXPECT_EQ(count3, 1u);
 }
 
 }  // namespace tt::tt_fabric

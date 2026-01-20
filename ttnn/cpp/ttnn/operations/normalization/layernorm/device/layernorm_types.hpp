@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 enum class LayerNormType { LAYERNORM, RMSNORM };
 
@@ -53,4 +53,4 @@ inline LayerNormProgramConfig create_program_config(const std::optional<tt::tt_m
     };
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
