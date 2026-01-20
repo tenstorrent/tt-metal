@@ -66,13 +66,19 @@ void bind_deepseek_minimal_all_reduce(nb::module_& mod) {
             ttnn.Tensor of the output on the mesh device.
 
         Example:
-            >>> sender_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> input_tensor = torch.randn([1, 7168], dtype=torch.bfloat16)
             >>> num_devices = 2
+            >>> num_links = 2
+            >>> cluster_axis = 0
+            >>> topology = ttnn.Topology.Linear
             >>> device_tensors = []
-            >>> mesh_tensor_torch = torch.cat(device_tensors, dim=-1)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
+            >>> for device_idx in range(num_devices):
+                    tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+                    device_tensors.append(tensor)
+            >>> mesh_tensor_torch = torch.cat(device_tensors, dim=0)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(num_devices, 1))
             >>> mesh_mapper_config = ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
+                    [ttnn.PlacementShard(0), ttnn.PlacementReplicate()], ttnn.MeshShape(num_devices, 1)
                 )
             >>> ttnn_tensor = ttnn.from_torch(
                             mesh_tensor_torch,
@@ -81,7 +87,7 @@ void bind_deepseek_minimal_all_reduce(nb::module_& mod) {
                             layout=layout,
                             memory_config=mem_config,
                             mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
-            >>> output = ttnn.experimental.all_reduce(ttnn_tensor)
+            >>> output = ttnn.experimental.all_reduce(ttnn_tensor, cluster_axis=cluster_axis, num_links=num_links, topology=topology)
 
         )doc");
 }

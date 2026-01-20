@@ -296,75 +296,6 @@ def run_deepseek_minimal_all_reduce_impl(
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(15232)},
-    ],
-    indirect=["device_params"],
-    ids=["fabric_1d"],
-)
-def test_deepseek_minimal_all_reduce(
-    bh_2d_mesh_device,
-    num_devices,
-    output_shape,
-    num_links,
-    input_dtype,
-    layout,
-    num_iters,
-    function_level_defaults,
-    input_shard_shape,
-    input_shard_grid,
-    tensor_mem_layout,
-    cluster_axis,
-):
-    # Validate we have the right mesh configuration
-    print("bh_2d_mesh_device.shape:", bh_2d_mesh_device.shape)
-    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
-
-    # Create a 2x1 submesh
-    mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(num_devices, 1))
-
-    run_deepseek_minimal_all_reduce_impl(
-        mesh_device,
-        num_devices,
-        output_shape,
-        num_links,
-        input_dtype,
-        layout,
-        function_level_defaults,
-        num_iters=num_iters,
-        rand_tensor=True,
-        input_shard_shape=input_shard_shape,
-        input_shard_grid=input_shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
-        cluster_axis=cluster_axis,
-    )
-
-
-@skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize(
-    "num_devices, num_links, output_shape, input_shard_shape, input_shard_grid, tensor_mem_layout",
-    [
-        (
-            2,
-            2,
-            [1, 7168],
-            (1, 7168),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),  # single core
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-    ],
-)
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-    ],
-)
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize(
@@ -395,7 +326,6 @@ def test_deepseek_minimal_all_reduce_trace(
 ):
     """Trace-enabled version of the all-reduce test for performance testing."""
     # Validate we have the right mesh configuration
-    print("bh_2d_mesh_device.shape:", bh_2d_mesh_device.shape)
     validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
 
     # Create a 2x1 submesh
