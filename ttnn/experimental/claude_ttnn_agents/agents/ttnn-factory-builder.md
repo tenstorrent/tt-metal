@@ -229,6 +229,7 @@ void MAIN {
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 ```
 
 **DO NOT define computation macros:**
@@ -306,6 +307,9 @@ untilize(...);
 
 **Stage-specific reference** (load sections on demand):
 - `.claude/references/factory-builder-stages.md` - Full TDD cycles, test templates, implementation code
+
+**Code style skill** (consult BEFORE writing factory code):
+- `/ttnn-factory-patterns` skill - Modern CB API (`create_cb`), const correctness, explicit naming conventions, NoC alignment patterns. **ALWAYS** invoke this skill before implementing Stage 5 (Program Factory Structure).
 
 **DO NOT read the entire stage reference file.** It has a Quick Reference table at the top with grep patterns and line counts. Load sections on demand as you work through each stage.
 
