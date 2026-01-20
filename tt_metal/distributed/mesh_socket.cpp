@@ -6,6 +6,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <iostream>
+#include <atomic>
+#include <immintrin.h>  // For _mm_clflush
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -615,8 +617,12 @@ void D2HSocket::wait_for_pages(uint32_t num_pages) {
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     uint32_t poll_count = 0;
     uint32_t last_bytes_sent_value = 0;
+    volatile uint32_t* bytes_sent_ptr = const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
     while (bytes_recv < num_bytes) {
-        volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
+        // Flush CPU cache line to force re-read from RAM (where PCIe writes land)
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(bytes_sent_ptr)));
+        _mm_lfence();  // Serialize loads after cache line flush
+        uint32_t bytes_sent_value = *bytes_sent_ptr;
         bytes_recv = bytes_sent_value - bytes_acked_;
         bytes_sent_ = bytes_sent_value;
         poll_count++;

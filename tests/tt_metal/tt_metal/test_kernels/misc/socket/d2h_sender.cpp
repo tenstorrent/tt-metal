@@ -78,6 +78,8 @@ void kernel_main() {
             // DeviceZoneScopedN("Note");
             //  Notify host via PCIe
             pcie_socket_notify_receiver(sender_socket);
+            // Barrier to ensure PCIe write is visible to host before next iteration
+            noc_async_write_barrier();
         }
     }
 
