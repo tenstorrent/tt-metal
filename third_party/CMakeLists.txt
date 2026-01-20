@@ -390,3 +390,31 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
 )
+
+###################################################################################################################
+# libtorch : https://pytorch.org/
+###################################################################################################################
+CPMAddPackage(
+    NAME libtorch
+    VERSION 2.7.1+cpu
+    URL
+        https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
+    DOWNLOAD_ONLY ON
+    PATCHES
+        libtorch_aten.patch
+)
+if(libtorch_ADDED)
+    add_library(libtorch INTERFACE)
+    add_library(torch::torch ALIAS libtorch)
+    target_include_directories(libtorch SYSTEM INTERFACE
+        ${libtorch_SOURCE_DIR}/include
+        ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+    )
+    target_link_directories(libtorch INTERFACE
+        ${libtorch_SOURCE_DIR}/lib
+    )
+    target_link_libraries(libtorch INTERFACE
+        c10
+        torch_cpu
+    )
+endif()
