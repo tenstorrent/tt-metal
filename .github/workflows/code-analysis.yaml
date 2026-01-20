@@ -435,108 +435,76 @@ jobs:
           set -euo pipefail
           REPORT_DIR="/tmp/previous-html"
 
-          echo "=== Listing HTML report contents ==="
-          ls -la "$REPORT_DIR" | head -20
+          # Find all .plist.html files (each contains embedded JSON with full issue details)
+          mapfile -t PLIST_HTML_FILES < <(find "$REPORT_DIR" -name "*.plist.html" -type f 2>/dev/null | head -100)
+          FILE_COUNT="${#PLIST_HTML_FILES[@]}"
 
-          # Find all .plist.html files (each contains issues for one source file)
-          PLIST_HTML_FILES=$(find "$REPORT_DIR" -name "*.plist.html" -type f 2>/dev/null)
-          ISSUE_COUNT=$(echo "$PLIST_HTML_FILES" | grep -c . || echo "0")
+          echo "Found $FILE_COUNT plist.html files"
 
-          echo "Found $ISSUE_COUNT plist.html files (each represents a file with issues)"
+          if [ "$FILE_COUNT" = "0" ]; then
+            echo "No issues found in CodeChecker HTML reports"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          if [ "$ISSUE_COUNT" = "0" ]; then
+          # Extract the embedded JSON from HTML files
+          # The HTML contains: var data = {"files": {...}, "reports": [...]}
+          JSON_OUTPUT="/tmp/codechecker_issues.json"
+          echo "[" > "$JSON_OUTPUT"
+
+          FIRST=true
+          TOTAL_ISSUES=0
+          for html_file in "${PLIST_HTML_FILES[@]}"; do
+            [ -z "$html_file" ] && continue
+
+            # Extract the JSON data from the HTML (it's in a "var data = {...}" line)
+            # Use grep to find the line and sed to extract just the JSON
+            DATA_LINE=$(grep -o 'var data = {.*};' "$html_file" 2>/dev/null | head -1 || true)
+
+            if [ -z "$DATA_LINE" ]; then
+              echo "Warning: Could not extract data from $html_file"
+              continue
+            fi
+
+            # Extract just the JSON object (remove "var data = " prefix and ";" suffix)
+            JSON_DATA=$(echo "$DATA_LINE" | sed 's/^var data = //; s/;$//')
+
+            # Extract reports array and append to our output
+            REPORTS=$(echo "$JSON_DATA" | jq -c '.reports[]?' 2>/dev/null || true)
+
+            if [ -z "$REPORTS" ]; then
+              continue
+            fi
+
+            while IFS= read -r report; do
+              [ -z "$report" ] && continue
+              TOTAL_ISSUES=$((TOTAL_ISSUES + 1))
+
+              if [ "$FIRST" = true ]; then
+                FIRST=false
+              else
+                echo "," >> "$JSON_OUTPUT"
+              fi
+
+              echo "$report" >> "$JSON_OUTPUT"
+            done <<< "$REPORTS"
+          done
+
+          echo "]" >> "$JSON_OUTPUT"
+
+          echo "Total issues extracted: $TOTAL_ISSUES"
+
+          if [ "$TOTAL_ISSUES" = "0" ]; then
             echo "No issues found in CodeChecker HTML reports"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "has-issues=true" >> "$GITHUB_OUTPUT"
-          echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
+          echo "issue-count=$TOTAL_ISSUES" >> "$GITHUB_OUTPUT"
 
-          # Extract issue information from the HTML files
-          # Each .plist.html file contains issues for a specific source file
-          # Format: {source_file}_clangsa_{hash}.plist.html
-          JSON_OUTPUT="/tmp/codechecker_issues.json"
-          echo "[" > "$JSON_OUTPUT"
-
-          FIRST=true
-          while IFS= read -r html_file; do
-            [ -z "$html_file" ] && continue
-
-            # Extract source file name from the HTML filename
-            # Format: test_cleanup.cpp_clangsa_d8c936ee4957f9035b5c5ea49b7cc12b.plist.html
-            basename_file=$(basename "$html_file")
-            # Remove _clangsa_*.plist.html suffix to get source file
-            source_file=$(echo "$basename_file" | sed 's/_clangsa_[a-f0-9]*\.plist\.html$//')
-
-            # Parse HTML to extract issue details
-            # Look for bug report entries - they typically contain checker name, line number, message
-            # The HTML structure varies, so we'll extract what we can
-
-            # Try to extract checker name from HTML (usually in a span or div with class containing "checker")
-            checker=$(grep -oP '(?<=<span class="checker-name">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
-                      grep -oP 'clangsa\.[^<"]+' "$html_file" 2>/dev/null | head -1 || \
-                      echo "clangsa.unknown")
-
-            # Try to extract line number (usually in report-line or similar)
-            line=$(grep -oP '(?<=<span class="line">)[0-9]+' "$html_file" 2>/dev/null | head -1 || \
-                   grep -oP '(?<=line )[0-9]+' "$html_file" 2>/dev/null | head -1 || \
-                   grep -oP ':[0-9]+:' "$html_file" 2>/dev/null | head -1 | tr -d ':' || \
-                   echo "1")
-
-            # Try to extract message
-            message=$(grep -oP '(?<=<span class="message">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
-                      grep -oP '(?<=<div class="bug-message">)[^<]+' "$html_file" 2>/dev/null | head -1 || \
-                      echo "Static analysis issue detected")
-
-            # Clean up extracted values
-            checker=$(echo "$checker" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 100)
-            line=$(echo "$line" | grep -oP '[0-9]+' | head -1)
-            [ -z "$line" ] && line="1"
-            message=$(echo "$message" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/"/\\"/g' | head -c 500)
-
-            if [ "$FIRST" = true ]; then
-              FIRST=false
-            else
-              echo "," >> "$JSON_OUTPUT"
-            fi
-
-            cat >> "$JSON_OUTPUT" << JSONEOF
-          {
-            "file": "$source_file",
-            "line": $line,
-            "checker": "$checker",
-            "message": "$message",
-            "html_report": "$basename_file"
-          }
-          JSONEOF
-
-          done <<< "$PLIST_HTML_FILES"
-
-          echo "]" >> "$JSON_OUTPUT"
-
-          echo "=== Generated JSON ==="
-          cat "$JSON_OUTPUT"
-
-          # Validate JSON
-          if ! jq empty "$JSON_OUTPUT" 2>/dev/null; then
-            echo "Warning: Generated invalid JSON, creating simple fallback"
-            # Create a simple fallback with just file names
-            echo "[" > "$JSON_OUTPUT"
-            FIRST=true
-            while IFS= read -r html_file; do
-              [ -z "$html_file" ] && continue
-              basename_file=$(basename "$html_file")
-              source_file=$(echo "$basename_file" | sed 's/_clangsa_[a-f0-9]*\.plist\.html$//')
-              if [ "$FIRST" = true ]; then
-                FIRST=false
-              else
-                echo "," >> "$JSON_OUTPUT"
-              fi
-              echo "{\"file\": \"$source_file\", \"line\": 1, \"checker\": \"clangsa\", \"message\": \"See HTML report\", \"html_report\": \"$basename_file\"}" >> "$JSON_OUTPUT"
-            done <<< "$PLIST_HTML_FILES"
-            echo "]" >> "$JSON_OUTPUT"
-          fi
+          echo "=== Sample of extracted issues ==="
+          jq '.[0:3]' "$JSON_OUTPUT" || cat "$JSON_OUTPUT"
 
       - name: Upload extracted issues JSON
         if: steps.extract-issues.outputs.has-issues == 'true'
@@ -582,15 +550,9 @@ jobs:
             exit 0
           fi
 
-          # Handle different JSON structures (array, object with reports, etc.)
-          ISSUE_COUNT=$(jq '
-            if type == "array" then length
-            elif type == "object" and has("reports") then (.reports | length)
-            elif type == "object" then length
-            else 0 end
-          ' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
+          ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
 
-          if [ "$ISSUE_COUNT" = "0" ] || [ -z "$ISSUE_COUNT" ] || [ "$ISSUE_COUNT" = "null" ]; then
+          if [ "$ISSUE_COUNT" = "0" ] || [ -z "$ISSUE_COUNT" ]; then
             echo "No issues found"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -600,40 +562,36 @@ jobs:
           echo "has-issues=true" >> "$GITHUB_OUTPUT"
           echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
 
-          # Extract the first issue
-          ISSUE=$(jq -r '
-            if type == "array" then .[0]
-            elif type == "object" and has("reports") then .reports[0]
-            elif type == "object" then .[keys[0]]
-            else empty end
-          ' /tmp/codechecker_issues.json)
+          # Get the first issue with full details
+          ISSUE=$(jq -r '.[0]' /tmp/codechecker_issues.json)
 
-          if [ -z "$ISSUE" ] || [ "$ISSUE" = "null" ]; then
-            echo "Failed to extract issue from JSON"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Extract all available fields
+          FILE_PATH=$(echo "$ISSUE" | jq -r '.path // .fileId // "unknown"')
+          LINE=$(echo "$ISSUE" | jq -r '.line // 1')
+          COLUMN=$(echo "$ISSUE" | jq -r '.column // 1')
+          CHECKER=$(echo "$ISSUE" | jq -r '.checker.name // .checker // "unknown"')
+          MESSAGE=$(echo "$ISSUE" | jq -r '.message // "Static analysis issue"')
+          SEVERITY=$(echo "$ISSUE" | jq -r '.severity // "unknown"')
 
-          # Extract key information (handle different JSON structures)
-          FILE_PATH=$(echo "$ISSUE" | jq -r '.file.path // .file.name // .file // .path // "unknown"')
-          LINE=$(echo "$ISSUE" | jq -r '.line // .location.line // .lineNumber // "unknown"')
-          COLUMN=$(echo "$ISSUE" | jq -r '.column // .location.col // .columnNumber // "unknown"')
-          CHECKER_NAME=$(echo "$ISSUE" | jq -r '.checker.name // .checker // .checkerName // "unknown"')
-          MESSAGE=$(echo "$ISSUE" | jq -r '.message // .description // .msg // "unknown"')
-          SEVERITY=$(echo "$ISSUE" | jq -r '.severity // .severityLevel // "unknown"')
+          # Strip /work/ prefix if present
+          FILE_PATH="${FILE_PATH#/work/}"
 
-          # Get relative path (strip common prefixes)
-          if [[ "$FILE_PATH" == "/work/"* ]]; then
-            REL_PATH="${FILE_PATH#/work/}"
-          else
-            REL_PATH="$FILE_PATH"
-          fi
+          echo "Selected issue:"
+          echo "  File: $FILE_PATH"
+          echo "  Line: $LINE"
+          echo "  Checker: $CHECKER"
+          echo "  Message: $MESSAGE"
 
-          echo "file-path=$REL_PATH" >> "$GITHUB_OUTPUT"
+          echo "file-path=$FILE_PATH" >> "$GITHUB_OUTPUT"
           echo "line=$LINE" >> "$GITHUB_OUTPUT"
           echo "column=$COLUMN" >> "$GITHUB_OUTPUT"
-          echo "checker-name=$CHECKER_NAME" >> "$GITHUB_OUTPUT"
-          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+          echo "checker=$CHECKER" >> "$GITHUB_OUTPUT"
+          # Use a delimiter for multi-line message
+          {
+            echo "message<<EOF"
+            echo "$MESSAGE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "severity=$SEVERITY" >> "$GITHUB_OUTPUT"
 
       - name: Create Copilot agent task via GitHub CLI
@@ -647,28 +605,28 @@ jobs:
           FILE_PATH="${{ steps.select-issue.outputs.file-path }}"
           LINE="${{ steps.select-issue.outputs.line }}"
           COLUMN="${{ steps.select-issue.outputs.column }}"
-          CHECKER_NAME="${{ steps.select-issue.outputs.checker-name }}"
+          CHECKER="${{ steps.select-issue.outputs.checker }}"
           MESSAGE="${{ steps.select-issue.outputs.message }}"
           SEVERITY="${{ steps.select-issue.outputs.severity }}"
 
-          # Construct the prompt for Copilot coding agent
-          PROMPT="Fix the following Clang Static Analyzer issue in this repository:
+          # Construct the prompt for Copilot coding agent with full issue details
+          PROMPT="Fix this Clang Static Analyzer issue in the repository:
 
           **File:** \`$FILE_PATH\`
-          **Line:** $LINE
-          **Column:** $COLUMN
-          **Checker:** $CHECKER_NAME
+          **Line:** $LINE, **Column:** $COLUMN
+          **Checker:** $CHECKER
           **Severity:** $SEVERITY
           **Message:** $MESSAGE
 
           Please:
-          1. Review the issue and the surrounding code context
-          2. Apply a fix that addresses the root cause
-          3. Ensure the fix follows the project's coding standards
-          4. Make sure the fix doesn't introduce new issues
-          5. Keep changes minimal and focused on fixing this specific issue
+          1. Open the file and go to line $LINE
+          2. Understand the issue reported by the static analyzer
+          3. Apply a fix that addresses the root cause
+          4. Ensure the fix follows the project's coding standards
+          5. Make sure the fix doesn't introduce new issues or change behavior
+          6. Keep changes minimal and focused on this specific issue
 
-          Create a PR with title: fix(clangsa): Fix $CHECKER_NAME issue in $FILE_PATH"
+          Create a PR with title: fix(clangsa): Fix $CHECKER in $FILE_PATH"
 
           # Determine base branch
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -724,8 +682,9 @@ jobs:
             echo "**Issue Details:**" >> "$GITHUB_STEP_SUMMARY"
             echo "- **File:** \`${{ steps.select-issue.outputs.file-path }}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Line:** ${{ steps.select-issue.outputs.line }}" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Checker:** \`${{ steps.select-issue.outputs.checker-name }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Checker:** \`${{ steps.select-issue.outputs.checker }}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Severity:** ${{ steps.select-issue.outputs.severity }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Message:** ${{ steps.select-issue.outputs.message }}" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
 
             if [ -n "${{ steps.create-agent-task.outputs.pr-url }}" ]; then
