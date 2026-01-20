@@ -49,7 +49,7 @@ void kernel_main() {
     const uint64_t noc_remote_sender_semaphore_addr =
         get_noc_addr(noc_final_x, noc_final_y, (uint32_t)sender_semaphore_addr);
 
-    // MAIN TRANSMISSION LOOP: Send local TopK results to final core
+    // Send local TopK results to final core
     for (uint32_t j = 0; j < Ht; ++j) {  // For each height row
         // Wait for permission to send
         // Block until the final core signals readiness to receive data
