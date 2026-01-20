@@ -127,6 +127,51 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(b_padded[-1] % TILE_WIDTH == 0, "minimal_matmul bias last dimension must be tile-aligned");
     }
 
+    // Validate fused ternary tensors if present
+    bool has_fused_ternary = operation_attributes.fused_ternary_scalar.has_value();
+    if (has_fused_ternary) {
+        TT_FATAL(
+            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_c.has_value(),
+            "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_c must be "
+            "provided");
+
+        const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
+        const auto& ternary_c = tensor_args.fused_ternary_input_c.value();
+
+        TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
+        TT_FATAL(ternary_c.storage_type() == StorageType::DEVICE, "fused_ternary_input_c must be on device");
+        TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
+        TT_FATAL(ternary_c.device() == act_tensor.device(), "fused_ternary_input_c must be on same device");
+        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_c.buffer() != nullptr, "fused_ternary_input_c must be allocated");
+
+        TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
+        TT_FATAL(ternary_c.layout() == Layout::TILE, "fused_ternary_input_c must be TILE layout");
+
+        TT_FATAL(
+            dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_c.dtype()),
+            "fused_ternary tensors must have supported dtypes");
+
+        const auto& ternary_a_logical = ternary_a.logical_shape();
+        const auto& ternary_c_logical = ternary_c.logical_shape();
+
+        // Both tensors should match output shape [M, N]
+        TT_FATAL(
+            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
+            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
+            M,
+            N,
+            ternary_a_logical[-2],
+            ternary_a_logical[-1]);
+        TT_FATAL(
+            ternary_c_logical[-2] == M && ternary_c_logical[-1] == N,
+            "fused_ternary_input_c shape must match output [M={}, N={}], got [{}, {}]",
+            M,
+            N,
+            ternary_c_logical[-2],
+            ternary_c_logical[-1]);
+    }
+
     // Config constraints
     if (config.has_value()) {
         const auto& cfg = config.value();
@@ -216,7 +261,10 @@ std::vector<Tensor> minimal_matmul(
     std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     int32_t chunks,
-    int32_t dim) {
+    int32_t dim,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<Tensor>& fused_ternary_input_a,
+    const std::optional<Tensor>& fused_ternary_input_c) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -232,11 +280,17 @@ std::vector<Tensor> minimal_matmul(
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config,
             .output_dtype = dtype,
+            .fused_ternary_scalar = fused_ternary_scalar,
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim},
         OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
+            .input_tensor = input_tensor,
+            .weight_tensor = weight_tensor,
+            .bias_tensor = bias_tensor,
+            .optional_input_tensor = std::nullopt,
+            .fused_ternary_input_a = fused_ternary_input_a,
+            .fused_ternary_input_c = fused_ternary_input_c});
 }
 
 }  // namespace ttnn::prim
