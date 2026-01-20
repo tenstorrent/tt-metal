@@ -623,6 +623,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
             dst_offset += dispatch_params.page_size_to_write;
         }
     }
+    command_sequence.align_write_offset();
 }
 
 // Issue dispatch commands for writing buffer data
