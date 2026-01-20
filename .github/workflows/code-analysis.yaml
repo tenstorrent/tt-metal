@@ -816,19 +816,7 @@ jobs:
             fi
           fi
 
-          # Method 3: Check if Copilot already created a PR
-          echo "=== Checking for existing PRs ==="
-          # Check for PRs from both copilot/ branches (if Copilot created one) and users/ branches (if we created one)
-          EXISTING_PR=$(gh pr list --json number,headRefName --jq '[.[] | select(.headRefName | startswith("copilot/") or startswith("users/"))] | .[0].number' 2>/dev/null || true)
-          if [ -n "$EXISTING_PR" ]; then
-            echo "Copilot already created PR #$EXISTING_PR"
-            PR_URL=$(gh pr view "$EXISTING_PR" --json url --jq '.url')
-            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-            echo "pr-created=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Method 4: Check if Copilot switched to a copilot/ branch with commits
+          # Method 3: Check if Copilot switched to a copilot/ branch with commits
           CURRENT_BRANCH=$(git branch --show-current)
           if [[ "$CURRENT_BRANCH" == copilot/* ]]; then
             echo "Copilot switched to branch: $CURRENT_BRANCH"
