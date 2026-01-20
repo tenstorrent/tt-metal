@@ -358,34 +358,90 @@ jobs:
     name: 📥 Download Previous Results
     if: ${{ inputs.previous-run-id != '' }}
     runs-on: ubuntu-latest
+    outputs:
+      has-issues: ${{ steps.extract-issues.outputs.has-issues }}
     steps:
-      - name: Download CodeChecker Issues JSON from previous run
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-Issues-JSON
-          path: /tmp/previous-results
-          run-id: ${{ inputs.previous-run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Re-upload as current workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CodeChecker-Issues-JSON
-          path: /tmp/previous-results/codechecker_issues.json
-
       - name: Download CodeChecker HTML Reports from previous run
         uses: actions/download-artifact@v4
         with:
           name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-html
+          path: /tmp/previous-reports
           run-id: ${{ inputs.previous-run-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install CodeChecker for parsing
+        run: |
+          pip install codechecker==6.27.1
+
+      - name: Extract issues from CodeChecker reports
+        id: extract-issues
+        run: |
+          set -euo pipefail
+          REPORT_DIR="/tmp/previous-reports"
+
+          if [ ! -d "$REPORT_DIR" ]; then
+            echo "No CodeChecker reports found"
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # CodeChecker stores reports in a specific structure
+          # Try to find the actual report directory (contains plist files)
+          REPORTS_BASE=""
+
+          # Look for a reports subdirectory
+          if [ -d "$REPORT_DIR/reports" ]; then
+            REPORTS_BASE="$REPORT_DIR/reports"
+          # Look for plist files in the directory
+          elif find "$REPORT_DIR" -name "*.plist" -type f | head -1 | grep -q .; then
+            REPORTS_BASE="$REPORT_DIR"
+          else
+            # Last resort: try the directory itself
+            REPORTS_BASE="$REPORT_DIR"
+          fi
+
+          echo "Using report directory: $REPORTS_BASE"
+
+          # Export issues to JSON using CodeChecker parse
+          JSON_OUTPUT="/tmp/codechecker_issues.json"
+          if CodeChecker parse "$REPORTS_BASE" --export json > "$JSON_OUTPUT" 2>&1; then
+            # Check if we have any issues
+            if [ ! -s "$JSON_OUTPUT" ]; then
+              echo "Empty JSON output from CodeChecker"
+              echo "has-issues=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Try to parse as JSON array
+            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" 2>/dev/null || echo "0")
+            if [ "$ISSUE_COUNT" = "0" ]; then
+              echo "No issues found in CodeChecker reports"
+              echo "has-issues=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Found $ISSUE_COUNT issues"
+            echo "has-issues=true" >> "$GITHUB_OUTPUT"
+            echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
+          else
+            echo "Failed to parse CodeChecker reports (this may be normal if no issues found)"
+            cat "$JSON_OUTPUT" || true
+            echo "has-issues=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+      - name: Upload extracted issues JSON
+        if: steps.extract-issues.outputs.has-issues == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodeChecker-Issues-JSON
+          path: /tmp/codechecker_issues.json
 
       - name: Re-upload HTML reports as current workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-html
+          path: /tmp/previous-reports
 
   copilot-fix-clangsa-issue:
     name: 🤖 Copilot Fix ClangSA Issue
@@ -401,7 +457,9 @@ jobs:
       session-url: ${{ steps.create-agent-task.outputs.session-url }}
     steps:
       - name: Download CodeChecker issues JSON
+        id: download-json
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: CodeChecker-Issues-JSON
           path: /tmp
