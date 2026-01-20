@@ -176,11 +176,35 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
 
+        ASSERT(dim == 3);
+        ASSERT(slice_C == 1);
+
+        DPRINT << "The writer kernel running its loop." << ENDL();
+        DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+        DPRINT << "ring_size: " << ring_size << ENDL();
+        DPRINT << "tile_granularity: " << tile_granularity << ENDL();
+        DPRINT << "page_size: " << page_size << ENDL();
+        DPRINT << "output_batch_num_pages: " << output_batch_num_pages << ENDL();
+        DPRINT << "input_tensor_B: " << input_tensor_B << ENDL();
+        DPRINT << "input_tensor_Wt: " << input_tensor_Wt << ENDL();
+        DPRINT << "slice_C: " << slice_C << ENDL();
+        DPRINT << "slice_Ht: " << slice_Ht << ENDL();
+        DPRINT << "slice_Wt: " << slice_Wt << ENDL();
+        DPRINT << "dim: " << dim << ENDL();
+        DPRINT << "start_pages_read_in_row: " << start_pages_read_in_row << ENDL();
+        DPRINT << "start_row_offset: " << start_row_offset << ENDL();
+        DPRINT << "start_tiles_read: " << start_tiles_read << ENDL();
+        DPRINT << "start_tiles_to_read: " << start_tiles_to_read << ENDL();
+
         for (uint32_t b = 0; b < batch_size; b++) {
+            DPRINT << "batch element: " << b << " " << ENDL();
             for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                     for (uint32_t i = 0; i < ring_size; i++) {
+                        DPRINT << "Next ring element: " << i << " " << ENDL();
+                        DPRINT << "direction: " << (uint32_t)direction << ENDL();
+                        DPRINT << "slice_idx: " << slice_idx << ENDL();
                         uint32_t actual_slice_idx;
                         if (direction) {
                             actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
@@ -190,46 +214,55 @@ void kernel_main() {
                         }
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
+                        DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                         if (i < (ring_size - 1)) {
                             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+                            DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
                             for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
                                  chunk_piece_idx++) {
                                 uint32_t tiles_to_read_in_current_direction = 1;
                                 uint32_t direction_offset = direction ? 0 : 1;
                                 uint32_t input_row_offset = start_row_offset;
 
-                                cb_wait_front(cb_output_id, tile_granularity);
+                                // cb_wait_front(cb_output_id, tile_granularity);
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                     uint32_t intermediate_tile_id =
                                         intermediate_tile_id_start + input_row_offset + direction_offset;
-                                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                        intermediate_addrgen, intermediate_tile_one_id, 0);
-                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                        &mux_connection_handle,
-                                        pkt_unicast_hdr,
-                                        l1_read_addr,
-                                        NocUnicastCommandHeader{noc_address0});
+                                    DPRINT << "intermediate_tile_id: " << intermediate_tile_id << ENDL();
+                                    // auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                    //     intermediate_addrgen, intermediate_tile_one_id, 0);
+                                    // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                    //     &mux_connection_handle,
+                                    //     pkt_unicast_hdr,
+                                    //     l1_read_addr,
+                                    //     NocUnicastCommandHeader{noc_address0});
                                     l1_read_addr += page_size;
-                                    noc_async_writes_flushed();
+                                    DPRINT << "--------------------------------" << ENDL();
+                                    // noc_async_writes_flushed();
                                 }
-                                cb_pop_front(cb_output_id, tile_granularity);
+                                // cb_pop_front(cb_output_id, tile_granularity);
                             }
                         } else {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
+
                             uint32_t tiles_to_read_in_current_direction = 1;
                             uint32_t direction_offset = direction ? 0 : 1;
-                            cb_wait_front(cb_output_id, tile_granularity);
+                            uint32_t input_row_offset = start_row_offset;
+                            // cb_wait_front(cb_output_id, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
                             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                                uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                                uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                uint32_t output_tile_id = output_tile_id_start + input_row_offset + direction_offset;
+                                DPRINT << "output_tile_id: " << output_tile_id << ENDL();
+                                // uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                // noc_async_write(l1_read_addr, local_noc_addr, page_size);
                                 l1_read_addr += page_size;
+                                DPRINT << "--------------------------------" << ENDL();
                             }
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_output_id, tile_granularity);
+                            // noc_async_write_barrier();
+                            // cb_pop_front(cb_output_id, tile_granularity);
                         }
+                        DPRINT << "====================================" << ENDL();
 
                         // TODO: mcast half batch ready semaphore
 
