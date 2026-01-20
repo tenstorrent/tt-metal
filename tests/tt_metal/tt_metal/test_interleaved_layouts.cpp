@@ -2,27 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/device_fixture.hpp"
+#include "common/command_queue_fixture.hpp"
 
 #include <chrono>
 #include <cerrno>
-#include <fmt/base.h>
 #include <cstdint>
-#include <cstdlib>
-#include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cmath>
 #include <cstring>
 #include <exception>
 #include <iostream>
-#include <map>
 #include <memory>
-#include <optional>
-#include <string>
-#include <tuple>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -37,9 +30,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "common/tt_backend_api_types.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -51,7 +42,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
-bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::IDevice* device) {
+bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshCommandQueue& cq) {
     /*
         This test just writes sticks in a interleaved fashion to DRAM and then reads back to ensure
         they were written correctly
@@ -65,20 +57,23 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::ID
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
-        tt_metal::InterleavedBufferConfig sticks_config{
-            .device = device,
-            .size = dram_buffer_size,
+        distributed::DeviceLocalBufferConfig device_local_config{
             .page_size = (uint64_t)stick_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+            .buffer_type = tt_metal::BufferType::DRAM,
+        };
 
-        auto sticks_buffer = CreateBuffer(sticks_config);
+        distributed::ReplicatedBufferConfig buffer_config{
+            .size = dram_buffer_size,
+        };
 
-        tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
+        auto sticks_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+
+        distributed::EnqueueWriteMeshBuffer(cq, sticks_buffer, src_vec, false);
 
         vector<uint32_t> dst_vec;
-        tt_metal::detail::ReadFromBuffer(sticks_buffer, dst_vec);
+        distributed::ReadShard(cq, dst_vec, sticks_buffer, distributed::MeshCoordinate(0, 0));
 
         pass &= (src_vec == dst_vec);
     } catch (const std::exception& e) {
@@ -92,7 +87,8 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(tt_metal::ID
     return pass;
 }
 
-bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal::IDevice* device) {
+bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshCommandQueue& cq) {
     bool pass = true;
 
     try {
@@ -114,22 +110,29 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
 
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        tt_metal::InterleavedBufferConfig src_config{
-            .device = device,
-            .size = dram_buffer_size,
+
+        distributed::DeviceLocalBufferConfig src_device_local_config{
             .page_size = (uint64_t)stick_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = device,
+            .buffer_type = tt_metal::BufferType::DRAM,
+        };
+        distributed::ReplicatedBufferConfig src_buffer_config{
             .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+        };
 
-        auto src_dram_buffer = CreateBuffer(src_config);
+        distributed::DeviceLocalBufferConfig dst_device_local_config{
+            .page_size = dram_buffer_size,
+            .buffer_type = tt_metal::BufferType::DRAM,
+        };
+        distributed::ReplicatedBufferConfig dst_buffer_config{
+            .size = dram_buffer_size,
+        };
+
+        auto src_dram_buffer =
+            distributed::MeshBuffer::create(src_buffer_config, src_device_local_config, mesh_device.get());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        auto dst_dram_buffer =
+            distributed::MeshBuffer::create(dst_buffer_config, dst_device_local_config, mesh_device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
@@ -182,9 +185,9 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -196,16 +199,16 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
             program,
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr,
-            (uint32_t) 0,
-            (uint32_t) num_output_tiles});
+            {dram_buffer_dst_addr, (uint32_t)0, (uint32_t)num_output_tiles});
 
         [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::MeshWorkload mesh_workload;
+        mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -220,8 +223,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
-        DeallocateBuffer(*dst_dram_buffer);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -235,7 +236,8 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(tt_metal:
 
 // Placeholder tests removed - were not implemented
 
-bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal::IDevice* device) {
+bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshCommandQueue& cq) {
     bool pass = true;
 
     try {
@@ -258,15 +260,20 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
+        distributed::DeviceLocalBufferConfig device_local_config{
             .page_size = (uint64_t)stick_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto src_dram_buffer = CreateBuffer(dram_config);
+            .buffer_type = tt_metal::BufferType::DRAM,
+        };
+        distributed::ReplicatedBufferConfig buffer_config{
+            .size = dram_buffer_size,
+        };
+
+        auto src_dram_buffer =
+            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dst_dram_buffer = CreateBuffer(dram_config);
+        auto dst_dram_buffer =
+            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
@@ -324,9 +331,9 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size / sizeof(bfloat16), false);
+        std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(dram_buffer_size, false);
 
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -340,10 +347,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
             core,
             {dram_buffer_dst_addr, (uint32_t)num_sticks, (uint32_t)stick_size, (uint32_t)log2(stick_size)});
 
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::MeshWorkload mesh_workload;
+        mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -370,7 +379,8 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(tt_metal:
 }
 
 template <bool src_is_in_l1, bool dst_is_in_l1>
-bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
+bool test_interleaved_l1_datacopy(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshCommandQueue& cq) {
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
     uint buffer_size = num_pages * num_bytes_per_page;
@@ -404,18 +414,20 @@ bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
 
     std::vector<uint32_t> host_buffer =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::InterleavedBufferConfig l1_config{
-        .device = device,
-        .size = buffer_size,
-        .page_size = num_bytes_per_page,
-        .buffer_type = tt_metal::BufferType::L1};
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = buffer_size,
-        .page_size = num_bytes_per_page,
-        .buffer_type = tt_metal::BufferType::DRAM};
 
-    std::shared_ptr<tt_metal::Buffer> src, dst;
+    distributed::DeviceLocalBufferConfig l1_local_config{
+        .page_size = num_bytes_per_page,
+        .buffer_type = tt_metal::BufferType::L1,
+    };
+    distributed::DeviceLocalBufferConfig dram_local_config{
+        .page_size = num_bytes_per_page,
+        .buffer_type = tt_metal::BufferType::DRAM,
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = buffer_size,
+    };
+
+    std::shared_ptr<distributed::MeshBuffer> src, dst;
     if constexpr (src_is_in_l1) {
         TT_FATAL(
             (buffer_size % num_l1_banks) == 0,
@@ -423,8 +435,8 @@ bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
             buffer_size,
             num_l1_banks);
 
-        src = CreateBuffer(l1_config);
-        tt_metal::detail::WriteToBuffer(src, host_buffer);
+        src = distributed::MeshBuffer::create(buffer_config, l1_local_config, mesh_device.get());
+        distributed::EnqueueWriteMeshBuffer(cq, src, host_buffer, false);
 
     } else {
         TT_FATAL(
@@ -433,15 +445,15 @@ bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
             buffer_size,
             num_dram_banks);
 
-        src = CreateBuffer(dram_config);
-        tt_metal::detail::WriteToBuffer(src, host_buffer);
+        src = distributed::MeshBuffer::create(buffer_config, dram_local_config, mesh_device.get());
+        distributed::EnqueueWriteMeshBuffer(cq, src, host_buffer, false);
     }
 
     // Create destination buffer prior to kernels to build compile-time args
     if constexpr (dst_is_in_l1) {
-        dst = CreateBuffer(l1_config);
+        dst = distributed::MeshBuffer::create(buffer_config, l1_local_config, mesh_device.get());
     } else {
-        dst = CreateBuffer(dram_config);
+        dst = distributed::MeshBuffer::create(buffer_config, dram_local_config, mesh_device.get());
     }
 
     // Create kernels with TensorAccessorArgs compile-time arguments
@@ -473,9 +485,11 @@ bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
     std::vector<uint32_t> readback_buffer;
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst->address(), 0, num_pages});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
-    tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
+    distributed::ReadShard(cq, readback_buffer, dst, distributed::MeshCoordinate(0, 0));
 
     pass = (host_buffer == readback_buffer);
 
@@ -486,30 +500,37 @@ bool test_interleaved_l1_datacopy(tt_metal::IDevice* device) {
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, WriteInterleavedSticksAndReadBack) {
-    ASSERT_TRUE(test_write_interleaved_sticks_and_then_read_interleaved_sticks(devices_[0]->get_devices()[0]));
+TEST_F(UnitMeshCQSingleCardFixture, WriteInterleavedSticksAndReadBack) {
+    ASSERT_TRUE(test_write_interleaved_sticks_and_then_read_interleaved_sticks(
+        devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedStickReaderSingleBankTilizedWriter) {
-    ASSERT_TRUE(interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(devices_[0]->get_devices()[0]));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedStickReaderSingleBankTilizedWriter) {
+    ASSERT_TRUE(interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
+        devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedTilizedReaderInterleavedStickWriter) {
-    ASSERT_TRUE(interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(devices_[0]->get_devices()[0]));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedTilizedReaderInterleavedStickWriter) {
+    ASSERT_TRUE(interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
+        devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyL1ToL1) {
-    ASSERT_TRUE((test_interleaved_l1_datacopy<true, true>(devices_[0]->get_devices()[0])));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyL1ToL1) {
+    ASSERT_TRUE(
+        (test_interleaved_l1_datacopy<true, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyDramToL1) {
-    ASSERT_TRUE((test_interleaved_l1_datacopy<false, true>(devices_[0]->get_devices()[0])));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyDramToL1) {
+    ASSERT_TRUE(
+        (test_interleaved_l1_datacopy<false, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyL1ToDram) {
-    ASSERT_TRUE((test_interleaved_l1_datacopy<true, false>(devices_[0]->get_devices()[0])));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyL1ToDram) {
+    ASSERT_TRUE(
+        (test_interleaved_l1_datacopy<true, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(MeshDeviceSingleCardFixture, InterleavedL1DatacopyDramToDram) {
-    ASSERT_TRUE((test_interleaved_l1_datacopy<false, false>(devices_[0]->get_devices()[0])));
+TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyDramToDram) {
+    ASSERT_TRUE(
+        (test_interleaved_l1_datacopy<false, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }
