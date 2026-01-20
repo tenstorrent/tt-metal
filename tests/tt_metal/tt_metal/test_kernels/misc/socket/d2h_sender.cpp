@@ -48,7 +48,7 @@ void kernel_main() {
         DeviceZoneScopedN("Loop");
         // Wait for space in the receiver's FIFO
         {
-            DeviceZoneScopedN("Res");
+            // DeviceZoneScopedN("Res");
             socket_reserve_pages(sender_socket, 1);
         }
 
@@ -69,14 +69,14 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("Push");
-            // Update socket state
+            // DeviceZoneScopedN("Push");
+            //  Update socket state
             socket_push_pages(sender_socket, 1);
         }
 
         {
-            DeviceZoneScopedN("Note");
-            // Notify host via PCIe
+            // DeviceZoneScopedN("Note");
+            //  Notify host via PCIe
             pcie_socket_notify_receiver(sender_socket);
         }
     }
