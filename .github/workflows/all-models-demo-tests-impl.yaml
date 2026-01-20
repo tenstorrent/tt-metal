@@ -90,19 +90,19 @@ jobs:
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             WH-LOUDBOX)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-QB2)
               tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-LOUDBOX)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             WH-6U)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-6U)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
           esac
 
@@ -124,19 +124,19 @@ jobs:
               standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-LOUDBOX)
-              standalone_models=$(jq -nc "[$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-QB2)
-              standalone_models=$(jq -nc "[$llama33_70b_text_test,$flux1_dev_test,$wan2_2_test,$whisper_test,$mobilenet_v2_test,$segformer_test,$bert_large_test]")
+              standalone_models=$(jq -nc "[$llama33_70b_text_test,$flux1_dev_test,$wan2_2_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             BH-LOUDBOX)
               standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-6U)
-              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-6U)
-              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$bert_large_test,$sentence_bert_bh_test]")
+              standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
           esac
 
