@@ -146,7 +146,7 @@ void MAIN {
 
         uint32_t num_k_sequences = (Wt * 32) / K;  // Number of K-element sequences in chunk
 
-        // STEP 2: ITERATIVE BITONIC MERGE PHASES
+        // Iterative bitonic sort across the entire local width chunk
         // Perform log(Wt) iterations of divide-and-conquer merging:
         // - Iteration 0: Compare tiles (0,1), (2,3), (4,5), ... → pairs of 64 elements
         // - Iteration 1: Compare tiles (0,2), (4,6), (8,10), ... → groups of 128 elements
@@ -172,7 +172,7 @@ void MAIN {
                 largest);                   // Find largest (true) or smallest (false)
         }  // m_iter loop
 
-        // STEP 3: EXTRACT AND PREPARE LOCAL TopK RESULTS FOR TRANSMISSION
+        // Extract and prepare local TopK results for transmission
         // After bitonic merging, the top Kt tiles contain the locally optimal
         // TopK elements. Extract these and prepare for sending to the final core.
 
@@ -181,7 +181,7 @@ void MAIN {
         copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
 
-        // STEP 3a: Extract local TopK values (first Kt tiles contain best values)
+        // Extract local TopK values (first Kt tiles contain best values)
         cb_wait_front(input_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
@@ -195,7 +195,7 @@ void MAIN {
         cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_transposed_cb_index, Wt);
 
-        // STEP 3b: Extract local TopK indices (corresponding to the best values)
+        // Extract local TopK indices (corresponding to the best values)
         reconfig_data_format_srca(index_transposed_cb_index);
         copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);

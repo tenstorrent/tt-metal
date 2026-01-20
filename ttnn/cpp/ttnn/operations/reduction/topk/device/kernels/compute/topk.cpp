@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,15 +11,6 @@
 #include "compute_kernel_api/pack.h"
 
 namespace NAMESPACE {
-
-/**
- * TopK Compute Kernel Implementation
- *
- * This kernel implements the TopK operation using an insertion sort algorithm
- * with double buffering for efficient tile-based processing. The algorithm
- * maintains a sorted buffer of K elements and processes input tiles one at a time,
- * inserting new elements while preserving the sorted order.
- */
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -49,7 +40,7 @@ FORCE_INLINE void transpose_and_pack(
         pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, 1);
         release_dst();
-    }
+    }  // i loop
     cb_pop_front(input_cb_index, 2 * total_tiles);
 }
 
@@ -218,7 +209,6 @@ void MAIN {
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
         for (uint32_t count = 1; count < Wt; count++) {
-            // STEP 1: INPUT TILE ACQUISITION AND TRANSPOSE
             // Read input tiles (2 on first iteration, 1 on subsequent) and transpose to HW format
             // Wait for input tiles to become available
             cb_wait_front(input_val_cb_index, input_take);
@@ -258,7 +248,7 @@ void MAIN {
             cb_push_back(transposed_val_cb_index, input_take);
             cb_push_back(transposed_ind_cb_index, input_take);
 
-            // STEP 2: INSERTION SORT INTO RESULT PREPARATION BUFFER
+            // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
             for (uint32_t index = 0; index < output_tiles; index++) {
                 // Initialize variables for current insertion iteration
@@ -295,7 +285,7 @@ void MAIN {
                     // (Uses default values set above - simple linear processing)
                 }
 
-                // STEP 3: PREPARE DATA FOR MERGE OPERATION
+                // Prepare data for merge operation
                 // Wait for required tiles to be available
                 cb_wait_front(cb0, in_cb_offset);  // Wait for existing sorted data
                 cb_wait_front(cb1, in_cb_offset);
@@ -310,7 +300,7 @@ void MAIN {
 
                 acquire_dst();
 
-                // STEP 4: LOAD TILES INTO DESTINATION REGISTERS FOR MERGE
+                // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
                 copy_tile_to_dst_init_short_with_dt(cb1, cb0);
                 copy_tile(cb0, 0, 0);
@@ -327,13 +317,13 @@ void MAIN {
                 copy_tile_to_dst_init_short_with_dt(transposed_val_cb_index, transposed_ind_cb_index);
                 copy_tile(transposed_ind_cb_index, transposed_offset, 3);
 
-                // STEP 5: PERFORM MERGE SORT
+                // Perform merge and sort operation
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
                 ckernel::topk_local_sort(0, (int)!largest, end_phase);
 
-                // STEP 6: STORE SORTED RESULTS AND MANAGE BUFFERS
+                // Store sorted results back to buffers
                 // Reserve space for storing the best K elements
                 cb_reserve_back(result_prep_val_cb_index, incr);
                 cb_reserve_back(result_prep_ind_cb_index, incr);
@@ -361,7 +351,7 @@ void MAIN {
                 // Maintain transposed buffer structure
                 cb_push_back(transposed_val_cb_index, 1);
                 cb_push_back(transposed_ind_cb_index, 1);
-            }
+            }  // index loop
 
             // After first iteration, process only 1 tile at a time
             input_take = 1;
@@ -369,18 +359,18 @@ void MAIN {
             // Clean up intermediate transposed tile
             cb_wait_pop_front(transposed_val_cb_index, 1);
             cb_wait_pop_front(transposed_ind_cb_index, 1);
-        }
+        }  // count loop
 
-        // STEP 7: FINALIZE OUTPUT FOR CURRENT HEIGHT ROW
+        // Final output preparation
         // Prepare result buffers for final output
         cb_reserve_push_back(result_prep_val_cb_index, output_tiles);
         cb_reserve_push_back(result_prep_ind_cb_index, output_tiles);
 
-        // STEP 8: TRANSPOSE BACK TO OUTPUT FORMAT
+        // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
         transpose_and_pack(result_prep_val_cb_index, output_val_cb_index, output_tiles);
         transpose_and_pack(result_prep_ind_cb_index, output_ind_cb_index, output_tiles);
-    }
+    }  // core_loop loop
 }
 
 }  // namespace NAMESPACE

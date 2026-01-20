@@ -1,25 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 
-/**
- * TopK Multicore Writer Kernel - Local Core Data Transmission
- *
- * This kernel runs on each local processing core and is responsible for sending
- * locally computed TopK results to the final aggregation core. It implements
- * the sender side of the semaphore-based synchronization protocol.
- *
- * Responsibilities:
- * 1. Read local TopK results from compute kernel output buffers
- * 2. Coordinate with final core using semaphore-based flow control
- * 3. Transmit data via NoC to final core's aggregation buffers
- * 4. Handle proper sequencing of values and indices transmission
- *
- * Data Flow:
- * Local Compute → Local Buffers → NoC Transmission → Final Core Buffers
- */
 void kernel_main() {
     // Runtime args
     const uint32_t start_wt = get_arg_val<uint32_t>(0);
@@ -67,11 +51,11 @@ void kernel_main() {
 
     // MAIN TRANSMISSION LOOP: Send local TopK results to final core
     for (uint32_t j = 0; j < Ht; ++j) {  // For each height row
-        // STEP 1: WAIT FOR PERMISSION TO SEND
+        // Wait for permission to send
         // Block until the final core signals readiness to receive data
         noc_semaphore_wait(receiver_semaphore_addr, VALID);
 
-        // STEP 2: TRANSMIT LOCAL TopK VALUES
+        // Transfer local TopK results
         // Send Kt tiles of locally computed TopK values to final core
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(values_cb_index, onetile);  // Wait for compute kernel output
@@ -80,9 +64,9 @@ void kernel_main() {
             // Direct NoC write to final core's aggregation buffer
             noc_async_write(l1_read_addr_val, noc_final_addr_values + i * tile_bytes_values, tile_bytes_values);
             cb_pop_front(values_cb_index, onetile);
-        }
+        }  // i loop
 
-        // STEP 3: TRANSMIT LOCAL TopK INDICES
+        // Transfer local TopK indices
         // Send Kt tiles of corresponding TopK indices to final core
         for (uint32_t i = 0; i < Kt; ++i) {
             cb_wait_front(output_ind_cb_index, onetile);  // Wait for compute kernel output
@@ -91,9 +75,9 @@ void kernel_main() {
             // Direct NoC write to final core's aggregation buffer
             noc_async_write(l1_read_addr_ind, noc_final_addr_indices + i * tile_bytes_ind, tile_bytes_ind);
             cb_pop_front(output_ind_cb_index, onetile);
-        }
+        }  // i loop
 
-        // STEP 4: COMPLETE TRANSMISSION PROTOCOL
+        // Complete all pending NoC writes
         noc_async_write_barrier();  // Ensure all data is transmitted before signaling
 
         // Signal completion: increment sender semaphore by Kt (number of tiles sent)
@@ -102,7 +86,7 @@ void kernel_main() {
 
         // Reset receiver semaphore to prepare for next round
         noc_semaphore_set(receiver_semaphore_addr, INVALID);
-    }
+    }  // j loop
 
     // Ensure all atomic operations complete before kernel termination
     noc_async_atomic_barrier();

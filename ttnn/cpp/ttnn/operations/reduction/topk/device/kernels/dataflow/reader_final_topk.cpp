@@ -5,25 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-/**
- * TopK Multicore Reader Kernel - Final Core Data Aggregation
- *
- * This kernel runs exclusively on the final aggregation core and coordinates the
- * collection of local TopK results from all worker cores. It implements a
- * semaphore-based synchronization protocol to aggregate results efficiently.
- *
- * Responsibilities:
- * 1. Coordinate data reception from multiple local processing cores
- * 2. Manage semaphore-based flow control to prevent buffer overflow
- * 3. Aggregate received data for final compute kernel processing
- * 4. Handle multicast synchronization across all contributing cores
- *
- * Synchronization Protocol:
- * - Uses paired semaphores for bidirectional flow control
- * - Receiver semaphore: Signals readiness to receive data
- * - Sender semaphore: Tracks completion of data transmission
- * - Multicast operations coordinate with multiple sender cores simultaneously
- */
 void kernel_main() {
     // Compiletime args
     const uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));  // Ready-to-receive signal
@@ -50,32 +31,31 @@ void kernel_main() {
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
-        // STEP 1: PREPARE RECEPTION BUFFERS
         // Reserve space for incoming data from all local cores
         cb_reserve_back(final_values_cb_index, Wt_final);   // Space for all TopK values
         cb_reserve_back(final_indices_cb_index, Wt_final);  // Space for all TopK indices
 
-        // STEP 2: INITIALIZE SYNCHRONIZATION STATE
+        // Initialize semaphores for this height row
         // Reset synchronization state for this height row
         noc_semaphore_set(sender_semaphore_addr, INVALID);  // Mark data as not yet sent
         noc_semaphore_set(receiver_semaphore_addr, VALID);  // Signal readiness to receive
 
-        // STEP 3: COORDINATE MULTICAST RECEPTION
+        // Coordinate multicast reception
         // Enable all local cores to send their data simultaneously by broadcasting
         // the receiver semaphore state. This allows for efficient parallel transmission.
         noc_semaphore_set_multicast(receiver_semaphore, mcast_receiver_semaphore_noc_addr, num_dests);
         noc_async_write_barrier();
 
-        // STEP 4: WAIT FOR DATA COMPLETION
+        // Wait for all data to arrive
         // Block until all expected data (Wt_final tiles) has been received from
         // the local cores. The sender semaphore is incremented by each sending core.
         noc_semaphore_wait(sender_semaphore_addr, Wt_final);
 
-        // STEP 5: COMMIT RECEIVED DATA
+        // Commit received data
         // Mark the received data as available to the final compute kernel
         cb_push_back(final_values_cb_index, Wt_final);
         cb_push_back(final_indices_cb_index, Wt_final);
-    }
+    }  // i loop
 
     // Ensure all NoC operations complete before kernel termination
     noc_async_write_barrier();
