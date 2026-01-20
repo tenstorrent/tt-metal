@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from pathlib import Path
 
@@ -238,8 +239,6 @@ def generate_reference_io(
                     # Need to handle cases where dimensions are not perfect multiples of block_size
                     block_size = hf_config.quantization_config["weight_block_size"]
                     # Calculate scale shape - round up to ensure coverage
-                    import math
-
                     scale_shape = [math.ceil(tensor.shape[i] / block_size[i]) for i in range(len(tensor.shape))]
                     state_dict[name + "_scale_inv"] = torch.ones(scale_shape, dtype=torch.float32)
                 else:
@@ -263,8 +262,6 @@ def generate_reference_io(
                     # Need to handle cases where dimensions are not perfect multiples of block_size
                     block_size = hf_config.quantization_config["weight_block_size"]
                     # Calculate scale shape - round up to ensure coverage
-                    import math
-
                     scale_shape = [math.ceil(tensor.shape[i] / block_size[i]) for i in range(len(tensor.shape))]
                     prefixed_synthetic[full_name + "_scale_inv"] = torch.ones(scale_shape, dtype=torch.float32)
                 else:
