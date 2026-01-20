@@ -189,8 +189,7 @@ void bind_unary_operation(
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -227,8 +226,7 @@ void bind_unary_operation(
         math,
         range,
         supported_dtype,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -254,8 +252,7 @@ void bind_unary_operation_subcoregrids(
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -293,8 +290,7 @@ void bind_unary_operation_subcoregrids(
         math,
         range,
         supported_dtype,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -683,10 +679,8 @@ void bind_unary_operation_with_scalar_parameter(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 1, 2, 3, 4, 5, 6
 
             {6}
         )doc",
@@ -956,10 +950,8 @@ void bind_unary_operation_with_dim_parameter(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 4
 
             {6}
         )doc",
@@ -1386,9 +1378,7 @@ void bind_unary_composite(
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& supported_layout = "TILE",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1413,12 +1403,10 @@ void bind_unary_composite(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - {5}
-                 - {6}
 
-            {7}
+            {6}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1426,9 +1414,7 @@ void bind_unary_composite(
         range,
         supported_dtype,
         supported_layout,
-        supported_rank,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -2345,10 +2331,7 @@ void py_module(nb::module_& mod) {
         R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        "",
-        R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
+        R"doc(TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::lgamma,
@@ -2361,10 +2344,7 @@ void py_module(nb::module_& mod) {
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
         "[supported range 1.6 to inf].",
         R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        "",
-        R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
+        R"doc(TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::sinh,
@@ -2385,10 +2365,7 @@ void py_module(nb::module_& mod) {
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+        R"doc(ROW_MAJOR, TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::logical_not_,
@@ -2401,10 +2378,7 @@ void py_module(nb::module_& mod) {
         R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+        R"doc(ROW_MAJOR, TILE)doc");
 
     bind_unary_composite_optional_floats_with_default(
         mod,

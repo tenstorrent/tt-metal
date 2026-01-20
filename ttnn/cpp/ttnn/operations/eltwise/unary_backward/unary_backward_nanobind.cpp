@@ -829,10 +829,8 @@ void bind_unary_backward_shape(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
                  - TILE
-                 - 4
 
             {6}
         )doc",
@@ -1011,10 +1009,8 @@ void bind_unary_backward_prod_bw(nb::module_& mod, const unary_backward_operatio
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
                  - TILE
-                 - 4
 
             For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
         )doc",

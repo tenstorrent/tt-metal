@@ -130,10 +130,8 @@ void bind_binary_backward_concat(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",

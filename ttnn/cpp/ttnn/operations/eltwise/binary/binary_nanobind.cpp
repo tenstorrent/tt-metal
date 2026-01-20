@@ -248,11 +248,6 @@ void bind_binary_gcd_lcm_operation(
     const std::string& description,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -275,7 +270,7 @@ void bind_binary_gcd_lcm_operation(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {9}
+        {6}
 
         Note:
             Supported dtypes and layouts:
@@ -285,12 +280,10 @@ void bind_binary_gcd_lcm_operation(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - {5}
 
-            {8}
+            {5}
         )doc",
 
         operation.base_name(),
@@ -298,9 +291,6 @@ void bind_binary_gcd_lcm_operation(
         description,
         math,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -873,11 +863,6 @@ void bind_binary_composite(
     const std::string& description,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -896,7 +881,7 @@ void bind_binary_composite(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {9}
+        {6}
 
         Note:
             Supported dtypes and layouts:
@@ -906,12 +891,10 @@ void bind_binary_composite(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - TILE
-                 - {5}
 
-            {8}
+            {5}
         )doc",
 
         operation.base_name(),
@@ -919,9 +902,6 @@ void bind_binary_composite(
         description,
         math,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -1016,11 +996,6 @@ void bind_binary_composite_overload(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1039,7 +1014,7 @@ void bind_binary_composite_overload(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {8}
+        {5}
 
         Note:
             Supported dtypes and layouts:
@@ -1049,20 +1024,15 @@ void bind_binary_composite_overload(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - {4}
 
-            {7}
+            {4}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -1099,11 +1069,6 @@ void bind_prelu(
     const binary_operation_t& operation,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1122,7 +1087,7 @@ void bind_prelu(
         Returns:
             ttnn.Tensor: the output tensor.
 
-        {8}
+        {5}
 
         Note:
             Supported dtypes and layouts:
@@ -1132,20 +1097,15 @@ void bind_prelu(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - TILE
-                 - {4}
 
-            {7}
+            {4}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
         supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
         note,
         BINARY_BROADCAST_DOC);
 
@@ -2437,9 +2397,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device))doc",
         R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
     detail::bind_binary_operation(
@@ -2478,10 +2435,7 @@ void py_module(nb::module_& mod) {
         [supported range [-2147483647, 2147483648]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        R"doc(INT32)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(INT32)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         mod,
@@ -2490,10 +2444,7 @@ void py_module(nb::module_& mod) {
         [supported range [-32767, 32768]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        R"doc(INT32)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(INT32)doc");
 
     detail::bind_binary_with_float_param(
         mod,
@@ -2550,9 +2501,6 @@ void py_module(nb::module_& mod) {
         ttnn::prelu,
         R"doc(Perform an eltwise-prelu operation.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(2, 3, 4, 5)doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([1, 2], dtype=torch.bfloat16), device=device))doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
@@ -2560,10 +2508,7 @@ void py_module(nb::module_& mod) {
         ttnn::outer,
         R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(4)doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 1, 32, 1], dtype=torch.bfloat16), device=device))doc",
-        R"doc(ttnn.from_torch(torch.rand([1, 1, 1, 32], dtype=torch.bfloat16), device=device))doc");
+        R"doc(BFLOAT16)doc");
 
     detail::bind_polyval(
         mod,

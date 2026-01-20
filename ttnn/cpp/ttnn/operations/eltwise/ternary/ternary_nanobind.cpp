@@ -110,10 +110,8 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
                  - TILE
-                 - 1, 2, 3, 4, 5
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
