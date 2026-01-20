@@ -9,7 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "pad_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
 
 struct PadRmReaderWriterMultiCoreSharedVariables {
     int ncores_h{};
@@ -30,4 +30,4 @@ struct PadRmReaderWriterMultiCoreProgramFactory {
         const PadInputs& tensor_args,
         Tensor& output);
 };
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

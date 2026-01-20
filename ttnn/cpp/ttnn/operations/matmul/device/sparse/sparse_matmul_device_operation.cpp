@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -60,15 +61,15 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 }
 }  // namespace
 
-namespace ttnn::operations::sparse_matmul {
+namespace ttnn::prim {
 SparseMatmulDeviceOperation::program_factory_t SparseMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::SparseMatmulMultiCoreReuseMcast1DProgramFactory{};
+    return SparseMatmulMultiCoreReuseMcast1DProgramFactory{};
 }
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
     const auto& input_tensor_a = tensor_args.input_tensors.at(0);
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
@@ -161,9 +162,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         batch_length);
 }
 
-spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
+SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
     TT_FATAL(
         tensor_args.optional_output_tensors.size() <= 1,
         "None or One Optional output tensor can be passed when accessing it "
@@ -188,7 +189,7 @@ spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
     auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
     auto in1_tile = get_matmul_tile(input_tensor_b, /*transpose=*/false);
 
-    tt::tt_metal::Tile output_tile = matmul::utilities::get_output_tile(
+    tt::tt_metal::Tile output_tile = operations::matmul::utilities::get_output_tile(
         operation_attributes.output_mem_config,
         in0_tile,
         in1_tile,
@@ -203,9 +204,9 @@ spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config))};
 }
 
-tensor_return_value_t SparseMatmulDeviceOperation::create_output_tensors(
+SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensors;
+    SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
 
@@ -247,13 +248,13 @@ SparseMatmulDeviceOperation::invoke(
     bool is_input_b_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    const std::optional<const matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord>& user_core_coord,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    auto sparse_matmul_attributes = SparseMatmulDeviceOperation::operation_attributes_t{
+    auto sparse_matmul_attributes = SparseMatmulParams{
         nnz,
         is_input_a_sparse,
         is_input_b_sparse,
@@ -269,16 +270,16 @@ SparseMatmulDeviceOperation::invoke(
     auto parameters = create_sparse_matmul_attributes(
         input_tensor_a, input_tensor_b, sparsity, sparse_matmul_attributes, {optional_output_tensor});
 
-    return {parameters, tensor_args_t{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
+    return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
 }
 
-SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attributes(
+SparseMatmulParams create_sparse_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& /*sparsity*/,
-    const SparseMatmulDeviceOperation::operation_attributes_t& parameters,
+    const SparseMatmulParams& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_attributes = MatmulParams{
         parameters.program_config,
         /*bcast_batch=*/std::nullopt,
         parameters.output_mem_config,
@@ -294,9 +295,9 @@ SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attribu
         parameters.global_cb,
         parameters.sub_device_id};
 
-    auto matmul_struct = matmul::create_matmul_attributes(
-        input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
-    return {
+    auto matmul_struct =
+        create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,
         parameters.is_input_b_sparse,
@@ -309,4 +310,4 @@ SparseMatmulDeviceOperation::operation_attributes_t create_sparse_matmul_attribu
         matmul_struct.global_cb,
         matmul_struct.sub_device_id};
 }
-}  // namespace ttnn::operations::sparse_matmul
+}  // namespace ttnn::prim

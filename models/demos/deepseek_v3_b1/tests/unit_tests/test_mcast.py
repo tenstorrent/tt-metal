@@ -18,47 +18,61 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
 
 
 @pytest.mark.parametrize(
-    "width, mcast_core, mcast_grid, noc",
+    "width, mcast_core, mcast_receivers, mcast_grid, noc",
     [
         (
             7168,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9)),
+                }
+            ),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 7),
+                ttnn.CoreCoord(11, 9),
             ),
             ttnn.NOC.NOC_1,
-        ),  # q_a_proj input, 96 cores
-        (
-            7168,
-            ttnn.CoreCoord(0, 8),
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 8),
-                ttnn.CoreCoord(8, 9),
-            ),
-            ttnn.NOC.NOC_0,
-        ),  # kv_a_proj input, 18 cores
+        ),  # q_a_proj input + kv_a_proj input, 96 cores + 18 cores (120 cores total)
         (
             1536,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 7),
+                ttnn.CoreCoord(11, 9),
             ),
             ttnn.NOC.NOC_1,
-        ),  # q_b_proj input, 96 cores
+        ),  # q_b_proj input, 96 cores (120 cores total)
         (
             8192,
-            ttnn.CoreCoord(11, 8),
+            ttnn.CoreCoord(11, 9),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 9)),
+                }
+            ),
             ttnn.CoreRange(
-                ttnn.CoreCoord(5, 0),
-                ttnn.CoreCoord(11, 7),
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(11, 9),
             ),
             ttnn.NOC.NOC_1,
-        ),  # o_proj input (TP 2), 56 cores to be finalized
+        ),  # o_proj input (TP 2), 112 cores (120 cores total)
+        (
+            1536,
+            ttnn.CoreCoord(11, 9),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))}),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(11, 9),
+            ),
+            ttnn.NOC.NOC_1,
+        ),  # loopback test for testing, not used in model
     ],
 )
-def test_mcast(device, width, mcast_core, mcast_grid, noc):
+def test_mcast(device, width, mcast_core, mcast_receivers, mcast_grid, noc):
     """Test TTNN mcast operation from single core to multiple cores"""
     # Truncate number of columns to 11 for P100 for testing
     if mcast_core.x >= device.compute_with_storage_grid_size().x:
@@ -95,14 +109,14 @@ def test_mcast(device, width, mcast_core, mcast_grid, noc):
         tile=tile,
     )
 
-    num_output_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
+    num_output_cores = mcast_receivers.num_cores()
 
     output_shape = (shape[0] * num_output_cores, width)
 
     # Each output core gets the same shard size as input
     output_shard_shape = shape  # Same shard size as input
     output_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({mcast_grid}),
+        mcast_receivers,
         output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -125,7 +139,7 @@ def test_mcast(device, width, mcast_core, mcast_grid, noc):
 
     # Run mcast operation using generic implementation
     logger.info("Running mcast operation...")
-    ttnn_result = McastSingleCore.op(ttnn_input, ttnn_output, noc)
+    ttnn_result = McastSingleCore.op(ttnn_input, ttnn_output, mcast_grid, noc)
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_result)

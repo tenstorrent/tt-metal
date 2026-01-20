@@ -829,6 +829,8 @@ class MLA1D(AbstractModule):
 
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
 
         tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
 
@@ -1021,7 +1023,9 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
-        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
+        tt_kvpe_fp16 = tt_kvpe
+        tt_kvpe = ttnn.typecast(tt_kvpe_fp16, dtype=kvpe_cache.dtype)
+        ttnn.deallocate(tt_kvpe_fp16)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
@@ -1043,15 +1047,17 @@ class MLA1D(AbstractModule):
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
+        ttnn.deallocate(tt_kvpe)
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        ttnn.deallocate(attn_out)
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
 
         # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
-        # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
+        # Strategy: Process each chunk independently to keep all_gather buffers small
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
             num_heads_local = v_out.shape[2]
@@ -1065,24 +1071,27 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
-            # Reshape to [num_chunks, chunk_size, num_heads_local, v_head_dim] (4D with chunks as batch)
-            v_out = ttnn.reshape(v_out, (num_chunks, SEQ_LEN_CHUNK_SIZE, num_heads_local, v_head_dim))
+            output_chunks = []
+            num_heads = cfg["num_heads"]
+            hidden_dim = num_heads * v_head_dim
+            for chunk_idx in range(num_chunks):
+                start = chunk_idx * SEQ_LEN_CHUNK_SIZE
+                end = start + SEQ_LEN_CHUNK_SIZE
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
+                v_chunk = ttnn.experimental.all_gather_async(
+                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
+                out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
+                output_chunks.append(out_chunk)
+                ttnn.deallocate(v_chunk)
 
-            # Now all_gather can work on dim=2 (heads dimension) with 4D tensor
-            v_out = ttnn.experimental.all_gather_async(
-                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-            )  # [num_chunks, chunk_size, num_heads, v_head_dim]
+            ttnn.deallocate(v_out)
 
-            # Reshape for linear: [num_chunks, chunk_size, num_heads, v_head_dim] -> [num_chunks, 1, chunk_size, hidden_dim]
-            num_heads = v_out.shape[2]
-            v_head_dim = v_out.shape[3]
-            v_out = ttnn.reshape(v_out, (num_chunks, 1, SEQ_LEN_CHUNK_SIZE, num_heads * v_head_dim))
-
-            out = ttnn.linear(v_out, **cfg["wo"])  # [num_chunks, 1, chunk_size, dim]
-
-            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, padded_seq_len, dim]
+            out = ttnn.concat(output_chunks, dim=2)
             output_dim = out.shape[3]
-            out = ttnn.reshape(out, (1, 1, padded_seq_len, output_dim))
+            for chunk in output_chunks:
+                ttnn.deallocate(chunk)
 
             # Trim padding if we added any
             if seq_len != padded_seq_len:
@@ -1096,5 +1105,6 @@ class MLA1D(AbstractModule):
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
             out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            ttnn.deallocate(v_out)
 
         return out
