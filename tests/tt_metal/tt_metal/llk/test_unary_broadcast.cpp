@@ -340,6 +340,7 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
+// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
 TEST_F(MeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
     for (BroadcastDim bcast_dim : {BroadcastDim::NONE, BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
         for (tt::DataFormat in0_t_ : {tt::DataFormat::Bfp8_b, tt::DataFormat::Float16_b}) {
