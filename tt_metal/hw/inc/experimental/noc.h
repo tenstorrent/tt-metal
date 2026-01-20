@@ -115,25 +115,17 @@ public:
         uint32_t trid = INVALID_TXN_ID) const {
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             noc_async_read_set_trid(trid, noc_id_);
-            uint64_t src_noc_addr = get_src_ptr<AddressType::NOC>(src, src_args);
-            static_assert(
-                max_page_size <= NOC_MAX_BURST_SIZE,
-                "Read with transaction id is not supported for page sizes greater than NOC_MAX_BURST_SIZE");
-            noc_async_read_one_packet_set_state(src_noc_addr, size_bytes, read_req_vc, noc_id_);
-            noc_async_read_one_packet_with_state_with_trid(
-                static_cast<uint32_t>((src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK),
-                static_cast<uint32_t>(src_noc_addr),
-                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-                trid,
-                noc_id_);
-        } else {
-            noc_async_read<max_page_size, enable_noc_tracing>(
-                get_src_ptr<AddressType::NOC>(src, src_args),
-                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-                size_bytes,
-                noc_id_,
-                read_req_vc);
-        }
+        } 
+
+        while(noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
+
+        noc_async_read<max_page_size, enable_noc_tracing>(
+            get_src_ptr<AddressType::NOC>(src, src_args),
+            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+            size_bytes,
+            noc_id_,
+            read_req_vc
+        );
     }
 
     /**
