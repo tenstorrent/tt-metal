@@ -7,8 +7,11 @@ import torch
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_t3000 import get_max_chunks_per_sync
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from tracy import signpost
 
 
 @skip_for_blackhole("This test is for wormhole")
@@ -556,7 +559,6 @@ def test_all_gather_async_wan_galaxy_4x32(
     # assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
 
 
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, cluster_axis, ag_input_dtype, layout, mem_config_input, mem_config_ag",
     [
@@ -578,7 +580,7 @@ def test_all_gather_async_wan_galaxy_4x32(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 90112,
+                "trace_region_size": 150000,
             },
             ttnn.Topology.Ring,
         ),
@@ -586,6 +588,11 @@ def test_all_gather_async_wan_galaxy_4x32(
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
+@pytest.mark.parametrize("num_links", [1])  # [1, 2, 3, 4]
+@pytest.mark.parametrize("chunks_per_sync", [10, "MAX"])  # [10, 20, 40, 80, 160, 320, "MAX"]
+@pytest.mark.parametrize("num_workers_per_link", [1])  # [1, 2, 4, 8]
+@pytest.mark.parametrize("num_buffers_per_channel", [2])  # [2, 4, 8]
+@pytest.mark.parametrize("num_iters, warmup_iters", [(75, 10)])
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_all_gather_wan(
     mesh_device,
@@ -597,13 +604,19 @@ def test_all_gather_wan(
     mem_config_input,
     mem_config_ag,
     num_links,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     all_gather_topology,
+    num_iters,
+    warmup_iters,
 ):
     from loguru import logger
 
     # Create input tensor
     mesh_shape = tuple(mesh_device.shape)
     input_shape = ag_output_shape
+    num_devices = mesh_shape[cluster_axis]
 
     torch.manual_seed(2005)
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -618,8 +631,14 @@ def test_all_gather_wan(
         device=mesh_device,
     )
 
-    # Run AG
-    logger.info(f"Starting all-gather")
+    # AllGather config
+    if chunks_per_sync == "MAX":
+        chunks_per_sync_val = get_max_chunks_per_sync(num_devices, ag_output_shape, num_links)
+    else:
+        chunks_per_sync_val = chunks_per_sync
+
+    # Compile Run
+    logger.info("Compiling model")
     tt_output = ttnn.all_gather(
         tt_input,
         dim=dim,
@@ -627,12 +646,68 @@ def test_all_gather_wan(
         topology=all_gather_topology,
         num_links=num_links,
         memory_config=mem_config_ag,
+        chunks_per_sync=chunks_per_sync_val,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
-    logger.info(f"All-gather completed")
+    ttnn.synchronize_device(mesh_device)
 
     # Check output
-    pas = True
-    for tt_out in ttnn.get_device_tensors(tt_output):
+    errors = []
+    for dev, tt_out in enumerate(ttnn.get_device_tensors(tt_output)):
         eq, mess = comp_pcc(torch_input, ttnn.to_torch(tt_out))
-        pas = pas and eq
-        assert eq, mess
+        if not eq:
+            errors.append(f"Device {dev}: {mess}")
+    assert not errors, f"PCC check failed on {len(errors)} device(s):\n" + "\n".join(errors)
+
+    ################## TRACE RUN #######################
+
+    # Capture trace
+    logger.info("Capturing trace")
+
+    def capture_trace(n_iters):
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(n_iters):
+            tt_output = ttnn.all_gather(
+                tt_input,
+                dim=dim,
+                cluster_axis=cluster_axis,
+                topology=all_gather_topology,
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                chunks_per_sync=chunks_per_sync_val,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        return trace_id
+
+    if warmup_iters > 0:
+        trace_id_warmup = capture_trace(warmup_iters)
+    trace_id = capture_trace(num_iters)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    profiler = BenchmarkProfiler()
+    profiler.start("all-gather-async-trace-warmup")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
+    profiler.end("all-gather-async-trace-warmup")
+
+    profiler.start("all-gather-async-trace")
+    signpost("start")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    profiler.end("all-gather-async-trace")
+    time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
+        "all-gather-async-trace-warmup"
+    )
+    effective_iter = num_iters - warmup_iters
+    logger.info(f"Time taken e2e: {time_taken} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
