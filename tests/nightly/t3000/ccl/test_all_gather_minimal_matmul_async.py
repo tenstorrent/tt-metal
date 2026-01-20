@@ -139,9 +139,13 @@ def run_test_linear_impl(
         mesh_composer=ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=(0, 1)),
     )
     check_result = []
-    for i in range(num_devices):
-        tt_device_output = tt_output[:, i * torch_output.shape[1] : (i + 1) * torch_output.shape[1]]
-        check_result.append(assert_quality(torch_output, tt_device_output))
+    for i in range(device.shape[0]):
+        for j in range(device.shape[1]):
+            tt_device_output = tt_output[
+                i * torch_output.shape[0] : (i + 1) * torch_output.shape[0],
+                j * torch_output.shape[1] : (j + 1) * torch_output.shape[1],
+            ]
+            check_result.append(assert_quality(torch_output, tt_device_output))
 
     return check_result
 
