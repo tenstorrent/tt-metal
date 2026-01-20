@@ -45,6 +45,7 @@ parameters = {
         "input_specs": [
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            [1, 256, 2, 32, 2, 32, 1, 1, 0, 0, 1, 1, False],  # regression in CB large kernel initialization edge case
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 16, 25, 23, 2, 2, 2, 2, 0, 0, 1, 1, False],  # C=16
             [1, 480, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, True],
