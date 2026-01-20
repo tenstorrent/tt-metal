@@ -739,6 +739,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=False,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 
@@ -765,6 +766,7 @@ class TestFromTorchAndDump:
                     memory_config=mock_memory_config,
                     mesh_mapper=None,
                     is_replicated=True,
+                    pad_value=0.0,
                     cache_file_name=cache_file,
                 )
 
@@ -791,6 +793,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=True,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 
@@ -813,6 +816,7 @@ class TestFromTorchAndDump:
                 memory_config=mock_memory_config,
                 mesh_mapper=mock_mapper,
                 is_replicated=False,
+                pad_value=0.0,
                 cache_file_name=None,
             )
 
