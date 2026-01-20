@@ -674,9 +674,9 @@ jobs:
             git diff > /tmp/copilot_fix.patch
           - Write a SHORT PR title (max 60 chars) to /tmp/copilot_fix_description.txt
             Examples:
-            - Single file:  "fix core.uninitialized.Assign in utils.cpp"
-            - Multi-file:   "fix core.uninitialized.Assign in 3 files"
-            - Mixed issues: "fix uninitialized fields in program_factory files"
+            - Single file:  fix core.uninitialized.Assign in utils.cpp
+            - Multi-file:   fix core.uninitialized.Assign in 3 files
+            - Mixed issues: fix uninitialized fields in program_factory files
             Keep it concise - this becomes the PR title!
 
           Do NOT create branches, commits, or PRs - we will handle that after you generate the patch.
