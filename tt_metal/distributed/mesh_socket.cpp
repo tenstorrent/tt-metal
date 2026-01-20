@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <iostream>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -612,10 +613,21 @@ void D2HSocket::wait_for_pages(uint32_t num_pages) {
     }
 
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
+    uint32_t poll_count = 0;
+    uint32_t last_bytes_sent_value = 0;
     while (bytes_recv < num_bytes) {
         volatile uint32_t bytes_sent_value = bytes_sent_buffer_->at(0);
         bytes_recv = bytes_sent_value - bytes_acked_;
         bytes_sent_ = bytes_sent_value;
+        poll_count++;
+        // Print when bytes_sent_value changes or periodically
+        if (bytes_sent_value != last_bytes_sent_value) {
+            std::cout << "[D2HSocket::wait_for_pages] bytes_sent_value changed: " << last_bytes_sent_value << " -> "
+                      << bytes_sent_value << ", bytes_acked_=" << bytes_acked_ << ", bytes_recv=" << bytes_recv
+                      << ", need=" << num_bytes << ", poll_count=" << poll_count << std::endl;
+            last_bytes_sent_value = bytes_sent_value;
+            poll_count = 0;
+        }
     }
 }
 

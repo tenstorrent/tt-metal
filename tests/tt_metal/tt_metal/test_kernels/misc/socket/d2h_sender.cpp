@@ -45,10 +45,10 @@ void kernel_main() {
 
     // Send data one page at a time
     while (outstanding_data_size) {
-        DeviceZoneScopedN("Loop");
-        // Wait for space in the receiver's FIFO
+        // DeviceZoneScopedN("Loop");
+        //  Wait for space in the receiver's FIFO
         {
-            // DeviceZoneScopedN("Res");
+            DeviceZoneScopedN("Res");
             socket_reserve_pages(sender_socket, 1);
         }
 
