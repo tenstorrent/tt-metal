@@ -435,11 +435,28 @@ jobs:
 
           echo "Prompt saved to /tmp/copilot_prompt.txt"
 
+      - name: Authenticate GitHub CLI with OAuth token
+        if: steps.prepare-prompt.outputs.has-issues == 'true'
+        env:
+          # OAuth token from `gh auth token` after interactive login
+          # Required for agent-task command (PATs don't work)
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
+            echo "::error::COPILOT_OAUTH_TOKEN secret is not set."
+            echo "To set it up:"
+            echo "  1. Run 'gh auth login' locally"
+            echo "  2. Run 'gh auth token' to get your OAuth token"
+            echo "  3. Add it as a repository secret named COPILOT_OAUTH_TOKEN"
+            exit 1
+          fi
+
+          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
+          echo "Authenticated as: $(gh api user --jq .login)"
+
       - name: Run Copilot to fix issues and create PR
         if: steps.prepare-prompt.outputs.has-issues == 'true'
         id: copilot-fix
-        env:
-          GH_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -508,12 +525,33 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Please review the changes carefully before merging." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ Copilot task was submitted but no PR was created yet." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Copilot task did not create a PR." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "This could mean:" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Copilot is still processing the request" >> "$GITHUB_STEP_SUMMARY"
-            echo "- All issues were determined to be false positives" >> "$GITHUB_STEP_SUMMARY"
-            echo "- The issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Possible causes:**" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`COPILOT_OAUTH_TOKEN\` secret not configured (see setup below)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Copilot determined all issues were false positives" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Copilot is still processing (check dashboard)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "<details>" >> "$GITHUB_STEP_SUMMARY"
+            echo "<summary>🔧 Setup: COPILOT_OAUTH_TOKEN secret</summary>" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The \`gh agent-task\` command requires OAuth authentication (PATs don't work)." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**One-time setup by a team member with Copilot access:**" >> "$GITHUB_STEP_SUMMARY"
+            echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+            echo '# 1. Login interactively' >> "$GITHUB_STEP_SUMMARY"
+            echo 'gh auth login' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '# 2. Extract your OAuth token' >> "$GITHUB_STEP_SUMMARY"
+            echo 'gh auth token' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '# 3. Add as repository secret: COPILOT_OAUTH_TOKEN' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The token owner must have GitHub Copilot access." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Check the [Copilot dashboard](https://github.com/${{ github.repository }}/copilot) for status." >> "$GITHUB_STEP_SUMMARY"
           fi
