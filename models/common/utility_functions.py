@@ -518,9 +518,16 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
-def comp_pcc(golden, calculated, pcc=0.99):
+def comp_pcc(golden, calculated, pcc=0.99, save_mismatches_csv=None, input_tensor=None):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
+
+    # Store original tensors for mismatch reporting
+    golden_orig = golden.clone()
+    calculated_orig = calculated.clone()
+    input_orig = None
+    if input_tensor is not None:
+        input_orig = torch.Tensor(input_tensor).clone()
 
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -570,6 +577,10 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if isinstance(cal_pcc, np.ma.core.MaskedConstant):
         return True, 1.0
 
+    # Save mismatches to CSV if PCC is below threshold
+    if cal_pcc < pcc:
+        _save_pcc_mismatches(golden_orig, calculated_orig, cal_pcc, save_mismatches_csv, input_orig)
+
     return cal_pcc >= pcc, cal_pcc
 
 
@@ -606,6 +617,46 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
         ulp_value = ttnn.from_torch(ulp_value)
 
     return ulp_value
+
+
+def comp_ulp_check(golden, calculated, allow_nonfinite=False):
+    """
+    Compute maximum ULP error between two tensors in Units of Least Precision (ULP)
+
+    Args:
+        golden: Golden reference tensor
+        calculated: Calculated tensor from device
+        allow_nonfinite: Whether to allow non-finite values
+
+    Returns:
+        float: Maximum ULP error between the tensors
+    """
+    # If both tensors are empty, return 0
+    if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
+        return 0.0
+
+    # nonfinite elements can interfere with ULP error calculation
+    # To avoid this, replace nan, +inf, -inf with 0
+    mask_finite = ~torch.isfinite(golden)
+    golden = golden.clone()
+    calculated = calculated.clone()
+    golden[mask_finite] = 0
+    calculated[mask_finite] = 0
+
+    # ULP is measured according to the golden tensor
+    # In most cases, data type of golden tensor should be the same as calculated tensor.
+    # However, in some cases, we may want to measure < 1 ULP differences, which requires golden tensor
+    # to have higher precision than calculated tensor.
+    ulp_value = ulp(golden.type(calculated.dtype))
+
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+
+    ULP_Cond = torch.abs(calculated - golden) / ulp_value
+    max_ulp = torch.max(ULP_Cond).item()
+
+    return max_ulp
 
 
 def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):

@@ -1,0 +1,109 @@
+================================================================================
+                    BINARY POWER TEST EXPLANATION
+================================================================================
+
+TEST FILE: tests/ttnn/unit_tests/operations/eltwise/test_unary_pow.py
+FUNCTION: test_binary_pow_sweep(device)
+
+--------------------------------------------------------------------------------
+WHAT THE TEST DOES
+--------------------------------------------------------------------------------
+
+This test exhaustively validates the binary power operation (A^B) on the
+Tenstorrent device by testing across ALL possible bfloat16 (bf16) values.
+
+The test:
+1. Generates tensor A containing all possible bf16 bit patterns
+2. Iterates through each value in tensor A as the exponent B
+3. For each B value, computes A^B on device and compares against PyTorch golden
+4. Measures ULP (Units of Least Precision) error
+5. Logs any failures (ULP > 1) to a CSV file
+
+--------------------------------------------------------------------------------
+TENSOR A
+--------------------------------------------------------------------------------
+
+Tensor A contains: 65,536 values (2^16)
+
+This is because bfloat16 is a 16-bit floating point format:
+- 1 bit for sign
+- 8 bits for exponent
+- 7 bits for mantissa
+- Total: 16 bits = 2^16 = 65,536 unique bit patterns
+
+SPECIAL VALUES MASKED:
+The following special values are replaced with 1.0 to avoid undefined behavior:
+- NaN (Not a Number)
+- -0.0 (Negative zero)
+- +inf (Positive infinity)
+- -inf (Negative infinity)
+
+After masking, tensor A still has 65,536 elements, but special values are
+replaced with 1.0.
+
+--------------------------------------------------------------------------------
+TESTING
+--------------------------------------------------------------------------------
+
+ALL possible bf16 values are tested comprehensively:
+
+For TENSOR A (base values):
+- All 65,536 bf16 bit patterns are included
+- Special values (NaN, ±inf, -0.0) are masked to 1.0
+- Every element of A is tested in EVERY iteration
+
+For TENSOR B (exponent values):
+- The test iterates through ALL 65,536 values from tensor A
+- Each iteration uses ONE value from A as the exponent
+- That value is broadcast across all 65,536 elements of tensor B
+
+--------------------------------------------------------------------------------
+TOTAL TEST COVERAGE
+--------------------------------------------------------------------------------
+
+Number of iterations:           65,536 (one per B value)
+Operations per iteration:       65,536 (one A^B per element)
+Total power operations tested:  65,536 × 65,536 = 4,294,967,296 (~4.3 BILLION)
+
+This means the test covers:
+- Every possible bf16 base value (A)
+- Against every possible bf16 exponent value (B)
+- = Complete coverage of the bf16 × bf16 power operation space
+
+--------------------------------------------------------------------------------
+OUTPUT FILES
+--------------------------------------------------------------------------------
+
+1. CSV FILE: binary_pow_results.csv
+   - Only contains entries where ULP > 1 (failures)
+   - Columns: Input_B, Max_ULP, Failing_Values
+   - Failing_Values includes: file path to mismatch details + failing range
+
+2. MISMATCH FOLDER: binary_pow_ulp_mismatches/
+   - Contains detailed mismatch files for each failing B value
+   - Filename format: ulp_mismatches_b_{value}.txt
+   - Each file lists: Input A value, Calculated result, Golden result, ULP error
+
+--------------------------------------------------------------------------------
+EXAMPLE ITERATION
+--------------------------------------------------------------------------------
+
+Iteration i=1000:
+- B value = tensor_a[1000] (e.g., 3.5)
+- Tensor B = [3.5, 3.5, 3.5, ..., 3.5] (65,536 elements, all 3.5)
+- Tensor A = [val_0, val_1, val_2, ..., val_65535] (all bf16 values)
+- Compute: A^B = [val_0^3.5, val_1^3.5, val_2^3.5, ..., val_65535^3.5]
+- Compare against PyTorch golden result
+- If max ULP > 1: log to CSV and save mismatch details
+
+--------------------------------------------------------------------------------
+HOW TO RUN
+--------------------------------------------------------------------------------
+
+As pytest:
+    pytest test_unary_pow.py::test_binary_pow_sweep -v
+
+As standalone script:
+    python test_unary_pow.py
+
+================================================================================
