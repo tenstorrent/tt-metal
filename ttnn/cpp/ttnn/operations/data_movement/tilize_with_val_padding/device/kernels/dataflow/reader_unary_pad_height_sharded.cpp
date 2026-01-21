@@ -62,7 +62,7 @@ void kernel_main() {
                     // Read actual data row
                     uint64_t src_row_addr = get_noc_addr(global_row, s0);
                     noc_async_read(src_row_addr, l1_write_addr, row_bytes);
-                    noc_async_read_barrier();  // Barrier per row to ensure data arrives before padding
+                    noc_async_read_barrier();  // Barrier per row to make sure data arrives before padding
                     l1_write_addr += row_bytes;
 
                     // Add width padding

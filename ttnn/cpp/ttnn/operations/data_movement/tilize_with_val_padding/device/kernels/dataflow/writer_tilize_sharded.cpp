@@ -29,12 +29,9 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
-    constexpr uint32_t tile_height = 32;
-    constexpr uint32_t tile_width = 32;
-    constexpr uint32_t tile_hw = tile_height * tile_width;
-    constexpr uint32_t element_size = 2;  // Assuming bf16, adjust if needed
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, tile_hw * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr, tile_bytes);
 #endif
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);

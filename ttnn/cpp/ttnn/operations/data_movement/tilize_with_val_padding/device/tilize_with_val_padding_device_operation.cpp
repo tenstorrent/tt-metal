@@ -24,10 +24,12 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         auto memory_layout = input_tensor.memory_config().memory_layout();
         if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED && operation_attributes.use_multicore) {
             return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreShardedFactory{};
-        } else {
-            // HEIGHT_SHARDED, BLOCK_SHARDED, or WIDTH_SHARDED with use_multicore=false
+        } else if (
+            memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // HEIGHT/BLOCK sharded using ShardedAddrGen addressing method
             return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreShardedFactory{};
         }
+        // WIDTH_SHARDED with single-core falls through to existing paths below
     }
     if (!operation_attributes.enough_space_height) {
         return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -127,18 +129,18 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_mem_config.buffer_type() == BufferType::L1,
             "Sharded output must use L1 buffer");
 
-        if (operation_attributes.use_multicore && layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            // Existing multicore width-sharded path: strict checks
+        if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            // WIDTH_SHARDED: uses existing paths (multicore or single-core)
+            // only height can be padded
             for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
                 if (i != input_shape.rank() - 2) {
                     TT_FATAL(
                         input_shape[i] == operation_attributes.output_padded_shape[i],
-                        "For WIDTH_SHARDED multicore, only height can be padded");
+                        "For WIDTH_SHARDED, only height can be padded");
                 }
             }
         }
-        // Single-core sharded path: allow HEIGHT/BLOCK_SHARDED with more flexible padding
-        // Shard shape consistency will be validated by the factory/kernels
+        // HEIGHT/BLOCK_SHARDED: uses single-core sharded factory with ShardedAddrGen
     }
 }
 

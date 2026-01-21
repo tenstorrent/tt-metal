@@ -52,15 +52,10 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
 
     // Pick first core from output shard grid for single-core execution
     auto shard_grid = output.shard_spec().value().grid;
-    // CoreCoord core = shard_grid.bounding_box().start_coord;
     CoreCoord core = corerange_to_cores(shard_grid).at(0);
     CoreRange core_range(core, core);
 
-    // Create circular buffers bound to sharded buffers
-    // uint32_t input_row_bytes = input_width * input.element_size();
-
-    // Use regular L1 CBs (not bound to sharded buffers)
-    // Single-core execution cannot use CB-bound sharded buffers across multiple cores
+    // Create CBs.
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -115,11 +110,6 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
         core_range,
         WriterDataMovementConfig(writer_ct_args, writer_defines));
 
-    // Create compute kernel (tilize)
-    // Compute args must match tilize.cpp expectations:
-    // Arg 0: per_core_block_cnt = number of blocks (outer loop iterations)
-    // Arg 1: per_core_block_tile_cnt = tiles per block
-    // We process tiles_per_row at a time, so num_tiles_per_block = tiles_per_row
     uint32_t num_tiles_per_block = tiles_per_row;
     uint32_t num_blocks = total_tiles / num_tiles_per_block;
 
@@ -187,9 +177,6 @@ void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
     auto* dst_buffer = output.buffer();
 
     // Reuse core used in create()
-    // auto shard_grid = output.shard_spec().value().grid;
-    // CoreCoord core = corerange_to_cores(shard_grid).at(0);
-    // CoreCoord core = shard_grid.bounding_box().start_coord;
     const CoreCoord core = shared_variables.core.start_coord;  // Extract CoreCoord from CoreRange
 
     // Override buffer addresses in runtime args (index 0 for both kernels)
