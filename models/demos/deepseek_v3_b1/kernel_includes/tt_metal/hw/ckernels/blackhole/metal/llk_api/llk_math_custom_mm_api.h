@@ -41,7 +41,7 @@ inline void llk_math_custom_mm_init(
 // Template parameter partial_acc:
 //   false (default): Full custom_mm - MVMULs + finalization
 //   true: Partial K accumulation - MVMULs only, no finalization (for intermediate K subblocks)
-template <int NUM_FIDELITY_PHASES, bool partial_acc = false, uint32_t num_faces = 4 /*not used*/>
+template <int NUM_FIDELITY_PHASES, bool partial_acc = false>
 inline void llk_math_custom_mm(const uint dst_index, const bool transpose = false, const std::uint32_t kt_dim = 1) {
     _llk_math_custom_mm_<partial_acc>(dst_index, transpose, kt_dim);
 }

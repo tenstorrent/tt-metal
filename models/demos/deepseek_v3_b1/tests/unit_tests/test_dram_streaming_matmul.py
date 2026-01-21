@@ -63,7 +63,6 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
         tensor_2d = torch.nn.functional.pad(tensor_2d, (0, n_padded - N))
 
     K_tiles = K // tile_size
-    N_tiles_padded = n_padded // tile_size
     per_core_N_tiles = n_padded // num_banks // tile_size
 
     shuffled = torch.zeros_like(tensor_2d)

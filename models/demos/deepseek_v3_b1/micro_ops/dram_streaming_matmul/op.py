@@ -31,16 +31,6 @@ from loguru import logger
 import ttnn
 
 
-def get_batch_size(shape):
-    """Calculate batch size from tensor shape (all dims except last 2)."""
-    if len(shape) <= 2:
-        return 1
-    batch = 1
-    for i in range(len(shape) - 2):
-        batch *= shape[i]
-    return batch
-
-
 def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
     """
     Calculate optimal page size and number of pages for NOC transfers.
@@ -193,10 +183,8 @@ class DRAMStreamingMatmul:
 
         logger.debug(f"num_cores={num_cores}, Mt={Mt}, Kt={Kt}, per_core_N={per_core_N}")
 
-        # Tile sizes
-        in0_tile_size = in0_tile.get_tile_size(in0_dtype)
+        # Tile size for in1 (used for NOC transfers and CB sizing)
         in1_tile_size = in1_tile.get_tile_size(in1_dtype)
-        out_tile_size = out_tile.get_tile_size(out_dtype)
 
         # Calculate page size for NOC transfers (respects max NOC burst size)
         # Each block is subblock_k tiles (one K subblock)
@@ -212,7 +200,11 @@ class DRAMStreamingMatmul:
         # in1: 3 * num_subblocks_k buffers for DRAM read pipelining
         # Transaction IDs must stay within NOC_MAX_TRANSACTION_ID (0xF = 15)
         num_in1_buffers = 3 * num_subblocks_k
-        assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
+        assert num_in1_buffers <= 15, (
+            f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15). "
+            f"Consider reducing subblock_k to satisfy: 3 * (Kt / subblock_k) <= 15 "
+            f"(current: 3 * ({Kt} / {subblock_k}) = {num_in1_buffers})"
+        )
         in1_CB_tiles = subblock_k * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
@@ -224,10 +216,8 @@ class DRAMStreamingMatmul:
             [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in all_worker_cores]
         )
 
-        # Tile descriptors
-        in0_tile_desc = ttnn.TileDescriptor(in0_tile)
+        # Tile descriptor for in1 (used in CB1 format descriptor)
         in1_tile_desc = ttnn.TileDescriptor(in1_tile)
-        out_tile_desc = ttnn.TileDescriptor(out_tile)
 
         # ========== CIRCULAR BUFFERS ==========
 
@@ -252,16 +242,6 @@ class DRAMStreamingMatmul:
         # CB 4: output - BACKED BY OUTPUT TENSOR
         cb4_descriptor = ttnn.cb_descriptor_from_sharded_tensor(4, output_tensor)
         cb_descriptors.append(cb4_descriptor)
-
-        # ========== SEMAPHORES ==========
-        semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(
-                id=0,
-                core_type=ttnn.CoreType.WORKER,
-                core_ranges=compute_cores,
-                initial_value=0,
-            ),
-        ]
 
         # ========== KERNEL ARGS ==========
 
@@ -378,7 +358,7 @@ class DRAMStreamingMatmul:
         # Create program
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=[in0_reader_kernel, in1_reader_kernel, compute_kernel],
-            semaphores=semaphore_descriptors,
+            semaphores=[],
             cbs=cb_descriptors,
         )
 
