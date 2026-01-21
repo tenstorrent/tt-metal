@@ -262,7 +262,7 @@ class TtASPP(LightweightModule):
 
             # Special handling for branch 3: needs flattened format for bfloat8_b dilated convolutions
             # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
-            if (i == 2 or i == 3) and x_l1.dtype == ttnn.bfloat8_b:
+            if i == 3 and x_l1.dtype == ttnn.bfloat8_b:
                 branch_out = conv(x_l1)
                 branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
                 # Sliced conv needs manual ReLU

@@ -923,11 +923,11 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         """Setup ASPP configurations for 110-core devices."""
         # Dilated conv branches
         dilated_configs = [
-            ("aspp.convs.0", 64),  # 1x1 convolution
-            ("aspp.convs.1", 32),  # dilation=6, act_block_h=32
-            # ("aspp.convs.2", 32),  # dilation=12, act_block_h=32
-            ("aspp.convs.4", 32),  # pooling conv
-            ("aspp.project", 64),  # project conv
+            ("aspp.convs.0", 256),  # 1x1 convolution
+            ("aspp.convs.1", 128),  # dilation=6, act_block_h=32
+            ("aspp.convs.2", 64),  # dilation=12, act_block_h=32
+            ("aspp.convs.4", 512),  # pooling conv
+            ("aspp.project", 512),  # project conv
         ]
 
         for path, act_block_h in dilated_configs:
@@ -936,22 +936,13 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
                 slice_strategy=L1FullSliceStrategyConfiguration(),
                 sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
                 deallocate_activation=False,
-                # activation=None,
                 enable_weights_double_buffer=True,
             )
 
         self.config.register_layer_override(
-            "aspp.convs.2",  # dilation=12
-            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
-            deallocate_activation=False,
-            activation=None,
-            enable_weights_double_buffer=True,
-        )
-        self.config.register_layer_override(
             "aspp.convs.3",  # dilation=18
             slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=256),
             deallocate_activation=False,
             activation=None,
             enable_weights_double_buffer=True,
@@ -992,7 +983,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config._register_multiple_layers(
             projection_layers,
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
@@ -1003,7 +994,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
                 self.config.register_layer_override(
                     f"{head_prefix}.decoder.{stage}.project_conv",
                     slice_strategy=L1FullSliceStrategyConfiguration(),
-                    sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+                    sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
                     deallocate_activation=True,
                     enable_weights_double_buffer=True,
                 )
@@ -1041,7 +1032,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config._register_multiple_layers(
             head_layers,
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
@@ -1062,7 +1053,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "instance_head.center_head.0",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             deallocate_activation=False,
             enable_weights_double_buffer=True,
         )
@@ -1070,7 +1061,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "instance_head.center_head.1",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
@@ -1078,7 +1069,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "instance_head.center_predictor",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=True,
             enable_weights_double_buffer=True,
@@ -1093,7 +1084,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config._register_multiple_layers(
             head_layers,
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             deallocate_activation=True,
             enable_weights_double_buffer=True,
         )
@@ -1101,7 +1092,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "instance_head.offset_predictor",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=True,
             enable_weights_double_buffer=True,
