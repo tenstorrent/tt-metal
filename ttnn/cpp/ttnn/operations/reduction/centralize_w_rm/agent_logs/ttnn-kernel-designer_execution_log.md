@@ -159,4 +159,4 @@ compute_kernel_lib::sub<
 
 | Commit SHA | Message | Files |
 |------------|---------|-------|
-| (pending) | [ttnn-kernel-designer] design: centralize_w_rm | kernel_design.md |
+| b0116c3417 | [ttnn-kernel-designer] design: centralize_w_rm | kernel_design.md, execution log, breadcrumbs |
