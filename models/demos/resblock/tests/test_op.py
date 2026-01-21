@@ -56,10 +56,12 @@ def create_random_tensor(shape, random_tensor_gen):
 def test_resblock(
     device, B, K, core_grid, generation_type, tile_size, activation_dtype, weight_dtype, num_layers, use_custom_mm
 ):
-    if activation_dtype == ttnn.bfloat8_b and tile_size[0] != 32:
-        pytest.skip("bfloat8_b is only supported for tile height 32")
-    if (K >= 2048 and num_layers >= 8) or (K >= 1024 and num_layers >= 12):
-        pytest.skip("Test is too large for 8 layers")
+    if (
+        (K >= 2048 and num_layers >= 12)
+        or (K >= 2048 and num_layers >= 8 and weight_dtype == ttnn.bfloat16)
+        or (K >= 1024 and num_layers >= 12 and weight_dtype == ttnn.bfloat16)
+    ):
+        pytest.skip("Test uses too much L1 memory")
 
     torch.manual_seed(1234)
 
