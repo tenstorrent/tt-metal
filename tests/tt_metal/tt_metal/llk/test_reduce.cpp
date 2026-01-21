@@ -40,6 +40,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -86,16 +87,14 @@ float get_scaler(const ReduceConfig& test_config) {
     // but the scaler is 1
     if (test_config.reduce_type != ReduceType::AVG) {
         return 1.0f;
-    } else {
-        // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
-        switch (test_config.reduce_dim) {
-            case ReduceDim::H: return (1.0f / H);
-            case ReduceDim::W: return (1.0f / W);
-            case ReduceDim::HW: return (1.0f / (H * W));
-            default: {
-                TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
-                break;
-            }
+    }  // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
+    switch (test_config.reduce_dim) {
+        case ReduceDim::H: return (1.0f / H);
+        case ReduceDim::W: return (1.0f / W);
+        case ReduceDim::HW: return (1.0f / (H * W));
+        default: {
+            TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
+            break;
         }
     }
 }

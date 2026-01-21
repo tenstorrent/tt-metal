@@ -23,7 +23,7 @@ export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
 
 # Run text generation demo on Galaxy (4×8 mesh)
 cd tt-metal/models/demos/gpt_oss/demo
-pytest text_demo.py -k "4x8"
+pytest text_demo.py -k "4x8 and prefill_128"
 ```
 
 ## Configuration

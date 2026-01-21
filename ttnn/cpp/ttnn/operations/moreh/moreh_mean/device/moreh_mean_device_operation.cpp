@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_mean_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -38,7 +39,8 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
 
     if (operation_attributes.dim + 1 == rank) {
         return MorehMeanWFactory{};
-    } else if (operation_attributes.dim + 2 == rank) {
+    }
+    if (operation_attributes.dim + 2 == rank) {
         return MorehMeanHFactory{};
     }
     return MorehMeanNCFactory{};

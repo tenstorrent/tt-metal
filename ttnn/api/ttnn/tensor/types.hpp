@@ -17,7 +17,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
 #include "ttnn/tensor/shape/shape.hpp"
@@ -98,5 +97,6 @@ struct NdShardSpec {
 };
 
 using PadValue = std::variant<uint32_t, float>;
+std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal

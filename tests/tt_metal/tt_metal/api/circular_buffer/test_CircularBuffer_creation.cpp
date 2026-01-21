@@ -41,7 +41,7 @@ namespace basic_tests::circular_buffer {
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const CoreRangeSet& cr_set,
+    const CoreRangeSet& /*cr_set*/,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
 

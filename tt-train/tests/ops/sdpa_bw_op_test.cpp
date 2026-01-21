@@ -314,10 +314,11 @@ ttnn::Tensor groups_shared_matmul(
     const auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     const auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
-        throw std::invalid_argument(fmt::format(
-            "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
-            query_tensor.logical_shape(),
-            kv_tensor.logical_shape()));
+        throw std::invalid_argument(
+            fmt::format(
+                "query_tensor and kv_tensor must have the same batch size, got shapes {} and {} respectively",
+                query_tensor.logical_shape(),
+                kv_tensor.logical_shape()));
     }
     if (heads == groups) {
         // no broadcasting needed
@@ -461,14 +462,13 @@ std::vector<ttnn::Tensor> composite_sdpa(
         /*transpose_b=*/false);
     dL_dV = sum_over_groups(dL_dV, groups);  // no-op when groups == heads
 
-    return {
-        /* forward pass output*/ attention_qkv,
-        /* per row max value*/ max_value,
-        /* recip sum exp */ recip_sum_exp,
-        /* dL_dQ */ dL_dQ,
-        /* dL_dK */ dL_dK,
-        /* dL_dV */ dL_dV,
-        /*attention_weights*/ qk_scaled};
+    return {/* forward pass output*/ attention_qkv,
+            /* per row max value*/ max_value,
+            /* recip sum exp */ recip_sum_exp,
+            /* dL_dQ */ dL_dQ,
+            /* dL_dK */ dL_dK,
+            /* dL_dV */ dL_dV,
+            /*attention_weights*/ qk_scaled};
 }
 
 // ========== Test Configuration ==========

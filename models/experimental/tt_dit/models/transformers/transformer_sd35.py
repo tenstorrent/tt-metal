@@ -266,8 +266,9 @@ class SD35TransformerBlock(Module):
             spatial_gate_ff,
         ) = chunk_time(spatial_time_11BF, 6)
 
-        spatial_normed_1BND = self.norm1_norm(spatial_1BND)
-        spatial_normed_1BND = spatial_normed_1BND * (1 + spatial_scale_attn) + spatial_shift_attn
+        spatial_normed_1BND = self.norm1_norm(
+            spatial_1BND, dynamic_weight=(1 + spatial_scale_attn), dynamic_bias=spatial_shift_attn
+        )
 
         if self.context_pre_only:
             prompt_scale_attn, prompt_shift_attn = chunk_time(prompt_time_11BE, 2)
@@ -285,8 +286,9 @@ class SD35TransformerBlock(Module):
                 prompt_gate_ff,
             ) = chunk_time(prompt_time_11BE, 6)
 
-        prompt_normed_1BLD = self.norm1_context_norm(prompt_1BLD)
-        prompt_normed_1BLD = prompt_normed_1BLD * (1 + prompt_scale_attn) + prompt_shift_attn
+        prompt_normed_1BLD = self.norm1_context_norm(
+            prompt_1BLD, dynamic_weight=(1 + prompt_scale_attn), dynamic_bias=prompt_shift_attn
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial, prompt before attention
@@ -326,8 +328,9 @@ class SD35TransformerBlock(Module):
         # residual
         spatial_1BND = spatial_1BND + spatial_attn_1BLD
 
-        spatial_normed_1BND = self.norm2(spatial_1BND)
-        spatial_normed_1BND = spatial_normed_1BND * (1 + spatial_scale_ff) + spatial_shift_ff
+        spatial_normed_1BND = self.norm2(
+            spatial_1BND, dynamic_weight=(1 + spatial_scale_ff), dynamic_bias=spatial_shift_ff
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
@@ -355,8 +358,9 @@ class SD35TransformerBlock(Module):
 
         prompt_1BLD += prompt_attn_1BLD
 
-        prompt_normed_1BLD = self.norm2_context(prompt_1BLD)
-        prompt_normed_1BLD = prompt_normed_1BLD * (1 + prompt_scale_ff) + prompt_shift_ff
+        prompt_normed_1BLD = self.norm2_context(
+            prompt_1BLD, dynamic_weight=(1 + prompt_scale_ff), dynamic_bias=prompt_shift_ff
+        )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             prompt_normed_1BLD = ttnn.experimental.all_gather_async(

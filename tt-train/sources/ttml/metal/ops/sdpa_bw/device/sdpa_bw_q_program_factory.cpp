@@ -196,29 +196,14 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    [[maybe_unused]] auto cb_grad_output = create_circular_buffer(  // CBIndex::c_0
-        program,
-        all_cores,
-        kGradOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_grad_output = create_circular_buffer( // CBIndex::c_0
+        program, all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
-        program,
-        all_cores,
-        kAttnOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_attn_output = create_circular_buffer( // CBIndex::c_1
+        program, all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer(  // CBIndex::c_2
-        program,
-        all_cores,
-        kQueryCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);

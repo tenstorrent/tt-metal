@@ -24,13 +24,13 @@ class VisionBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args
-        self.hidden_size = args.dim
-        self.n_heads = args.n_heads
+        self.hidden_size = args.vision_dim
+        self.n_heads = args.vision_n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = args.max_seq_len
-        self.dim = args.dim
+        self.dim = args.vision_dim
         self.max_batch_size = args.max_batch_size
-        self.n_kv_heads = args.n_kv_heads
+        self.n_kv_heads = args.vision_n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
 
@@ -52,26 +52,32 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
+        # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
+        extra_rmsnorm_kwargs = {}
+        if args.base_model_name in ("Qwen2.5-VL-7B",):
+            extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
             device=mesh_device,
-            dim=args.dim,
+            dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
             weight_key="norm1",
+            **extra_rmsnorm_kwargs,
         )
         # args.dim = 1280
         self.ff_norm = RMSNorm(
             device=mesh_device,
-            dim=args.dim,
+            dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
             weight_key="norm2",
+            **extra_rmsnorm_kwargs,
         )
 
     def forward(

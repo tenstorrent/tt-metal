@@ -622,7 +622,6 @@ ALWI void cb_matmul_blocks(
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
-                cb_pop_front(mask_cb, out_subblock_num_tiles);
             }
             tile_regs_commit();
             tile_regs_wait();

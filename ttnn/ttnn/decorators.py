@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import glob
+import os
 import pathlib
 import shutil
 import sys
@@ -53,17 +55,9 @@ def compare_tensors_using_pcc(
         else:
             torch_output = output
         matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
-
-        output_tensor_id = output.tensor_id if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
-        golden_tensor_id = (
-            golden_output.tensor_id
-            if isinstance(golden_output, ttnn.Tensor)
-            else getattr(golden_output, "tensor_id", None)
-        )
-
         comparison_record = ttnn.database.TensorComparisonRecord(
-            tensor_id=output_tensor_id,
-            golden_tensor_id=golden_tensor_id,
+            tensor_id=output.tensor_id,
+            golden_tensor_id=golden_output.tensor_id,
             matches=matches,
             desired_pcc=desired_pcc,
             actual_pcc=actual_pcc,
@@ -208,13 +202,10 @@ def get_all_tensors(object_value):
 def set_tensor_id(tensor, force=False):
     import torch
 
-    if isinstance(tensor, ttnn.Tensor):
-        # ttnn.Tensor id is assigned in the constructor
-        pass
-    elif isinstance(tensor, torch.Tensor):
+    if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn._ttnn.next_tensor_id()
+        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -352,10 +343,9 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
             raise TypeError(f"Expected list or tuple, got {type(golden_outputs)}")
 
     for output, golden_output in zip(outputs, golden_outputs):
-        output_tensor_id = output.tensor_id if isinstance(output, ttnn.Tensor) else getattr(output, "tensor_id", None)
-        if output_tensor_id is None:
+        if output.tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
-        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output_tensor_id] = golden_output
+        TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
 
 
 @dataclasses.dataclass
@@ -683,6 +673,8 @@ class Operation:
                         cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
                         if not cluster_descriptor_path.exists():
                             save_cluster_descriptor(str(cluster_descriptor_path))
+                        if not glob.glob(str(ttnn.CONFIG.report_path) + "/physical_chip_mesh_coordinate_mapping*.yaml"):
+                            save_mesh_descriptor(ttnn.CONFIG.report_path)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
                         ttnn.database.insert_stack_trace(
                             ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
@@ -1050,6 +1042,14 @@ def register_python_operation(
     return operation_decorator
 
 
+def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, function):
+    function = register_python_operation(
+        name=python_fully_qualified_name,
+        is_experimental=True,
+    )(function)
+    return function
+
+
 def save_cluster_descriptor(dest_path):
     temp_path = ttnn._ttnn.cluster.serialize_cluster_descriptor()
 
@@ -1057,3 +1057,18 @@ def save_cluster_descriptor(dest_path):
         return None
 
     shutil.copy(temp_path, dest_path)
+
+
+def save_mesh_descriptor(dest_path):
+    if not "TT_METAL_HOME" in os.environ:
+        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
+        return
+
+    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
+
+    if not mesh_descriptor_paths:
+        logger.warning("Mesh descriptor not found")
+        return
+
+    for path in mesh_descriptor_paths:
+        shutil.copy(path, dest_path)
