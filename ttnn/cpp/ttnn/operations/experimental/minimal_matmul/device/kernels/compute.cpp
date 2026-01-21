@@ -128,6 +128,9 @@ void kernel_main() {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+#ifdef FUSE_TERNARY
+    const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
+#endif
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -135,6 +138,10 @@ void kernel_main() {
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
+#endif
+#ifdef FUSE_TERNARY
+    constexpr uint32_t in4_cb = tt::CBIndex::c_5;
+    constexpr uint32_t in5_cb = tt::CBIndex::c_6;
 #endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION

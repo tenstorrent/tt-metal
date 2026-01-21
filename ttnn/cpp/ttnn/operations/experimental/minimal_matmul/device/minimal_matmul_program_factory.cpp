@@ -90,7 +90,11 @@ void append_accessors(
     const Tensor& main_tensor,
     const std::vector<Tensor>& output_tensors,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<const Tensor>& ag_input_tensor = std::nullopt) {
+    const std::optional<const Tensor>& ag_input_tensor = std::nullopt
+    // TOOD: Add fused ternary op support in kernel
+    // const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
+    // const std::optional<const Tensor>& fused_ternary_input_c = std::nullopt
+) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -98,6 +102,12 @@ void append_accessors(
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
     }
+    // if (fused_ternary_input_a.has_value()) {
+    //     tt::tt_metal::TensorAccessorArgs(*fused_ternary_input_a.value().buffer()).append_to(args);
+    // }
+    // if (fused_ternary_input_c.has_value()) {
+    //     tt::tt_metal::TensorAccessorArgs(*fused_ternary_input_c.value().buffer()).append_to(args);
+    // }
     if (ag_input_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
     }
@@ -148,6 +158,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in2_data_format =
         use_bias ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor.value().dtype()) : in1_data_format;
     auto in2_tile_size = tt::tile_size(in2_data_format);
+
+    // bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_c.has_value();
+    // TOOD: Add fused ternary op support in kernel
+    // auto in4_data_format = use_fused_ternary
+    //                            ?
+    //                            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype())
+    //                            : output_data_format;  // doesn't matter if not used
+    // auto in5_data_format = use_fused_ternary
+    //                            ?
+    //                            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_c.value().dtype())
+    //                            : output_data_format;  // doesn't matter if not used
+    // auto in4_tile_size = tt::tile_size(in4_data_format);
+    // auto in5_tile_size = tt::tile_size(in5_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -472,8 +495,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
+        // in4_tile_size,
+        // in5_tile_size,
     };
-    append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
+    // append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor);
+    append_accessors(
+        in0_receiver_compile_time_args, input_tensor, output_tensors, bias_tensor, std::nullopt
+        // TOOD: Add fused ternary op support in kernel
+        // use_fused_ternary ? fused_ternary_input_a : std::nullopt,
+        // use_fused_ternary ? fused_ternary_input_c : std::nullopt);
+    );
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -504,8 +535,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         true,               // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        // TOOD: Add fused ternary op support in kernel
+        // in4_tile_size,
+        // in5_tile_size,
     };
-    append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensors, bias_tensor);
+    append_accessors(
+        in1_sender_compile_time_args, weight_tensor, output_tensors, bias_tensor, std::nullopt
+        // use_fused_ternary ? fused_ternary_input_a : std::nullopt,
+        // use_fused_ternary ? fused_ternary_input_c : std::nullopt);
+    );
+
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -535,8 +574,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         false,              // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        false,              // is_injector_core
+        // TOOD: Add fused ternary op support in kernel
+        // in4_tile_size,
+        // in5_tile_size,
     };
-    append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensors, bias_tensor);
+    append_accessors(
+        in1_receiver_compile_time_args, weight_tensor, output_tensors, bias_tensor, std::nullopt
+        // TOOD: Add fused ternary op support in kernel
+        // use_fused_ternary ? fused_ternary_input_a : std::nullopt,
+        // use_fused_ternary ? fused_ternary_input_c : std::nullopt);
+    );
+
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
