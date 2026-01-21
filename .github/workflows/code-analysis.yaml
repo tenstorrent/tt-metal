@@ -439,7 +439,7 @@ jobs:
           if [ -n "$PR_NUMBER" ]; then
             echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
             echo "pr-created=true" >> "$GITHUB_OUTPUT"
-            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "/codeowners" || true
+            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "/codeowners ping" || true
           else
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
           fi
