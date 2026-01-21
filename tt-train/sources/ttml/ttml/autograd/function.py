@@ -71,7 +71,7 @@ def _wrap_output(output: Any) -> Any:
     if output is None:
         return None
     if _is_ttnn_tensor(output):
-        return cpp.autograd.create_tensor(output, True)
+        return cpp.autograd.create_tensor(output, requires_grad=True)
     return output
 
 
@@ -216,10 +216,8 @@ class Function:
         # Normalize outputs to a tuple for consistent handling
         if not isinstance(outputs, tuple):
             outputs_tuple = (outputs,)
-            single_output = True
         else:
             outputs_tuple = outputs
-            single_output = False
 
         # Check if outputs already have nodes from autograd ops
         # If so, the graph is already built and we don't need custom backward
@@ -229,81 +227,88 @@ class Function:
             if hasattr(out, "get_node")
         )
         if outputs_have_nodes:
-            return outputs if not single_output else outputs
+            return outputs
 
         # Collect input tensors (objects with get_requires_grad method)
         input_tensors = [inp for inp in inputs if hasattr(inp, "get_requires_grad")]
 
-        # Check if any input requires gradients
-        any_requires_grad = any(t.get_requires_grad() for t in input_tensors)
+        # Extract links from input tensors (for graph dependencies)
+        links = get_links(input_tensors)
 
-        # Only set up backward if we have inputs that require gradients
-        if any_requires_grad:
-            # Extract links from input tensors (for graph dependencies)
-            links = get_links(input_tensors)
-
-            # Create closure factory to properly capture variables
-            def make_backward_closure(bwd_ctx, bwd_outputs, bwd_inputs, bwd_cls):
-                def backward_closure():
-                    try:
-                        # Get gradients from output tensors
-                        grad_outputs = []
-                        for out in bwd_outputs:
-                            if out is not None and out.is_grad_initialized():
-                                grad_outputs.append(out.get_grad())
-                            else:
-                                raise RuntimeError(
-                                    f"Output tensor gradient not initialized in "
-                                    f"{bwd_cls.__name__}.backward(). "
-                                    f"Gradients are initialized lazily via add_grad()."
-                                )
-                        grad_outputs = tuple(grad_outputs)
-
-                        # Call user's backward - returns gradients (PyTorch style)
-                        if len(grad_outputs) == 1:
-                            grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+        # Create closure factory to properly capture variables
+        def make_backward_closure(bwd_ctx, bwd_outputs, bwd_inputs, bwd_cls):
+            def backward_closure():
+                try:
+                    # Get gradients from output tensors
+                    # If an output wasn't used in the loss, initialize with zeros
+                    # (consistent with C++ behavior where get_grad() returns default tensor)
+                    grad_outputs = []
+                    for out in bwd_outputs:
+                        if out is not None and out.is_grad_initialized():
+                            grad_outputs.append(out.get_grad())
+                        elif out is not None:
+                            # Create zero tensor with same shape as output
+                            grad_outputs.append(cpp.core.zeros_like(out.get_value()))
                         else:
-                            grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
+                            grad_outputs.append(None)
+                    grad_outputs = tuple(grad_outputs)
 
-                        # Normalize to tuple
-                        if grad_inputs is None:
-                            grad_inputs = (None,) * len(bwd_inputs)
-                        elif not isinstance(grad_inputs, tuple):
-                            grad_inputs = (grad_inputs,)
+                    # Call user's backward - returns gradients (PyTorch style)
+                    if len(grad_outputs) == 1:
+                        grad_inputs = bwd_cls.backward(bwd_ctx, grad_outputs[0])
+                    else:
+                        grad_inputs = bwd_cls.backward(bwd_ctx, *grad_outputs)
 
-                        # Validate: number of returned gradients must match number of tensor inputs
-                        if len(grad_inputs) != len(bwd_inputs):
-                            raise RuntimeError(
-                                f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
-                                f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
-                                f"Return None for inputs that don't need gradients."
-                            )
+                    # Normalize to tuple
+                    if grad_inputs is None:
+                        grad_inputs = (None,) * len(bwd_inputs)
+                    elif not isinstance(grad_inputs, tuple):
+                        grad_inputs = (grad_inputs,)
 
-                        # Accumulate gradients to input tensors
-                        for tensor, grad in zip(bwd_inputs, grad_inputs):
-                            if grad is not None and tensor.get_requires_grad():
-                                # Handle both ttml Tensor and raw ttnn tensor
-                                if hasattr(grad, "get_value"):
-                                    tensor.add_grad(grad.get_value())
-                                else:
-                                    tensor.add_grad(grad)
-                    except Exception as e:
+                    # Validate: number of returned gradients must match number of tensor inputs
+                    if len(grad_inputs) != len(bwd_inputs):
                         raise RuntimeError(
-                            f"Error in backward of {bwd_cls.__name__}: {e}"
-                        ) from e
+                            f"{bwd_cls.__name__}.backward() returned {len(grad_inputs)} "
+                            f"gradients but expected {len(bwd_inputs)} (one per tensor input). "
+                            f"Return None for inputs that don't need gradients."
+                        )
 
-                return backward_closure
+                    # Accumulate gradients to input tensors
+                    for tensor, grad in zip(bwd_inputs, grad_inputs):
+                        if grad is not None and tensor.get_requires_grad():
+                            # Handle both ttml Tensor and raw ttnn tensor
+                            if hasattr(grad, "get_value"):
+                                tensor.add_grad(grad.get_value())
+                            else:
+                                tensor.add_grad(grad)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Error in backward of {bwd_cls.__name__}: {e}"
+                    ) from e
 
-            # Create the backward closure with captured variables
-            backward_fn = make_backward_closure(ctx, outputs_tuple, input_tensors, cls)
+            return backward_closure
 
-            # Register the backward node
-            node_id = auto_context.add_backward_node(backward_fn, links)
+        # Create the backward closure with captured variables
+        backward_fn = make_backward_closure(ctx, outputs_tuple, input_tensors, cls)
 
-            # Set the node on all output tensors
-            if node_id is not None:
-                for output in outputs_tuple:
-                    if output is not None and hasattr(output, "set_node"):
-                        output.set_node(node_id)
+        # Register the backward node
+        node_id = auto_context.add_backward_node(backward_fn, links)
+
+        # Set the node on all output tensors
+        if node_id is not None:
+            if len(outputs_tuple) == 1:
+                outputs_tuple[0].set_node(node_id)
+            else:
+                # Multi-output: Hack, similar to used in multi_head_utils.cpp::grouped_heads_creation
+                # Set node on first output only
+                outputs_tuple[0].set_node(node_id)
+
+                # Other outputs get dummy nodes that depend on first output
+                dummy_links = get_links([outputs_tuple[0]])
+                for output in outputs_tuple[1:]:
+                    dummy_node = auto_context.add_backward_node(
+                        lambda: None, dummy_links
+                    )
+                    output.set_node(dummy_node)
 
         return outputs
