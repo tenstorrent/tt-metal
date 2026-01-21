@@ -137,6 +137,7 @@ struct TestFabricSetup {
 struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
+    bool is_sequential;
 };
 
 struct ParsedTestConfig {

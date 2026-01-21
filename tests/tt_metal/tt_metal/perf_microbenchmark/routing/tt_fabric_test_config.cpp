@@ -150,10 +150,15 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
-    TT_FATAL(
-        !test_config.patterns.has_value() || test_config.patterns.value().empty(),
-        "Test '{}': latency_test_mode does not support high-level patterns",
-        test_config.name);
+    if(test_config.patterns.has_value()){
+        auto iterator = std::find_if_not(test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) { return config.is_sequential; });
+        TT_FATAL(
+            // If no config which is NOT sequential was found (all configs were sequential), we can proceed
+            // Otherwise, print the first non-sequential high-level pattern returned from std::find_if_not
+            iterator == test_config.patterns.value().end(),
+            "Test '{}': latency_test_mode does not support non-sequential high-level pattern {}",
+            test_config.name, iterator->type);
+    }
     TT_FATAL(
         test_config.senders.size() == 1,
         "Test '{}': latency_test_mode requires exactly one sender, got {}",
@@ -838,6 +843,9 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
         "Unsupported pattern type: '{}'. Supported types are: {}",
         config.type,
         get_supported_high_level_patterns());
+
+    // Above ensures the config type is supported before checking if it is sequential
+    config.is_sequential = high_level_pattern_is_sequential(detail::high_level_traffic_pattern_mapper.to_enum.at(config.type));
 
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);

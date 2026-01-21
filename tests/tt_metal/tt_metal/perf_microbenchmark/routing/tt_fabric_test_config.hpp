@@ -167,6 +167,26 @@ void append_with_separator(std::string& target, std::string_view separator, cons
 
 }  // namespace detail
 
+inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern){
+    switch(pattern){
+    case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
+    case HighLevelTrafficPattern::SequentialAllToAll:
+        return true;
+    case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOneRandom: [[fallthrough]];
+    case HighLevelTrafficPattern::FullDeviceRandomPairing: [[fallthrough]];
+    case HighLevelTrafficPattern::UnidirectionalLinear: [[fallthrough]];
+    case HighLevelTrafficPattern::FullRing: [[fallthrough]];
+    case HighLevelTrafficPattern::HalfRing: [[fallthrough]];
+    case HighLevelTrafficPattern::AllDevicesUniformPattern: [[fallthrough]];
+    case HighLevelTrafficPattern::NeighborExchange: [[fallthrough]];
+    default: return false;
+    }
+}
+
+
 // Helper function to resolve DeviceIdentifier to FabricNodeId
 inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id, const IDeviceInfoProvider& provider) {
     return std::visit(
