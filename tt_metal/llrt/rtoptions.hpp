@@ -526,6 +526,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    void set_experimental_device_debug_dump_enabled(bool enabled);
     bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
