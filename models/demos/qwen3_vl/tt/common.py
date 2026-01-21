@@ -88,7 +88,16 @@ def preprocess_inputs_prefill(
 
         # Initialize prefill tensors full of pad tokens
         input_prefill_i = torch.empty((prefill_seq_len, pad_embedding.shape[-1]), dtype=pad_embedding.dtype)
-        deepstack_visual_embeds_i = [torch.nn.functional.pad(deepstack_visual_embeds[j][i], (0, 0, 0, prefill_seq_len - deepstack_visual_embeds[j][i].shape[0])) for j in range(len(deepstack_visual_embeds))] if deepstack_visual_embeds is not None else None
+        deepstack_visual_embeds_i = (
+            [
+                torch.nn.functional.pad(
+                    deepstack_visual_embeds[j][i], (0, 0, 0, prefill_seq_len - deepstack_visual_embeds[j][i].shape[0])
+                )
+                for j in range(len(deepstack_visual_embeds))
+            ]
+            if deepstack_visual_embeds is not None
+            else None
+        )
         input_prefill_i[:] = pad_embedding
 
         # Copy only the *actual* tokens, not the processor padding.

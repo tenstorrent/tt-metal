@@ -194,7 +194,9 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
             # Vision prefill
-            image_embeds, deepstack_visual_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            image_embeds, deepstack_visual_embeds = self.visual_model(
+                inputs.pixel_values, grid_thw=inputs.image_grid_thw
+            )
         else:
             # text-only users
             image_embeds = torch.tensor([], dtype=torch.bfloat16)
@@ -202,7 +204,9 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config, deepstack_visual_embeds)
+        input_embeds, deepstack_visual_embeds = merge_vision_tokens(
+            inputs.input_ids, text_embeds, image_embeds, self.reference_model.config, deepstack_visual_embeds
+        )
         (
             input_prefill_pt,
             deepstack_visual_embeds,

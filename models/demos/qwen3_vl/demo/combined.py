@@ -45,7 +45,7 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 
             **Main Subjects:**
             - **The Woman:** She is sitting cross-legged on the sand, facing her dog. She has long, dark hair and is wearing a blue and white plaid shirt with rolled-up sleeves and dark pants. She is smiling warmly, looking at her dog, and holding a small treat in her hand. Her left wrist has a white watch or band.
-            - **The Dog:** A golden-colored Labrador Retriever, likely a yellow lab, is sitting upright on the sand, facing the"""
+            - **The Dog:** A golden-colored Labrador Retriever, likely a yellow lab, is sitting upright on the sand, facing the""",
         ),
         (
             "https://gist.github.com/gwangTT/ae3ac698de56020bc459018c7c2bff08/raw/a91b2df96c61234d83a7f61c4495bfc826786c74/paper.png",

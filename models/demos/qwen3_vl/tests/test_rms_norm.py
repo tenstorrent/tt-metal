@@ -8,11 +8,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 
 
 @torch.no_grad()
@@ -54,7 +52,7 @@ def test_rms_norm_inference(
     state_dict = {f"norm2.{k}": v for k, v in state_dict.items()}
 
     # Create the inner RMSNorm
-    tt_model= LayerNorm(
+    tt_model = LayerNorm(
         device=mesh_device,
         dim=model_args.dim,
         eps=1e-6,  # Qwen3_VLVisionBlock hard-codes this

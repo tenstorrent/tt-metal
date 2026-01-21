@@ -7,7 +7,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 

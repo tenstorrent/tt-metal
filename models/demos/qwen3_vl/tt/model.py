@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.tt_transformers.tt.model_config import TensorGroup
 import torch
 from loguru import logger
 
@@ -10,7 +9,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
 from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
-from models.demos.qwen3_vl.tt.attention import Attention as QwenVLAttentionModule
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen3_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen3_vl.tt.rope import RotarySetup
@@ -22,6 +20,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model import Transformer as TTTransformer
+from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class VisionTransformer(LightweightModule):
@@ -309,9 +308,13 @@ class DropInVisionTransformer(torch.nn.Module):
                 tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
             )
 
-            deepstack_visual_embeds_torch_list = [ttnn.to_torch(
-                deepstack_visual_embeds[i], mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            ) for i in range(len(deepstack_visual_embeds))]
+            deepstack_visual_embeds_torch_list = [
+                ttnn.to_torch(
+                    deepstack_visual_embeds[i],
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
+                )
+                for i in range(len(deepstack_visual_embeds))
+            ]
 
             # deallocate TT output
             ttnn.deallocate(tt_out)
@@ -322,7 +325,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             final_output = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
             deepstack_visual_embeds_torch = [
-                deepstack_visual_embeds_torch_list[i][:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0) 
+                deepstack_visual_embeds_torch_list[i][:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
                 for i in range(len(deepstack_visual_embeds_torch_list))
             ]
 
@@ -337,7 +340,9 @@ class DropInVisionTransformer(torch.nn.Module):
                 if deepstack_visual_embeds_list[i] is None:
                     deepstack_visual_embeds_list[i] = deepstack_visual_embeds_torch[i]
                 else:
-                    deepstack_visual_embeds_list[i] = torch.cat([deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0)
+                    deepstack_visual_embeds_list[i] = torch.cat(
+                        [deepstack_visual_embeds_list[i], deepstack_visual_embeds_torch[i]], dim=0
+                    )
         # concatenate all the outputs
         return torch.cat(final_outputs, dim=0), deepstack_visual_embeds_list
 
@@ -383,7 +388,9 @@ class Transformer(TTTransformer):
             )
         return outputs
 
-    def prepare_inputs_prefill(self, tokens, rot_mats, deepstack_visual_embeds=None, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill(
+        self, tokens, rot_mats, deepstack_visual_embeds=None, start_pos=0, page_table=None, chunk_page_table=None,
+    ):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
         # tokens is actually embeddings
@@ -402,14 +409,16 @@ class Transformer(TTTransformer):
         if deepstack_visual_embeds is not None:
             deepstack_visual_embeds = [
                 ttnn.from_torch(
-                deepstack_visual_embeds[i].unsqueeze(0).unsqueeze(0),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
-                ),
-            ) for i in range(len(deepstack_visual_embeds))]
+                    deepstack_visual_embeds[i].unsqueeze(0).unsqueeze(0),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+                    ),
+                )
+                for i in range(len(deepstack_visual_embeds))
+            ]
 
         # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
@@ -444,11 +453,11 @@ class Transformer(TTTransformer):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table, deepstack_visual_embeds
-    
+  
     def deepstack_process(self, x, deepstack_visual_embeds):
         x = ttnn.add(x, deepstack_visual_embeds)
         return x
-    
+
     def ttnn_prefill_forward(
         self,
         x,
@@ -460,7 +469,7 @@ class Transformer(TTTransformer):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        deepstack_visual_embeds=None
+        deepstack_visual_embeds=None,
     ):
         return self.forward(
             x,
@@ -517,7 +526,6 @@ class Transformer(TTTransformer):
             )
             if deepstack_visual_embeds is not None and i in range(len(deepstack_visual_embeds)):
                 x = self.deepstack_process(x, deepstack_visual_embeds[i])
-
 
         if mode == "prefill" and get_last_token == -1:
             return x

@@ -10,7 +10,9 @@ from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
 
 
 class PatchMerger(LightweightModule):
-    def __init__(self, mesh_device, args, state_dict, state_dict_prefix, weight_cache_path, dtype, postshuffle_norm=False):
+    def __init__(
+        self, mesh_device, args, state_dict, state_dict_prefix, weight_cache_path, dtype, postshuffle_norm=False
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -20,7 +22,9 @@ class PatchMerger(LightweightModule):
         self.mlp_size = args.hf_config.vision_config.hidden_size * (
             args.hf_config.vision_config.spatial_merge_size**2
         )
-        state_dict_prefix = args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
+        state_dict_prefix = (
+            args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
+        )
 
         # Create the LayerNorm layer
         self.norm = LayerNorm(

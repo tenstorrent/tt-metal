@@ -417,9 +417,9 @@ def test_demo(
         logger.info(f"Vision model prefill batch {batch_idx}")
         if not vision_model_traced:
             image_embeds, deepstack_visual_embeds = (
-            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            if "pixel_values" in inputs
-            else (torch.tensor([], dtype=torch.bfloat16), None)
+                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                if "pixel_values" in inputs
+                else (torch.tensor([], dtype=torch.bfloat16), None)
             )
             vision_model_traced = True
         profiler.start(f"vision_model_prefill", iteration=batch_idx)
@@ -434,7 +434,13 @@ def test_demo(
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config, deepstack_visual_embeds=deepstack_visual_embeds)
+        input_embeds, deepstack_visual_embeds = merge_vision_tokens(
+            inputs.input_ids,
+            text_embeds,
+            image_embeds,
+            reference_model.config,
+            deepstack_visual_embeds=deepstack_visual_embeds
+        )
         pad_token_id = tokenizer.pad_token_id
         assert (
             model_args.max_seq_len >= max(len(x) for x in input_embeds) + max_generated_tokens
@@ -636,11 +642,7 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if (
-        is_ci_env
-        and "bert-score" in test_id
-    ):
-        assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
+    if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 

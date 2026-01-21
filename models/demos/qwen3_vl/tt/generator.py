@@ -43,7 +43,15 @@ class Generator:
     def processor(self):
         return self._ttt_generator.processor
 
-    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None, deepstack_visual_embeds=None):
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        rot_mats,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        deepstack_visual_embeds=None,
+    ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -68,7 +76,9 @@ class Generator:
                 last_token_idx=last_token_idx,
                 rot_mats=rot_mats,
                 kv_cache=kv_cache,
-                deepstack_visual_embeds=deepstack_visual_embeds[user_id] if deepstack_visual_embeds is not None else None,
+                deepstack_visual_embeds=deepstack_visual_embeds[user_id]
+                if deepstack_visual_embeds is not None
+                else None,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -113,7 +123,9 @@ class Generator:
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None):
+    def __prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
+    ):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
@@ -150,7 +162,13 @@ class Generator:
                     chunk_end <= seq_len
                 ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
-                deepstack_visual_embeds_chunk = [deepstack_visual_embeds[i][chunk_start:chunk_end] for i in range(len(deepstack_visual_embeds))]
+                if deepstack_visual_embeds is not None:
+                    deepstack_visual_embeds_chunk = [
+                        deepstack_visual_embeds[i][chunk_start:chunk_end]
+                        for i in range(len(deepstack_visual_embeds))
+                    ]
+                else:
+                    deepstack_visual_embeds_chunk = None
                 chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
 
                 (
@@ -180,12 +198,20 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32))
+                    logits = self.model.process_output_prefill(
+                        tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32),
+                    )
                     return logits
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _, deepstack_visual_embeds = self.model.prepare_inputs_prefill(
+            (
+                prefill_input,
+                rot_mats_prefill,
+                page_table_tt,
+                _,
+                deepstack_visual_embeds,
+            ) = self.model.prepare_inputs_prefill(
                 tokens,
                 rot_mats=rot_mats,
                 page_table=page_table,

@@ -67,7 +67,10 @@ def test_vision_block_inference(
         # Example inputs and preprocessing
         pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
         # pt_input = torch.load(f"ref_x_{layer_num - 1}.pt").unsqueeze(0).unsqueeze(0)
-        cu_seqlens, position_embeddings, = qwen3_vision_transformer_preprocess(
+        (
+            cu_seqlens,
+            position_embeddings,
+        ) = qwen3_vision_transformer_preprocess(
             seq_len=ref_seq_len,
             grid_thw=image_grid_thw,
             head_dim=model_args.head_dim,

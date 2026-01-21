@@ -146,7 +146,6 @@ def test_vision_model_inference(
     # Run reference model
     reference_output, reference_deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
 
-
     # Run TT model
     tt_out, tt_deepstack_visual_embeds = tt_model(
         tt_input,
@@ -159,15 +158,21 @@ def test_vision_model_inference(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
 
-    tt_deepstack_visual_embeds = [ttnn.to_torch(
-        tt_deepstack_visual_embeds[i], 
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
-    ) for i in range(len(tt_deepstack_visual_embeds))]
+    tt_deepstack_visual_embeds = [
+        ttnn.to_torch(
+            tt_deepstack_visual_embeds[i], 
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+        )
+        for i in range(len(tt_deepstack_visual_embeds))
+    ]
 
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
     tt_deepstack_visual_embeds_torch = [
-        tt_deepstack_visual_embeds[i][:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0) 
-        for i in range(len(tt_deepstack_visual_embeds))]
+        tt_deepstack_visual_embeds[i][:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size]
+        .squeeze(0)
+        .squeeze(0) 
+        for i in range(len(tt_deepstack_visual_embeds))
+    ]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
@@ -175,7 +180,11 @@ def test_vision_model_inference(
     logger.info(f"PCC of output: {pcc_message}")
     deepstack_visual_embeds_passing = True
     for i in range(len(tt_deepstack_visual_embeds)):
-        deepstack_visual_embeds_passing_i, pcc_message = comp_pcc(reference_deepstack_visual_embeds[i], tt_deepstack_visual_embeds_torch[i], pcc)
+        deepstack_visual_embeds_passing_i, pcc_message = comp_pcc(
+            reference_deepstack_visual_embeds[i],
+            tt_deepstack_visual_embeds_torch[i],
+            pcc,
+        )
         deepstack_visual_embeds_passing &= deepstack_visual_embeds_passing_i
         logger.info(comp_allclose(reference_deepstack_visual_embeds[i], tt_deepstack_visual_embeds_torch[i]))
         logger.info(f"PCC of deepstack visual embeds {i}: {pcc_message}")
@@ -188,6 +197,10 @@ def test_vision_model_inference(
     elif not passing:
         logger.warning(f"{test_desc} Failed! PCC value is lower than {pcc} for some of the outputs. Check Warnings!")
     elif not deepstack_visual_embeds_passing:
-        logger.warning(f"{test_desc} Failed! PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!")
+        logger.warning(
+            f"{test_desc} Failed! PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!",
+        )
     assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
-    assert deepstack_visual_embeds_passing, f"PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!"
+    assert (
+        deepstack_visual_embeds_passing
+    ), f"PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!"
