@@ -9,8 +9,6 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 
-namespace NAMESPACE {
-
 ALWI void process_tile(
     tt::CBIndex predicate_cb,
     tt::CBIndex true_cb,
@@ -95,7 +93,7 @@ ALWI void process_tile(
 #endif
 }
 
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -124,4 +122,3 @@ void MAIN {
         process_tile(predicate_cb, true_cb, false_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE
