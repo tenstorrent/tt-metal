@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from collections import OrderedDict
 import numpy as np
+import time
+import ttnn
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.dispatcher import set_dispatcher
 from models.experimental.tt_symbiote.core.dispatchers.dispatcher_config import register_dispatcher
@@ -20,6 +22,29 @@ from models.experimental.tt_symbiote.core.run_config import (
     set_device_wrap,
 )
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.core.utils import ensure_tile_layout
+
+
+def setup_ttnn_call(args, kwargs):
+    begin = time.time()
+    transform = compose_transforms(
+        wrap_to_torch_ttnn_tensor, to_ttnn_wrap_keep_torch, set_device_wrap(TrainingDispatcher.device)
+    )
+    func_args = tree_map(transform, args)
+    func_kwargs = tree_map(transform, kwargs)
+    end = time.time()
+    DispatchManager.record_timing(
+        "TTNN",
+        (
+            ""
+            if DispatchManager.current_module_name is None
+            else DispatchManager.current_module_name + ".ttnn_dispatch_setup"
+        ),
+        "ttnn_dispatch_setup",
+        {},
+        end - begin,
+    )
+    return func_args, func_kwargs
 
 
 class TrainingDispatcher:
@@ -31,11 +56,7 @@ class TrainingDispatcher:
 
     @staticmethod
     def dispatch_to_ttnn(func_name: str, args=None, kwargs=None):
-        transform = compose_transforms(
-            wrap_to_torch_ttnn_tensor, to_ttnn_wrap_keep_torch, set_device_wrap(TrainingDispatcher.device)
-        )
-        func_args = tree_map(transform, args)
-        func_kwargs = tree_map(transform, kwargs)
+        func_args, func_kwargs = setup_ttnn_call(args, kwargs)
         result = func_to_ttnn_compatible[func_name](func_name, func_args, func_kwargs)
         return result
 
@@ -77,7 +98,9 @@ class LinearFunction(torch.autograd.Function):
 
         # Compute gradients in NumPy
         grad_x_np = np.matmul(grad_np, weight_np)
-        grad_weight_np = np.matmul(grad_np.T, x_np)
+        grad_weight_np = np.matmul(
+            grad_np.reshape(-1, weight_np.shape[0]).T, x_np.reshape(-1, weight_np.shape[1])
+        ).reshape(weight_np.shape)
 
         # Convert back to PyTorch
         grad_x = torch.from_numpy(grad_x_np).to(device=x.device, dtype=x.dtype)
@@ -85,10 +108,48 @@ class LinearFunction(torch.autograd.Function):
 
         grad_bias = None
         if bias is not None:
-            grad_bias_np = np.sum(grad_np, axis=0)
+            res = [i for i in range(grad_np.ndim - 1)]
+            grad_bias_np = grad_np
+            for i in res:
+                grad_bias_np = grad_bias_np.sum(axis=0)
             grad_bias = torch.from_numpy(grad_bias_np).to(device=bias.device, dtype=bias.dtype)
 
         return grad_x, grad_weight, grad_bias
+
+    @staticmethod
+    def backward_ttnn(ctx, grad):
+        x, weight, bias = ctx.saved_tensors
+        func_args, func_kwargs = setup_ttnn_call((x, weight, bias, grad), {})
+        func_args[0].ttnn_tensor = ensure_tile_layout(func_args[0].ttnn_tensor)
+        func_args[1].ttnn_tensor = ensure_tile_layout(func_args[1].ttnn_tensor)
+        if bias is not None:
+            func_args[2].ttnn_tensor = ensure_tile_layout(func_args[2].ttnn_tensor)
+        func_args[3].ttnn_tensor = ensure_tile_layout(func_args[3].ttnn_tensor)
+        # Compute gradients using TTNN operations
+        batch_size = grad.shape[0] * grad.shape[1] if len(grad.shape) > 2 else grad.shape[0]
+        features = grad.shape[-1]
+
+        reshaped_grad = ttnn.reshape(func_args[3].ttnn_tensor, [batch_size, features])
+        reshaped_x = ttnn.reshape(func_args[0].ttnn_tensor, [batch_size, func_args[0].shape[-1]])
+
+        # Compute gradients using basic ttnn operations
+        grad_weight = ttnn.linear(ttnn.transpose(reshaped_grad, -2, -1), reshaped_x)
+        grad_weight = ttnn.transpose(grad_weight, -2, -1)
+
+        grad_x = ttnn.linear(func_args[3].ttnn_tensor, func_args[1].ttnn_tensor)
+
+        # Handle bias separately
+        grad_bias = None
+        if bias is not None:
+            # Sum over all dimensions except the last
+            grad_bias = ttnn.clone(func_args[3].ttnn_tensor)
+            for i in range(len(func_args[3].shape) - 1):
+                grad_bias = ttnn.sum(grad_bias, dim=0)
+            grad_bias = ttnn.reshape(grad_bias, func_args[2].shape)
+            grad_bias = TorchTTNNTensor(grad_bias)
+            bias.ttnn_tensor = None
+        weight.ttnn_tensor = None
+        return TorchTTNNTensor(grad_x), TorchTTNNTensor(grad_weight), grad_bias
 
 
 # Define ModuleLinear
@@ -102,10 +163,11 @@ class MyModel(torch.nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
         # Create parameters manually
-        self.linear = nn.Linear(in_features, out_features)
-        self.linear_grad = ModuleLinear()
+        self.linear = nn.Linear(in_features, out_features, bias=False)
+        # self.linear_grad = ModuleLinear()
 
     def forward(self, x):
+        # return self.linear_grad.forward(x, self.linear.weight, self.linear.bias)
         return self.linear.forward(x)
 
 
@@ -137,8 +199,8 @@ def test_training_with_ttnn(device):
     TrainingDispatcher.device = device
     input_dim = 10
     output_dim = 10
-    batch_size = 4
-    num_epochs = 100
+    batch_size = 1
+    num_epochs = 10
     learning_rate = 0.001
 
     # Create model
@@ -156,11 +218,13 @@ def test_training_with_ttnn(device):
     criterion = nn.MSELoss()
 
     # Generate synthetic training data
-    X_train = TorchTTNNTensor(torch.randn(100, input_dim))
+    X_train = TorchTTNNTensor(torch.randn(100, 1, input_dim))
     # Create targets with some relationship to inputs for learning
-    y_train = TorchTTNNTensor(torch.randn(100, output_dim))
+    y_train = TorchTTNNTensor(torch.randn(100, 1, output_dim))
 
     # Training loop
+    loss = criterion(model(X_train[0:1]), y_train[0:1])  # Warm-up run
+    loss.backward()
     print(f"\nStarting training for {num_epochs} epochs...")
     DispatchManager.clear_timings()
     for epoch in range(num_epochs):
