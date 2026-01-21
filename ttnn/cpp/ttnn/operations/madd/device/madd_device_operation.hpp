@@ -5,13 +5,11 @@
 #pragma once
 
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
-#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"
-#include "ttnn/operations/madd/device/madd_program_factory.hpp"
+#include "ttnn/tensor/tensor.hpp"                                       // Tensor
+#include "ttnn/tensor/tensor_spec.hpp"                                  // TensorSpec
+#include "ttnn/operations/core/core.hpp"                                // MemoryConfig, DeviceComputeKernelConfig
+#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"  // MAddParams, MAddArgs
+#include "ttnn/operations/madd/device/madd_program_factory.hpp"         // MAddProgramFactory
 
 namespace ttnn::prim {
 

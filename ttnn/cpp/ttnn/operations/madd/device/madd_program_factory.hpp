@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"
+
+#include "ttnn/tensor/tensor.hpp"                                       // Tensor
+#include "ttnn/tensor/tensor_spec.hpp"                                  // TensorSpec
+#include "ttnn/operations/madd/device/madd_device_operation_types.hpp"  // MAddParams, MAddArgs
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::prim {

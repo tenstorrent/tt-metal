@@ -8,11 +8,6 @@
 
 namespace ttnn::prim {
 
-static std::array<uint32_t, 4> get_input_shape(const Tensor& x) {
-    const Shape& x_shape = x.logical_shape();
-    return {x_shape[0], x_shape[1]};
-}
-
 MAddOperation::spec_return_value_t MAddOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& a = tensor_args.a;
@@ -84,4 +79,5 @@ ttnn::Tensor madd(
     return ttnn::device_operation::launch<MAddOperation>(
         MAddParams{.output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config},
         MAddArgs{.a = a, .b = b, .c = c});
+}
 }  // namespace ttnn::prim

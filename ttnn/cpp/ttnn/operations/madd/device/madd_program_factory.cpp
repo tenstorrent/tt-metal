@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <string>
 
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -34,7 +37,7 @@ static inline auto get_tile_count(const Tensor& x) {
 }
 
 MAddProgramFactory::cached_program_t MAddProgramFactory::create(
-    const MAddParams& operation_attributes, const MAddArgs& tensor_args, Tensor& output_tensor) {
+    [[maybe_unused]] const MAddParams& operation_attributes, const MAddArgs& tensor_args, Tensor& output_tensor) {
     // unpack tensor args
     const ttnn::Tensor& a = tensor_args.a;
     const ttnn::Tensor& b = tensor_args.b;
@@ -43,17 +46,16 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
+    // const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Output dimensions
-    const tt::tt_metal::Shape& output_shape = output.padded_shape();
+    // const tt::tt_metal::Shape& output_shape = output.padded_shape();
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     // TODO: Verify that all inputs have the same data format
 
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    const auto& output_shape = output.padded_shape();
     tt::tt_metal::IDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -64,7 +66,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     uint32_t input_cb_required_pages;
     uint32_t aligned_input_unit_size;  // Size used for CB creation
 
-    uint32_t output_unit_size;
+    // uint32_t output_unit_size;
 
     uint32_t work_units_to_split;
 
@@ -74,7 +76,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         input_unit_size = tt::tile_size(input_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
-        output_unit_size = tt::tile_size(output_cb_data_format);
+        // output_unit_size = tt::tile_size(output_cb_data_format);
 
         const auto [num_input_tiles_in_row, num_input_tiles_in_col] = get_tile_count(a);
 
@@ -112,14 +114,15 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
 
     // Separate output CB for tiled
-    const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
-    const auto [cb_output_index, cb_output] =
-        create_cb(next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
+    // const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
+    // const auto [cb_output_index, cb_output] =
+    //     create_cb(next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb,
+    //     output_cb_data_format);
 
     auto* const a_buffer = a.buffer();
     auto* const b_buffer = b.buffer();
     auto* const c_buffer = c.buffer();
-    auto* const dst_buffer = output.buffer();
+    // auto* const dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)cb_srcA_index,
@@ -171,7 +174,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         std::move(program),
         shared_variables_t{
             .reader_kernel = reader_kernel,
-            .writer_kernel = writer_kernel,
+            // .writer_kernel = writer_kernel,
             .num_cores = num_cores,
             .num_cores_y = num_cores_y}};
 }
@@ -180,17 +183,17 @@ void MAddProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const MAddParams& /*operation_attributes*/,
     const MAddArgs& tensor_args,
-    Tensor& output_tensor) {
+    [[maybe_unused]] Tensor& output_tensor) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel;
+    // const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel;
     const auto& num_cores = cached_program.shared_variables.num_cores;
     const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
     auto* const a_buffer = tensor_args.a.buffer();
     auto* const b_buffer = tensor_args.b.buffer();
     auto* const c_buffer = tensor_args.c.buffer();
-    auto* const dst_buffer = output_tensor.buffer();
+    // auto* const dst_buffer = output_tensor.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
