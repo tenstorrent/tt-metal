@@ -1662,7 +1662,7 @@ bool process_cmd(
 /* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d. test_for_nonzero is an optimization that can be false
  * if amt_to_write >= downstream_cb_page_size. For simplicity this code will always acquire the exact number of pages
  * needed, unlike write_pages_to_dispatcher which may acquire an extra page if we hit an exact page boundary. */
-template<bool test_for_nonzero>
+template <bool test_for_nonzero>
 static void relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
     // Unlike in write_pages_to_dispatcher we always round npages down, so if downstream_data_ptr is at the start of a
