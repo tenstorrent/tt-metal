@@ -6,7 +6,7 @@ from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
@@ -69,7 +69,7 @@ def test_fast_tilize_perf(
 
     formats = InputOutputFormat(input_format, output_format)
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/fast_tilize_test.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],

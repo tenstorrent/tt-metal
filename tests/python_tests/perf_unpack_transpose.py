@@ -5,7 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType, Transpose
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     TILE_COUNT,
@@ -46,7 +46,7 @@ def test_perf_unpack_transpose(
 
     tile_count = 16
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/unpack_transpose_perf.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE],

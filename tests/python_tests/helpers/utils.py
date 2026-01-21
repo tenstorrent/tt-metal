@@ -196,12 +196,40 @@ def passed_test(
                 num_tiles = (res_tensor.size()[0]) // 1024
                 tile_shape = (32, 32)
 
-                for tile_no in range(num_tiles):
+                GREEN = "\033[42m"
+                YELLOW = "\033[43m"
+                RED = "\033[41m"
+                RESET = "\033[0m"
 
-                    tile_str = f"Row\t === Tile {tile_no+1} ===\n"
-                    res_tile = res_tensor[tile_no * 1024 : (tile_no + 1) * 1024].view(
-                        tile_shape
-                    )
+                def format_tile(
+                    tile_data, error_tile, tile_no, golden: bool = False
+                ) -> list[str]:
+                    if torch.all(error_tile == 0):
+                        return []
+
+                    label = "Golden tile" if golden else "Result tile"
+                    background = YELLOW if golden else GREEN
+                    tile_lines = [f"Row\t === {label} {tile_no+1} ==="]
+                    for row in range(32):
+                        row_values = []
+                        for col in range(32):
+                            colour = RED if error_tile[row, col] else background
+                            row_values.append(
+                                f"{colour}{tile_data[row, col]:7.2f}{RESET}{' ' if col == 15 else '' }"
+                            )
+
+                        tile_lines.append(f"{(row+1):02d}. {''.join(row_values)}")
+
+                        if row == 15:
+                            tile_lines.append("")
+                    return tile_lines
+
+                formatted_error = []
+
+                for tile_no in range(num_tiles):
+                    result_tile = res_tensor[
+                        tile_no * 1024 : (tile_no + 1) * 1024
+                    ].view(tile_shape)
                     golden_tile = golden_tensor[
                         tile_no * 1024 : (tile_no + 1) * 1024
                     ].view(tile_shape)
@@ -209,43 +237,17 @@ def passed_test(
                         tile_shape
                     )
 
-                    for row in range(32):
-                        row_str = ""
-                        for col in range(32):
-                            row_str += (
-                                "\033[41m" if error_tile[row, col] else "\033[42m"
-                            )
-                            row_str += f"{res_tile[row, col]:7.2f}\033[0m"
+                    lines = format_tile(result_tile, error_tile, tile_no)
+                    if not lines:
+                        continue
 
-                            if col == 15:
-                                row_str += " "
+                    formatted_error.extend(lines)
+                    formatted_error.append("")
+                    formatted_error.extend(
+                        format_tile(golden_tile, error_tile, tile_no, True)
+                    )
 
-                        tile_str += f"{(row+1):02d}. {row_str}\n"
-
-                        if row == 15:
-                            tile_str += "\n"
-
-                    print(tile_str, file=sys.stderr)
-
-                    tile_str = f"Row\t === Golden tile Tile {tile_no+1} ===\n"
-
-                    for row in range(32):
-                        row_str = ""
-                        for col in range(32):
-                            row_str += (
-                                "\033[41m" if error_tile[row, col] else "\033[42m"
-                            )
-                            row_str += f"{golden_tile[row, col]:7.2f}\033[0m"
-
-                            if col == 15:
-                                row_str += " "
-
-                        tile_str += f"{(row+1):02d}. {row_str}\n"
-
-                        if row == 15:
-                            tile_str += "\n"
-
-                    print(tile_str, file=sys.stderr)
+                print("\n".join(formatted_error), file=sys.stderr)
 
         except RuntimeError:
             print(

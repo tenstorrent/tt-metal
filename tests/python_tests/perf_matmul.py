@@ -11,7 +11,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -21,6 +21,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES,
     THROTTLE_LEVEL,
+    TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
 
@@ -73,7 +74,7 @@ def matmul_combos(
         MathFidelity.HiFi4,
     ],
 )
-def test_perf_matmul(perf_report, combos, math_fidelity):
+def test_perf_matmul(perf_report, combos, math_fidelity, workers_tensix_coordinates):
 
     formats, dest_acc, (matrix_a, matrix_b) = combos
 
@@ -93,7 +94,7 @@ def test_perf_matmul(perf_report, combos, math_fidelity):
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/matmul_perf.cpp",
         formats,
         run_types,
@@ -107,6 +108,7 @@ def test_perf_matmul(perf_report, combos, math_fidelity):
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),
             LOOP_FACTOR(16),
+            TILE_COUNT(variant_tile_count),
             CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
         ],
         variant_stimuli=StimuliConfig(
@@ -122,4 +124,4 @@ def test_perf_matmul(perf_report, combos, math_fidelity):
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report)
+    configuration.run(perf_report, location=workers_tensix_coordinates)

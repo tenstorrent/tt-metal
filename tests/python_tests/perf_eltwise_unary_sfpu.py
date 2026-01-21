@@ -14,7 +14,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -155,7 +155,7 @@ def test_perf_eltwise_unary_sfpu(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
         run_types=[

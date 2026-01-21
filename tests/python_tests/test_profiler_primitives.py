@@ -5,7 +5,8 @@
 import pandas as pd
 import pytest
 from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
+from helpers.profiler import Profiler
 from helpers.test_config import TestConfig, TestMode
 
 
@@ -39,25 +40,25 @@ def test_profiler_primitives(workers_tensix_coordinates):
     if TestConfig.MODE == TestMode.PRODUCE:
         pytest.skip()
 
-    configuration = ProfilerConfig("sources/profiler_primitives_test.cpp")
+    configuration = PerfConfig("sources/profiler_primitives_test.cpp")
 
     configuration.generate_variant_hash()
     configuration.build_elfs()
     configuration.run_elf_files(workers_tensix_coordinates)
 
-    runtime = configuration.get_data(workers_tensix_coordinates)
+    runtime = Profiler.get_data(
+        configuration.test_name, configuration.variant_id, workers_tensix_coordinates
+    )
 
     # Get metadata to look up marker IDs (stable across build environments)
-    metadata = ProfilerConfig._get_meta(
-        configuration.test_name, configuration.variant_id
-    )
-    expected_zone_id = ProfilerConfig._get_marker_id(
+    metadata = Profiler._get_meta(configuration.test_name, configuration.variant_id)
+    expected_zone_id = Profiler._get_marker_id(
         metadata, "TEST_ZONE", "profiler_primitives_test.cpp", 17
     )
-    expected_timestamp_id = ProfilerConfig._get_marker_id(
+    expected_timestamp_id = Profiler._get_marker_id(
         metadata, "TEST_TIMESTAMP", "profiler_primitives_test.cpp", 26
     )
-    expected_timestamp_data_id = ProfilerConfig._get_marker_id(
+    expected_timestamp_data_id = Profiler._get_marker_id(
         metadata, "TEST_TIMESTAMP_DATA", "profiler_primitives_test.cpp", 35
     )
 

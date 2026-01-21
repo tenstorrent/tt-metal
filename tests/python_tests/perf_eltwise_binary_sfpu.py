@@ -13,7 +13,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -85,7 +85,7 @@ def test_perf_eltwise_binary_sfpu_float(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
         run_types=[
@@ -175,7 +175,7 @@ def test_perf_eltwise_binary_sfpu_int(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
         run_types=[
@@ -274,7 +274,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
         run_types=[

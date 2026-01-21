@@ -13,7 +13,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
@@ -46,7 +46,7 @@ def test_perf_eltwise_binary_fpu(
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/eltwise_binary_fpu_perf.cpp",
         formats,
         run_types=[

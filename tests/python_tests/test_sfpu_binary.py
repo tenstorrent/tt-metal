@@ -44,6 +44,14 @@ def test_sfpu_binary_float(formats, dest_acc, mathop, workers_tensix_coordinates
         pytest.skip("Not currently supported in tests")
 
     if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+        and mathop in [MathOperation.SfpuElwadd, MathOperation.SfpuElwmul]
+        and dest_acc == DestAccumulation.No
+        and formats.input_format == DataFormat.Float32
+    ):
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1092")
+
+    if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Float16
         and dest_acc == DestAccumulation.No

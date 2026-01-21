@@ -5,12 +5,22 @@
 import glob
 import os
 import re
+from dataclasses import fields
+from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pandas as pd
+import pytest
+from ttexalens.tt_exalens_lib import write_to_device
 
-from .test_config import TestConfig
+from .device import BootMode, wait_for_tensix_operations_finished
+from .format_config import FormatConfig
+from .llk_params import DestAccumulation, PerfRunType
+from .profiler import Profiler, ProfilerData
+from .stimuli_config import StimuliConfig
+from .test_config import ProfilerBuild, TestConfig, TestMode
+from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 # Common postprocessing
 
@@ -24,7 +34,8 @@ def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     # Ensure columns exist and default missing values only for masked rows
     for col in ["loop_factor", "tile_cnt"]:
         if col not in frame.columns:
-            frame[col] = 1
+            col_idx = frame.columns.get_loc("marker")
+            frame.insert(col_idx, col, 1)
         frame[col] = frame[col].fillna(1)
 
     # Compute divisor as Series aligned with masked rows
@@ -98,16 +109,14 @@ class PerfReport:
         self._masks = [pd.Series(), pd.Series(True, index=frame.index)]
 
     def dump_csv(self, filename: str):
-        benchmark_dir = TestConfig.LLK_ROOT / "perf_data"
-
-        if not benchmark_dir.exists():
-            benchmark_dir.mkdir(parents=True, exist_ok=True)
+        if not TestConfig.PERF_DATA_DIR.exists():
+            TestConfig.PERF_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         frame = pd.concat(self._frames, ignore_index=True)
         mask = pd.concat(self._masks, ignore_index=True)
 
         # apply masks
-        frame[mask].to_csv(benchmark_dir / filename, index=False)
+        frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
 
 
 def dump_scatter(testname: str, report: PerfReport):
@@ -171,15 +180,15 @@ def get_unique_base_names(input_dir: Path):
     Extract unique base filenames from files matching *.gw*.csv pattern.
     For example: perf_unpack_untilize.gw0.csv -> perf_unpack_untilize
     """
-    # Use Path.glob() for more Pythonic code
+
     csv_files = list(input_dir.glob("*.gw*.csv")) + list(
-        input_dir.glob("*.master.*.csv")
+        input_dir.glob("*.master*.csv")
     )
 
     # Extract base names with regex that handles both patterns
     unique_bases = {
-        re.sub(r"\.(?:gw\d+|master\.\d+)(?:\.post)?\.csv$", "", f.name)
-        for f in csv_files
+        re.sub(r"\.(?:gw\d+|master)(?:\.post)?\.csv$", "", report_file.name)
+        for report_file in csv_files
     }
 
     return sorted(unique_bases)
@@ -192,17 +201,37 @@ def combine_perf_reports():
     - One for post files (with .post.csv)
     """
 
-    output_dir = input_dir = TestConfig.LLK_ROOT / "perf_data"
-
-    if not output_dir.exists():
+    unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)
+    if not unique_module_names:
         return
 
-    for base_name in get_unique_base_names(input_dir):
-        csv_files = glob.glob(os.path.join(input_dir, f"{base_name}.gw*.csv"))
-        csv_files += glob.glob(os.path.join(input_dir, f"{base_name}.master.*.csv"))
+    output_dir = TestConfig.LLK_ROOT / "perf_data"
 
-        regular_files = [f for f in csv_files if not f.endswith(".post.csv")]
-        post_files = [f for f in csv_files if f.endswith(".post.csv")]
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    for base_name in unique_module_names:
+        csv_files = glob.glob(
+            os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.gw*.csv")
+        )
+        csv_files += glob.glob(
+            os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.master*.csv")
+        )
+
+        temp_output_dir = output_dir / base_name
+        if not temp_output_dir.exists():
+            temp_output_dir.mkdir(parents=True, exist_ok=True)
+
+        regular_files, post_files = [], []
+        regular_append = regular_files.append
+        post_append = post_files.append
+
+        for f in csv_files:
+            if f.endswith(".post.csv"):
+                post_append(f)
+            else:
+                regular_append(f)
+
         if regular_files:
             dfs_regular = []
             for file in sorted(regular_files):
@@ -210,7 +239,10 @@ def combine_perf_reports():
                 dfs_regular.append(df)
 
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
-            output_regular = os.path.join(output_dir, f"{base_name}.csv")
+            combined_regular = combined_regular.sort_values(
+                by=combined_regular.columns.tolist()
+            ).reset_index(drop=True)
+            output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
             combined_regular.to_csv(output_regular, index=False)
 
         if post_files:
@@ -220,7 +252,10 @@ def combine_perf_reports():
                 dfs_post.append(df)
 
             combined_post = pd.concat(dfs_post, ignore_index=True)
-            output_post = os.path.join(output_dir, f"{base_name}.post.csv")
+            combined_post = combined_post.sort_values(
+                by=combined_post.columns.tolist()
+            ).reset_index(drop=True)
+            output_post = os.path.join(temp_output_dir, f"{base_name}.post.csv")
             combined_post.to_csv(output_post, index=False)
 
         for file in regular_files:
@@ -228,3 +263,134 @@ def combine_perf_reports():
 
         for file in post_files:
             Path(file).unlink()
+
+
+class PerfConfig(TestConfig):
+    # === STATIC VARIABLES ===
+    TEST_COUNTER: ClassVar[int] = 0
+
+    def __init__(
+        self,
+        test_name: str,
+        formats: FormatConfig = None,
+        run_types: list[PerfRunType] = [],
+        templates: list[TemplateParameter] = [],
+        runtimes: list[RuntimeParameter] = [],
+        variant_stimuli: StimuliConfig = None,
+        unpack_to_dest=False,
+        disable_format_inference=False,
+        dest_acc=DestAccumulation.No,
+    ):
+        super().__init__(
+            test_name,
+            formats,
+            templates,
+            runtimes,
+            variant_stimuli,
+            BootMode.DEFAULT,
+            ProfilerBuild.Yes,
+            1,  # L1_2_L1s
+            unpack_to_dest,
+            disable_format_inference,
+            dest_acc,
+        )
+
+        self.passed_templates = templates
+        self.passed_runtimes = runtimes
+        self.current_run_type = None
+
+        # TODO Add check for all selected runs, to see if the profiler/counter supports them
+
+        self.run_configs = [
+            (
+                templates.copy() + [PERF_RUN_TYPE(run_type)],
+                runtimes.copy(),
+                run_type,
+            )
+            for run_type in run_types
+        ]
+
+    def generate_variant_hash(self):
+        NON_COMPILATION_ARGUMENTS = [
+            "variant_stimuli",
+            "run_configs",
+            "variant_id",
+            "runtime_params_struct",
+            "runtime_format",
+            "runtimes",
+        ]
+        temp_str = [
+            str(value)
+            for field_name, value in self.__dict__.items()
+            if field_name not in NON_COMPILATION_ARGUMENTS
+        ]
+
+        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+
+    @staticmethod
+    def _dataclass_name_and_values(obj):
+        """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
+
+    def run(self, perf_report: PerfReport, run_count=5, location="0,0"):
+        results = []
+
+        if TestConfig.MODE in [TestMode.PRODUCE, TestMode.DEFAULT]:
+            for templates, runtimes, run_type in self.run_configs:
+                self.current_run_type = run_type
+                self.templates = templates
+                self.runtimes = runtimes
+                self.generate_variant_hash()
+                self.build_elfs()
+
+        if TestConfig.MODE == TestMode.PRODUCE:
+            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+        PerfConfig.TEST_COUNTER += 1
+
+        for templates, runtimes, run_type in self.run_configs:
+            self.current_run_type = run_type
+            self.templates = templates
+            self.runtimes = runtimes
+            self.generate_variant_hash()
+            variant_raw_data = []
+            for _ in range(run_count):
+                write_to_device(location, 0x64FF0, [0, 0, 0, 0, 0, 0, 0])
+                self.write_runtimes_to_L1(location)
+                elfs = self.run_elf_files(location)
+                wait_for_tensix_operations_finished(elfs, location)
+
+                profiler_data = Profiler.get_data(
+                    self.test_name, self.variant_id, location
+                )
+                # TODO You add additional data collections you want here
+
+                variant_raw_data.append(profiler_data)
+
+            get_stats = Profiler.STATS_FUNCTION[run_type]
+            results.append(get_stats(ProfilerData.concat(variant_raw_data)))
+
+        results = pd.concat(results, ignore_index=True)
+        run_results = results.groupby("marker").first().reset_index()
+
+        # Setting header fields that are always there
+        names = ["formats.input", "formats.output"] if self.formats else []
+        values = (
+            [self.formats.input_format, self.formats.output_format]
+            if self.formats
+            else []
+        )
+
+        names += ["unpack_to_dest", "dest_acc"]
+        values += [self.unpack_to_dest, self.dest_acc]
+
+        for param in self.passed_templates + self.passed_runtimes:
+            for name, value in PerfConfig._dataclass_name_and_values(param):
+                if value is not None:
+                    names.append(name)
+                    values.append(value)
+
+        sweep = pd.DataFrame([values], columns=names)
+        combined = sweep.merge(run_results, how="cross")
+
+        perf_report.append(combined)

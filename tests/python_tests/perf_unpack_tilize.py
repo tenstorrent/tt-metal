@@ -5,7 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
@@ -58,7 +58,7 @@ def _perf_unpack_tilize(
     tile_count = rt_dim * ct_dim
     dimensions = [rt_dim * 32, ct_dim * 32]
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/unpack_tilize_perf.cpp",
         formats,
         run_types=[

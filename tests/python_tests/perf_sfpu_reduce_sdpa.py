@@ -9,7 +9,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
@@ -60,7 +60,7 @@ def test_perf_sfpu_reduce_sdpa(
     # Run performance benchmarks focusing on MATH_ISOLATE to measure SFPU cycles
     # MATH_ISOLATE measures only the math operation cycles, excluding unpack/pack
     # This specifically measures the _calculate_reduce_sdpa_ function cycles
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/sfpu_reduce_sdpa_perf.cpp",
         formats,
         run_types=[

@@ -286,8 +286,25 @@ def parametrize(**kwargs: any):
     parameters_string = ",".join(parameters)
     parameter_values = _params_solve_dependencies(**kwargs)
 
+    def generate_id(value_tuple):
+        """Generate readable test IDs from parameter values."""
+        parts = []
+        for param, value in zip(parameters, value_tuple):
+            if isinstance(value, InputOutputFormat):
+                param_value = f"{value.input_format.name}->{value.output_format.name}"
+            elif hasattr(value, "name"):
+                param_value = value.name
+            elif hasattr(value, "value"):
+                param_value = str(value.value)
+            else:
+                param_value = str(value)
+            parts.append(f"{param}:{param_value}")
+        return "-".join(parts)
+
+    ids = [generate_id(values) for values in parameter_values]
+
     def decorator(test_function):
-        return pytest.mark.parametrize(parameters_string, parameter_values)(
+        return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
             test_function
         )
 

@@ -12,7 +12,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
@@ -52,7 +52,7 @@ def test_perf_math_transpose(
 
     tile_count = 16
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/math_transpose_perf.cpp",
         formats,
         run_types=[PerfRunType.L1_TO_L1],

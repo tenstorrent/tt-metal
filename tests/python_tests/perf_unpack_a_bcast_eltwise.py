@@ -11,7 +11,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.profiler import ProfilerConfig
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -56,7 +56,7 @@ def test_perf_col_tile_sdpa(
 
     tile_count = input_dimensions[0] * input_dimensions[1] // 1024
 
-    configuration = ProfilerConfig(
+    configuration = PerfConfig(
         "sources/unpack_a_bcast_eltwise_perf.cpp",
         formats,
         # For now only L1_TO_L1 and PACK_ISOLATE are supported because of custom usage of dvalid signals
@@ -85,5 +85,4 @@ def test_perf_col_tile_sdpa(
         perf_report,
         run_count=10,
         location=workers_tensix_coordinates,
-        delete_artefacts=False,
     )
