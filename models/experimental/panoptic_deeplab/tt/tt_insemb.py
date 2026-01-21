@@ -172,15 +172,15 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # Matmul based upsample
         offset_logits = self.final_upsample(offset_logits)
 
-        if not self.is_20_core:
-            # Shard before
-            mem_config = ttnn.create_sharded_memory_config_(
-                offset_logits.shape,
-                core_grid=ttnn.CoreGrid(x=8, y=8),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            offset_logits = ttnn.to_memory_config(offset_logits, mem_config)
+        # if not self.is_20_core:
+        #     # Shard before
+        #     mem_config = ttnn.create_sharded_memory_config_(
+        #         offset_logits.shape,
+        #         core_grid=ttnn.CoreGrid(x=8, y=8),
+        #         strategy=ttnn.ShardStrategy.HEIGHT,
+        #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #     )
+        #     offset_logits = ttnn.to_memory_config(offset_logits, mem_config)
 
         # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
