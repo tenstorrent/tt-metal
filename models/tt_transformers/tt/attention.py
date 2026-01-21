@@ -802,32 +802,33 @@ class Attention(LightweightModule):
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
         if batch_size > 1:
-            # Galaxy 70B approach: reshape K/V to [1, 1, total_seq_len, -1] and use batch_idx_tensor
-            # k_fill/v_fill have shape [batch_size, n_kv_heads, seq_len_per_user, head_dim]
-            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
-            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
+            # For batched prefill, loop over VALID users only and fill each user's cache separately
+            # k_fill/v_fill have shape [padded_batch, n_kv_heads, seq_len_per_user, head_dim]
+            # The paged_fill_cache kernel reads batch_idx_ptr[0] for all positions,
+            # so we must call it once per user with their specific K/V slice
+            #
+            # IMPORTANT: user_id is a list of valid slot indices for batched prefill.
+            # Empty slots have page_table entries of -1, so we must skip them to avoid
+            # writing to invalid memory blocks.
+            seq_len_per_user = k_fill.shape[2]
+            page_len = fill_page_table.shape[1] * block_size
 
-            # Use batch_idx_tensor for batched KV cache fill (Galaxy 70B style)
-            if user_id_tensor is not None:
-                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx_tensor=user_id_tensor)
-                ttnn.experimental.paged_fill_cache(
-                    values_BKSD, v_fill, fill_page_table, batch_idx_tensor=user_id_tensor
-                )
-            else:
-                # Fallback: create user_id_tensor from range(batch_size)
-                user_id_tensor_local = ttnn.from_torch(
-                    torch.arange(batch_size, dtype=torch.int32),
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                ttnn.experimental.paged_fill_cache(
-                    keys_BKSD, k_fill, fill_page_table, batch_idx_tensor=user_id_tensor_local
-                )
-                ttnn.experimental.paged_fill_cache(
-                    values_BKSD, v_fill, fill_page_table, batch_idx_tensor=user_id_tensor_local
-                )
+            # user_id is a list of valid slot indices (e.g., [0, 1, 2, ..., N-1] for N users)
+            # Each slot index tells us which row in k_fill and page_table to use
+            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+
+            for slot_idx in valid_slots:
+                # Extract this slot's K/V slice: [1, n_kv_heads, seq_len_per_user, head_dim]
+                k_user = k_fill[slot_idx : slot_idx + 1, :, :, :]
+                v_user = v_fill[slot_idx : slot_idx + 1, :, :, :]
+
+                # Slice to page length if needed (same as single-user path)
+                k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+
+                # Fill cache for this specific slot with scalar batch_idx
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
         elif page_table:
             # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size

@@ -417,7 +417,9 @@ class Generator:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=0 if use_batched_prefill else group_user_id,  # Galaxy 70B uses user_id=0
+                    user_id=empty_slots
+                    if use_batched_prefill
+                    else group_user_id,  # Pass valid slot indices for batched
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
@@ -429,7 +431,9 @@ class Generator:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=0 if use_batched_prefill else group_user_id,  # Galaxy 70B uses user_id=0
+                    user_id=empty_slots
+                    if use_batched_prefill
+                    else group_user_id,  # Pass valid slot indices for batched
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,

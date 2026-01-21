@@ -282,25 +282,15 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
-            # For batched prefill (batch_size > 1), concatenate page tables along sequence dimension
-            # Following 70B Galaxy approach: reshape from [B, num_pages] to [1, B * num_pages]
-            if batch_size > 1:
-                page_table_concat = page_table.reshape(1, -1)  # [B, num_pages] -> [1, B * num_pages]
-                tt_page_table = ttnn.from_torch(
-                    page_table_concat,
-                    device=device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-            else:
-                tt_page_table = ttnn.from_torch(
-                    page_table,
-                    device=device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
+            # For batched prefill, replicate page_table to all devices (same as single-user path)
+            # The KV cache fill will loop over users and use batch_idx=user_id for each
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         else:
             tt_page_table = None
 
@@ -316,11 +306,12 @@ class Transformer(LightweightModule):
             tt_chunk_page_table = None
 
         # Create user_id tensor for batched prefill KV cache filling
-        # This must be created here (before trace capture) not in attention
-        if batch_size > 1 and isinstance(user_id, list):
-            # user_id is a list of user IDs for batched prefill
+        # For batched prefill: always use scalar [0] because each device reads its local
+        # page table row 0 (which contains that device's users' pages due to sharding)
+        if batch_size > 1:
+            # Scalar user_id = 0 - each device reads row 0 of its sharded page table
             tt_user_id = ttnn.from_torch(
-                torch.tensor(user_id, dtype=torch.int32),
+                torch.tensor([0], dtype=torch.int32),
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
