@@ -294,10 +294,21 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     std::vector<std::optional<Tensor>> grad_tensor;
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor tanh_res = ttnn::tanh(input, output_mem_config);
-    tanh_res = ttnn::square(tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(tanh_res, 1.0f, std::nullopt, output_mem_config);
-    ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config, input_grad);
+    // Use sech²(x) = 1/cosh²(x) instead of 1-tanh²(x)
+    // This avoids precision loss when tanh(x) saturates to ±1 for large |x|
+    // The old formula: 1 - tanh²(x) would produce 0 when tanh = ±1
+    // The new formula: 1/cosh²(x) correctly produces small non-zero values
+    //
+    // For very large |x| (>10), cosh(x) grows exponentially and precision is lost
+    // in the chain of operations. Since sech²(10) ≈ 8e-9 is negligible for training
+    // and the true value approaches 0 asymptotically, we return 0 for |x| > 10.
+    // This matches the mathematically correct asymptotic behavior.
+    Tensor cosh_res = ttnn::cosh(input, output_mem_config);
+    Tensor sech2 = ttnn::reciprocal(ttnn::square(cosh_res, output_mem_config), output_mem_config);
+    // For |x| > 10, sech²(x) is essentially 0; use where to handle precision issues
+    Tensor abs_input = ttnn::abs(input, output_mem_config);
+    sech2 = ttnn::where(ttnn::gt(abs_input, 10.0f, std::nullopt, output_mem_config), 0.0f, sech2, output_mem_config);
+    ttnn::multiply(grad, sech2, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
