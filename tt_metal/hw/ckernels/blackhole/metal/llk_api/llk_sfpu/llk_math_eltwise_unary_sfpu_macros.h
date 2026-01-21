@@ -70,6 +70,10 @@
 #define SFPU_UNARY_NO_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
 
+// For ops without extra uint parameter with ITERATIONS
+#define SFPU_UNARY_NO_PARAM_KERNEL_FN_ITERATIONS(FN, MODE, APPROXIMATE, DST_IDX, ITERATIONS) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, ITERATIONS>, DST_IDX, (int)VectorMode::MODE)
+
 // For ops without extra uint parameters with type and iteration
 #define SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE_AND_ITERATIONS(FN, TYPE, MODE, APPROXIMATE, DST_IDX, ITERATIONS) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
