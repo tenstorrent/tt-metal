@@ -643,6 +643,21 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     fifo_curr_size_ = fifo_page_aligned_size;
 }
 
+uint32_t D2HSocket::pages_available() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
+
+    // Flush CPU cache line to force re-read from RAM (where PCIe writes land)
+    volatile uint32_t* bytes_sent_ptr = const_cast<volatile uint32_t*>(&bytes_sent_buffer_->at(0));
+    _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(bytes_sent_ptr)));
+    _mm_lfence();  // Serialize loads after cache line flush
+
+    uint32_t bytes_sent_value = *bytes_sent_ptr;
+    bytes_sent_ = bytes_sent_value;
+    uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
+
+    return bytes_recv / page_size_;
+}
+
 void D2HSocket::wait_for_pages(uint32_t num_pages) {
     TT_FATAL(page_size_ > 0, "Page size must be set before waiting for pages.");
     uint32_t num_bytes = num_pages * page_size_;

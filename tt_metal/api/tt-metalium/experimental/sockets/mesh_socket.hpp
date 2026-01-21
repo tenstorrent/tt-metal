@@ -92,6 +92,7 @@ public:
         uint32_t l1_data_buffer_size = 0);
 
     void wait_for_pages(uint32_t num_pages);
+    uint32_t pages_available();  // Non-blocking check for available pages
     void pop_pages(uint32_t num_pages);
     void notify_sender();
     uint32_t get_page_size() const { return page_size_; }

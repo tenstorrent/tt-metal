@@ -256,7 +256,7 @@ bool perf_telemetry_init() {
 }
 
 // Push the L1 data buffer contents to the host as a telemetry page
-// Lazily initializes the socket on first call if config is available
+// Blocking: waits for space in receiver's FIFO
 // Returns: true if data was sent, false if not initialized or no L1 buffer
 FORCE_INLINE
 bool perf_telemetry_push() {
@@ -272,7 +272,7 @@ bool perf_telemetry_push() {
         return false;
     }
 
-    // Wait for space in the receiver's FIFO
+    // Wait for space in the receiver's FIFO (blocking)
     socket_reserve_pages(perf_telemetry_socket, 1);
 
     // Build 64-bit PCIe destination address
@@ -308,7 +308,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
 
     WAYPOINT("DAPW");
 
-    // Push perf telemetry data before waiting for pages
+    // Push perf telemetry data (blocking - waits for space)
     perf_telemetry_push();
 
     uint32_t heartbeat = 0;

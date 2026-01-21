@@ -47,6 +47,7 @@
 #include "tracy/Tracy.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
+#include "llrt/hal.hpp"
 
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -1250,10 +1251,89 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     // Set page size for the socket
     perf_telemetry_socket_->set_page_size(kPerfTelemetryPageSize);
 
-    // Note: Background scrubbing thread is not started during device init
-    // because wait_for_pages() blocks and the dispatch_s kernel may not be
-    // pushing data yet. The thread should be started explicitly when needed.
+    // Populate L1 data buffer with test data (series of numbers)
+    uint32_t l1_data_addr = perf_telemetry_socket_->get_l1_data_buffer_address();
+    if (l1_data_addr != 0) {
+        std::vector<uint32_t> test_data(kPerfTelemetryPageSize / sizeof(uint32_t));
+        for (uint32_t i = 0; i < test_data.size(); i++) {
+            test_data[i] = 0xDEAD0000 + i;  // Recognizable pattern
+        }
+        tt::tt_metal::detail::WriteToDeviceL1(ref_device, dispatch_core, l1_data_addr, test_data, CoreType::WORKER);
+        log_info(
+            tt::LogMetal,
+            "Populated L1 data buffer at 0x{:x} with {} words of test data",
+            l1_data_addr,
+            test_data.size());
+    }
+
+    // Write config buffer address to mailbox so kernel can find it
+    // The kernel reads from mailboxes_t.perf_telemetry.config_buffer_addr
+    uint32_t config_buffer_addr = perf_telemetry_socket_->get_config_buffer_address();
+
+    // Use HAL's dev_msgs factory to get the offset of perf_telemetry within mailboxes_t
+    const auto& hal = MetalContext::instance().hal();
+    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    uint32_t perf_telemetry_offset =
+        factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::perf_telemetry);
+    uint32_t config_buffer_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
+        dev_msgs::perf_telemetry_config_t::Field::config_buffer_addr);
+
+    uint32_t perf_telemetry_mailbox_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset +
+        config_buffer_addr_offset;
+
+    // Write the config buffer address as a vector of uint32_t
+    std::vector<uint32_t> addr_data = {config_buffer_addr};
+    tt::tt_metal::detail::WriteToDeviceL1(
+        ref_device, dispatch_core, perf_telemetry_mailbox_addr, addr_data, CoreType::WORKER);
+
+    log_info(
+        tt::LogMetal,
+        "Wrote perf telemetry config buffer addr 0x{:x} to mailbox addr 0x{:x}",
+        config_buffer_addr,
+        perf_telemetry_mailbox_addr);
+
+    // Start background scrubbing thread to receive telemetry data
     perf_telemetry_stop_.store(false);
+    perf_telemetry_thread_ = std::thread([this]() {
+        constexpr uint32_t page_size = 64;  // Same as kPerfTelemetryPageSize
+        uint32_t page_size_words = page_size / sizeof(uint32_t);
+        uint64_t pages_received = 0;
+
+        log_info(tt::LogMetal, "[Perf Telemetry] Receiver thread started");
+
+        while (!perf_telemetry_stop_.load()) {
+            try {
+                // Non-blocking check for available pages with 10ms timeout
+                uint32_t available = perf_telemetry_socket_->pages_available();
+                if (available == 0) {
+                    // No data available, sleep and check stop flag
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                // Data is available, now we can safely call wait_for_pages (won't block)
+                perf_telemetry_socket_->wait_for_pages(1);
+                uint32_t* read_ptr = perf_telemetry_socket_->get_read_ptr();
+
+                // Print first few words of telemetry data
+                std::cout << "[Perf Telemetry] Page " << pages_received << ": ";
+                for (uint32_t i = 0; i < page_size_words && i < 4; i++) {
+                    std::cout << "0x" << std::hex << read_ptr[i] << " ";
+                }
+                std::cout << std::dec << std::endl;
+
+                perf_telemetry_socket_->pop_pages(1);
+                perf_telemetry_socket_->notify_sender();
+                pages_received++;
+            } catch (const std::exception& e) {
+                log_warning(tt::LogMetal, "[Perf Telemetry] Exception in receiver: {}", e.what());
+                break;
+            }
+        }
+
+        log_info(tt::LogMetal, "[Perf Telemetry] Receiver thread stopped after {} pages", pages_received);
+    });
 }
 
 D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const { return perf_telemetry_socket_.get(); }
