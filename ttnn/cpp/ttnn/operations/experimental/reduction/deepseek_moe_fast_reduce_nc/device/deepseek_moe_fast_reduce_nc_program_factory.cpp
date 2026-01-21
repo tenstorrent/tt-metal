@@ -45,7 +45,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     // const uint32_t split_dim = operation_attributes.split_dim;
 
     // const uint32_t input_tensor_Ht = input_shape[-2] / tt::constants::TILE_HEIGHT;
-    // const uint32_t input_tensor_wt = input_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t input_tensor_Wt = input_shape[-1] / tt::constants::TILE_WIDTH;
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
     uint32_t inner_dims_product = 1;
@@ -130,8 +130,16 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         compute_input_cb_id_1};
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {output_page_size, num_cores_to_be_used, compute_output_cb_id};
+    std::vector<uint32_t> writer_ct_args = {
+        output_page_size, num_cores_to_be_used, compute_output_cb_id, input_tensor_Wt};
     TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(1).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(2).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(3).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(4).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(5).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(6).buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensors.at(7).buffer()).append_to(writer_ct_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/"
@@ -248,7 +256,17 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
             inner_num_tiles};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        std::vector<uint32_t> writer_rt_args = {output_tensors.at(0).buffer()->address(), id_range_length, i};
+        std::vector<uint32_t> writer_rt_args = {
+            output_tensors.at(0).buffer()->address(),
+            output_tensors.at(1).buffer()->address(),
+            output_tensors.at(2).buffer()->address(),
+            output_tensors.at(3).buffer()->address(),
+            output_tensors.at(4).buffer()->address(),
+            output_tensors.at(5).buffer()->address(),
+            output_tensors.at(6).buffer()->address(),
+            output_tensors.at(7).buffer()->address(),
+            id_range_length,
+            i};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
