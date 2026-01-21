@@ -31,8 +31,8 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        ack_counters[src_id]++;
+    FORCE_INLINE void send_ack_credit(uint8_t src_id, int count = 1) {
+        ack_counters[src_id] += count;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
         update_sender_side_credits();
     }
@@ -56,18 +56,24 @@ private:
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
-            sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+            if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+                sender_channel_packets_completed_stream_ids[i] = to_receiver_packets_sent_streams[0];
+            } else {
+                sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+            }
             sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i];
         }
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
+        WATCHER_RING_BUFFER_PUSH(0xFCC00000 | (src_id << 16) | sender_channel_packets_completed_stream_ids[src_id]);
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
+    FORCE_INLINE void send_ack_credit(uint8_t src_id, int count = 1) {
+        WATCHER_RING_BUFFER_PUSH(0xFAA00000 | (src_id << 16) | sender_channel_packets_ack_stream_ids[src_id]);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], count);
     }
 
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
@@ -154,7 +160,9 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
         to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
-        to_sender_packets_completed_stream(to_sender_packets_completed_streams[sender_channel_index]) {}
+        to_sender_packets_completed_stream(
+            ENABLE_FIRST_LEVEL_ACK ? to_receiver_packets_sent_streams[0]
+                                   : to_sender_packets_completed_streams[sender_channel_index]) {}
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
@@ -162,6 +170,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) {
+        // WATCHER_RING_BUFFER_PUSH(0xAAA00000 | to_sender_packets_acked_stream);
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
@@ -171,6 +180,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
+        // WATCHER_RING_BUFFER_PUSH(0xBBB00000 | to_sender_packets_completed_stream);
         increment_local_update_ptr_val(to_sender_packets_completed_stream, -num_completions);
     }
 
@@ -247,10 +257,10 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_received_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id, int count = 1) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
     }
-    receiver_channel_response_credit_sender.send_ack_credit(src_id);
+    receiver_channel_response_credit_sender.send_ack_credit(src_id, count);
 }

@@ -1615,6 +1615,8 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+
+        // WATCHER_RING_BUFFER_PUSH(0x55000000 | sender_channel_index | (to_receiver_pkts_sent_id << 16));
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1626,6 +1628,7 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
+        // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
@@ -1644,6 +1647,7 @@ FORCE_INLINE
     if constexpr (enable_first_level_ack) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
+            // WATCHER_RING_BUFFER_PUSH(0xAA000000 | (acks_since_last_check << 16) | sender_channel_index);
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
@@ -1694,7 +1698,11 @@ FORCE_INLINE
 
         return run_sender_channel_step_impl<
             sender_channel_index,
-            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+            ENABLE_FIRST_LEVEL_ACK
+                ?
+                // for first level ack, the src_id is actually interpreted as the receiver channel index
+                to_sender_packets_completed_streams[sender_channel_index]
+                : to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
             sender_ch_live_check_skip[sender_channel_index],
             enable_first_level_ack>(
             local_sender_channels.template get<sender_channel_index>(),
@@ -1733,7 +1741,22 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    uint32_t pkts_received_since_last_check;
+    std::array<uint8_t, NUM_SENDER_CHANNELS> num_packets_to_process;
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        pkts_received_since_last_check = 0;
+#pragma unroll
+        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+            num_packets_to_process[i] = get_ptr_val(to_sender_packets_completed_streams[i]);
+            pkts_received_since_last_check += num_packets_to_process[i];
+            if (num_packets_to_process[i] > 0) {
+                WATCHER_RING_BUFFER_PUSH(
+                    i | (num_packets_to_process[i]) | (to_sender_packets_completed_streams[i] << 16));
+            }
+        }
+    } else {
+        pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    }
 
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1864,38 +1887,54 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         // Track newly received packets that need first-level acks
-        receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
-        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-
-        // Try to send first-level acks independently
-        bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
-        bool can_send_ack = has_unsent_acks;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (can_send_ack) {
-            // currently only support processing one packet at a time, so we only decrement by 1
-            invalidate_l1_cache();
-
-            uint8_t src_ch_id;
-            auto& ack_counter = receiver_channel_pointers.ack_counter();
-            if constexpr (skip_src_ch_id_update) {
-                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
-                // sender channel so we don't dynamically fetch it off the packet header
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+        // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
+        auto& ack_counter = receiver_channel_pointers.ack_counter();
+#pragma unroll
+        uint32_t acks_to_send = 0;
+        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+            auto num_packets_to_process_i = num_packets_to_process[i];
+            acks_to_send += num_packets_to_process_i;
+            increment_local_update_ptr_val(to_sender_packets_completed_streams[i], -num_packets_to_process_i);
+            if (num_packets_to_process_i > 0) {
+                WATCHER_RING_BUFFER_PUSH(
+                    0xFA000000 | (num_packets_to_process_i << 16) | (to_sender_packets_completed_streams[i] << 8) | i);
+                receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                    receiver_channel_response_credit_sender, i, num_packets_to_process_i);
             }
-
-            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id);
-            ack_counter.increment();
-            receiver_channel_pointers.m.unsent_first_level_acks--;
+            ack_counter.increment_n(num_packets_to_process_i);
         }
+        // receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
+
+        // // Try to send first-level acks independently
+        // bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
+        // bool can_send_ack = has_unsent_acks;
+        // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        //     can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+        // }
+        // if (can_send_ack) {
+        //     // currently only support processing one packet at a time, so we only decrement by 1
+        //     invalidate_l1_cache();
+
+        //     // uint8_t src_ch_id;
+        //     // auto& ack_counter = receiver_channel_pointers.ack_counter();
+        //     // if constexpr (skip_src_ch_id_update) {
+        //     //     // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+        //     //     // sender channel so we don't dynamically fetch it off the packet header
+        //     //     src_ch_id = receiver_channel_pointers.get_src_chan_id();
+        //     // } else {
+        //     //     auto receiver_buffer_index = ack_counter.get_buffer_index();
+        //     //     tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+        //     //         local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+        //     //     receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        //     //     src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+        //     // }
+        //     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        //         receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+        //             receiver_channel_response_credit_sender, i);
+        //     }
+        //     ack_counter.increment();
+        //     // receiver_channel_pointers.m.unsent_first_level_acks--;
+        // }
         // unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     }
 
@@ -1945,6 +1984,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
+            WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
         }
