@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 
 namespace ttnn::operations::reduction::reduce_mean_w_rm::program {
@@ -39,8 +40,9 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
 
     // Tensor dimensions (const)
     const uint32_t W = input.padded_shape()[-1];
+    const uint32_t H = input.padded_shape()[-2];
     const uint32_t Wt = W / tt::constants::TILE_WIDTH;
-    // Note: H and Ht will be used in Stage 6 kernel args
+    const uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
     // Stick sizes (unaligned and aligned for NoC)
     const uint32_t input_stick_size = W * input.element_size();
@@ -69,10 +71,12 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
     //    - CB c_16: Output row-major sticks (1 tile, width = 32 padded)
     // ============================================================
 
-    // CB c_0: Input RM sticks (double-buffered, 32 sticks per tile row)
+    // CB c_0: Input RM sticks (double-buffered, Wt tiles worth per tile-row)
+    // Tilize helper uses cb_wait_front(cb, Wt), so configure with tile_size pages
+    // Memory equivalence: Wt tiles * tile_size = 32 sticks * W * elem_size
     constexpr uint32_t cb_in_rm_idx = tt::CBIndex::c_0;
-    const uint32_t cb_in_rm_page_size = input_stick_size_aligned;
-    const uint32_t cb_in_rm_num_pages = buffering_factor * tt::constants::TILE_HEIGHT;  // 2 * 32 = 64
+    const uint32_t cb_in_rm_page_size = tile_size;              // Tile-sized for tilize sync
+    const uint32_t cb_in_rm_num_pages = buffering_factor * Wt;  // 2 * Wt for double buffering
     tt::tt_metal::create_cb(cb_in_rm_idx, program, all_cores, cb_in_rm_page_size, cb_in_rm_num_pages, cb_data_format);
 
     // CB c_1: Tiled input (double-buffered, Wt tiles per tile-row)
@@ -83,11 +87,14 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
         cb_in_tiled_idx, program, all_cores, cb_in_tiled_page_size, cb_in_tiled_num_pages, cb_data_format);
 
     // CB c_2: Scaler tile (1 tile, persistent, contains 1/W for mean)
+    // Scaler datatype is hardcoded bfloat16 due to tile creation in reader using generate_reduce_scaler
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
-    const uint32_t cb_scaler_page_size = tile_size;
+    const tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
+    const uint32_t cb_scaler_page_size = scaler_tile_size;
     const uint32_t cb_scaler_num_pages = 1;
     tt::tt_metal::create_cb(
-        cb_scaler_idx, program, all_cores, cb_scaler_page_size, cb_scaler_num_pages, cb_data_format);
+        cb_scaler_idx, program, all_cores, cb_scaler_page_size, cb_scaler_num_pages, scaler_cb_data_format);
 
     // CB c_3: Reduced tiled output (1 tile, output width = 1 tile after reduction)
     constexpr uint32_t cb_reduced_tiled_idx = tt::CBIndex::c_3;
@@ -101,21 +108,35 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
         cb_reduced_tiled_num_pages,
         cb_data_format);
 
-    // CB c_16: Output RM sticks (1 tile, output width = 32 padded)
+    // CB c_16: Output after untilize (1 tile = 32 sticks of width 32)
+    // Untilize helper operates on tiles, so page_size = tile_size
+    // Writer extracts 32 sticks from each tile
     constexpr uint32_t cb_out_rm_idx = tt::CBIndex::c_16;
-    const uint32_t cb_out_rm_page_size = output_stick_size_aligned;
+    const uint32_t cb_out_rm_page_size = tile_size;  // Tile-sized for untilize helper
     const uint32_t cb_out_rm_num_pages = 1;
     tt::tt_metal::create_cb(
         cb_out_rm_idx, program, all_cores, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // ============================================================
-    // 5. Create kernels (Stage 6 - empty stubs)
+    // 5. Create kernels
     // ============================================================
 
-    // Compile-time args for kernels (minimal for empty stubs)
-    const std::vector<uint32_t> reader_compile_time_args = {};
-    const std::vector<uint32_t> compute_compile_time_args = {};
-    const std::vector<uint32_t> writer_compile_time_args = {};
+    // Calculate scaler value: 1/W for mean calculation
+    // Scaler is packed as two bfloat16 values in a uint32
+    const float scaler_value = 1.0f / static_cast<float>(W);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler_value);
+    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+
+    // Reader compile-time args: input_stick_size, packed_scaler, Ht, Wt, TensorAccessorArgs
+    std::vector<uint32_t> reader_compile_time_args = {input_stick_size_aligned, packed_scaler_value, Ht, Wt};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+
+    // Compute compile-time args: Ht, Wt
+    const std::vector<uint32_t> compute_compile_time_args = {Ht, Wt};
+
+    // Writer compile-time args: output_stick_size, Ht, TensorAccessorArgs
+    std::vector<uint32_t> writer_compile_time_args = {output_stick_size_aligned, Ht};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Reader kernel (RISCV_0 / BRISC / NOC0)
     const auto reader_id = tt::tt_metal::CreateKernel(
