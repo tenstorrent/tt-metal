@@ -17,8 +17,8 @@ namespace ttnn::operations::experimental::minimal_matmul_split {
 std::vector<ttnn::Tensor> ExecuteMinimalMatmulSplit::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    const int32_t chunks,
-    const int32_t dim,
+    int32_t chunks,
+    int32_t dim,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<unary::UnaryWithParam> fused_activation,
     const std::optional<const MinimalMatmulSplitConfig>& config,
