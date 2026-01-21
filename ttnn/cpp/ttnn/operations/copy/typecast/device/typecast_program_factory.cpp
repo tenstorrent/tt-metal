@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
@@ -18,43 +19,51 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input = tensor_args.input;
-    const auto& input_dtype = args.input_dtype;
-    const auto& output_dtype = args.output_dtype;
+    const Tensor& input = tensor_args.input;
+    const DataType& input_dtype = args.input_dtype;
+    const DataType& output_dtype = args.output_dtype;
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
+    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    const auto* device = input.device();
 
-    tt::tt_metal::IDevice* device = input.device();
+    // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
+    const uint32_t num_pages = input.buffer()->num_pages();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
+    // Set CB page size correctly based on layout
+    // - For TILE layout: page = one 32x32 tile
+    // - For ROW_MAJOR layout: page = one full row including padding
+    const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
+    const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+
+    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
+
+    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t num_input_pages = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt::tt_metal::CircularBufferConfig(num_input_pages * input_page_size, {{src0_cb_index, cb_data_format_input}})
+            .set_page_size(src0_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = 2;
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint32_t num_output_pages = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
+            num_output_pages * output_page_size, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -74,8 +83,8 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1,                           // per_core_block_size
+        num_items_per_core_group_1,  // per_core_block_cnt
+        1,                           // per_core_block_dim (always 1, works for both tiled and row-major)
         src0_cb_index,
         output_cb_index};
 
@@ -84,7 +93,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    bool math_approx_mode = false;
+    constexpr bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
@@ -96,7 +105,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
-    const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+    const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     tt::tt_metal::CreateKernel(
         program,
@@ -113,8 +122,8 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1,                           // per_core_block_size
+            num_items_per_core_group_2,  // per_core_block_cnt
+            1,                           // per_core_block_dim (always 1)
             src0_cb_index,
             output_cb_index};
 
@@ -132,23 +141,27 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
                 .defines = unary_defines});
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core = 0;
+    // Convert CoreRangeSet to vector of cores in the correct order
+    // Use row_wise=true for row-major layout to match row distribution, false for tile layout
+    auto cores_vec = corerange_to_cores(all_cores, std::nullopt, is_row_major);
+
+    uint32_t num_items_written = 0;
+    for (const auto& core : cores_vec) {
+        uint32_t num_items_per_core = 0;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_items_per_core = num_items_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_items_per_core = num_items_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
         tt::tt_metal::SetRuntimeArgs(
-            program, typecast_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+            program, typecast_reader_kernel_id, core, {src_buffer->address(), num_items_per_core, num_items_written});
 
         tt::tt_metal::SetRuntimeArgs(
-            program, typecast_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
-        num_tiles_written += num_tiles_per_core;
+            program, typecast_writer_kernel_id, core, {dst_buffer->address(), num_items_per_core, num_items_written});
+        num_items_written += num_items_per_core;
     }
 
     return cached_program_t{
