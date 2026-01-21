@@ -795,9 +795,7 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_shard_shape = list(shard_shape)
     output_shard_shape[0] = 1
     output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
-    if interleaved:
-        memory_config = None
-        output_memory_config = None
+
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )
