@@ -187,13 +187,13 @@ def test_ag_tg_deepseek_allgather_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_slice", 10, 100),  # Target based on typical reduce performance
-        ("kv_nope_slice", 10, 100),
-        ("kv_rope_slice", 10, 100),
+        ("q_slice", 10, 1.5),  # Target based on typical reduce performance
+        ("kv_nope_slice", 10, 1.3),
+        ("kv_rope_slice", 10, 1),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_slice_deepseek_allgather_perf(
+def test_slice_deepseek_perf(
     step_name,
     warmup_iters,
     perf_target_us,
@@ -206,7 +206,6 @@ def test_slice_deepseek_allgather_perf(
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_slice_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "SliceDeviceOperation"
-    warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)
@@ -242,12 +241,12 @@ def test_slice_deepseek_allgather_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("q_norm", 10, 100),  # Target based on typical reduce performance
-        ("kv_norm", 10, 100),
+        ("q_norm", 10, 7.34),  # Target based on typical reduce performance
+        ("kv_norm", 10, 6.68),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_rmsnorm_deepseek_allgather_perf(
+def test_rmsnorm_deepseek_perf(
     step_name,
     warmup_iters,
     perf_target_us,
@@ -260,7 +259,6 @@ def test_rmsnorm_deepseek_allgather_perf(
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_rmsnorm_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "LayerNormDeviceOperation"
-    warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)
@@ -294,15 +292,30 @@ def test_rmsnorm_deepseek_allgather_perf(
 
 
 @pytest.mark.parametrize(
-    "step_name, warmup_iters, perf_target_us",
+    "step_name, warmup_iters, perf_target_us, op_name",
     [
-        ("kv_nope_to_interleaved", 10, 50),
-        ("kv_rope_reshard", 10, 50),
-        ("kv_rope_out_reshard", 10, 50),
-        ("kvpe_reshard", 10, 50),
-        ("q_rope_out_reshard", 10, 50),
-        ("flash_mla_reshard", 10, 50),
-        ("flash_mla_out_reshard", 10, 50),
+        (
+            "kv_nope_to_interleaved",
+            0.75,
+            50,
+            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
+        ),
+        ("kv_rope_reshard", 1.04, 50, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
+        (
+            "kv_rope_out_reshard",
+            1.19,
+            50,
+            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
+        ),
+        ("kvpe_reshard", 2.8, 50, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
+        ("q_rope_out_reshard", 1.18, 50, "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>"),
+        ("flash_mla_reshard", 9.34, 50, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
+        (
+            "flash_mla_out_reshard",
+            3.86,
+            50,
+            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
+        ),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -311,6 +324,7 @@ def test_to_memory_config_deepseek_perf(
     warmup_iters,
     perf_target_us,
     galaxy_type,
+    op_name,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -318,8 +332,6 @@ def test_to_memory_config_deepseek_perf(
     subdir = "deepseek_ccl_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_to_memory_config_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "ToMemoryConfigDeviceOperation"
-    warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
     profiler.start(step_name)
