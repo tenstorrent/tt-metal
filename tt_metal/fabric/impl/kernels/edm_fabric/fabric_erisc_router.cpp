@@ -850,6 +850,7 @@ FORCE_INLINE void receiver_forward_packet(
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        WATCHER_RING_BUFFER_PUSH(0x44440000);
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -1634,7 +1635,7 @@ FORCE_INLINE
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
     if (completions_since_last_check) {
         // WATCHER_RING_BUFFER_PUSH(0xBB000000 | (completions_since_last_check << 16) | sender_channel_index);
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
@@ -1653,12 +1654,12 @@ FORCE_INLINE
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
-        auto packed_acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        auto packed_acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
         if (packed_acks != 0) {
             auto acks_since_last_check = extract_sender_channel_acks<sender_channel_index>(packed_acks);
             if (acks_since_last_check > 0) {
                 uint32_t acks_to_decrement = build_ack_decrement_value<sender_channel_index>(acks_since_last_check);
-                sender_channel_from_receiver_credits.increment_num_processed_acks(acks_to_decrement);
+                sender_channel_from_receiver_credits.increment_num_processed_acks<sender_channel_index>(acks_to_decrement);
                 send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                     local_sender_channel_worker_interface,
                     acks_since_last_check,
@@ -1757,7 +1758,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
     uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
-    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
         // WH with ENABLE_FIRST_LEVEL_ACK: Packed credits - read from shared stream register
         uint32_t packed_num_packets_raw = get_ptr_val(to_sender_packets_completed_streams[0]);
         // Track newly received packets that need first-level acks
@@ -1882,7 +1883,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
     // For WH with ENABLE_FIRST_LEVEL_ACK (packed credits), send accumulated ACKs to channel 0
     // For BH, ACKs are sent immediately per packet above via receiver_send_received_ack
-    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        static_assert(!ENABLE_FIRST_LEVEL_ACK || USE_PACKED_FIRST_LEVEL_ACK_CREDITS, "ENABLE_FIRST_LEVEL_ACK requires USE_PACKED_FIRST_LEVEL_ACK_CREDITS");
         if (receiver_channel_pointers.m.unsent_first_level_acks) {
             // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
             bool can_send = true;
@@ -1891,7 +1893,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             if (can_send) {
                 receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                    receiver_channel_response_credit_sender, 0, receiver_channel_pointers.m.unsent_first_level_acks);
+                    receiver_channel_response_credit_sender, 0 /*ignored*/, receiver_channel_pointers.m.unsent_first_level_acks);
                 receiver_channel_pointers.m.unsent_first_level_acks = 0;
             }
         }
