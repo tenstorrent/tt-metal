@@ -9,8 +9,8 @@ TtDeiTAttention::TtDeiTAttention(
     const DeiTConfig& config,
     std::shared_ptr<ttnn::MeshDevice> device,
     const std::unordered_map<std::string, torch::Tensor>& state_dict,
-    const std::string& base_address
-) : config(config), device(device) {
+    const std::string& base_address) :
+    device(device), config(config) {
     if (!device) {
         throw std::invalid_argument("Device cannot be null");
     }
