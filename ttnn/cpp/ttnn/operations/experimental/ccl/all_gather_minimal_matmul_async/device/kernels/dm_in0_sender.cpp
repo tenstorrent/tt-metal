@@ -195,14 +195,14 @@ void kernel_main() {
         mux_connection_handle_backward = nullptr;
     }
 
-    if (mux_connection_valid_forward) {
+    if (mux_connection_valid_backward) {
         // need to wait for fabric mux to be ready to accept connections
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x_forward,
-            fabric_mux_y_forward,
+            fabric_mux_x_backward,
+            fabric_mux_y_backward,
             fabric_mux_status_address,
-            local_fabric_mux_status_address_forward);
-        tt::tt_fabric::fabric_client_connect(*mux_connection_handle_forward);
+            local_fabric_mux_status_address_backward);
+        tt::tt_fabric::fabric_client_connect(*mux_connection_handle_backward);
     }
 
     if (mux_connection_valid_forward) {
@@ -335,7 +335,7 @@ void kernel_main() {
     auto pkt_unicast_hdr_forward = PacketHeaderPool::allocate_header();
     auto pkt_hdr_sem_inc_forward = PacketHeaderPool::allocate_header();
     // only initialize if we're actually going to send something over fabric
-    if (detail::valid_targets(1)) {
+    if (detail::valid_targets(0)) {
         auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
@@ -506,7 +506,8 @@ void kernel_main() {
                                 in0_tile_size,
                                 out_ready_sem_noc_addr_backward_in_pkt);
                         }
-                    } else if (!use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
+                    }
+                    if (!use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
                         if (slices_received_forward <= writes_expected_forward) {
                             // If forward, send backward
                             forward_block_to_fabric_neighbor(
@@ -527,6 +528,7 @@ void kernel_main() {
                         }
                     }
                 }
+
 #endif
             }
 #ifdef FUSE_BIAS
