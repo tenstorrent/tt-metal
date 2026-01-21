@@ -5,7 +5,7 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.t
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
-# Clear any compile options that may have been set by consuming projects that have leaked into us.
+# Clear any compile options that may have been set by consuming projects that have leaked.
 set_directory_properties(
     PROPERTIES
         COMPILE_OPTIONS
