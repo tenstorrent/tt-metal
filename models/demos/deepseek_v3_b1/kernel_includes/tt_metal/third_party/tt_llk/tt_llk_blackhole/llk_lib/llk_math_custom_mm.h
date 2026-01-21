@@ -77,8 +77,43 @@ inline void custom_mm_configure_addrmod(
             .dest = {.incr = 1000, .clr = 0, .cr = 0},  // -24 wrapped
         }
             .set(ADDR_MOD_4);
+    } else if (is_in0_32x32) {
+        // 32x32: Standard matmul pattern for better cache locality
+        // srcA reused for 2 MVMULs, srcB/dest sequential +8
+
+        // ADDR_MOD_0: srcA stay, srcB +8, dest +8
+        addr_mod_t{
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_0);
+
+        // ADDR_MOD_1: srcA +16, srcB -8 (56), dest +8
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 56, .clr = 0, .cr = 0},  // -8 wrapped
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_1);
+
+        // ADDR_MOD_4: srcA +16, srcB +8, dest -24 (1000) - K accumulation transition
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 1000, .clr = 0, .cr = 0},  // -24 wrapped
+        }
+            .set(ADDR_MOD_4);
+
+        // ADDR_MOD_5: srcA +16 (wraps to 0), srcB +8, dest +8 - block transition
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},  // 48+16=64=0 mod 64
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_5);
     } else {
-        // 1x32 and 32x32: Original pattern
+        // 1x32: Original pattern
         // ADDR_MOD_0: srcA +16, srcB stay, dest +16
         addr_mod_t{
             .srca = {.incr = 16, .clr = 0, .cr = 0},
@@ -94,24 +129,6 @@ inline void custom_mm_configure_addrmod(
             .dest = {.incr = 1008, .clr = 0, .cr = 0},  // -16 wrapped
         }
             .set(ADDR_MOD_1);
-
-        if (is_in0_32x32) {
-            // ADDR_MOD_4: srcA clr, srcB -8 (56), dest -8 (1016)
-            addr_mod_t{
-                .srca = {.incr = 0, .clr = 1, .cr = 0},
-                .srcb = {.incr = 56, .clr = 0, .cr = 0},
-                .dest = {.incr = 1016, .clr = 0, .cr = 0},
-            }
-                .set(ADDR_MOD_4);
-
-            // ADDR_MOD_5: srcA clr, srcB +8, dest +8
-            addr_mod_t{
-                .srca = {.incr = 0, .clr = 1, .cr = 0},
-                .srcb = {.incr = 8, .clr = 0, .cr = 0},
-                .dest = {.incr = 8, .clr = 0, .cr = 0},
-            }
-                .set(ADDR_MOD_5);
-        }
     }
 }
 
@@ -128,33 +145,34 @@ inline void custom_mm_configure_mop(
     const bool is_in0_16x32 = (in0_tile_r_dim == 16) && (in0_tile_c_dim == TILE_C_DIM);
 
     if (is_in0_32x32) {
-        // 32x32 tile: 16 MVMULs (4 row chunks × 2 columns × 2 K-partials)
-        // srcB cycles: 0,0,16,16, 8,8,24,24, 32,32,48,48, 40,40,56,56
-        // dest cycles: 0,16,0,16, 8,24,8,24, 32,48,32,48, 40,56,40,56
+        // 32x32 tile: 16 MVMULs with standard matmul pattern for better cache locality
+        // srcA: 0,0,16,16,32,32,48,48, 0,0,16,16,32,32,48,48 (reused for 2 MVMULs)
+        // srcB: 0,8,0,8,16,24,16,24, 32,40,32,40,48,56,48,56 (sequential +8)
+        // dest: 0,8,16,24,0,8,16,24, 32,40,48,56,32,40,48,56 (sequential +8, K accum)
         load_replay_buf(ckernel::math::replay_buf_offset, 16, [] {
-            // Row chunk 0 (rows 0-7): srcB 0,0,16,16, dest 0,16,0,16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // transition to chunk 1: srcB 16→8, dest 16→8
+            // Block 1: M-rows 0-15
+            // K-half 0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=0, srcB=0, dest=0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // srcA=0, srcB=8, dest=8
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=16, srcB=0, dest=16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // srcA=16, srcB=8, dest=24 → K accum
+            // K-half 1
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=32, srcB=16, dest=0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // srcA=32, srcB=24, dest=8
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=48, srcB=16, dest=16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);  // srcA=48, srcB=24, dest=24 → block transition
 
-            // Row chunk 1 (rows 8-15): srcB 8,8,24,24, dest 8,24,8,24
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);  // transition to chunk 2: srcB 24→32, dest 24→32
-
-            // Row chunk 2 (rows 16-23): srcB 32,32,48,48, dest 32,48,32,48
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // transition to chunk 3: srcB 48→40, dest 48→40
-
-            // Row chunk 3 (rows 24-31): srcB 40,40,56,56, dest 40,56,40,56
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);  // final, clear all
+            // Block 2: M-rows 16-31
+            // K-half 0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=0, srcB=32, dest=32
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // srcA=0, srcB=40, dest=40
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=16, srcB=32, dest=48
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // srcA=16, srcB=40, dest=56 → K accum
+            // K-half 1
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=32, srcB=48, dest=32
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // srcA=32, srcB=56, dest=40
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // srcA=48, srcB=48, dest=48
+            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // srcA=48, srcB=56, dest=56, clear all
         });
     } else if (is_in0_16x32) {
         // 16x32 tile: 8 MVMULs with standard matmul pattern for better cache locality
