@@ -10,9 +10,8 @@ TtDeiTEmbeddings::TtDeiTEmbeddings(
     const DeiTConfig& config,
     std::unordered_map<std::string, torch::Tensor>& state_dict,
     const std::string& base_address,
-    bool use_mask_token
-) : use_mask_token_(use_mask_token), hidden_size_(config.hidden_size) {
-
+    bool use_mask_token) :
+    hidden_size_(config.hidden_size), use_mask_token_(use_mask_token) {
     // Initialize patch embeddings
     patch_embeddings_ = std::make_unique<TtDeiTPatchEmbeddings>(
         config,

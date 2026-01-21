@@ -15,9 +15,8 @@ TtDeiTModel::TtDeiTModel(
     const std::string& base_address,
     std::shared_ptr<ttnn::MeshDevice> device,
     bool add_pooling_layer,
-    bool use_mask_token
-) : config_(config), device_(device), add_pooling_layer_(add_pooling_layer) {
-
+    bool use_mask_token) :
+    config_(config), device_(device) {
     try {
         // Initialize embeddings
         std::string embeddings_address = base_address.empty() ? "embeddings" : base_address + "embeddings";

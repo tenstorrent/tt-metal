@@ -2,4 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deit)
+if(BUILD_DEIT_OPENCV)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deit)
+endif()
