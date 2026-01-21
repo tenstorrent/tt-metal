@@ -104,6 +104,7 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
+        # hf_config.num_hidden_layers = 1
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
@@ -463,9 +464,19 @@ class Model:
         return tokens_embd, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_prefill(
-        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
     ):
         """Prepare inputs for prefill mode"""
+        # Default global_user_id to 0 if not provided
+        if global_user_id is None:
+            global_user_id = 0
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -498,6 +509,26 @@ class Model:
                 # Multi-user prefill: shard page table across rows
                 tt_page_table = ttnn.from_torch(
                     page_table,
+                    device=device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                    ),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            elif self.users_row_sharded and page_table.shape[0] == 1:
+                # Single-user prefill with row-sharding: create page table with valid entries
+                # only on the target row to prevent KV cache corruption on other rows
+                num_rows = self.mesh_device.shape[0]
+                users_per_row = getattr(self.args, "max_local_batch_size", self.args.max_batch_size // num_rows)
+                target_row = global_user_id // users_per_row
+
+                # Create page table with -1 (invalid) for all rows except target
+                full_page_table = torch.full((num_rows, page_table.shape[1]), -1, dtype=page_table.dtype)
+                full_page_table[target_row] = page_table[0]
+
+                tt_page_table = ttnn.from_torch(
+                    full_page_table,
                     device=device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
