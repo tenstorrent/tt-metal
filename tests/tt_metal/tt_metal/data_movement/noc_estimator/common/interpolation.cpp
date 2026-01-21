@@ -67,7 +67,7 @@ double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>&
             const double l0 = (x - x1) * (x - x2) / denom0;
             const double l1 = (x - x0) * (x - x2) / denom1;
             const double l2 = (x - x0) * (x - x1) / denom2;
-            return y0 * l0 + y1 * l1 + y2 * l2;
+            return (y0 * l0) + (y1 * l1) + (y2 * l2);
         }
     }
 
