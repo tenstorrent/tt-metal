@@ -1,10 +1,41 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include <algorithm>
+#include <tuple>
+#include <utility>
 #include "api/dataflow/dataflow_api.h"
+
+namespace detail {
+/**
+ * Helper to create tuple of TensorAccessors from TensorAccessorArgs tuple.
+ * Unlike make_tensor_accessor_tuple, this takes the actual page_size value,
+ * not a Compile Time Argument (CTA) index.
+ */
+template <typename... Args, uint32_t... Indexes>
+auto make_tensor_accessor_tuple_with_page_size(
+    const std::tuple<Args...>& args_tuple,
+    uint32_t address_rt_arg_index_start,
+    uint32_t page_size,
+    std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(TensorAccessor(
+        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
+}
+}  // namespace detail
+
+/**
+ * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
+ * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.
+ * All tensors share the same page_size (actual value, not CTA index).
+ */
+template <typename... Args>
+auto make_tensor_accessor_tuple_uniform_page_size(
+    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
+    return detail::make_tensor_accessor_tuple_with_page_size(
+        args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+}
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -195,6 +226,135 @@ void write_block_sync_granular(
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
                 noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                out_read_ptr += tile_size_bytes;
+            }
+        }
+        cb_pop_front(cb_id_out, N_block_tiles);
+    }
+    noc_async_writes_flushed();
+}
+
+/**
+ * Helper: dispatch to correct tuple element using fold expression.
+ * Each branch calls noc_async_write_tile with the concrete TensorAccessor type.
+ */
+template <typename Tuple, size_t... Is>
+FORCE_INLINE void write_tile_to_chunk(
+    const Tuple& accessors, uint32_t chunk_idx, uint32_t tile_id, uint32_t read_ptr, std::index_sequence<Is...>) {
+    // Fold expression: expands to if/else chain at compile time
+    // Each branch calls noc_async_write_tile with the concrete type
+    ((chunk_idx == Is ? (noc_async_write_tile(tile_id, std::get<Is>(accessors), read_ptr), void()) : void()), ...);
+}
+
+/**
+ * Write a block of output to a potentially padded tensor.
+ * Skip writing when M >= logical_M or N >= logical_N
+ *
+ * Note: Unlike write_block_sync, this function takes a tuple of accessors, rather than a single accessor.
+ */
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    typename... Accessors>
+void write_block_sync_split(
+    const std::tuple<Accessors...>& accessors,
+    const TensorShape2D& chunk_shape,
+    uint32_t read_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+
+    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
+    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        // Assumes that all chunks have same number of tiles on the M-axis
+        if (i >= chunk_shape.logical_d0) {
+            break;
+        }
+
+        uint32_t chunk_idx = chunk_idx_start;
+        uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
+
+        for (uint32_t j = d1_start; j < d1_end; j++, tile_idx_in_chunk++) {
+            // If we've reached the end of the current chunk, move to the next one
+            if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+                tile_idx_in_chunk = 0;
+                chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
+            }
+
+            // Skip padding
+            if (chunk_idx >= N_chunks) {
+                read_ptr += tile_size_bytes;
+                continue;
+            }
+
+            uint32_t tile_id_in_chunk = i * chunk_shape.logical_d1 + tile_idx_in_chunk;
+
+            // Compile-time dispatch preserving concrete types
+            write_tile_to_chunk(
+                accessors, chunk_idx, tile_id_in_chunk, read_ptr, std::index_sequence_for<Accessors...>{});
+            read_ptr += tile_size_bytes;
+        }
+        // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
+        read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    noc_async_writes_flushed();
+}
+
+/**
+ * Variadic write method for split operation with N output tensors.
+ * Takes the tuple directly, preserving concrete TensorAccessor<DSpec> types for noc_async_write_tile.
+ */
+template <
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t N_chunks,
+    uint32_t N_tiles_per_chunk,
+    typename... Accessors>
+void write_block_sync_granular_split(
+    const std::tuple<Accessors...>& accessors,
+    const TensorShape2D& chunk_shape,
+    uint32_t cb_id_out,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
+    const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
+
+    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+        cb_wait_front(cb_id_out, N_block_tiles);
+        uint32_t m_tile = d0_start + m_id;
+        if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
+            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+
+            uint32_t chunk_idx = chunk_idx_start;
+            uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
+
+            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++, tile_idx_in_chunk++) {
+                // If we've reached the end of the current chunk, move to the next one
+                if (tile_idx_in_chunk >= chunk_shape.logical_d1) {
+                    tile_idx_in_chunk = 0;
+                    chunk_idx++;  // Move to next chunk; if chunk is past last one then next branch will skip padding
+                }
+
+                if (chunk_idx >= N_chunks) {
+                    break;
+                }
+
+                uint32_t tile_id = m_tile * chunk_shape.logical_d1 + tile_idx_in_chunk;
+                // Compile-time dispatch preserving concrete types
+                write_tile_to_chunk(
+                    accessors, chunk_idx, tile_id, out_read_ptr, std::index_sequence_for<Accessors...>{});
+
                 out_read_ptr += tile_size_bytes;
             }
         }
