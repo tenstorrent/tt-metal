@@ -16,12 +16,13 @@ namespace ttnn::operations::experimental::ccl {
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::program_factory_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const tensor_args_t& tensor_args) {
     return AllToAllDispatchSelectiveTilizeSparse{};
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
 
@@ -32,11 +33,12 @@ void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_m
 }
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const tensor_args_t& tensor_args) {}
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::spec_return_value_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
 

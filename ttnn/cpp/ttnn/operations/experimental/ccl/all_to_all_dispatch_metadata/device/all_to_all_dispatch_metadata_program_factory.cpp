@@ -8,7 +8,6 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -43,7 +42,7 @@ std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
     const ttnn::Tensor& scores_tensor,
     const ttnn::Tensor& mapping_tensor,
     uint32_t num_links,
-    std::optional<uint32_t> axis) {
+    [[maybe_unused]] std::optional<uint32_t> axis) {
     auto aligned_input_page_size = get_aligned_page_size(input_tensor);
     auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
     auto aligned_scores_page_size = get_aligned_page_size(scores_tensor);
@@ -561,7 +560,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
 void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {

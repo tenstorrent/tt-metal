@@ -7,6 +7,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
@@ -61,7 +62,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    [[maybe_unused]] const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::Program program{};
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -78,7 +79,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    uint32_t linearized_mesh_coord = ::ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
+    uint32_t linearized_mesh_coord = ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(
         tt::LogOp,
@@ -640,9 +641,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
 void AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& selective_tilize_kernel_id = shared_variables.selective_tilize_kernel_id;

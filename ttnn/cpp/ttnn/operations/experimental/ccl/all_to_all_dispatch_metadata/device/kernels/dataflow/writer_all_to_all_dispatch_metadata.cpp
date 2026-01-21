@@ -552,8 +552,8 @@ void kernel_main() {
     // TODO: Implement sparse multicast that collects target devices and sends optimally
     //   through the ring (e.g., device 0 sends to device 1 which forwards to device 2).
     // ============================================================================
-    constexpr bool USE_BIDIRECTIONAL_MULTICAST = false;
-    constexpr bool USE_POINT_TO_POINT_UNICAST = true;
+    constexpr bool USE_BIDIRECTIONAL_MULTICAST = true;
+    constexpr bool USE_POINT_TO_POINT_UNICAST = false;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token

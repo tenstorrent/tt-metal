@@ -4,7 +4,7 @@
 
 #include "all_to_all_dispatch_selective_tilize.hpp"
 #include "device/all_to_all_dispatch_selective_tilize_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include <array>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>

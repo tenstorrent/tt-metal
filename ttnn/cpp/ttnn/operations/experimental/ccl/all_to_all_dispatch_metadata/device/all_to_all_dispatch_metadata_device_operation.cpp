@@ -15,7 +15,8 @@ namespace ttnn::operations::experimental::ccl {
 
 AllToAllDispatchMetadataDeviceOperation::program_factory_t
 AllToAllDispatchMetadataDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const tensor_args_t& tensor_args) {
     return AllToAllDispatchMetadataSparse{};
 }
 
@@ -115,7 +116,8 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
 }
 
 void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const tensor_args_t& tensor_args) {}
 
 AllToAllDispatchMetadataDeviceOperation::spec_return_value_t
 AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
