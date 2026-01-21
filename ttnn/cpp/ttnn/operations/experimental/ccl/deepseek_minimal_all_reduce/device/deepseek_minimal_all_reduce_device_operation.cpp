@@ -114,7 +114,8 @@ ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinima
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         std::optional<uint32_t> cluster_axis,
-        const std::optional<ttnn::Tensor>& intermediate_tensor) {
+        const std::optional<ttnn::Tensor>& intermediate_tensor,
+        const std::optional<ttnn::Tensor>& residual_tensor) {
     using OperationType =
         ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinimalAllReduceDeviceOperation;
 
@@ -134,8 +135,8 @@ ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinima
         num_devices);
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_links = num_links, .ring_size = num_devices, .topology = topology, .cluster_axis = cluster_axis};
-    auto tensor_args =
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .intermediate_tensor = intermediate_tensor};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .intermediate_tensor = intermediate_tensor, .residual_tensor = residual_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -20,6 +20,7 @@ struct operation_attributes_t {
 struct tensor_args_t {
     Tensor input_tensor;
     std::optional<Tensor> intermediate_tensor;
+    std::optional<Tensor> residual_tensor;  // Optional residual input for fused residual add
 };
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

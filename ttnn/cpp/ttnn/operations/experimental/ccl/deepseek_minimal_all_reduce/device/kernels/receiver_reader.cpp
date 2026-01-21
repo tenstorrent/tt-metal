@@ -28,6 +28,8 @@ void kernel_main() {
     constexpr uint32_t remote_sender_noc_x = get_compile_time_arg_val(4);
     constexpr uint32_t remote_sender_noc_y = get_compile_time_arg_val(5);
     constexpr uint32_t num_standard_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_residual = get_compile_time_arg_val(7);  // CB for residual tensor (optional)
+    constexpr uint32_t has_residual = get_compile_time_arg_val(8);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint8_t sender_num_hops = 1;
@@ -53,6 +55,16 @@ void kernel_main() {
     connection.wait_for_empty_write_slot();
     connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
+    // Push local and residual tiles to compute immediately (they're ready)
+    // This allows compute to start (local + residual) while waiting for remote data
+    cb_reserve_back(cb_in2, num_standard_tiles);
+    cb_push_back(cb_in2, num_standard_tiles);
+
+    if constexpr (has_residual) {
+        cb_reserve_back(cb_residual, num_standard_tiles);
+        cb_push_back(cb_residual, num_standard_tiles);
+    }
+
     // Wait for remote sender to signal data has been written to intermediate tensor
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
@@ -60,11 +72,7 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
-    // Now both local and remote data are ready
-    // Just reserve and push to make tiles available for compute
+    // Remote data is now ready, push to compute
     cb_reserve_back(cb_in1, num_standard_tiles);
     cb_push_back(cb_in1, num_standard_tiles);
-
-    cb_reserve_back(cb_in2, num_standard_tiles);
-    cb_push_back(cb_in2, num_standard_tiles);
 }

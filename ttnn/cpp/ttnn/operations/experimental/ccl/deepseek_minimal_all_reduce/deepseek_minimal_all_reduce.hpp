@@ -17,7 +17,8 @@ struct ExecuteDeepseekMinimalAllReduce {
         uint32_t num_links = 2,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<uint32_t> cluster_axis = std::nullopt,
-        const std::optional<ttnn::Tensor>& intermediate_tensor = std::nullopt);
+        const std::optional<ttnn::Tensor>& intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

@@ -16,6 +16,8 @@ struct DeepseekMinimalAllReduceProgramFactory {
         tt::tt_metal::CBHandle compute_cb_in1_handle{};
         tt::tt_metal::CBHandle compute_cb_in2_handle{};
         tt::tt_metal::CBHandle compute_cb_out_handle{};
+        tt::tt_metal::CBHandle compute_cb_residual_handle{};
+        bool has_residual = false;
         tt::tt_metal::GlobalSemaphore semaphore1;
         tt::tt_metal::GlobalSemaphore semaphore2;
         uint32_t ring_index = 0;

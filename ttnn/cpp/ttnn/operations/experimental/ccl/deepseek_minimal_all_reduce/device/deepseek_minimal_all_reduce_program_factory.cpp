@@ -85,6 +85,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     const tt::tt_metal::GlobalSemaphore& semaphore1,
     const tt::tt_metal::GlobalSemaphore& semaphore2) {
     const auto& input_tensor = tensor_args.input_tensor;
+    const bool has_residual = tensor_args.residual_tensor.has_value();
     tt::tt_metal::Program program{};
 
     // uint32_t num_links = operation_attributes.num_links;
@@ -215,6 +216,33 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     auto compute_cb_out_handle =
         CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_out_config);
 
+    // Residual CB - only created if residual tensor is provided
+    // Used for fused residual add: (local + residual) + remote → output
+    constexpr auto compute_cb_residual = tt::CBIndex::c_6;
+    tt::tt_metal::CBHandle compute_cb_residual_handle{};
+    if (has_residual) {
+        const auto& residual_tensor = tensor_args.residual_tensor.value();
+        tt::tt_metal::CircularBufferConfig compute_cb_residual_config =
+            tt::tt_metal::CircularBufferConfig(
+                num_standard_tiles * standard_tile_size_bytes, {{compute_cb_residual, df}})
+                .set_page_size(compute_cb_residual, standard_tile_size_bytes)
+                .set_tile_dims(compute_cb_residual, standard_tile)
+                .set_globally_allocated_address(*residual_tensor.buffer());
+        compute_cb_residual_handle =
+            CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_residual_config);
+    }
+
+    // Scratch CB for intermediate result of (local + residual)
+    // Only needed when fused residual add is enabled
+    constexpr auto compute_cb_temp = tt::CBIndex::c_7;
+    if (has_residual) {
+        tt::tt_metal::CircularBufferConfig compute_cb_temp_config =
+            tt::tt_metal::CircularBufferConfig(num_standard_tiles * standard_tile_size_bytes, {{compute_cb_temp, df}})
+                .set_page_size(compute_cb_temp, standard_tile_size_bytes)
+                .set_tile_dims(compute_cb_temp, standard_tile);
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_temp_config);
+    }
+
     constexpr auto packet_header_cb_id = tt::CBIndex::c_4;
     constexpr auto buffering_factor = 2;
     constexpr auto num_packet_headers_storable = 2;
@@ -278,7 +306,9 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         compute_cb_in2,       // CB for local data (input tensor)
         remote_sender_noc_x,  // remote sender core for semaphore
         remote_sender_noc_y,
-        num_standard_tiles,  // num standard tiles (7)
+        num_standard_tiles,   // num standard tiles (7)
+        compute_cb_residual,  // CB for residual tensor (optional)
+        static_cast<uint32_t>(has_residual ? 1 : 0),
     };
 
     // output writes directly to output tensor memory
@@ -309,7 +339,14 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_configuration);
 
-    std::vector<uint32_t> compute_ct_args = {compute_cb_in1, compute_cb_in2, compute_cb_out, 1, num_standard_tiles};
+    std::vector<uint32_t> compute_ct_args = {
+        compute_cb_in1,
+        compute_cb_in2,
+        compute_cb_out,
+        compute_cb_residual,
+        compute_cb_temp,
+        static_cast<uint32_t>(has_residual ? 1 : 0),
+        num_standard_tiles};
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/reduction.cpp",
@@ -386,6 +423,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         .compute_cb_in1_handle = compute_cb_in1_handle,
         .compute_cb_in2_handle = compute_cb_in2_handle,
         .compute_cb_out_handle = compute_cb_out_handle,
+        .compute_cb_residual_handle = compute_cb_residual_handle,
+        .has_residual = has_residual,
         .semaphore1 = semaphore1,
         .semaphore2 = semaphore2,
         .ring_index = ring_index,
@@ -420,6 +459,12 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
         UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_in1_handle, *intermediate.buffer());
         UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_in2_handle, *input.buffer());
         UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_out_handle, *output.buffer());
+
+        // Update residual CB if present
+        if (shared_vars.has_residual && tensor_args.residual_tensor.has_value()) {
+            const auto& residual = tensor_args.residual_tensor.value();
+            UpdateDynamicCircularBufferAddress(program, shared_vars.compute_cb_residual_handle, *residual.buffer());
+        }
 
         for (const auto& core : shared_vars.sender_worker_cores) {
             // Sender reader

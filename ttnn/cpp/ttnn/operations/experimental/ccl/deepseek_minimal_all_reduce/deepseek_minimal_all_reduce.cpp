@@ -15,9 +15,10 @@ ttnn::Tensor ExecuteDeepseekMinimalAllReduce::invoke(
     const uint32_t num_links,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<ttnn::Tensor>& intermediate_tensor) {
+    const std::optional<ttnn::Tensor>& intermediate_tensor,
+    const std::optional<ttnn::Tensor>& residual_tensor) {
     return ttnn::prim::deepseek_minimal_all_reduce(
-        input_tensor, num_links, topology, cluster_axis, intermediate_tensor);
+        input_tensor, num_links, topology, cluster_axis, intermediate_tensor, residual_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

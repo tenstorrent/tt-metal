@@ -49,6 +49,7 @@ ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce::DeepseekMinima
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         std::optional<uint32_t> cluster_axis,
-        const std::optional<ttnn::Tensor>& intermediate_tensor);
+        const std::optional<ttnn::Tensor>& intermediate_tensor,
+        const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
