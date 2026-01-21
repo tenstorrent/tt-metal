@@ -9,6 +9,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::madd {
+
 struct MAdd {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& a,

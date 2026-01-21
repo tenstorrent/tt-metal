@@ -8,7 +8,7 @@
 #include "ttnn/operations/madd/device/madd_device_operation.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::madd {

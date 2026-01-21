@@ -3,28 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/madd/device/madd_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::madd {
+namespace ttnn::prim {
 
 static std::array<uint32_t, 4> get_input_shape(const Tensor& x) {
     const Shape& x_shape = x.logical_shape();
     return {x_shape[0], x_shape[1]};
 }
 
-spec_return_value_t MAddOperation::compute_output_specs(
+MAddOperation::spec_return_value_t MAddOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& a = tensor_args.a;
-    const Tensor& b = tensor_args.b;
-    const std::array<uint32_t, 4> a_shape = get_input_shape(a);
-    const std::array<uint32_t, 4> b_shape = get_input_shape(b);
 
-    const uint32_t a_h = a_shape[0];
-    const uint32_t b_w = b_shape[1];
-
-    const ttnn::Shape output_shape = ttnn::Shape({a_h, b_w});
-
+    const ttnn::Shape output_shape = a.logical_shape();
     const tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;  // upsample only outputs row major data
-
     const tt::tt_metal::DataType output_data_type = a.dtype();
 
     return tt::tt_metal::TensorSpec(
@@ -32,7 +26,7 @@ spec_return_value_t MAddOperation::compute_output_specs(
         tt::tt_metal::TensorLayout(output_data_type, tt::tt_metal::PageConfig(output_layout), args.output_mem_config));
 }
 
-tensor_return_value_t MAddOperation::create_output_tensors(
+MAddOperation::tensor_return_value_t MAddOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(args, tensor_args);
     return create_device_tensor(output_spec, tensor_args.a.device());
@@ -59,24 +53,16 @@ void MAddOperation::validate_on_program_cache_miss(
     validate_operand(b);
     validate_operand(c);
 
-    const std::array<uint32_t, 4> a_shape = get_input_shape(a);
-    const std::array<uint32_t, 4> b_shape = get_input_shape(b);
-    const std::array<uint32_t, 4> c_shape = get_input_shape(c);
-
-    const uint32_t a_h = a_shape[0];
-    const uint32_t a_w = a_shape[1];
-    const uint32_t b_h = b_shape[0];
-    const uint32_t b_w = b_shape[1];
-    const uint32_t c_h = c_shape[0];
-    const uint32_t c_w = c_shape[1];
-
-    TT_FATAL(a_w == b_h, "Matrix multiplication shape mismatch: A width {} must equal B height {}", a_w, b_h);
-    TT_FATAL(b_w == c_w, "Matrix multiplication shape mismatch: B width {} must equal C width {}", b_w, c_w);
     TT_FATAL(
-        a_h == c_h,
-        "Matrix multiplication shape mismatch: A height {} must equal C height {}",
-        a_h,
-        c_h);  // Not really, broadcasting should be enabled
+        a.logical_shape() == b.logical_shape(),
+        "Matrix shape mismatch: A shape {} must equal B shape {}",
+        a.logical_shape(),
+        b.logical_shape());
+    TT_FATAL(
+        b.logical_shape() == c.logical_shape(),
+        "Matrix shape mismatch: B shape {} must equal C shape {}",
+        b.logical_shape(),
+        c.logical_shape());
 }
 
 void MAddOperation::validate_on_program_cache_hit(
@@ -86,20 +72,16 @@ void MAddOperation::validate_on_program_cache_hit(
 
 MAddOperation::program_factory_t MAddOperation::select_program_factory(
     [[maybe_unused]] const operation_attributes_t& args, [[maybe_unused]] const tensor_args_t& tensor_args) {
-    return program::MAddProgramFactory{};
+    return MAddProgramFactory{};
 }
 
-}  // namespace ttnn::operations::madd
-
-namespace ttnn::prim {
 ttnn::Tensor madd(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
     const ttnn::Tensor& c,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    using OperationType = ttnn::operations::madd::MAddOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{output_mem_config, compute_kernel_config},
-        OperationType::tensor_args_t{a, b, c});
+    return ttnn::device_operation::launch<MAddOperation>(
+        MAddParams{.output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config},
+        MAddArgs{.a = a, .b = b, .c = c});
 }  // namespace ttnn::prim

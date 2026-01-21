@@ -13,15 +13,15 @@
 #include "ttnn/operations/madd/device/madd_device_operation_types.hpp"
 #include "ttnn/operations/madd/device/madd_program_factory.hpp"
 
-namespace ttnn::operations::madd {
+namespace ttnn::prim {
 
 struct MAddOperation {
-    using operation_attributes_t = madd::operation_attributes_t;
-    using tensor_args_t = madd::tensor_args_t;
-    using spec_return_value_t = madd::spec_return_value_t;
-    using tensor_return_value_t = madd::tensor_return_value_t;
+    using operation_attributes_t = MAddParams;
+    using tensor_args_t = MAddArgs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<program::MAddProgramFactory>;
+    using program_factory_t = std::variant<MAddProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
@@ -33,9 +33,6 @@ struct MAddOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::madd
-
-namespace ttnn::prim {
 ttnn::Tensor madd(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,

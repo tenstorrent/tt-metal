@@ -7,20 +7,17 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::madd {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct MAddParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct MAddArgs {
     Tensor a;
     Tensor b;
     Tensor c;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::madd
+}  // namespace ttnn::prim

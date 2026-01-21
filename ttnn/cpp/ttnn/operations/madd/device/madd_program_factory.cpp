@@ -2,22 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/madd/device/madd_program_factory.hpp"
+#include <cmath>
+#include <cstdint>
+#include <string>
+
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/work_split.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/madd/device/madd_program_factory.hpp"
 
-namespace ttnn::operations::madd::program {
-
-using FixedPoint = int32_t;
-constexpr int32_t FIXED_POINT_SHIFT = 16;
-constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
-
-static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
+namespace ttnn::prim {
 
 static inline auto get_tile_count(const Tensor& x) {
     const uint32_t input_tensor_width = x.padded_shape()[-1];
@@ -34,17 +34,16 @@ static inline auto get_tile_count(const Tensor& x) {
 }
 
 MAddProgramFactory::cached_program_t MAddProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const MAddParams& operation_attributes, const MAddArgs& tensor_args, Tensor& output_tensor) {
+    // unpack tensor args
     const ttnn::Tensor& a = tensor_args.a;
     const ttnn::Tensor& b = tensor_args.b;
     const ttnn::Tensor& c = tensor_args.c;
     const ttnn::Tensor& output = output_tensor;
 
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Output dimensions
     const tt::tt_metal::Shape& output_shape = output.padded_shape();
@@ -54,9 +53,11 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
 
     const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
+    const auto& output_shape = output.padded_shape();
     tt::tt_metal::IDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Declare variables that will be set based on layout
     uint32_t input_unit_size;
@@ -67,7 +68,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
 
     uint32_t work_units_to_split;
 
-    const bool is_tiled_layout = (input.layout() == tt::tt_metal::Layout::TILE);
+    const bool is_tiled_layout = (a.layout() == tt::tt_metal::Layout::TILE);
     if (is_tiled_layout) {
         // Tiled layout specific calculations
         input_unit_size = tt::tile_size(input_cb_data_format);
@@ -93,6 +94,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     // Create circular buffers
     uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t num_pages_in_input_cb;
+
     num_pages_in_input_cb = input_cb_required_pages;
     if (work_per_core_group_1 > 1) {
         // Double buffer if the core is processing 2+ blocks
@@ -146,7 +148,6 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         0   // set in loop, start_id of unit in core
     };
 
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     for (uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};  // x, y, looks like a bug.
         uint32_t blocks_per_core = 0;
@@ -162,7 +163,6 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         reader_rt_arguments[4] = blocks_processed * input_cb_required_pages;  // offset in pages
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_arguments);
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, writer_rt_arguments);
 
         blocks_processed += blocks_per_core;
     }
@@ -172,31 +172,39 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         shared_variables_t{
             .reader_kernel = reader_kernel,
             .writer_kernel = writer_kernel,
-            .cb_srcA = cb_srcA,
-            .cb_srcB = cb_srcB,
-            .cb_srcC = cb_srcC,
-            .out_cb = cb_output,
-        }};
+            .num_cores = num_cores,
+            .num_cores_y = num_cores_y}};
 }
 
 void MAddProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    tt::tt_metal::Program& program = cached_program.program;
-    tt::tt_metal::CBHandle& cb_srcA = cached_program.shared_variables.cb_srcA;
-    tt::tt_metal::CBHandle& cb_srcB = cached_program.shared_variables.cb_srcB;
-    tt::tt_metal::CBHandle& cb_srcC = cached_program.shared_variables.cb_srcC;
-    tt::tt_metal::CBHandle& out_cb = cached_program.shared_variables.out_cb;
+    const MAddParams& /*operation_attributes*/,
+    const MAddArgs& tensor_args,
+    Tensor& output_tensor) {
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel;
+    const auto& num_cores = cached_program.shared_variables.num_cores;
+    const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const ttnn::Tensor& a = tensor_args.a;
-    const ttnn::Tensor& b = tensor_args.b;
-    const ttnn::Tensor& c = tensor_args.c;
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_srcA, *a.buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_srcB, *b.buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_srcC, *c.buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *output_tensor.buffer());
+    auto* const a_buffer = tensor_args.a.buffer();
+    auto* const b_buffer = tensor_args.b.buffer();
+    auto* const c_buffer = tensor_args.c.buffer();
+    auto* const dst_buffer = output_tensor.buffer();
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = a_buffer->address();
+            runtime_args[1] = b_buffer->address();
+            runtime_args[2] = c_buffer->address();
+        }
+        // {
+        //     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+        //     runtime_args[0] = dst_buffer->address();
+        // }
+    }
 }
 
-}  // namespace ttnn::operations::madd::program
+}  // namespace ttnn::prim
