@@ -167,7 +167,7 @@ static inline CoreCoord clamped_swapped_next(const std::vector<CoreCoord>& order
 }
 
 void fabric_mux_connection_ct_args(
-    const uint32_t num_workers_per_direction,
+    const uint32_t num_workers_per_link,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args) {
@@ -177,7 +177,7 @@ void fabric_mux_connection_ct_args(
     worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
-    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
+    worker_ct_args.push_back(num_workers_per_link);           // num_mux_clients
 }
 
 void fabric_mux_connection_rt_args(
@@ -254,7 +254,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     const uint32_t chunks_per_sync,
-    const uint32_t num_workers_per_direction,
+    const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -281,7 +281,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_minimal_matmul_async_fa
                 barrier_semaphore,
                 using_persistent_buffers,
                 chunks_per_sync,
-                num_workers_per_direction,
+                num_workers_per_link,
                 num_buffers_per_channel);
 
     auto override_runtime_arguments_callback =
@@ -319,7 +319,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     const uint32_t chunks_per_sync,
-    const uint32_t num_workers_per_direction,
+    const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
     auto* device = input_tensor.device();
 
@@ -532,7 +532,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    auto num_full_size_channels = num_workers_per_direction;
+    auto num_full_size_channels = num_workers_per_link;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
@@ -636,7 +636,7 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
-        num_workers_per_direction,
+        num_workers_per_link,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_backward_compile_time_args);
@@ -683,7 +683,7 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
     };
     fabric_mux_connection_ct_args(
-        num_workers_per_direction,
+        num_workers_per_link,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_sender_forward_compile_time_args);
@@ -970,20 +970,18 @@ all_gather_minimal_matmul_async_factory_helper(
         };
         if (in0_core_order_index == 0) {
             // in0 backward sender
-            uint32_t mux_core_index =
-                in0_core_order_index * num_links + in1_core_order_index / num_workers_per_direction;
+            uint32_t mux_core_index = in0_core_order_index * num_links + in1_core_order_index / num_workers_per_link;
             auto mux_logical_core = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index)
                                                         : CoreCoord(mux_core_index, full_grid_size.y - 1);
             CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
-            uint32_t worker_idx =
-                transpose_core_grid ? core.x % num_workers_per_direction : core.y % num_workers_per_direction;
+            uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
             auto termination_master_logical_core =
                 transpose_core_grid ? CoreCoord(core.x - worker_idx, core.y) : CoreCoord(core.x, core.y - worker_idx);
             CoreCoord termination_master_virtual_core =
                 device->worker_core_from_logical_core(termination_master_logical_core);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(0),
-                !(in1_core_order_index % num_workers_per_direction),
+                !(in1_core_order_index % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core,
                 worker_idx,
@@ -995,20 +993,18 @@ all_gather_minimal_matmul_async_factory_helper(
             SetRuntimeArgs(program, in0_sender_backward_kernels_id, core, in0_args);
         } else if (in0_core_order_index == 1) {
             // in0 forward sender
-            uint32_t mux_core_index =
-                in0_core_order_index * num_links + in1_core_order_index / num_workers_per_direction;
+            uint32_t mux_core_index = in0_core_order_index * num_links + in1_core_order_index / num_workers_per_link;
             auto mux_logical_core = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index)
                                                         : CoreCoord(mux_core_index, full_grid_size.y - 1);
             CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
-            uint32_t worker_idx =
-                transpose_core_grid ? core.x % num_workers_per_direction : core.y % num_workers_per_direction;
+            uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
             auto termination_master_logical_core =
                 transpose_core_grid ? CoreCoord(core.x - worker_idx, core.y) : CoreCoord(core.x, core.y - worker_idx);
             CoreCoord termination_master_virtual_core =
                 device->worker_core_from_logical_core(termination_master_logical_core);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(1),
-                !(in1_core_order_index % num_workers_per_direction),
+                !(in1_core_order_index % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core,
                 worker_idx,
