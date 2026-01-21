@@ -1773,7 +1773,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Track newly received packets that need first-level acks
         if (num_packets_to_process > 0) {
             PackedCredits credits{.packed = num_packets_to_process};
-            if constexpr (NUM_SENDER_CHANNELS == 2) {
+            if constexpr (NUM_SENDER_CHANNELS != 2) {
                 for (size_t i = 0; i < 4; i++) {
                     receiver_channel_pointers.m.unsent_messages += credits.bytes[i];
                 }
