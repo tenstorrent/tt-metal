@@ -372,25 +372,36 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         expected_kvpe_dim = int(self.hf_config.kv_lora_rank + self.hf_config.qk_rope_head_dim)
         expected_block_size = int(self.paged_config.block_size)
         expected_blocks_per_seq = int(self.hf_config.max_seq_len // expected_block_size)
-        assert kv_cache_shape[2] == expected_block_size, (
+        assert (
+            kv_cache_shape[2] == expected_block_size
+        ), (
             f"vLLM kv_cache_shape[2] (block_size) mismatch: "
             f"kv_cache_shape[2]={kv_cache_shape[2]} vs "
             f"paged_config.block_size={expected_block_size}"
         )
-        assert kv_cache_shape[3] == expected_kvpe_dim, (
+        assert (
+            kv_cache_shape[3] == expected_kvpe_dim
+        ), (
             f"vLLM kv_cache_shape[3] (kvpe_dim) mismatch: "
             f"kv_cache_shape[3]={kv_cache_shape[3]} vs "
             f"kv_lora_rank+qk_rope_head_dim={expected_kvpe_dim}"
         )
-        assert kv_cache_shape[1] == 1, (
-            f"vLLM kv_cache_shape[1] (num_kv_heads) mismatch: " f"kv_cache_shape[1]={kv_cache_shape[1]} vs expected=1"
+        assert (
+            kv_cache_shape[1] == 1
+        ), (
+            f"vLLM kv_cache_shape[1] (num_kv_heads) mismatch: "
+            f"kv_cache_shape[1]={kv_cache_shape[1]} vs expected=1"
         )
-        assert kv_cache_shape[0] >= expected_blocks_per_seq, (
+        assert (
+            kv_cache_shape[0] >= expected_blocks_per_seq
+        ), (
             f"vLLM kv_cache_shape[0] (max_num_blocks) too small: "
             f"kv_cache_shape[0]={kv_cache_shape[0]} vs "
             f"min_required_blocks={expected_blocks_per_seq}"
         )
-        assert num_layers == self.hf_config.num_hidden_layers, (
+        assert (
+            num_layers == self.hf_config.num_hidden_layers
+        ), (
             f"vLLM num_layers mismatch: num_layers={num_layers} vs "
             f"hf_config.num_hidden_layers={self.hf_config.num_hidden_layers}"
         )
