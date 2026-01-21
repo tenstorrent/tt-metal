@@ -88,7 +88,8 @@ struct OverlayRegisterFile : public RegisterFile {
     // eventually support alternating versions of 24 bit overlay registers
     // 16+8 then 8+16; can be split by checking if the LowerBitRegister index is even or odd
     // will need to make more generic by removing "Lower"/"Upper" distinction on templated
-    // types
+    // types; will also need to make the static compile time checks more generic based on
+    // the inputs
     //
     template<typename LowerBitRegister, typename UpperBitRegister>
     static FORCE_INLINE uint32_t load() {
@@ -101,9 +102,9 @@ struct OverlayRegisterFile : public RegisterFile {
         uint32_t const upper_bits = OverlayRegisterFile::load<UpperBitRegister>();
 
         // overlay registers are 24 bits wide, so we need to combine two registers
-        // shift the upper 8 bits into position and combine with lower 24 bits
+        // shift the upper 8 bits into position and combine with lower 16 bits
         //
-        return (upper_bits << OverlayRegisterFile::NumLowerBits::value) | lower_bits;
+        return ((upper_bits << OverlayRegisterFile::NumLowerBits::value) | lower_bits ) & 0x00FFFFFFU;
     }
 
     template<typename LowerBitRegister, typename UpperBitRegister>

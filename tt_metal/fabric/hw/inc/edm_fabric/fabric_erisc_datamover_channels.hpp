@@ -677,7 +677,7 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        //return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+//        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
         return get_connection_live_semaphore() ==
             tt::tt_fabric::connection_interface::close_connection_request_value;
     }
@@ -692,7 +692,7 @@ struct EdmChannelWorkerInterface {
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
-    //volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
+//    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
@@ -714,13 +714,13 @@ struct StaticSizedSenderChannelWorkerInterface
     StaticSizedSenderChannelWorkerInterface(
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
-        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+//        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value,
         uint32_t read_counter_update_src_address = 0) :
         Base(
             worker_location_info_ptr,
-            connection_live_semaphore,
+//            connection_live_semaphore,
             sender_sync_noc_cmd_buf,
             edm_read_counter_initial_value),
         read_counter_update_src_address(read_counter_update_src_address) {}

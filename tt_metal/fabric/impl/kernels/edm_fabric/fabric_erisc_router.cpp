@@ -2307,7 +2307,7 @@ void
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
-        while (!connect_is_requested(*interface.connection_live_semaphore)) {
+        while (!connect_is_requested(interface.get_connection_live_semaphore())) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
@@ -2345,15 +2345,19 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
-    auto connection_live_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
+//    auto connection_live_semaphore_ptr =
+//        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
+    uint32_t* connection_live_semaphore_ptr =
+        reinterpret_cast<uint32_t*>(local_sender_connection_live_semaphore_addresses[I]);
+
     auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
         local_sender_connection_info_addresses[I]);
     new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
         StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
             connection_worker_info_ptr,
             0,  // Not used for credits.
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+//            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+            connection_live_semaphore_ptr,
             sender_channel_ack_cmd_buf_ids[I],
             get_credits_init_val<I>(),
             notify_worker_of_read_counter_update_src_address);

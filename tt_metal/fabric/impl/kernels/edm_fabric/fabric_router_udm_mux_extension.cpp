@@ -176,7 +176,7 @@ static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay ke
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
-    while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
+    while (!connect_is_requested(worker_interface.get_connection_live_semaphore())) {
         invalidate_l1_cache();
     }
 
