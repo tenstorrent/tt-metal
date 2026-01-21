@@ -1145,6 +1145,9 @@ class ModelOptimisations512x512:
             return self.conv_configs["ABH_256_ADB"]
 
         # DOWN BLOCK 0
+        # TODO (fbajraktari): Fix this elif part so it is clear that first elif is
+        # for "down_blocks.0.resnets.0.conv1" and second elif is for
+        #     "down_blocks.0.resnets.0.conv2"
         elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
             return self.conv_configs["ABH_1024_ADB_WDB_BS"]
         elif "down_blocks.0.resnets" in conv_path:
