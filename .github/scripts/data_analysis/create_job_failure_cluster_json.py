@@ -20,30 +20,11 @@ def ensure_required_fields(cluster_data: dict) -> dict:
     """
     Ensure all required fields are populated, using fallbacks for None values.
 
-    The pydantic model requires all timestamp fields to be datetime (not Optional),
-    but the source data may have None values. This function provides fallbacks.
+    Timestamp fields can now be None (Optional[datetime] in pydantic model),
+    but we still need to ensure other required fields like job names are populated.
     """
     # Make a copy to avoid modifying the original
     data = cluster_data.copy()
-
-    # Handle None timestamps - use dummy value to indicate missing data
-    # TODO: Ideally, the pydantic model should allow Optional[datetime] for these fields
-    # Using epoch timestamp (1970-01-01) as a clear indicator of missing data
-    DUMMY_TIMESTAMP = "1970-01-01T00:00:00.000Z"
-
-    if data.get("centroid_job_slack_ts") is None:
-        logger.warning(
-            f"centroid_job_slack_ts is None for job {data.get('github_job_id')}, "
-            f"using dummy timestamp {DUMMY_TIMESTAMP} (consider making this field Optional in pydantic model)"
-        )
-        data["centroid_job_slack_ts"] = DUMMY_TIMESTAMP
-
-    if data.get("oldest_job_slack_ts") is None:
-        logger.warning(
-            f"oldest_job_slack_ts is None for job {data.get('github_job_id')}, "
-            f"using dummy timestamp {DUMMY_TIMESTAMP} (consider making this field Optional in pydantic model)"
-        )
-        data["oldest_job_slack_ts"] = DUMMY_TIMESTAMP
 
     # Ensure job_name, centroid_job_name, oldest_job_name are never None
     if data.get("job_name") is None:

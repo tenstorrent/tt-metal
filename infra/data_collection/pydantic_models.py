@@ -586,8 +586,9 @@ class JobFailureCluster(BaseModel):
     github_job_link: str = Field(description="Link to the GitHub job for the specific job being analyzed.")
     job_name: str = Field(description="Name of the job being analyzed.")
     job_error_message: str = Field(description="Error message from the job failure.")
-    job_slack_ts: datetime = Field(
-        description="Timestamp with timezone when the Slack message for this specific failure was sent."
+    job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp with timezone when the Slack message for this specific failure was sent.",
     )
     job_commit_hash: str = Field(description="Commit hash associated with the job failure.")
     is_nd: bool = Field(description="Non-Deterministic flag indicating if the failure is flaky.")
@@ -600,8 +601,9 @@ class JobFailureCluster(BaseModel):
     centroid_job_error_message: str = Field(
         description="Error message of the representative failure for this cluster group."
     )
-    centroid_job_slack_ts: datetime = Field(
-        description="Timestamp when the Slack message for the representative failure for this cluster group was sent."
+    centroid_job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp when the Slack message for the representative failure for this cluster group was sent.",
     )
     centroid_job_commit_hash: str = Field(
         description="Commit hash of the representative failure for this cluster group."
@@ -620,8 +622,9 @@ class JobFailureCluster(BaseModel):
     oldest_job_error_message: str = Field(
         description="Error message of the oldest run that had the same error as the currently failing run."
     )
-    oldest_job_slack_ts: datetime = Field(
-        description="Timestamp when the Slack message for the oldest run that had the same error as the currently failing run was sent."
+    oldest_job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp when the Slack message for the oldest run that had the same error as the currently failing run was sent.",
     )
     oldest_job_commit_hash: str = Field(
         description="Commit hash of the oldest run that had the same error as the currently failing run."
