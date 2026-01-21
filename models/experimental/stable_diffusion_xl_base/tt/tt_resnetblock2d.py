@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tracy
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -191,8 +190,6 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
 
-        # TODO: To optimize
-        tracy.signpost(f"Resnet Linear 1 start: {self.module_path}")
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
@@ -200,7 +197,6 @@ class TtResnetBlock2D(LightweightModule):
             program_config=self.linear_program_config,
             compute_kernel_config=self.default_compute_config,
         )
-        tracy.signpost("Resnet Linear 1 end")
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         # Note: moving this add to NG has perf impact, to be investigated
@@ -263,8 +259,6 @@ class TtResnetBlock2D(LightweightModule):
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
-            # TODO: To optimize
-            tracy.signpost(f"Resnet Linear 2 start {self.module_path}")
             input_tensor = ttnn.linear(
                 input_tensor,
                 self.tt_conv3_weights,
@@ -273,7 +267,6 @@ class TtResnetBlock2D(LightweightModule):
                 compute_kernel_config=self.default_compute_config,
                 memory_config=self.conv3_memory_config,
             )
-            tracy.signpost("Resnet Linear 2 end")
             if not self.is_first_resnet_block:
                 ttnn.deallocate(input_tensor_pre_conv)
         if input_tensor.memory_config() != hidden_states.memory_config():

@@ -7,7 +7,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
-import tracy
 
 
 class TtAttention(LightweightModule):
@@ -97,8 +96,6 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
-            # TODO: To optimize
-            tracy.signpost("Attention_QKV Start")
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
@@ -107,7 +104,6 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.q_compute_kernel_config,
                 program_config=self.q_program_config,
             )
-            tracy.signpost("Attention_QKV End")
 
             (
                 q_heads,
@@ -118,8 +114,6 @@ class TtAttention(LightweightModule):
             )
             ttnn.deallocate(qkv_fused)
         else:
-            # TODO: To optimize
-            tracy.signpost("Attention Q Start")
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
@@ -127,10 +121,6 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=self.q_memory_config,
             )
-            tracy.signpost("Attention Q End")
-
-            # TODO: To optimize
-            tracy.signpost("Attention K Start")
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
@@ -138,10 +128,6 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.k_program_config,
             )
-            tracy.signpost("Attention K End")
-
-            # TODO: To optimize
-            tracy.signpost("Attention V Start")
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
@@ -149,7 +135,6 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.v_program_config,
             )
-            tracy.signpost("Attention V End")
 
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 q_heads,
@@ -187,8 +172,6 @@ class TtAttention(LightweightModule):
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # TODO: To optimize
-        tracy.signpost("Attention Out Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
@@ -197,6 +180,5 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=self.out_memory_config,
         )
-        tracy.signpost("Attention Out End")
 
         return hidden_states

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tracy
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
@@ -24,17 +23,10 @@ class TtTimestepEmbedding(LightweightModule):
         self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, weights_2, bias_2, linear_weights_dtype)
 
     def forward(self, sample):
-        # TODO: To optimize
-        tracy.signpost("Embedding Linear 1 Start")
         sample = ttnn.linear(sample, self.tt_weights_1, bias=self.tt_bias_1, activation="silu")
-        tracy.signpost("Embedding Linear 1 End")
-
-        # TODO: To optimize
-        tracy.signpost("Embedding Linear 2 Start")
         sample = ttnn.linear(
             sample,
             self.tt_weights_2,
             bias=self.tt_bias_2,
         )
-        tracy.signpost("Embedding Linear 2 End")
         return sample
