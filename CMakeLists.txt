@@ -270,6 +270,9 @@ if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()
 
+# Add test-run directory for debug/test programs
+add_subdirectory(test-run)
+
 ############################################################################################################################
 # Install targets for build artifacts and nanobinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
