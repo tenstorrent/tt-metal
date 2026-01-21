@@ -459,7 +459,8 @@ jobs:
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
     needs: [ clang-static-analyzer ]
-    if: ${{ always() && needs.clang-static-analyzer.result == 'success' }}
+    # Only publish on full scans (skip when debug-file-filter is used)
+    if: ${{ always() && needs.clang-static-analyzer.result == 'success' && inputs.debug-file-filter == '' }}
     runs-on: ubuntu-latest
 
     steps:
