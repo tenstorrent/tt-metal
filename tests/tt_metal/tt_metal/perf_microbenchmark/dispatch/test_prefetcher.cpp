@@ -1096,17 +1096,6 @@ public:
 
             commands_per_iteration.push_back(std::move(cmd1));
 
-            const uint32_t total_cmd_bytes = tt::align(sizeof(CQPrefetchCmdLarge), host_alignment_);
-
-            // Create the the relay linear H command as a separate command as it must be
-            // the only entry in fetchQ
-            HostMemDeviceCommand cmd2(total_cmd_bytes);
-
-            // Create the relay linear H command
-            CQPrefetchCmdLarge cmd{};
-            std::memset(&cmd, 0, sizeof(CQPrefetchCmdLarge));
-            cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
-
             // Source (DRAM on MMIO Device) -> Use mmio_device_ (Chip 0)
             const uint32_t dram_bank_id = 0;
             auto dram_channel = mmio_device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
@@ -1115,26 +1104,25 @@ public:
                                                .get_cluster()
                                                .get_soc_desc(mmio_device_->id())
                                                .get_preferred_worker_core_for_dram_view(dram_channel, NOC::NOC_0);
-            cmd.relay_linear_h.noc_xy_addr =
+            uint32_t src_noc_xy_addr =
                 mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dram_physical_core);
 
             [[maybe_unused]] auto offset =
                 mmio_device_->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
             // Read from DRAM result data address where data is stored
             // Common::DeviceData uses the logical coordinates as keys
-            cmd.relay_linear_h.addr = mmio_dram_base + offset;
-            cmd.relay_linear_h.length = length;
-            cmd.relay_linear_h.pad1 = 0;
-            cmd.relay_linear_h.pad2 = 0;
+            uint32_t src_addr = mmio_dram_base + offset;
+
+            // Create the relay linear H command as a separate command as it must be
+            // the only entry in fetchQ
+            DeviceCommandCalculator calc2;
+            calc2.add_prefetch_relay_linear_h();
+            const uint32_t relay_cmd_size = calc2.write_offset_bytes();
+
+            HostMemDeviceCommand cmd2(relay_cmd_size);
+            cmd2.add_prefetch_relay_linear_h(src_noc_xy_addr, length, src_addr);
 
             uint32_t length_words = length / sizeof(uint32_t);
-
-            // Use reserve_space to properly update cmd_write_offsetB
-            CQPrefetchCmdLarge* cmd_ptr = cmd2.reserve_space<CQPrefetchCmdLarge*>(sizeof(CQPrefetchCmdLarge));
-            std::memcpy(cmd_ptr, &cmd, sizeof(CQPrefetchCmdLarge));
-
-            // Align the write offset for any padding needed
-            cmd2.align_write_offset();
 
             commands_per_iteration.push_back(std::move(cmd2));
 
