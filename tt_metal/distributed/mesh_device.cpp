@@ -1200,15 +1200,7 @@ void MeshDeviceImpl::init_fabric() {
 }
 
 void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
-    log_info(
-        tt::LogMetal,
-        "init_perf_telemetry_socket: this={}, mesh_device={}, mesh_device->pimpl_={}",
-        (void*)this,
-        (void*)mesh_device.get(),
-        (void*)mesh_device->pimpl_.get());
-
     if (perf_telemetry_socket_) {
-        log_debug(tt::LogMetal, "Perf telemetry socket already initialized");
         return;
     }
 
@@ -1242,11 +1234,6 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
 
     perf_telemetry_socket_ =
         std::make_unique<D2HSocket>(mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize);
-
-    log_info(
-        tt::LogMetal,
-        "Perf telemetry socket initialized with config buffer at address 0x{:x}",
-        perf_telemetry_socket_->get_config_buffer_address());
 }
 
 D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const { return perf_telemetry_socket_.get(); }
@@ -1348,18 +1335,9 @@ std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
-    log_info(
-        tt::LogMetal,
-        "MeshDeviceImpl::allocator_impl: this={}, sub_device_manager_tracker_={}",
-        (void*)this,
-        (void*)sub_device_manager_tracker_.get());
     TT_FATAL(
         sub_device_manager_tracker_ != nullptr, "sub_device_manager_tracker_ is NULL! MeshDeviceImpl not initialized.");
-    auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();
-    log_info(tt::LogMetal, "MeshDeviceImpl::allocator_impl: default_manager={}", (void*)default_manager);
-    const auto& alloc = default_manager->allocator(SubDeviceId{0});
-    log_info(tt::LogMetal, "MeshDeviceImpl::allocator_impl: allocator={}", (void*)alloc.get());
-    return alloc;
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
 const std::unique_ptr<Allocator>& MeshDeviceImpl::allocator() const { return this->allocator_impl()->view(); }

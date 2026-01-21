@@ -291,25 +291,16 @@ Buffer::Buffer(
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
-    log_info(tt::LogMetal, "Buffer::Buffer: Constructor starting");
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
-    log_info(tt::LogMetal, "Buffer::Buffer: Device check passed");
     if (this->sub_device_id_.has_value()) {
-        log_info(tt::LogMetal, "Buffer::Buffer: Has sub_device_id, validating");
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
-        log_info(tt::LogMetal, "Buffer::Buffer: Getting active sub_device_manager_id");
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        log_info(tt::LogMetal, "Buffer::Buffer: Getting allocator for sub_device");
         this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        log_info(tt::LogMetal, "Buffer::Buffer: No sub_device_id, getting default allocator");
         this->allocator_ = device->allocator_impl().get();
     }
-    log_info(tt::LogMetal, "Buffer::Buffer: Allocator obtained, ptr={}", (void*)this->allocator_);
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
-    log_info(tt::LogMetal, "Buffer::Buffer: Parameters validated");
     unique_id_ = next_unique_id.fetch_add(1);
-    log_info(tt::LogMetal, "Buffer::Buffer: Constructor complete, unique_id={}", unique_id_);
 }
 
 std::shared_ptr<Buffer> Buffer::create(
@@ -322,27 +313,15 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
-    log_info(
-        tt::LogMetal,
-        "Buffer::create: Starting, device={}, size={}, page_size={}, buffer_type={}",
-        (void*)device,
-        size,
-        page_size,
-        static_cast<int>(buffer_type));
-
-    log_info(tt::LogMetal, "Buffer::create: Constructing Buffer object");
     auto buffer = std::make_shared<Buffer>(
         device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
-    log_info(tt::LogMetal, "Buffer::create: Buffer object constructed");
 
     if (buffer->size_ == 0) {
         buffer->allocation_status_ = AllocationStatus::ALLOCATED;
         return buffer;
     }
 
-    log_info(tt::LogMetal, "Buffer::create: Calling allocate_impl");
     buffer->allocate_impl();
-    log_info(tt::LogMetal, "Buffer::create: allocate_impl complete");
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,

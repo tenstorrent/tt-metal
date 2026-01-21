@@ -79,10 +79,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
-    log_info(tt::LogMetal, "MeshBuffer::create: Starting, mesh_device={}", (void*)mesh_device);
-
     validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
-    log_info(tt::LogMetal, "MeshBuffer::create: Config validated");
 
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
@@ -93,18 +90,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
-    log_info(
-        tt::LogMetal,
-        "MeshBuffer::create: device_local_size={}, page_size={}, buffer_type={}",
-        device_local_size,
-        device_local_config.page_size,
-        static_cast<int>(device_local_config.buffer_type));
-
     std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
-        log_info(tt::LogMetal, "MeshBuffer::create: Calling Buffer::create");
         std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
             device_local_size,
@@ -113,7 +102,6 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.sharding_args,
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
-        log_info(tt::LogMetal, "MeshBuffer::create: Buffer::create returned");
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
@@ -122,9 +110,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
     }
 
-    log_info(tt::LogMetal, "MeshBuffer::create: Calling initialize_device_buffers");
     mesh_buffer->initialize_device_buffers();
-    log_info(tt::LogMetal, "MeshBuffer::create: Complete");
 
     return mesh_buffer;
 }
