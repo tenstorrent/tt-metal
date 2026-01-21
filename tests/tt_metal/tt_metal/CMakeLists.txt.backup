@@ -150,24 +150,3 @@ install(
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation
 )
-
-# Block variant tests (Issue #35739)
-tt_metal_add_gtest(test_eltwise_binary_block
-    block_variants/test_eltwise_binary_block.cpp
-)
-
-tt_metal_add_gtest(test_reduce_block
-    block_variants/test_reduce_block.cpp
-)
-
-tt_metal_add_gtest(test_broadcast_block
-    block_variants/test_broadcast_block.cpp
-)
-
-tt_metal_add_gtest(test_transpose_block
-    block_variants/test_transpose_block.cpp
-)
-
-tt_metal_add_gtest(test_pack_block
-    block_variants/test_pack_block.cpp
-)

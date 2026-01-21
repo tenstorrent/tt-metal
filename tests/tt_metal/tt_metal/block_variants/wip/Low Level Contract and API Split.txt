@@ -1,0 +1,224 @@
+Low Level Contract
+Goal
+In order to provide a clean conforming Compute API, it helps if the underlying APIs that it relies on are also conforming to a same or similar contract.
+Otherwise a lot of leaky abstractions or other issues have to be patched over higher up in the stack than ideal.
+Making low level APIs (llk_api, llk_lib) fully conform to a contract is a significant amount of work, the goal is to map the proposed contract and identify biggest violations of that contract so an informed decision can be made on where to fix issues in the low level APIs and where to patch them over higher up (Compute API).
+
+Low Level Contract
+Primer
+Most of the low level contract / issues revolve around managing tensix state.
+90+% of tensix state managed by llk falls into these categories (most are per thread):	CFG regs (“per exu”), THREAD regs, GPRs, ADDRMOD/MOP/REPLAY, ADC/RWC
+90+% of llk_lib APIs fall into these categories:	HW Configure, Reconfig, Dest Sync, Init, Execute, Uninit
+Newly introduced notion of an Operand (in some shape or form), looks like this:	face_width, face_height, tile_width_faces, tile_height_faces, src_fmt, dst_fmt	Derived values: tile_width, tile_height, tile_size, num_faces, narrow_tile, narrow_row, partial_face
+Operand state: Collection of tensix state that depends only on the values of:	SrcA Operand, SrcB Operand, Output Operand (structures as described above) + Dest width (16 or 32 bit datums)	DOES NOT DEPEND ON THE OPERATION BEING EXECUTED
+Invariant state: Collection of tensix state that doesn’t depend on any kernel parameters (eg. disabling legacy flags).
+Transient state: Small collection of tensix state that is so operation dependent and often changed that it doesn't make sense for it to be persistently managed.
+90+%, there will be outliers and they will have to be managed on a case by case basis, goal is for all P0 and P1 to be a part of this 90+% and thus covered by contract.
+
+Low Level Contract
+First stumbling block, separation of concerns and encapsulation
+Compute API (single threaded illusion, dest bank management)
+llk_api (interacting with metal specifics, CBs)
+llk_lib (actual implementation of an operation on a tensix engine)
+A layer should only call into the public part of the layer directly below.
+Currently there are multiple ways this simple principle is broken:
+Tensix functionality (that belongs in llk_lib) implemented in llk_api or Compute API.Usually little additions of tensix code in inits/uninits (that tensix code should have been added at llk_lib level)or even full APIs that should have a llk_lib counterpart being called but instead implement all functionality at the llk_api level.
+Calling into private parts of the layer below.Mop and addrmod configs are considered private parts of the llk_lib and there is usually no reason why they should be called directly instead of via an appropriate init.
+There is no way to utilize/enforce a contract if there is no defined/respected surface to use it across
+Personal pet peeve, no clear cut way to decide if something is safe to be a compile-time vs run-time parameter (L1 address 100% run-time, ReduceDim 100% compile-time, face_height ¯\_(ツ)_/¯)
+
+Low Level Contract
+HW Configure
+Only called at the beginning of the kernel when tensix is idle
+Only parametrized by input/output operands and dest width
+Only writes to Operand state and Invariant state
+Operation agnostic (no state set should be specific for a particular operation)
+Pain points:
+There are 8 different hw configure APIs for unpacker, while most are functionally equivalent there are at least 2 operation specific versions that differ.
+Reduce API surface by having only one operation agnostic hw configure per thread.
+Configuration specific to the operation should be moved to the appropriate init.
+Certain hw configure APIs take as parameters and configure state that affects operations beyond formats and dimensions, (eg. StochRnd, Transpose, Tilize, Untilize, ZeroFlagDisable)
+These parameters should be removed from hw config APIs and passed and set as part of the appropriate init API.
+
+Low Level Contract
+Reconfig
+Uses only tensix instructions to manipulate state
+Uses stallwaits to protect non latched state
+Can be performed at any point in the kernel (by the virtue of the above rules)
+Only parametrized by input/output operands and dest width
+Optionally parametrized by previous values of the arguments (for perf optimization opportunity)
+Only writes to Operand state
+Writes to all Operand state that the appropriate HW Configure writes to
+Operation agnostic (no state set should be specific for a particular operation)
+Pain points:
+Not 100% sure which state is not latched / what stallwaits are required
+Current reconfigs only perform piecemeal updates of the state.
+Should be modified to set all appropriate Operand state.
+APIs like pack_relu_config, pack_reconfig_l1_acc, math/pack_reconfig_stoch_rnd (proposed), are considered reconfig class but are much simpler and thus need to follow a much simpler and relaxed set of rules
+
+Low Level Contract
+Init
+Configures state required to complete a specific operation
+All state modifications are performed using tensix instructions or guarded (MOP)
+Only allowed state modifications are:
+Transient state modifications
+Restorable state modifications (state whose default/previous value can be easily determined and is potentially independent of arguments)
+Saved state modifications (state whose previous value is stored in GPRs to be restored later)
+Parameters consist of Operand parameters (data about operands required for operation specific state modification) and Operation parameters (specify details about behaviour of the operation). Should Operand parameters be consistent across all init APIs (or all APIs in general) even if unused?
+Potentially store arguments so they don't have to be replicated in execute?
+Pain points:
+LEAKING STATE
+No clear definition and enforcement which state is transient.
+Need to go over all inits with a fine tooth comb and apply above rules.
+
+Low Level Contract
+Execute
+Should not modify state except a strict subset of transient state dedicated for execute (L1 addresses, counters)
+Should not rely in any way on a previous value of any of that transient state, unless state is required to be “clean” at the function entry (reset counters at the beginning vs the end of the function?)
+Any other state modifications must be invisible outside of the function (state is set and restored before the end of the function) and only performed when a certain state needs to change during the functions execution (very rare, afaik only transpose_dest for now)
+All state modifications are performed using tensix instructions or guarded (L1 addresses)
+Set of arguments should be a superset of arguments passed to the appropriate init, even if not all are used (open for debate, improves usability and ease of writing asserts)
+Arguments that don’t exist in both init and execute APIs (eg. L1 addresses) can be changed between calls without a need to call init again
+If an argument exists in both init and execute APIs, value passed to execute must be the same one passed to the last call of the appropriate init, and last call of the any init API for the same thread must be the appropriate init
+Pain points:
+Not many, execute usually breaks due to bugs in other classes of APIs and is not often the cause of the bug
+Again, going through with a fine tooth comb helps
+
+Low Level Contract
+Uninit
+Must exist if the appropriate init touches Restorable state or Saved state (should it always exist for consistency even if empty?)
+All state modifications are performed using tensix instructions or guarded (no example for now)
+Must restore all Restorable state that is touched in the appropriate init to the previous/default value
+Must restore all Saved state that is touched (and saved) in the appropriate init to the saved values
+In theory all state is Restorable if enough arguments are provided to the uninit (do we want that?, how to decide if some state is Restorable or Saved?)
+Pain points:
+Too often simply doesn’t exist or is implemented in llk_api instead of llk_lib
+
+LLK Sanitizer
+Check correct LLK usage by tracking currently configured HW state
+Implementation:
+hw_configure(OperandArgs) { // Store OperandArgs
+hw_reconfigure(OperandArgs) { // Store OperandArgs
+init(OperationArgs) { // Store OperationArgs with OperationId, verify state is clean, mark state as dirty
+execute(OperandArgs, OperationArgs) { // Verify that OperandArgs, OperationArgs and OperationId match the stored values
+uninit() { // Verify OperationId matches, mark state as clean
+Implemented at _llk level, requires additional support from upper levels to provide additional features
+At llk_api level, provide additional information about the operand that is not passed to _llk
+At compute_api level, provide backtrace information for more useful error messages eg.:LLK San Error llk_unpack_AB_matmul_init called with dirty state, from llk_unpack_tilize_init; Missing uninit? In mm_block_init.
+First version detects missing or misplaced configure/reconfigure’s, inits, uninits
+Additionally detects mixed width writes to Dst and unsafe MMIO writes (not shown above)
+Shares a lot of groundwork with and is a step on the path to stateful LLKs(Sanitizer that configures difference in state when it encounters an error ~~ Stateful LLKs)
+
+LLK Sanitizer
+Pitfalls
+Assumes correct LLK implementation and full conformance to the proposed programming model, example violations:
+Init + Uninit pairs not fully restoring state
+Functionality implemented above _llk level
+Reconfigs not updating all required state
+Configs and Reconfigs not Operation agnostic
+Uneven API surface
+These will mostly result in false positives (sanitizer passes but test fails)
+Solved by raising issues and fixing/refactoring LLKs
+False negatives will come from overly pessimistic assumptions about hw state (false dependencies between the operation and parts of hw state
+Solved by moving to comprehensive state checks that exactly model complete hw state and dependencies(Quite a bit of work, hopefully won’t be needed by the time we get to it due to other efforts like stateful LLKs and unified API)
+
+LLK Sanitizer
+Theory of operation
+5 Classes of LLK APIs (Configure, Reconfigure, Init, Execute, Uninit)
+Configure: HW State  = f(Args)
+Reconfig:  HW State |= g(Args) (Can change only a subset of state, related to operand shape and formats)
+Init:      HW State |= h(Api)(Args); SW State = i(Api)(Args)(Changes only a subset of state related to Operation parameters and configures “software” state (ADDRMOD, REPLAY, MOP)
+Execute:   HW State == h(Api)(Args) && SW State == i(Api)(Args) (Otherwise assert)
+Uninit:    HW State &= h(Api)(Args); (Restore to previous state)
+
+LLK Sanitizer
+Assumptions
+Configure: Operation agnostic, configures all required state
+Reconfig:  Operation agnostic, reconfigures all state related to shape and formats
+Init:      Performs only the following modifications of HW/SW state:
+Modifies state that is modifier by every Init API (eg. ADDRMOD, MOP, REPLAY)
+Modifies state that is restored to the previous value in the Uninit API (either by saving and restoring previous state or by recalculating previous state from arguments provided to Uninit API)
+Execute:   Should not modify state, if it does, changed state must be restored inside the API
+Uninit:    Should always exist for API consistency (even if empty)
+
+
+Compute API 2.0 :P
+19 November 2025
+1
+
+Motivation & Goal
+2
+Compute API is not easy to use
+Which threads does API use?
+What’s the input size limit?
+Does the API manage DEST synchronization or not?
+Can it be used the same way on all HW generations?
+How to use uninits/reconfigs?
+Rudimentary state tracking could help a lot here #32801
+From LLK standpoint - hard to maintain Compute API contract due to lack of underlying Low Level contract
+Wanted Outcome - communicate the necessary bandwidth for structural changes
+We want to answer by making a Compute API Contract where function name conveys a well-defined scope.
+Won’t change the way API is consumed
+Reduces cognitive load
+CONFIDENTIAL - CONTAINS TRADE SECRETS
+2
+
+Compute API Contract
+3
+CONFIDENTIAL - CONTAINS TRADE SECRETS
+Suffix
+Pattern
+Threads
+Tile Capacity
+DEST Sync
+Packing
+SFPU Fusible
+Prefix Convention
+*_tensor
+L1 → L1
+UNPACK + MATH + PACK
+Unlimited
+Auto
+Auto
+No
+(omit) = FPU / sfpu_* = SFPU
+*_block
+L1 → DEST
+UNPACK + MATH
+up to DEST bank
+Manual
+No
+Yes
+(omit) = FPU / sfpu_* = SFPU
+pack_*_block
+DEST → L1
+PACK
+up to DEST bank
+Manual
+N/A
+N/A
+(omit) = FPU / sfpu_* = SFPU
+*_dest
+DEST → DEST
+MATH
+Single tile
+N/A
+N/A
+N/A
+(omit) = FPU / sfpu_* = SFPU
+Tier 1 respects the proposed contract: 200+ (~200 SFPU functions, natively conformant, 11 non-SFPU)
+Tier 2 doesn’t respect the contract: 18 total (out of which 16 have clear path to conformance - tile variants)
+To have a complete Tier 1 list: 22-27 missing (depending on design decisions)
+3
+
+Future: Tier 1 → Tier 0
+4
+CONFIDENTIAL - CONTAINS TRADE SECRETS
+Future ez_* Variants (0 currently exist)
+Automatic initialization
+Hide DEST management
+Examples: ez_matmul, ez_relu, ez_tilize
+ETA: Jan 2026
+4
+
+Thanks!

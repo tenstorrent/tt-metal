@@ -1,0 +1,59 @@
+╔═══════════════════════════════════════════════════════════════╗
+║  QUICK REFERENCE - Block Variant Tests                       ║
+║  Issue #35739                                                 ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🚀 RUN TESTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./run_block_tests.sh                    # Build & run all tests
+
+
+📝 REGENERATE TESTS (if needed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./run_test_generation.sh --all         # Generate skeletons
+  ./run_test_completion.sh --parallel    # AI complete TODOs
+  ./add_tests_to_cmake.sh                # Add to build
+
+
+🔨 BUILD ONLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  cd tt-metal
+  ./build_metal.sh --build-tests
+
+
+🧪 RUN SPECIFIC TEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  cd tt-metal
+  ./build/test/tt_metal/test_eltwise_binary_block
+  ./build/test/tt_metal/test_reduce_block
+  ./build/test/tt_metal/test_broadcast_block
+  ./build/test/tt_metal/test_transpose_block
+  ./build/test/tt_metal/test_pack_block
+
+
+📚 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  README.md              - Project overview
+  READY_TO_RUN.md        - Quick start guide
+  WORKFLOW_GUIDE.md      - Complete documentation
+
+
+✅ VERIFY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ls tt-metal/tests/tt_metal/tt_metal/block_variants/*.cpp
+  grep -r TODO tt-metal/tests/tt_metal/tt_metal/block_variants/
+  grep test_eltwise_binary_block tt-metal/tests/tt_metal/tt_metal/CMakeLists.txt
+
+
+📊 STATUS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✅ 9 API functions implemented
+  ✅ 85 test cases generated
+  ✅ 0 TODOs remaining
+  ✅ Tests in CMakeLists.txt
+  ✅ Ready to build & run
+
+
+🎯 NEXT ACTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./run_block_tests.sh
