@@ -847,7 +847,11 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         return mapped_dst_type;
     }
 
-    return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
+    // TODO: Perform type conversion on the Python side for now due to performance considerations.
+    // Device-side type conversion is disabled because of issues with typecast/to_layout.
+    // Re-enable device-side typecasting once these issues are fixed.
+    return mapped_dst_type;
+    // return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
 }
 }  // namespace
 
