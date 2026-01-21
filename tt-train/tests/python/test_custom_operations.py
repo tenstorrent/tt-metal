@@ -104,8 +104,6 @@ class PythonLinearOp(Function):
         Returns:
             Output tensor of shape [*, out_features]
         """
-        import ttnn
-
         ctx.save_for_backward(input, weight, bias)
 
         ttnn_input = input.get_value()
@@ -132,8 +130,6 @@ class PythonLinearOp(Function):
         Returns:
             Tuple of (grad_input, grad_weight, grad_bias)
         """
-        import ttnn
-
         input, weight, bias = ctx.saved_tensors
 
         ttnn_input = input.get_value()
@@ -229,8 +225,6 @@ class PythonGroupedHeadsCreationOp(Function):
         Returns:
             Tuple of (q, k, v) tensors
         """
-        import ttnn
-
         ctx.save_for_backward(qs, kvs)
         ctx.num_heads = num_heads
         ctx.num_groups = num_groups
@@ -262,8 +256,6 @@ class PythonGroupedHeadsCreationOp(Function):
         Returns:
             Tuple of (grad_qs, grad_kvs)
         """
-        import ttnn
-
         # Concatenate heads back
         # (B, num_heads, S, E/num_heads) -> (B, 1, S, E)
         grad_qs = ttnn.experimental.nlp_concat_heads(grad_q)
@@ -421,7 +413,6 @@ class TestCustomOperationsWithDevice:
 
     def test_simple_scale_operation_forward(self):
         """Test a simple scale operation forward pass."""
-        import ttnn
 
         class Scale(Function):
             @staticmethod
@@ -509,7 +500,6 @@ class TestCustomOperationsWithDevice:
 
     def test_backward_pass_gradient_accumulation(self):
         """Test that gradients are accumulated correctly in backward pass."""
-        import ttnn
 
         class DoubleOp(Function):
             @staticmethod
@@ -574,7 +564,6 @@ class TestCustomOperationsWithDevice:
 
     def test_mixed_tensor_and_scalar_inputs(self):
         """Test operation with both tensor and scalar inputs."""
-        import ttnn
 
         class ScaleAndShift(Function):
             @staticmethod
@@ -602,7 +591,6 @@ class TestCustomOperationsWithDevice:
 
     def test_multiple_output_tensors(self):
         """Test custom operation that returns multiple output tensors as a tuple."""
-        import ttnn
 
         class SplitOp(Function):
             """Splits input into two outputs: one scaled by 2, one scaled by 3."""
@@ -683,7 +671,6 @@ class TestCustomOperationsWithDevice:
 
     def test_case2_ttnn_primitives_explicit_backward(self):
         """Test Case 2: Build from ttnn primitives - explicit backward with add_grad."""
-        import ttnn
 
         class ScaleOp(Function):
             @staticmethod
