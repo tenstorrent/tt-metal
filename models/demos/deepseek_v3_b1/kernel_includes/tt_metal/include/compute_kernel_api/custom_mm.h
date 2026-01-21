@@ -96,7 +96,7 @@ ALWI void custom_mm_block(
     const uint32_t transpose,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_custom_mm(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim)));
-    MATH((llk_math_custom_mm<MATH_FIDELITY, partial_acc>(idst, transpose, kt_dim)));
+    MATH((llk_math_custom_mm<MATH_FIDELITY, partial_acc>(in0_cb_id, idst, transpose, kt_dim)));
 }
 
 ALWI void custom_mm_block_unpack(
@@ -118,7 +118,7 @@ ALWI void custom_mm_block_math(
     uint32_t idst,
     const uint32_t transpose,
     uint32_t kt_dim) {
-    MATH((llk_math_custom_mm<MATH_FIDELITY>(idst, transpose, kt_dim)));
+    MATH((llk_math_custom_mm<MATH_FIDELITY>(in0_cb_id, idst, transpose, kt_dim)));
 }
 
 }  // namespace ckernel

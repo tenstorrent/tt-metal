@@ -6,6 +6,8 @@
 #include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_custom_mm.h"
 #include "llk_unpack_common_api.h"
 
+#include "api/debug/dprint.h"
+
 /*************************************************************************
  * LLK UNPACK AB CUSTOM_MM
  *
