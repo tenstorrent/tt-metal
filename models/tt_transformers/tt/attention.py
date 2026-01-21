@@ -44,8 +44,6 @@ class Attention(LightweightModule):
         self.paged_attention_config = paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
-        self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
         self.rms_norm_add_unit_offset = configuration.rms_norm_add_unit_offset
@@ -476,8 +474,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
@@ -674,7 +670,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
-                num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
@@ -710,8 +705,6 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,
                 memory_config=(
@@ -775,8 +768,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
         )
@@ -970,8 +961,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,

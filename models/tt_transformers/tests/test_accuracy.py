@@ -318,7 +318,7 @@ def test_tt_model_acc(
 
         if tt_model.args.num_devices > 1:
             cluster_axis = 0 if tt_model.args.is_galaxy else None
-            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
+            num_links = tt_model.tt_ccl.get_num_links(cluster_axis) if tt_model.args.is_galaxy else 1
             tt_out_gathered = ttnn.experimental.all_gather_async(
                 tt_out,
                 persistent_output_buffer=None,
