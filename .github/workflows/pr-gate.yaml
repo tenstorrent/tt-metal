@@ -114,7 +114,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
@@ -138,7 +138,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
@@ -235,7 +235,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
