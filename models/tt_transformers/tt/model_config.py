@@ -1421,7 +1421,6 @@ class ModelArgs:
                 "T3K": [128],
                 "TG": [128, 1024, 2048, 4096, 8192],
             },
-
             "Qwen3-Embedding-8B": {
                 "N150": [128, 1024],
                 "N300": [128, 1024, 2048, 4096, 8192],
@@ -1429,14 +1428,10 @@ class ModelArgs:
                 "TG": [128, 1024, 2048, 4096, 8192],
                 "P150x4": [128, 1024, 2048, 4096, 8192],
             },
-            
             "Llama-3.2-3B": {
                 "N150": [],
             },
         }
-
-        model_name = self.base_model_name
-        device_name = self.device_name
 
         model_name = self.base_model_name
         device_name = self.device_name
