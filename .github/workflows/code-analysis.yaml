@@ -356,7 +356,7 @@ jobs:
     needs: [ clang-static-analyzer ]
     if: |
       always() &&
-      inputs.enable-copilot-fix == true &&
+      (inputs.enable-copilot-fix == true || github.event_name == 'schedule') &&
       needs.clang-static-analyzer.result == 'success'
     runs-on: ubuntu-latest
     permissions:
