@@ -14,7 +14,7 @@ import ttnn.operation_tracer
 pytestmark = pytest.mark.use_module_device
 
 
-def count_elements(obj):
+def count_elements(obj) -> int:
     """Recursively count elements in a nested list structure."""
     if isinstance(obj, list):
         return sum(count_elements(item) for item in obj)
@@ -31,10 +31,22 @@ def enable_tracing_for_test(request):
     """
     # Save original state
     original_trace_flag = ttnn.operation_tracer._ENABLE_TRACE
+    original_serialize_values = ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES
 
     # Only enable tracing for the specific test that needs it
-    if "test_operation_parameter_tracing" in request.node.name:
+    if (
+        "test_operation_parameter_tracing" in request.node.name
+        or "test_default_no_tensor_values" in request.node.name
+        or "test_from_torch_to_device_tracing" in request.node.name
+    ):
         ttnn.operation_tracer._ENABLE_TRACE = True
+        # For test_operation_parameter_tracing, enable tensor value serialization (to test with values)
+        # For test_default_no_tensor_values, use default (False - no values) to test default behavior
+        if "test_operation_parameter_tracing" in request.node.name:
+            ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = True
+        else:
+            # Use default (False) - no values serialized by default
+            ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = False
     else:
         ttnn.operation_tracer._ENABLE_TRACE = False
 
@@ -42,6 +54,7 @@ def enable_tracing_for_test(request):
 
     # Restore original state after test
     ttnn.operation_tracer._ENABLE_TRACE = original_trace_flag
+    ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = original_serialize_values
 
 
 @pytest.mark.parametrize(
@@ -203,6 +216,84 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     assert (
         actual_return_elements == expected_return_elements
     ), f"Return value element count mismatch: expected {expected_return_elements}, got {actual_return_elements}"
+
+    # Clean up trace directory
+    if trace_dir.exists():
+        shutil.rmtree(trace_dir)
+
+    # Restore original state
+    ttnn.operation_tracer._OPERATION_COUNTER = original_operation_counter
+    if original_report_path is not None:
+        ttnn.CONFIG.root_report_path = original_report_path
+
+
+def test_default_no_tensor_values(tmp_path, device):
+    """Test that tensor values are excluded by default (only metadata is serialized)."""
+    # Reset counter for predictable test numbering
+    original_operation_counter = ttnn.operation_tracer._OPERATION_COUNTER
+    ttnn.operation_tracer._OPERATION_COUNTER = 0
+
+    # Override the log directory in CONFIG to use tmp_path
+    original_report_path = None
+    if hasattr(ttnn.CONFIG, "root_report_path"):
+        original_report_path = ttnn.CONFIG.root_report_path
+        ttnn.CONFIG.root_report_path = str(tmp_path)
+
+    # The trace directory will be created under root_report_path / "operation_parameters"
+    trace_dir = tmp_path / "operation_parameters"
+
+    # Create tensors and perform operation
+    shape_a = [2, 3]
+    shape_b = [2, 3]
+    tensor_a = ttnn.rand(shape=shape_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensor_b = ttnn.rand(shape=shape_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensor_c = ttnn.add(tensor_a, tensor_b)
+    ttnn.synchronize_device(device)
+
+    # Find the trace files
+    trace_files = sorted(trace_dir.glob("*_ttnn_*.json")) if trace_dir.exists() else []
+
+    # Verify that trace files were created
+    assert len(trace_files) >= 3, f"Expected at least 3 trace files, found {len(trace_files)}"
+
+    # Find add operation file
+    add_files = [f for f in trace_files if "ttnn_add" in f.name]
+    assert len(add_files) >= 1, f"Expected at least 1 add trace file, found {len(add_files)}"
+
+    # Check the add operation trace
+    add_file = add_files[0]
+    with open(add_file, "r") as f:
+        operation_data_add = json.load(f)
+
+    assert operation_data_add["operation_name"] == "ttnn.add"
+
+    # Check that tensor data exists but values are NOT included
+    arg_0 = operation_data_add["args"][0]["value"]
+    arg_1 = operation_data_add["args"][1]["value"]
+
+    assert arg_0["type"] == "ttnn.Tensor", f"Expected tensor type, got {arg_0.get('type')}"
+    assert arg_1["type"] == "ttnn.Tensor", f"Expected tensor type, got {arg_1.get('type')}"
+
+    # Verify tensor metadata exists
+    for i, tensor_data in enumerate([arg_0, arg_1]):
+        assert "shape" in tensor_data, f"Tensor data {i} missing 'shape' field"
+        assert "dtype" in tensor_data, f"Tensor data {i} missing 'dtype' field"
+        # Verify values are NOT included
+        assert (
+            "values" not in tensor_data
+        ), f"Tensor data {i} should not have 'values' field when serialization is disabled"
+
+    # Verify return value also doesn't have values
+    assert "return_value" in operation_data_add, "Expected return_value in add operation data"
+    return_value_data = operation_data_add["return_value"]
+    assert (
+        return_value_data["type"] == "ttnn.Tensor"
+    ), f"Expected return value to be tensor, got {return_value_data.get('type')}"
+    assert "shape" in return_value_data, "Return value missing 'shape' field"
+    assert "dtype" in return_value_data, "Return value missing 'dtype' field"
+    assert (
+        "values" not in return_value_data
+    ), "Return value should not have 'values' field when serialization is disabled"
 
     # Clean up trace directory
     if trace_dir.exists():
