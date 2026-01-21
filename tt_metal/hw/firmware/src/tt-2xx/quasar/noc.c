@@ -9,9 +9,9 @@
 #include "noc_parameters.h"
 
 // generated code
-#include "../registers/c/noc_niu_reg.h"
-#include "../registers/c/noc_config_reg.h"
-#include "../registers/c/noc_status_reg.h"
+#include "registers/noc_niu_reg.h"
+#include "registers/noc_config_reg.h"
+#include "registers/noc_status_reg.h"
 
 #ifdef TB_NOC
 
@@ -21,10 +21,10 @@
 
 #define NOC_WRITE_REG(addr, val)                                      \
     ((*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + \
-                             noc_get_active_instance() * NOC_INSTANCE_OFFSET + (addr)))) = (val))
+                             noc_get_active_instance() * NOC_INSTANCE_OFFSET + ((uintptr_t)addr)))) = (val))
 #define NOC_READ_REG(addr)                                                                                             \
     (*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + noc_get_active_instance() * NOC_INSTANCE_OFFSET + \
-                            (addr))))
+                            ((uintptr_t)addr))))
 
 #endif
 
