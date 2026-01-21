@@ -15,3 +15,6 @@
 {"event":"result","type":"build","success":true,"ts":"2026-01-21T16:02:24+00:00"}
 {"event":"test","stage":5,"result":"PASS","ts":"2026-01-21T16:02:46+00:00"}
 {"event":"tdd_cycle","stage":5,"phase":"GREEN","result":"PASS","ts":"2026-01-21T16:02:46+00:00"}
+{"event":"action","type":"build","command":"./build_metal.sh -b Debug","notes":"Stage 6: kernels created, building","ts":"2026-01-21T16:04:44+00:00"}
+{"event":"result","type":"build","success":true,"ts":"2026-01-21T16:05:05+00:00"}
+{"event":"cb_sync_summary","total_cbs":8,"reader_to_compute":"Wt pages","compute_to_writer":"1 tile","note":"Simple passthrough stub for Stage 6","ts":"2026-01-21T16:06:43+00:00"}

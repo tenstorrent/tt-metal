@@ -150,14 +150,7 @@ VarianceWRmProgramFactory::cached_program_t VarianceWRmProgramFactory::create(
         cb_out_rm_idx, program, all_cores, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // ============================================================
-    // 5. Throw before kernel creation (Stage 5 boundary)
-    // ============================================================
-    TT_THROW("variance_w_rm: Kernel creation not yet implemented (Stage 6)");
-
-    // The code below will be uncommented in Stage 6
-    /*
-    // ============================================================
-    // 6. Create kernels
+    // 5. Create kernels
     // ============================================================
 
     // Calculate scaler value: 1/W for mean calculation
@@ -198,7 +191,7 @@ VarianceWRmProgramFactory::cached_program_t VarianceWRmProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // ============================================================
-    // 7. Set runtime args (minimal for stubs)
+    // 6. Set runtime args (minimal for stubs)
     // ============================================================
     const std::vector<uint32_t> reader_runtime_args = {src_buffer->address()};
     const std::vector<uint32_t> compute_runtime_args = {};
@@ -209,7 +202,7 @@ VarianceWRmProgramFactory::cached_program_t VarianceWRmProgramFactory::create(
     SetRuntimeArgs(program, writer_id, single_core, writer_runtime_args);
 
     // ============================================================
-    // 8. Return cached program with shared variables
+    // 7. Return cached program with shared variables
     // ============================================================
     return {
         std::move(program),
@@ -219,7 +212,6 @@ VarianceWRmProgramFactory::cached_program_t VarianceWRmProgramFactory::create(
             .writer_kernel_id = writer_id,
             .all_cores = all_cores,
             .num_cores = 1}};
-    */
 }
 
 void VarianceWRmProgramFactory::override_runtime_arguments(
