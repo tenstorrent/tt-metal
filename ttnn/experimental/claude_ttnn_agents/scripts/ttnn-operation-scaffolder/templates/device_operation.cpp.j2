@@ -24,8 +24,19 @@ void {{ operation_name_pascal }}DeviceOperation::validate_on_program_cache_hit(
 
 void {{ operation_name_pascal }}DeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Extract parameters from operation_attributes for use in validations
+{% for param in parameters %}
+    const auto {{ param.name }} = operation_attributes.{{ param.name }};
+{% endfor %}
+
+    // Extract tensors from tensor_args
 {% for tensor in input_tensors %}
     const auto& {{ tensor.cpp_name }} = tensor_args.{{ tensor.cpp_name }};
+{% endfor %}
+
+    // Suppress unused variable warnings if parameters aren't used in validations
+{% for param in parameters %}
+    (void){{ param.name }};
 {% endfor %}
 
     // Storage type validation
