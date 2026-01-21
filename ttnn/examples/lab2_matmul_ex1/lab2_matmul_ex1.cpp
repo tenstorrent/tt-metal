@@ -390,7 +390,7 @@ int main() {
 
         // Initialize program state (includes device creation)
         ProgramState prog_state = init_program();
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, 5, prog_state);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, 1, prog_state);
 
         log_info(tt::LogAlways, "Output vector of size {}", result_vec.size());
 

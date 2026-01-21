@@ -80,7 +80,17 @@ needed to perform matrix multiplication on multiple cores.
 In Tenstorrent architecture, the cores are organized into a 2D grid with each core uniquely identified
 by an index ``(x, y)`` in this grid.
 
-TODO: Insert a figure showing a grid of cores with core indices ``(x, y)`` labeled.
+.. figure:: images/tensix_core_grid.png
+   :width: 900
+   :alt: Tensix Core Grid
+   :align: center
+
+   Figure 1: Tensix Core Grid
+
+As shown in Figure 1, core coordinates use the ``x`` and ``y`` dimensions of the grid, rather than the
+``row`` and ``column`` dimensions. This is something to be cognizant of when interpreting the coordinates.
+While the exact coordinates are not important in many cases, they are useful when examining logs and debug
+messages. They also become relevant when examining performance in more detail.
 
 Determine Number of Available Tensix Cores
 ------------------------------------------
@@ -269,9 +279,12 @@ In this exercise, you will:
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
 #. Verify correctness by comparing the result against the CPU reference implementation.
 #. Run the same workload using:
-   * Work distributed over **quarter** of the compute cores.
-   * Work distributed over **half** of the compute cores.
    * Work distributed over **all** available compute cores.
+   * Work distributed over **half** of the available compute cores.
+   * Work distributed over **one fifth** of the available compute cores.
+   
+   Note that depending on device type, you may not be able to use precisely one fifth of the cores.
+   If the number of cores is not divisible by 5, simply round down to the nearest integer.
 #. Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
 #. Plot a speedup plot comparing the performance of the three runs relative to the single core implementation from Lab 1.
 
