@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <iostream>
 #include <atomic>
 #include <immintrin.h>  // For _mm_clflush
@@ -552,6 +553,7 @@ D2HSocket::D2HSocket(
     auto num_cores = sender_core_range_set.size();
     auto total_config_buffer_size = num_cores * config_buffer_size;
 
+    // Allocate config buffer via MeshBuffer
     auto shard_params = ShardSpecBuffer(
         sender_core_range_set, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
 
@@ -568,7 +570,7 @@ D2HSocket::D2HSocket(
     };
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
 
-    // Allocate L1 data buffer on sender core if requested
+    // Allocate L1 data buffer on sender core if requested (same pattern as config buffer)
     if (l1_data_buffer_size > 0) {
         // Get default page size (use 64 bytes as minimum, matching PCIe alignment)
         const uint32_t default_page_size = 64;
@@ -594,6 +596,7 @@ D2HSocket::D2HSocket(
         l1_data_buffer_address_ = l1_data_buffer_->address();
     }
 
+    // Prepare and write config data
     std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
     config_data[0] = 0;
     config_data[1] = 1;
@@ -607,7 +610,7 @@ D2HSocket::D2HSocket(
     config_data[host_addr_offset] = data_pcie_xy_enc;
     config_data[host_addr_offset + 1] = data_addr_hi;
     config_data[host_addr_offset + 2] = bytes_sent_addr_hi;
-    // Store L1 data buffer info at offset [15] and [16]
+    // Store L1 data buffer info in config
     config_data[host_addr_offset + 3] = l1_data_buffer_address_;
     config_data[host_addr_offset + 4] = l1_data_buffer_size_;
 

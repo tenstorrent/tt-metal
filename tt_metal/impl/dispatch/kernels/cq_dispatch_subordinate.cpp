@@ -207,29 +207,6 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
     }
 }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-
-    WAYPOINT("DAPW");
-    uint32_t heartbeat = 0;
-    // Stall until the number of pages already acquired + the number that need to be acquired is greater
-    // than the number available
-    while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
-        invalidate_l1_cache();
-        update_worker_completion_count_on_dispatch_d();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    }
-    WAYPOINT("DAPD");
-    num_pages_acquired += n;
-}
-
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
-    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
-}
-
 // ============================================================================
 // Perf Telemetry Socket Functions
 // ============================================================================
@@ -282,6 +259,7 @@ void perf_telemetry_init() {
 // Returns: true if data was sent, false if socket not initialized or no L1 buffer
 FORCE_INLINE
 bool perf_telemetry_push() {
+    DeviceZoneScopedN("push_perf");
     if constexpr (!perf_telemetry_enabled) {
         return false;
     }
@@ -317,6 +295,33 @@ bool perf_telemetry_push() {
     noc_async_write_barrier();
 
     return true;
+}
+
+template <uint32_t noc_xy, uint32_t sem_id>
+FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+
+    WAYPOINT("DAPW");
+
+    // Push perf telemetry data before waiting for pages
+    perf_telemetry_push();
+
+    uint32_t heartbeat = 0;
+    // Stall until the number of pages already acquired + the number that need to be acquired is greater
+    // than the number available
+    while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
+        invalidate_l1_cache();
+        update_worker_completion_count_on_dispatch_d();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("DAPD");
+    num_pages_acquired += n;
+}
+
+template <uint32_t noc_xy, uint32_t sem_id>
+FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
+    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
 }
 
 // Pointer to profiler control buffer for signaling dispatch TRISC to terminate

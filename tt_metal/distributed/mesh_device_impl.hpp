@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -135,6 +137,9 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // D2H socket for streaming performance telemetry from device to host in real-time
     std::unique_ptr<D2HSocket> perf_telemetry_socket_;
+    // Background thread for scrubbing perf telemetry data from device
+    std::thread perf_telemetry_thread_;
+    std::atomic<bool> perf_telemetry_stop_{false};
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.

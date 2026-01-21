@@ -732,6 +732,13 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
+    // Stop the perf telemetry scrubbing thread if running
+    if (perf_telemetry_thread_.joinable()) {
+        perf_telemetry_stop_.store(true);
+        perf_telemetry_thread_.join();
+        log_trace(tt::LogMetal, "Perf telemetry receiver thread stopped");
+    }
+
     if (this->is_initialized()) {
         ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
     }
@@ -1206,9 +1213,10 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
 
     // Configuration for perf telemetry socket
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
-    constexpr uint32_t kPerfTelemetryFifoSize = 4096;               // 4KB FIFO for telemetry data
-    constexpr uint32_t kPerfTelemetryPageSize = 64;                 // 64 bytes per telemetry page
-    constexpr uint32_t kL1DataBufferSize = kPerfTelemetryPageSize;  // 1 page of L1 data buffer
+    constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
+    constexpr uint32_t kPerfTelemetryPageSize = 64;    // 64 bytes per telemetry page
+    // L1 data buffer for telemetry - kernel reads address from config
+    constexpr uint32_t kL1DataBufferSize = kPerfTelemetryPageSize;
 
     // Get the dispatch_s core which runs the dispatch_subordinate kernel
     // This is the core that will push telemetry data to host
@@ -1234,35 +1242,18 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         dispatch_core.x,
         dispatch_core.y);
 
-    // Create socket with L1 data buffer for telemetry data
+    // Create socket - config buffer and L1 data buffer are allocated via MeshBuffer
+    // L1 data buffer address/size are stored in config for the kernel to read
     perf_telemetry_socket_ = std::make_unique<D2HSocket>(
         mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize, kL1DataBufferSize);
 
-    // Populate L1 data buffer with test data (series of numbers)
-    if (perf_telemetry_socket_->get_l1_data_buffer_size() > 0) {
-        uint32_t num_words = perf_telemetry_socket_->get_l1_data_buffer_size() / sizeof(uint32_t);
-        std::vector<uint32_t> test_data(num_words);
-        for (uint32_t i = 0; i < num_words; i++) {
-            test_data[i] = i;  // Simple series: 0, 1, 2, 3, ...
-        }
+    // Set page size for the socket
+    perf_telemetry_socket_->set_page_size(kPerfTelemetryPageSize);
 
-        // Write test data to L1 buffer on the sender core
-        auto l1_buffer_addr = perf_telemetry_socket_->get_l1_data_buffer_address();
-        auto virtual_core = ref_device->virtual_core_from_logical_core(
-            dispatch_core, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-        tt::tt_metal::detail::WriteToDeviceL1(
-            ref_device,
-            virtual_core,
-            l1_buffer_addr,
-            test_data,
-            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-
-        log_info(
-            tt::LogMetal,
-            "Perf telemetry L1 data buffer at 0x{:x} (size={}) populated with test data",
-            l1_buffer_addr,
-            perf_telemetry_socket_->get_l1_data_buffer_size());
-    }
+    // Note: Background scrubbing thread is not started during device init
+    // because wait_for_pages() blocks and the dispatch_s kernel may not be
+    // pushing data yet. The thread should be started explicitly when needed.
+    perf_telemetry_stop_.store(false);
 }
 
 D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const { return perf_telemetry_socket_.get(); }
