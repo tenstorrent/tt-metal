@@ -78,7 +78,7 @@ void bind_gather_operation(nb::module_& mod) {
                const int8_t dim,
                const ttnn::Tensor& input_index_tensor,
                const bool sparse_grad,
-               std::optional<ttnn::Tensor> optional_output_tensor,
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
                const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
                 return self(

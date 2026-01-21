@@ -26,7 +26,7 @@ Tensor loss_function(
     const LossFunction loss_kind,
     const LossReductionMode reduce_mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor) {
     std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
         case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
