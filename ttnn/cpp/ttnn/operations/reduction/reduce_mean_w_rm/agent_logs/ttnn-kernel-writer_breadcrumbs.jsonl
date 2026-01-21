@@ -11,3 +11,5 @@
 {"event":"action","type":"test","command":"pytest test_stage7_kernel_correctness.py","ts":"2026-01-21T13:56:54+00:00"}
 {"event":"test","stage":7,"result":"PASS","tests_passed":6,"tests_total":6,"ts":"2026-01-21T13:57:12+00:00"}
 {"event":"design_compliance_summary","total_phases":5,"all_compliant":true,"ts":"2026-01-21T13:57:12+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"06e5b233d3","ts":"2026-01-21T13:57:46+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[7],"final_commit":"06e5b233d3","ts":"2026-01-21T13:57:46+00:00"}
