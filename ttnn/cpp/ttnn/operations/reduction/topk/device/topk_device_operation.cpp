@@ -20,6 +20,13 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+/**
+ * @brief Checks if a given unsigned integer is a power of two.
+ *
+ * @param n The unsigned integer to check
+ * @return true if n is a power of two (1, 2, 4, 8, 16, ...), false otherwise
+ */
+bool isPowerOfTwo(uint32_t n) { return n != 0 && (n & (n - 1)) == 0; }
 
 /**
  * @brief Selects the optimal program factory (single-core vs multi-core) for TopK execution
@@ -33,6 +40,7 @@ namespace ttnn::prim {
  *
  * 1. DIMENSION SIZE: Input dimension >= multi_core_min_width
  *    - Ensures sufficient work to justify parallel execution overhead
+ *    - Dimension size must be a power of 2 for bitonic sort
  *
  * 2. OUTPUT DATA TYPE: Must support 16-bit indices (dimension size < 65536)
  *    - Multi-core implementation currently only supports UInt16 indices
@@ -67,6 +75,8 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     // Apply requirement #2: Multi-core implementation constraint
     // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
     multicore_supported &= (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
+    // Dimension size must be a power of two for bitonic sort
+    multicore_supported &= isPowerOfTwo(input_shape[args.dim]);
 
     // Apply requirement #3: K value limitation for multi-core optimization
     multicore_supported &= (args.k <= 64);
