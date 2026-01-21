@@ -439,7 +439,6 @@ class MLP1D(LightweightModule):
 
         # Extract settings from args/model_config
         ccl_topology = args.ccl_topology()
-        num_reduce_scatter_links = args.num_reduce_scatter_links
 
         if state_dict_prefix is None:
             state_dict_prefix = args.get_state_dict_prefix("MLP", layer_num)
@@ -547,7 +546,6 @@ class MLP1D(LightweightModule):
             max_batch_size=args.max_batch_size,
             mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
             topology=ccl_topology,
-            num_reduce_scatter_links=num_reduce_scatter_links,
             decode_w1_w3_prg_config=decode_w1_w3_prg_config,
             decode_w2_prg_config=decode_w2_prg_config,
             decode_mlp2_input_memcfg=decode_mlp2_input_memcfg,
