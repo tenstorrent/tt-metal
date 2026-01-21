@@ -10,7 +10,7 @@ class AttentionConfig:
     """Base configuration class for attention modules"""
 
     embed_dims: int = 256
-    num_heads: int = 4
+    num_heads: int = 8
     num_levels: int = 4
     num_points: int = 4
     dropout: float = 0.0

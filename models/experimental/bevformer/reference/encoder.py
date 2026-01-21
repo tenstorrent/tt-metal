@@ -111,21 +111,21 @@ class BEVFormerLayer(nn.Module):
         Forward pass for a single BEVFormer layer.
 
         Args:
-            bev_query: Current BEV query features [B, num_query, embed_dims]
+            bev_query: Current BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key
-            bev_pos: BEV positional encoding [B, num_query, embed_dims]
+            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
             level_start_index: Start index of each level [num_levels]
             valid_ratios: Valid ratios for each level [B, num_levels, 2]
-            prev_bev: Previous timestep BEV features [B, num_query, embed_dims]
+            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
-            reference_points_3d: 3D reference points [num_query, D, 3]
-            reference_points_cam: Camera reference points [num_cams, B, num_query, D, 2]
-            bev_mask: Validity mask for camera projections [num_cams, B, num_query, D]
+            reference_points_3d: 3D reference points [num_queries, D, 3]
+            reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
+            bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
 
         Returns:
-            torch.Tensor: Updated BEV features [B, num_query, embed_dims]
+            torch.Tensor: Updated BEV features [B, num_queries, embed_dims]
         """
 
         # Temporal Self-Attention
@@ -266,27 +266,27 @@ class BEVFormerEncoder(nn.Module):
         Forward pass of BEVFormer encoder.
 
         Args:
-            bev_query: Initial BEV query features [B, num_query, embed_dims]
+            bev_query: Initial BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key (optional)
             bev_h: BEV grid height
             bev_w: BEV grid width
-            bev_pos: BEV positional encoding [B, num_query, embed_dims]
+            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Multi-scale feature shapes [num_levels, 2]
             level_start_index: Start indices for each level [num_levels]
             valid_ratios: Valid ratios for each level [B, num_levels, 2]
-            prev_bev: Previous timestep BEV features [B, num_query, embed_dims]
+            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
             img_metas: Camera metadata for point sampling
 
         Returns:
-            torch.Tensor: Final BEV features [B, num_query, embed_dims]
+            torch.Tensor: Final BEV features [B, num_queries, embed_dims]
                 If return_intermediate=True, returns list of intermediate features.
         """
         output = bev_query
         intermediate = []
 
-        bs, num_query, _ = bev_query.shape
+        bs, num_queries, _ = bev_query.shape
 
         # Generate reference points for spatial cross-attention
         if img_metas is not None:

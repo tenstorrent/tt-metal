@@ -144,51 +144,51 @@ class TTBEVFormerLayer:
         Forward pass for a single TTBEVFormerLayer.
 
         Args:
-            bev_query: Current BEV query features [B, num_query, embed_dims]
+            bev_query: Current BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key
-            bev_pos: BEV positional encoding [B, num_query, embed_dims]
+            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
             bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
             level_start_index: Start index of each level [num_levels]
             valid_ratios: Valid ratios for each level [B, num_levels, 2]
-            prev_bev: Previous timestep BEV features [B, num_query, embed_dims]
+            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
-            reference_points_3d: 3D reference points [B, num_query, D, 3]
-            reference_points_cam: Camera reference points [num_cams, B, num_query, D, 2]
-            bev_mask: Validity mask for camera projections [num_cams, B, num_query, D]
+            reference_points_3d: 3D reference points [B, num_queries, D, 3]
+            reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
+            bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
 
         Returns:
-            Updated BEV features [B, num_query, embed_dims]
+            Updated BEV features [B, num_queries, embed_dims]
         """
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
 
         # Convert torch tensors to ttnn tensors if needed
         if isinstance(bev_query, torch.Tensor):
-            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         # Temporal Self-Attention
         if isinstance(prev_bev, torch.Tensor):
-            prev_bev = ttnn.from_torch(prev_bev, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            prev_bev = ttnn.from_torch(prev_bev, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         if isinstance(reference_points_3d, torch.Tensor):
             # Extract 2D coordinates from the first depth level of 3D reference points
-            # reference_points_3d shape: [bs, num_query, num_points, 3]
-            bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_query, 1, 2]
+            # reference_points_3d shape: [bs, num_queries, num_points, 3]
+            bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
 
             # Convert to TTNN tensor if needed
             if hasattr(ttnn, "Device") and isinstance(self.device, ttnn.Device):
                 bev_reference_points = ttnn.from_torch(
-                    bev_reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+                    bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 )
         else:
             # reference_points_3d is already a TTNN tensor
             # Convert to torch, do the operations, then convert back
             torch_ref_points = ttnn.to_torch(reference_points_3d)
-            bev_reference_points = torch_ref_points[:, :, 0, :2].unsqueeze(2)  # [bs, num_query, 1, 2]
+            bev_reference_points = torch_ref_points[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
             bev_reference_points = ttnn.from_torch(
-                bev_reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+                bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
         if use_signpost:
@@ -266,10 +266,10 @@ class TTBEVFormerLayer:
         Forward pass through the feed-forward network using TTNN operations.
 
         Args:
-            x: Input tensor [B, num_query, embed_dims]
+            x: Input tensor [B, num_queries, embed_dims]
 
         Returns:
-            Output tensor [B, num_query, embed_dims]
+            Output tensor [B, num_queries, embed_dims]
         """
         # Check if FFN parameters exist - mixed object/dict structure
         if not (
@@ -420,21 +420,21 @@ class TTBEVFormerEncoder:
         Forward pass of TTNN BEVFormer encoder.
 
         Args:
-            bev_query: Initial BEV query features [B, num_query, embed_dims]
+            bev_query: Initial BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key (optional)
             bev_h: BEV grid height
             bev_w: BEV grid width
-            bev_pos: BEV positional encoding [B, num_query, embed_dims]
+            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Multi-scale feature shapes [num_levels, 2]
             level_start_index: Start indices for each level [num_levels]
             valid_ratios: Valid ratios for each level [B, num_levels, 2]
-            prev_bev: Previous timestep BEV features [B, num_query, embed_dims]
+            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
             img_metas: Camera metadata for point sampling
 
         Returns:
-            Final BEV features [B, num_query, embed_dims]
+            Final BEV features [B, num_queries, embed_dims]
             If return_intermediate=True, returns list of intermediate features.
         """
         if use_signpost:
@@ -442,13 +442,13 @@ class TTBEVFormerEncoder:
 
         # Convert torch tensors to ttnn tensors if needed
         if isinstance(bev_query, torch.Tensor):
-            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            bev_query = ttnn.from_torch(bev_query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         output = bev_query
         intermediate = []
 
         # Get batch size and number of queries for reference point generation
-        bs, num_query, _ = bev_query.shape
+        bs, num_queries, _ = bev_query.shape
 
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Generation Start")

@@ -27,7 +27,7 @@ from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_heads, num_bev_queue",
+    "batch_size, num_queries, embed_dims, num_heads, num_bev_queue",
     [
         (1, 900, 256, 8, 2),  # nuScenes 30x30 BEV grid
         (1, 2500, 256, 8, 2),  # 50x50 BEV grid
@@ -42,7 +42,7 @@ from loguru import logger
 def test_temporal_self_attention_forward(
     device,
     batch_size,
-    num_query,
+    num_queries,
     embed_dims,
     num_heads,
     num_bev_queue,
@@ -51,16 +51,16 @@ def test_temporal_self_attention_forward(
     torch.manual_seed(seed)
     print_detailed_comparison_flag = False
 
-    bev_spatial_shapes = torch.tensor([[int(math.sqrt(num_query))] * 2], dtype=torch.long)
+    bev_spatial_shapes = torch.tensor([[int(math.sqrt(num_queries))] * 2], dtype=torch.long)
     bev_h, bev_w = bev_spatial_shapes[0]
     num_levels = len(bev_spatial_shapes)
 
     # Create input tensors for temporal self attention
-    current_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    prev_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
+    current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
 
-    # BEV reference points in 2D space [batch_size, num_query, num_levels, 2]
-    reference_points_2d = torch.rand(batch_size, num_query, num_levels, 2, dtype=torch.float32)
+    # BEV reference points in 2D space [batch_size, num_queries, num_levels, 2]
+    reference_points_2d = torch.rand(batch_size, num_queries, num_levels, 2, dtype=torch.float32)
 
     # Level start index
     indices = bev_spatial_shapes.prod(1).cumsum(0)
@@ -152,17 +152,17 @@ def test_temporal_self_attention_forward(
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_heads",
+    "batch_size, num_queries, embed_dims, num_heads",
     [
         (1, 100, 256, 4),  # Small test case
-        (2, 256, 256, 4),  # Different batch size and num_query
+        (2, 256, 256, 4),  # Different batch size and num_queries
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_temporal_self_attention_without_prev_bev(
     device,
     batch_size,
-    num_query,
+    num_queries,
     embed_dims,
     num_heads,
 ):
@@ -171,26 +171,26 @@ def test_temporal_self_attention_without_prev_bev(
 
     # Simple BEV spatial configuration - match the number of queries
     # For 100 queries: 10x10, for 256 queries: 16x16
-    if num_query == 100:
+    if num_queries == 100:
         bev_spatial_shapes = torch.tensor([[10, 10]], dtype=torch.long)
         bev_h, bev_w = 10, 10
-    elif num_query == 256:
+    elif num_queries == 256:
         bev_spatial_shapes = torch.tensor([[16, 16]], dtype=torch.long)
         bev_h, bev_w = 16, 16
     else:
         # Default: try to find square root for other cases
         import math
 
-        side_length = int(math.sqrt(num_query))
-        if side_length * side_length == num_query:
+        side_length = int(math.sqrt(num_queries))
+        if side_length * side_length == num_queries:
             bev_spatial_shapes = torch.tensor([[side_length, side_length]], dtype=torch.long)
             bev_h, bev_w = side_length, side_length
         else:
-            raise ValueError(f"num_query {num_query} is not a perfect square, cannot create square BEV grid")
+            raise ValueError(f"num_queries {num_queries} is not a perfect square, cannot create square BEV grid")
 
     # Create test inputs
-    current_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    reference_points_2d = torch.rand(batch_size, num_query, 1, 2, dtype=torch.float32)
+    current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    reference_points_2d = torch.rand(batch_size, num_queries, 1, 2, dtype=torch.float32)
     level_start_index = torch.tensor([0], dtype=torch.long)
 
     # Create reference model
@@ -225,7 +225,7 @@ def test_temporal_self_attention_without_prev_bev(
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_heads",
+    "batch_size, num_queries, embed_dims, num_heads",
     [
         (1, 64, 128, 4),  # Smaller dimensions for validation
     ],
@@ -234,7 +234,7 @@ def test_temporal_self_attention_without_prev_bev(
 def test_temporal_self_attention_shape_consistency(
     device,
     batch_size,
-    num_query,
+    num_queries,
     embed_dims,
     num_heads,
 ):
@@ -245,9 +245,9 @@ def test_temporal_self_attention_shape_consistency(
     bev_spatial_shapes = torch.tensor([[8, 8]], dtype=torch.long)
 
     # Create test inputs
-    current_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    prev_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    reference_points_2d = torch.rand(batch_size, num_query, 1, 2, dtype=torch.float32)
+    current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    reference_points_2d = torch.rand(batch_size, num_queries, 1, 2, dtype=torch.float32)
     level_start_index = torch.tensor([0], dtype=torch.long)
 
     # Create reference model
