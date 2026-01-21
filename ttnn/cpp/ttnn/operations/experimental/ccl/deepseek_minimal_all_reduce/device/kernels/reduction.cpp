@@ -38,7 +38,7 @@ void MAIN {
 
         tile_regs_wait();
         for (uint32_t i = 0; i < batch_size; ++i) {
-            pack_tile<true>(i, cb_out0, start_tile + i);
+            pack_tile(i, cb_out0, start_tile + i);
         }
         tile_regs_release();
     }
