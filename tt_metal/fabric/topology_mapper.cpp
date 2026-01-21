@@ -1499,6 +1499,10 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     for (const auto& asic_id : all_asic_ids) {
         asic_id_to_mesh_rank[MeshId{0}][asic_id] = MeshHostRankId{0};
     }
+
+    // print the number of physical chips in the physical system descriptor
+    log_debug(tt::LogFabric, "Number of physical chips in the physical system descriptor: {}", total_number_of_chips);
+
     auto physical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
         physical_system_descriptor, asic_id_to_mesh_rank);
 
@@ -1534,6 +1538,11 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         // Do the mapping and see if its successful
         tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
         config.strict_mode = false;  // Use relaxed mode for initial matching
+
+        // print the mesh shape
+        log_debug(tt::LogFabric, "Trying mesh shape: {}", mesh_shape);
+
+        // Print theadjacnecy matrices
 
         auto mapping_result = tt::tt_metal::experimental::tt_fabric::map_mesh_to_physical(
             mesh_id, logical_adj, physical_adj, node_to_host_rank, asic_to_host_rank, config);

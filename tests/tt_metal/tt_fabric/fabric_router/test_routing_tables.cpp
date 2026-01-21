@@ -201,6 +201,11 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane_1d(galaxy_6u_mesh_graph_desc_path);
+
+    // Test physical mesh shape for 1x32 MGD
+    auto mesh_shape = control_plane->get_physical_mesh_shape(MeshId{0});
+    EXPECT_EQ(mesh_shape, tt::tt_metal::distributed::MeshShape(1, 32))
+        << "Expected physical mesh shape to be 1x32, got: (" << mesh_shape[0] << "x" << mesh_shape[1] << ")";
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
