@@ -27,7 +27,7 @@ void MAIN {
     const uint32_t mm_N_blocks_per_slice = 1;
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
-    const uint32_t mm_M_block_ht = 2;
+    const uint32_t chunk_width = 1;
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
@@ -38,7 +38,7 @@ void MAIN {
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 for (uint32_t i = 1; i < ring_size; i++) {
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        for (uint32_t mm_M_tile = 0; mm_M_tile < mm_M_block_ht; mm_M_tile++) {
+                        for (uint32_t chunk_tile = 0; chunk_tile < chunk_width; chunk_tile++) {
                             uint32_t tiles_to_read_in_current_direction = 1;
                             cb_wait_front(input_cb_id, tile_granularity);
                             cb_wait_front(intermediate_cb, tile_granularity);
