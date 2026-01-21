@@ -535,7 +535,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
 // top of the first page At the end, do not grab page N+1
 template <int32_t round, bool test_for_nonzero>
 static uint32_t write_pages_to_dispatcher(
-    uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
+    uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t amt_to_write) {
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - round) / downstream_cb_page_size;
 
@@ -1725,8 +1725,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
-    uint32_t db_toggle = 0;
-    uint32_t scratch_write_addr;
+    uint32_t scratch_write_start_addr = scratch_db_top[0];
+    uint32_t scratch_read_start_addr = scratch_db_top[1];
     // Add back start_offset to amt_to_read to ensure all bytes from scratch_db are transferred
     amt_to_read += start_offset;
     // Calculate the largest multiple of scratch_db_half_size that can fit in a uint32_t. This allows most of the math
@@ -1739,9 +1739,9 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
             // This ensures that writes from prior iteration are done
             noc_async_writes_flushed();
 
-            db_toggle ^= 1;
-            scratch_read_addr = scratch_db_top[db_toggle];
-            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+            uint32_t scratch_read_addr = scratch_read_start_addr;
+            uint32_t scratch_write_addr = scratch_write_start_addr;
+            std::swap(scratch_read_start_addr, scratch_write_start_addr);
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
@@ -1758,9 +1758,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     }
 
     // Third step - write from DB
-    scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // RelayLinearH is a large command.
