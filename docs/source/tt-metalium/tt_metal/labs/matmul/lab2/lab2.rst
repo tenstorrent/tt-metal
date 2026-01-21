@@ -279,6 +279,7 @@ In this exercise, you will:
 #. Implement matrix multiplication on multiple Tensix cores by modifying your Lab 1 solution.
 #. Verify correctness by comparing the result against the CPU reference implementation.
 #. Run the same workload using:
+
    * Work distributed over **all** available compute cores.
    * Work distributed over **half** of the available compute cores.
    * Work distributed over **one fifth** of the available compute cores.
