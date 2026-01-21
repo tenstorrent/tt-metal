@@ -164,7 +164,6 @@ void kernel_main() {
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         // DPRINT << "direction_offset: " << direction_offset << ENDL();
 
-                        // TODO: remove the if (reduce) after introducing the writer kernel
                         cb_reserve_back(cb_in0, tile_granularity);
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {

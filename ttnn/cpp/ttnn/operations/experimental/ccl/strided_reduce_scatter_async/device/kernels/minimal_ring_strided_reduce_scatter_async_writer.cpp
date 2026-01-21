@@ -225,6 +225,9 @@ void kernel_main() {
                                 uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                                 uint32_t input_row_offset = start_row_offset;
 
+                                if (i == 0) {
+                                    cb_wait_front(cb_output_id, tile_granularity);
+                                }
                                 // cb_wait_front(cb_output_id, tile_granularity);
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
@@ -238,11 +241,13 @@ void kernel_main() {
                                     //     pkt_unicast_hdr,
                                     //     l1_read_addr,
                                     //     NocUnicastCommandHeader{noc_address0});
-                                    l1_read_addr += page_size;
+                                    // l1_read_addr += page_size;
                                     // noc_async_writes_flushed();
                                 }
                                 DPRINT << "--------------------------------" << ENDL();
-                                // cb_pop_front(cb_output_id, tile_granularity);
+                                if (i == 0) {
+                                    cb_pop_front(cb_output_id, tile_granularity);
+                                }
                             }
                         } else {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
