@@ -46,3 +46,23 @@ template <
 inline void llk_math_reduce_init() {
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, num_fidelity_phases, enforce_fp32_accumulation>();
 }
+
+template <
+    PoolType type,
+    ReduceDim dim,
+    bool is_fp32_dest_acc_en,
+    int num_fidelity_phases = 0,
+    bool is_int_fpu_en = false,
+    bool enforce_fp32_accumulation = false>
+inline void llk_math_reduce_scalar_fused(const uint dst_index, const uint num_faces = 4) {
+    _llk_math_reduce_scalar_fused_<
+        type,
+        dim,
+        is_fp32_dest_acc_en,
+        num_fidelity_phases,
+        is_int_fpu_en,
+        enforce_fp32_accumulation,
+        false>(dst_index, false, num_faces);
+}
+
+inline void llk_math_reduce_clear_dvalid_after_for_loop() { _llk_math_reduce_clear_dvalid_after_for_loop_(); }
