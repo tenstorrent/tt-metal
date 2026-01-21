@@ -55,6 +55,8 @@ void DeepseekMoEReductScatterDeviceOperation::validate_on_program_cache_miss(
 
     // input tensor properties
     const ttnn::Tensor& first_input_tensor = input_tensors.at(0);
+    const uint32_t input_tensor_rank = first_input_tensor.logical_shape().rank();
+    const auto& input_tensor_shape = first_input_tensor.logical_shape();
     TT_FATAL(
         first_input_tensor.buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
         "deepseek_moe_reduce_scatter requires aligned pages");
@@ -65,6 +67,20 @@ void DeepseekMoEReductScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         first_input_tensor.element_size() <= 2,
         "deepseek_moe_reduce_scatter requires element size <= 2 bytes for scatter_write usage");
+    TT_FATAL(
+        input_tensor_rank >= 2,
+        "deepseek_moe_reduce_scatter requires input tensor must have rank at least 2, bus has {}",
+        input_tensor_rank);
+
+    // input tensor must be 1 tile high
+    uint32_t outer_dims_product = 1;
+    for (uint32_t dim = 0; dim < input_tensor_rank - 1; ++dim) {
+        outer_dims_product *= input_tensor_shape[dim];
+    }
+    TT_FATAL(
+        outer_dims_product == tt::constants::TILE_HEIGHT,
+        "deepseek_moe_reduce_scatter requires the collapsed upper dims to be the height of a single tile, but has {}",
+        outer_dims_product);
 
     // input tensor shard spec properties
     TT_FATAL(
@@ -125,7 +141,7 @@ void DeepseekMoEReductScatterDeviceOperation::validate_on_program_cache_miss(
 
     // dim
     TT_FATAL(
-        dim == input_tensors.at(0).logical_shape().rank() - 1,
+        dim == input_tensor_rank - 1,
         "deepseek_moe_reduce_scatter only supports scattering on the last dim, but has dim {}",
         dim);
 
