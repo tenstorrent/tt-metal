@@ -26,21 +26,24 @@ def ensure_required_fields(cluster_data: dict) -> dict:
     # Make a copy to avoid modifying the original
     data = cluster_data.copy()
 
-    # Get the job timestamp as a fallback (it should always exist)
-    job_timestamp = data.get("job_slack_ts")
+    # Handle None timestamps - use dummy value to indicate missing data
+    # TODO: Ideally, the pydantic model should allow Optional[datetime] for these fields
+    # Using epoch timestamp (1970-01-01) as a clear indicator of missing data
+    DUMMY_TIMESTAMP = "1970-01-01T00:00:00.000Z"
 
-    # Handle None timestamps - use job timestamp as fallback
     if data.get("centroid_job_slack_ts") is None:
         logger.warning(
-            f"centroid_job_slack_ts is None for job {data.get('github_job_id')}, " f"using job_slack_ts as fallback"
+            f"centroid_job_slack_ts is None for job {data.get('github_job_id')}, "
+            f"using dummy timestamp {DUMMY_TIMESTAMP} (consider making this field Optional in pydantic model)"
         )
-        data["centroid_job_slack_ts"] = job_timestamp
+        data["centroid_job_slack_ts"] = DUMMY_TIMESTAMP
 
     if data.get("oldest_job_slack_ts") is None:
         logger.warning(
-            f"oldest_job_slack_ts is None for job {data.get('github_job_id')}, " f"using job_slack_ts as fallback"
+            f"oldest_job_slack_ts is None for job {data.get('github_job_id')}, "
+            f"using dummy timestamp {DUMMY_TIMESTAMP} (consider making this field Optional in pydantic model)"
         )
-        data["oldest_job_slack_ts"] = job_timestamp
+        data["oldest_job_slack_ts"] = DUMMY_TIMESTAMP
 
     # Ensure job_name, centroid_job_name, oldest_job_name are never None
     if data.get("job_name") is None:
@@ -124,6 +127,9 @@ def create_job_failure_cluster_json():
     created_files = []
     for idx, cluster_data in enumerate(clusters_data):
         try:
+            # Ensure all required fields are populated (handle None values)
+            cluster_data = ensure_required_fields(cluster_data)
+
             # Create pydantic model instance (validates data)
             cluster = JobFailureCluster(**cluster_data)
 
