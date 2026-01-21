@@ -37,7 +37,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
-        description: "Platform to build for"
+        description: "Platform to target"
       enable-lto:
         required: false
         type: boolean
@@ -108,6 +108,7 @@ jobs:
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - platform: "Ubuntu 24.04"
+            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true

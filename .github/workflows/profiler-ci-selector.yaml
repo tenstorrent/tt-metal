@@ -124,7 +124,7 @@ jobs:
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ (github.event_name == 'workflow_call' && inputs.enable-lto) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lto == 'true' || github.event.inputs.enable-lto == true)) || (github.event_name == 'schedule' && true) }}
+      enable-lto: ${{ (github.event_name == 'workflow_call' && inputs.enable-lto) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lto == 'true' || github.event.inputs.enable-lto == true)) }}
 
   t3k-profiler-tests:
     if: >-

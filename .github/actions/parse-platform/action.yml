@@ -66,13 +66,13 @@ runs:
               echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
               echo "version=22.04" >> "$GITHUB_OUTPUT"
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
-              output_enable_lto "true"
+              output_enable_lto "false"
               ;;
             "Ubuntu 24.04")
               echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
               echo "version=24.04" >> "$GITHUB_OUTPUT"
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
-              output_enable_lto "true"
+              output_enable_lto "false"
               ;;
             *)
               # Unknown platform, use legacy fallback
@@ -96,7 +96,7 @@ runs:
           if [ "$DISTRO" = "ubuntu" ]; then
             if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
-              output_enable_lto "true"
+              output_enable_lto "false"
             else
               echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
