@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+#define REDUCE_OP (PoolType::MAX)
+#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+
 #include "compute_kernel_api.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
