@@ -1202,6 +1202,8 @@ template <typename unary_operation_t>
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
+        DEPRECATED in favor of ttnn.sigmoid, which now has exactly the same behavior.
+
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::

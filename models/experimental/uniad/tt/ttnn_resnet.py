@@ -139,7 +139,7 @@ class TtModulatedDeformConv2dPack:
         offset = ttnn.concat((o1, o2), dim=3)
         ttnn.deallocate(o1)
         ttnn.deallocate(o2)
-        mask = ttnn.sigmoid_accurate(mask)  # low pcc if we use ttnn sigmoid for mask
+        mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
         mask = ttnn.permute(mask, (0, 3, 1, 2))
 
         mask = ttnn.to_torch(mask).to(dtype=torch.float)
