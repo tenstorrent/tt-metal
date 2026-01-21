@@ -474,5 +474,34 @@ struct MappingValidator {
 
 }  // namespace tt::tt_fabric::detail
 
+// Internal API: solve_topology_mapping (uses internal types)
+// This function is not part of the public API and should only be used by internal code
+namespace tt::tt_fabric {
+
+/**
+ * @brief Solve topology mapping using constraint satisfaction (internal API)
+ *
+ * This is an internal function that uses internal types. For public API, see topology_solver.hpp.
+ * Internal code should include topology_solver_internal.hpp to use this function.
+ *
+ * @tparam TargetNode The type used to identify nodes in the target graph
+ * @tparam GlobalNode The type used to identify nodes in the global graph
+ * @param target_graph The target graph (subgraph pattern to find)
+ * @param global_graph The global graph (larger host graph that contains the target)
+ * @param constraints The mapping constraints to satisfy
+ * @param connection_validation_mode How to validate connection counts
+ * @param quiet_mode If true, log errors at debug level instead of error level
+ * @return MappingResult containing success status, bidirectional mappings, and warnings
+ */
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false);
+
+}  // namespace tt::tt_fabric
+
 // Include template implementations
 #include "tt_metal/fabric/topology_solver_internal.tpp"

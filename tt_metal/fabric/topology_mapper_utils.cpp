@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -1039,7 +1040,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
 
     // Store mesh adjacency graphs once (no duplication)
     for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
-        logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
+        logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = AdjacencyGraph<FabricNodeId>(adjacency_graph);
     }
 
     // Build mesh-level adjacency map using MeshIds (lightweight)
@@ -1125,7 +1126,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // Store mesh adjacency graphs once (no duplication)
     for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
-        physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
+        physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(adjacency_graph);
     }
 
     // Build mesh-level adjacency map using MeshIds (lightweight)

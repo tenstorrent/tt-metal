@@ -16,7 +16,6 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include "tt_metal/fabric/topology_solver_internal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -383,43 +382,6 @@ std::set<GlobalNode> MappingConstraints<TargetNode, GlobalNode>::intersect_sets(
     const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2) {
     std::set<GlobalNode> result;
     std::set_intersection(set1.begin(), set1.end(), set2.begin(), set2.end(), std::inserter(result, result.begin()));
-    return result;
-}
-
-// solve_topology_mapping template implementation
-template <typename TargetNode, typename GlobalNode>
-MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
-    const AdjacencyGraph<TargetNode>& target_graph,
-    const AdjacencyGraph<GlobalNode>& global_graph,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
-    ConnectionValidationMode connection_validation_mode,
-    bool quiet_mode) {
-    using namespace tt::tt_fabric::detail;
-
-    auto start_time = std::chrono::steady_clock::now();
-
-    // Build indexed graph representation
-    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
-
-    // Build indexed constraint representation
-    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
-
-    // Run DFS search (state is now internal to the engine)
-    DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-    search_engine.search(graph_data, constraint_data, constraints, connection_validation_mode, quiet_mode);
-
-    // Calculate elapsed time
-    auto end_time = std::chrono::steady_clock::now();
-    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-    // Get state from engine and build result using validator
-    const auto& state = search_engine.get_state();
-    auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
-        state.mapping, graph_data, state, constraints, connection_validation_mode, quiet_mode);
-
-    // Set elapsed time
-    result.stats.elapsed_time = elapsed_ms;
-
     return result;
 }
 
