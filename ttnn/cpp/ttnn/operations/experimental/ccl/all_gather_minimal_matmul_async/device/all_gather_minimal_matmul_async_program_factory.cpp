@@ -32,8 +32,7 @@ void override_program_parameters(
     auto in2_addr =
         optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
     auto in3_addr = input_tensors.at(0).buffer()->address();
-    auto& in0_sender_backward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_backward_kernels_id);
-    auto& in0_sender_forward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_forward_kernels_id);
+    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
@@ -43,17 +42,9 @@ void override_program_parameters(
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
         if (in1_idx == 0) {
-            auto& in0_sender_args = in0_sender_backward_runtime_args[core.x][core.y];
+            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
             // TODO FIX THIS AFTER MIGRATING TO NEW OP INFRA
             //	    const auto& out_ready_semaphore = override_variables.semaphore.at(0);
-            in0_sender_args[0] = in0_addr;
-            in0_sender_args[1] = output_addr;
-            in0_sender_args[2] = in2_addr;
-            in0_sender_args[3] = in3_addr;
-            //	    in0_sender_args[20] = out_ready_semaphore.address();
-        } else if (in1_idx == override_variables.in0_forward_core) {
-            auto& in0_sender_args = in0_sender_forward_runtime_args[core.x][core.y];
-            //	    const auto& out_ready_semaphore = override_variables.semaphore.at(1);
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
@@ -141,29 +132,9 @@ static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32
     return order.at(index == 0 ? 0 : index - 1);
 }
 
-static inline CoreCoord clamped_swapped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
-    switch (index) {
-        case 0: return order.at(1); break;
-        case 1: return order.at(1); break;
-        case 2: return order.at(0); break;
-        default: return order.at(index - 1); break;
-    }
-}
-
 static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     const uint32_t last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
-}
-
-static inline CoreCoord clamped_swapped_next(const std::vector<CoreCoord>& order, uint32_t index) {
-    switch (index) {
-        case 0: return order.at(2); break;
-        case 1: return order.at(0); break;
-        default:
-            const uint32_t last = static_cast<uint32_t>(order.size() - 1);
-            return order.at(index >= last ? last : index + 1);
-            break;
-    }
 }
 
 void fabric_mux_connection_ct_args(
@@ -467,25 +438,17 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_0_0 = CoreCoord{0, 0};
     auto core_0_1 = CoreCoord{0, 1};
     auto core_1_0 = CoreCoord{1, 0};
-    auto core_0_2 = CoreCoord{0, 2};
     auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
-    auto core_endx_1 = CoreCoord{grid_size.x - 1, 1};
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
-    auto core_endxminus1_endy = CoreCoord{grid_size.x - 2, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
-    auto in0_sender_backward_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_sender_forward_cores =
-        CoreRange(transpose_core_grid ? core_0_1 : core_endx_0, transpose_core_grid ? core_endx_1 : core_endx_endy);
-    auto in0_receiver_cores = CoreRange(
-        transpose_core_grid ? core_0_2 : core_1_0, transpose_core_grid ? core_endx_endy : core_endxminus1_endy);
+    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    auto in0_sender_backward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_sender_forward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_receiver_backward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_receiver_forward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -609,7 +572,7 @@ all_gather_minimal_matmul_async_factory_helper(
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
-    std::vector<uint32_t> in0_sender_backward_compile_time_args = {
+    std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
         K_tiles,
@@ -625,8 +588,7 @@ all_gather_minimal_matmul_async_factory_helper(
         out_tile_size,
         in2_tile_size,
         in0_is_output_writer,
-        true,   // is_injector_core_backward
-        false,  // is_injector_core_forward
+        true,
         ring_size,
         ring_index,
         in3_tile_size,
@@ -639,68 +601,20 @@ all_gather_minimal_matmul_async_factory_helper(
         num_workers_per_link,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
-        in0_sender_backward_compile_time_args);
-    in0_sender_backward_compile_time_args.insert(
-        in0_sender_backward_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    in0_sender_backward_compile_time_args.insert(
-        in0_sender_backward_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-    append_accessors(
-        in0_sender_backward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
-    auto in0_sender_backward_kernels_id = CreateKernel(
+        in0_sender_compile_time_args);
+    in0_sender_compile_time_args.insert(
+        in0_sender_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+    in0_sender_compile_time_args.insert(
+        in0_sender_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+    append_accessors(in0_sender_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
+    auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_sender_backward_cores,
+        in0_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc,
             .noc = in0_noc,
-            .compile_args = in0_sender_backward_compile_time_args,
-            .defines = in0_injector_defines});
-
-    std::vector<uint32_t> in0_sender_forward_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        in0_tile_size,
-        out_tile_size,
-        in2_tile_size,
-        in0_is_output_writer,
-        false,  // is_injector_core_backward
-        true,   // is_injector_core_forward
-        ring_size,
-        ring_index,
-        in3_tile_size,
-        num_tiles_to_write_per_packet,
-        num_targets_forward,
-        num_targets_backward,
-        static_cast<uint32_t>(topology),
-    };
-    fabric_mux_connection_ct_args(
-        num_workers_per_link,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        in0_sender_forward_compile_time_args);
-    in0_sender_forward_compile_time_args.insert(
-        in0_sender_forward_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    in0_sender_forward_compile_time_args.insert(
-        in0_sender_forward_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-    append_accessors(
-        in0_sender_forward_compile_time_args, ag_output_tensor, mm_output_tensor, bias_tensor, input_tensor, true);
-    auto in0_sender_forward_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_sender_forward_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc,
-            .noc = in0_noc,
-            .compile_args = in0_sender_forward_compile_time_args,
+            .compile_args = in0_sender_compile_time_args,
             .defines = in0_injector_defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
@@ -719,7 +633,6 @@ all_gather_minimal_matmul_async_factory_helper(
         out_tile_size,
         in2_tile_size,
         in0_is_output_writer,
-        false,  // is_injector_core
         false,  // is_injector_core
         ring_size,
         ring_index,
@@ -904,17 +817,13 @@ all_gather_minimal_matmul_async_factory_helper(
             /*axis_is_x_when_not_transposed=*/false,
             /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
 
-        auto in0_backward_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
-        auto in0_forward_prev_core = clamped_swapped_prev(in0_core_order, in0_core_order_index);
-        auto in0_backward_next_core = clamped_next(in0_core_order, in0_core_order_index);
-        auto in0_forward_next_core = clamped_swapped_next(in0_core_order, in0_core_order_index);
+        auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
+        auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
         auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
         auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
-        auto in0_backward_prev_core_physical = device->worker_core_from_logical_core(in0_backward_prev_core);
-        auto in0_forward_prev_core_physical = device->worker_core_from_logical_core(in0_forward_prev_core);
-        auto in0_backward_next_core_physical = device->worker_core_from_logical_core(in0_backward_next_core);
-        auto in0_forward_next_core_physical = device->worker_core_from_logical_core(in0_forward_next_core);
+        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
+        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
 
@@ -946,18 +855,12 @@ all_gather_minimal_matmul_async_factory_helper(
             in2_addr,
             in3_addr,
             is_in0_sink,
-            (std::uint32_t)in0_backward_next_core_physical.x,  // in0_dest_noc_x
-            (std::uint32_t)in0_backward_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_forward_next_core_physical.x,   // in0_dest_noc_x
-            (std::uint32_t)in0_forward_next_core_physical.y,   // in0_dest_noc_y
-            (std::uint32_t)in0_backward_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_backward_prev_core_physical.y,  // in0_sender_noc_y
-            (std::uint32_t)in0_forward_prev_core_physical.x,   // in0_sender_noc_x
-            (std::uint32_t)in0_forward_prev_core_physical.y,   // in0_sender_noc_y
-            in0_sender_backward_semaphore_id,
-            in0_sender_forward_semaphore_id,
-            in0_receiver_backward_semaphore_id,
-            in0_receiver_forward_semaphore_id,
+            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
+            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
+            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
+            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+            in0_sender_semaphore_id,
+            in0_receiver_semaphore_id,
             in0_valid_semaphore_id,
             M_start_tile,
             M_end_tile,
@@ -966,54 +869,52 @@ all_gather_minimal_matmul_async_factory_helper(
             defer_write_k_block,
             virtual_core.x,
             virtual_core.y,
-            (in0_core_order_index == 0) ? semaphore.at(0).address() : semaphore.at(1).address(),
+            semaphore.at(0).address(),
+            semaphore.at(1).address(),
         };
         if (in0_core_order_index == 0) {
-            // in0 backward sender
-            uint32_t mux_core_index = in0_core_order_index * num_links + in1_core_order_index / num_workers_per_link;
-            auto mux_logical_core = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index)
-                                                        : CoreCoord(mux_core_index, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
             uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
             auto termination_master_logical_core =
                 transpose_core_grid ? CoreCoord(core.x - worker_idx, core.y) : CoreCoord(core.x, core.y - worker_idx);
             CoreCoord termination_master_virtual_core =
                 device->worker_core_from_logical_core(termination_master_logical_core);
+
+            // in0 backward sender
+            uint32_t mux_core_index_backward = in1_core_order_index / num_workers_per_link;
+            auto mux_logical_core_backward = transpose_core_grid
+                                                 ? CoreCoord(full_grid_size.x - 1, mux_core_index_backward)
+                                                 : CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+            CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(0),
                 !(in1_core_order_index % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core,
+                mux_virtual_core_backward,
                 worker_idx,
                 core,
                 mux_kernel_config,
                 program,
                 termination_master_virtual_core,
                 in0_args);
-            SetRuntimeArgs(program, in0_sender_backward_kernels_id, core, in0_args);
-        } else if (in0_core_order_index == 1) {
+
             // in0 forward sender
-            uint32_t mux_core_index = in0_core_order_index * num_links + in1_core_order_index / num_workers_per_link;
-            auto mux_logical_core = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index)
-                                                        : CoreCoord(mux_core_index, full_grid_size.y - 1);
-            CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
-            uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
-            auto termination_master_logical_core =
-                transpose_core_grid ? CoreCoord(core.x - worker_idx, core.y) : CoreCoord(core.x, core.y - worker_idx);
-            CoreCoord termination_master_virtual_core =
-                device->worker_core_from_logical_core(termination_master_logical_core);
+            uint32_t mux_core_index_forward = num_links + in1_core_order_index / num_workers_per_link;
+            auto mux_logical_core_forward = transpose_core_grid
+                                                ? CoreCoord(full_grid_size.x - 1, mux_core_index_forward)
+                                                : CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+            CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(1),
                 !(in1_core_order_index % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_virtual_core,
+                mux_virtual_core_forward,
                 worker_idx,
                 core,
                 mux_kernel_config,
                 program,
                 termination_master_virtual_core,
                 in0_args);
-            SetRuntimeArgs(program, in0_sender_forward_kernels_id, core, in0_args);
+            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
             // in0 receiver
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
@@ -1058,13 +959,11 @@ all_gather_minimal_matmul_async_factory_helper(
         all_gather_minimal_matmul_async_override_variables_t{
             num_cores,
             cores,
-            in0_sender_backward_kernels_id,
-            in0_sender_forward_kernels_id,
+            in0_sender_kernels_id,
             in0_receiver_kernels_id,
             in1_sender_kernels_id,
             in1_receiver_kernels_id,
-            transpose_core_grid,
-            (in0_noc == tt::tt_metal::NOC::NOC_0) ? 1 : (grid_size.x - 1)};
+            transpose_core_grid};
 }
 
 }  // namespace detail
