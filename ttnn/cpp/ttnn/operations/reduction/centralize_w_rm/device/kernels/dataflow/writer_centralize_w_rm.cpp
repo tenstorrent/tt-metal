@@ -21,17 +21,18 @@ void kernel_main() {
     // Create tensor accessor for output
     const auto accessor = TensorAccessor(tensor_args, dst_addr, output_stick_size);
 
-    // STUB: Pop and write 1 tile at a time (matches compute's push of 1 at a time)
-    // Real implementation (Stage 7): Will pop Wt at a time for untilize helper
+    // Write output sticks (per tile-row)
+    // Each tile-row produces 32 output sticks (Wt tiles worth of centralized data)
+    // Output width = input width (not reduced like reduce_mean_w_rm)
     constexpr uint32_t TILE_HEIGHT = 32;
     uint32_t stick_id = 0;
 
-    const uint32_t num_tiles = Ht * Wt;
-    for (uint32_t tile = 0; tile < num_tiles; ++tile) {
-        cb_wait_front(cb_out_rm, 1);
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        // Wait for untilized data from compute kernel (Wt tiles per tile-row)
+        cb_wait_front(cb_out_rm, Wt);
         uint32_t l1_read_addr = get_read_ptr(cb_out_rm);
 
-        // Write 32 sticks for one tile
+        // Write 32 output sticks (full width)
         for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
             uint64_t noc_addr = accessor.get_noc_addr(stick_id);
             noc_async_write(l1_read_addr, noc_addr, output_stick_size);
@@ -40,6 +41,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
 
-        cb_pop_front(cb_out_rm, 1);
+        // Release CB space
+        cb_pop_front(cb_out_rm, Wt);
     }
 }
