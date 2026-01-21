@@ -927,18 +927,19 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         << std::endl;
     // How many words to shift the source buffer by to get it to start an unaligned word
     constexpr size_t unaligned_word_shift = 1;
+    const size_t num_words = (bytes_per_device / sizeof(uint32_t));
     // Prepare write source buffer and pin the entire destination range for the target shard
     auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
-        (bytes_per_device / sizeof(uint32_t)) + unaligned_word_shift, 0);
+        num_words + unaligned_word_shift, 0);
 
     uint32_t* src_unaligned = src->data() + unaligned_word_shift;
-    std::iota(src_unaligned, src_unaligned + (bytes_per_device / sizeof(uint32_t)), 0);
+    std::iota(src_unaligned, src_unaligned + num_words, 0);
 
     // Create a copy of the source vector to make it easy to verify with the destination vector.
-    std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + (bytes_per_device / sizeof(uint32_t)));
+    std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + num_words);
     // Create HostBuffer on top of src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
-    std::vector<uint32_t> dst{bytes_per_device / sizeof(uint32_t), 0};
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
+    std::vector<uint32_t> dst(num_words, 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     for (auto coord : coord_range) {
@@ -952,7 +953,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
         auto write_transfer = distributed::ShardDataTransfer{coord}
-                                  .host_data(static_cast<void*>(src->data()))
+                                  .host_data(static_cast<void*>(src_unaligned))
                                   .region(BufferRegion(0, bytes_per_device));
         tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
         mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
