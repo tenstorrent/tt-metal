@@ -151,3 +151,6 @@ Testing
 models/experimental/petr/resources/*.pth
 
 .claude
+
+.github/scripts/analyze-nd-failures/downloaded_logs/*
+.github/scripts/analyze-nd-failures/analysis_output/*
