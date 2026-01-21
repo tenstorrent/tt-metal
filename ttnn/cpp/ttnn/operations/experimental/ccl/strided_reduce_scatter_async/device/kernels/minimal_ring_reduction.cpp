@@ -27,7 +27,7 @@ void MAIN {
     const uint32_t mm_N_blocks_per_slice = 1;
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
-    const uint32_t mm_M_block_ht = 1;
+    const uint32_t mm_M_block_ht = 2;
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
