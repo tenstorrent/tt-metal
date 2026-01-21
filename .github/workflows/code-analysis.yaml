@@ -316,6 +316,7 @@ jobs:
           HTML_OUTPUT="/work/.build/codechecker_html"
 
           echo "=== Generating JSON report ==="
+          # CodeChecker parse can fail if no issues found or plist files corrupted - that's OK
           CodeChecker parse "$OUTPUT_DIR" --export json --output "$JSON_OUTPUT" || true
 
           if [ -f "$JSON_OUTPUT" ] && [ -s "$JSON_OUTPUT" ]; then
@@ -329,6 +330,7 @@ jobs:
           echo ""
           echo "=== Generating HTML report ==="
           mkdir -p "$HTML_OUTPUT"
+          # Same as above - parse can fail for non-fatal reasons
           CodeChecker parse "$OUTPUT_DIR" --export html --output "$HTML_OUTPUT" || true
 
           if [ -d "$HTML_OUTPUT" ] && [ -n "$(ls -A "$HTML_OUTPUT")" ]; then
@@ -415,12 +417,12 @@ jobs:
 
           {
             echo "Fix these Clang Static Analyzer issues:"
-            echo ""
+          echo ""
             jq -r --argjson limit "$LIMIT" '
               .reports[:$limit][] |
               "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"
             ' /tmp/codechecker_issues.json
-            echo ""
+          echo ""
             echo "For each: verify it's real, apply minimal fix, follow coding standards."
           } > /tmp/prompt.txt
 
