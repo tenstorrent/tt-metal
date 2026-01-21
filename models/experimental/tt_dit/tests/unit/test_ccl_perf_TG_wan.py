@@ -188,6 +188,10 @@ def post_process_ops_log_by_config(
 
         config_df[duration_col] = config_df[duration_col].astype(float)
 
+        # Sort by GLOBAL CALL COUNT to ensure correct execution order
+        # (CSV may be sorted by DEVICE ID first, not by operation order)
+        config_df = config_df.sort_values("GLOBAL CALL COUNT").reset_index(drop=True)
+
         # Get number of devices from max DEVICE ID
         num_devices = int(config_df["DEVICE ID"].max()) + 1
         total_rows = len(config_df)
