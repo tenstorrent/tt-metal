@@ -281,22 +281,32 @@ void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
     const operation_attributes_t&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto* input_buffer = tensor_args.input_tensor.buffer();
-    const auto* output_buffer = tensor_return_value.at(0).buffer();
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
+
     auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const auto& num_cores_x = cached_program.shared_variables.num_cores_x;
+    const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const tt::tt_metal::KernelHandle& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const uint32_t num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    const uint32_t num_cores_x = cached_program.shared_variables.num_cores_x;
 
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
+
         auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-        reader_kernel_args[0] = input_buffer->address();
+        reader_kernel_args[0] = input_tensor.buffer()->address();
+
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
-        writer_kernel_args[0] = output_buffer->address();
+        writer_kernel_args[0] = output_tensors.at(0).buffer()->address();
+        writer_kernel_args[1] = output_tensors.at(1).buffer()->address();
+        writer_kernel_args[2] = output_tensors.at(2).buffer()->address();
+        writer_kernel_args[3] = output_tensors.at(3).buffer()->address();
+        writer_kernel_args[4] = output_tensors.at(4).buffer()->address();
+        writer_kernel_args[5] = output_tensors.at(5).buffer()->address();
+        writer_kernel_args[6] = output_tensors.at(6).buffer()->address();
+        writer_kernel_args[7] = output_tensors.at(7).buffer()->address();
     }
 }
 
