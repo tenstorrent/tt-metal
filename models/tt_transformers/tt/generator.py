@@ -392,9 +392,12 @@ class Generator:
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
             )
 
+            # For batched prefill: pass full page_table (function handles slot placement)
+            # For non-batched prefill: pass sliced page_table for current user (like original code)
+            page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
             page_table_user = (
                 self._get_prefill_user_page_table(
-                    page_table,
+                    page_table_for_user,
                     kv_cache[model_id],
                     seq_len,
                     trace_enabled=enable_trace_current_prompt,
