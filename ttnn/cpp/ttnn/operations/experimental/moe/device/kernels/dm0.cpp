@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "moe_ring_common.h"
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
@@ -26,6 +27,7 @@ void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -34,84 +36,77 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto core_id = get_arg_val<uint32_t>(argidx++);
+    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
     const auto w2_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
-    const auto neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
+    const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w0 = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2c_mm0 = tt::CBIndex::c_2;
-    constexpr auto cb_c2c_mm1 = tt::CBIndex::c_3;
-    constexpr auto cb_c2w_elt = tt::CBIndex::c_4;
-    constexpr auto cb_r2c_in2 = tt::CBIndex::c_5;
-    constexpr auto cb_c2w_mm2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
+    constexpr auto cb_w2s_out = tt::CBIndex::c_6;
 
     // CB Aliases
-    constexpr auto cb_r2c_w1 = tt::CBIndex::c_0;
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w0_tile_size = get_tile_size(cb_r2c_w0);
-    constexpr uint32_t w1_tile_size = get_tile_size(cb_r2c_w1);
+    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_elt);
-
-    // Tensor accessors
-    const auto in_accessor = TensorAccessor(in_args, in_addr, in_tile_size);
-    const auto w0_w1_accessor = TensorAccessor(w0_w1_args, w0_w1_addr, w0_tile_size);
-    const auto w2_accessor = TensorAccessor(w2_args, w2_addr, w2_tile_size);
-    const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
+    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = 224;
-    constexpr uint32_t num_w2_tiles_h = 64;
+    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
+    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = (core_id < 8) ? 5 : 6;
-    const uint32_t num_w2_tiles_w = (core_id < 8) ? 18 : 20;
+    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_A[ring_core_id];
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
+    //-------------------------------------------------------------------------
     // W0 and W1 reading constants
-    constexpr uint32_t w0_w1_txns_per_block = 2;
-    constexpr uint32_t w0_w1_tiles_per_txn = 14;
+    //-------------------------------------------------------------------------
+    constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
+    constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
-    constexpr uint32_t w0_w1_txns_per_elt_tile =
+    constexpr uint32_t w0_w1_blocks_per_elt_tile =
         2 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 16
-    const uint32_t w0_w1_blocks_per_expert = (core_id < 8) ? 80 : 96;
+    const uint32_t w0_w1_blocks_per_expert = moe_ring::W0_W1_BLOCKS_PER_EXPERT_A[ring_core_id];
     // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = 2;
-    constexpr uint32_t w2_tiles_per_txn = 14;
+    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
+    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_txns_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;            // 2 * 5 / 2 = 5
-    const uint32_t w2_blocks_per_expert = (core_id < 8) ? 45 : 50;
-    // (num_w2_tiles_w/2) * w2_txns_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
+    constexpr uint32_t w2_blocks_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;          // 2 * 5 / 2 = 5
+    const uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT_A[ring_core_id];
+    // (num_w2_tiles_w/2) * w2_blocks_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
     //-------------------------------------------------------------------------
-    const uint32_t dram_bank_id = core_id;
-    const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
-
-    constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_tile_size;
-    constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_tile_size;
+    constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_w1_tile_size;
+    constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 6 * w0_tile_size;
+    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 6 * w0_w1_tile_size;
     constexpr uint32_t w0_w1_total_size_per_expert = 2 * w0_size_per_expert;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
@@ -124,10 +119,13 @@ void kernel_main() {
     uint32_t w0_w1_expert_offset = w0_w1_layer_offset + w0_w1_addr;
     uint32_t w2_expert_offset = w2_layer_offset + w2_addr;
 
+    // DRAM bank's base NOC address
+    const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
+
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0);
+    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w0_w1);
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
@@ -147,7 +145,7 @@ void kernel_main() {
     bool txns_in_flight = false;
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0, w0_w1_tiles_per_block);
+    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //-------------------------------------------------------------------------
@@ -172,14 +170,14 @@ void kernel_main() {
             // Only when we first start the pipeline, we don't have any txns in flight
             if (txns_in_flight) {
                 noc_async_read_barrier_with_trid(trid_to_wait);
-                cb_push_back(cb_r2c_w0, w0_w1_tiles_per_block);
+                cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                 ADVANCE_TRID(trid_to_wait);
 
                 // Reserve for next block
                 // Reserve back is not incremental, so to reserve one more, we need to reserve 2
                 // This accounts for the one we already have reserved (for in-flight read)
-                cb_reserve_back(cb_r2c_w0, w0_w1_tiles_per_block * 2);
+                cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
             }
             txns_in_flight = true;
         }
