@@ -116,7 +116,7 @@ FROM ci-build AS ci-test-minimal
 # - numpy: Already installed in ci-build stage
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1 && \
-    uv pip install --no-cache pytest==8.4.2 loguru==0.6.0 transformers==4.53.0 networkx==3.1 nbformat nbconvert==7.16.6
+    uv pip install --no-cache pytest==8.4.2 loguru==0.6.0 transformers==4.53.0 networkx==3.1 nbformat nbconvert==7.16.6 multiprocess
 
 #############################################################
 
