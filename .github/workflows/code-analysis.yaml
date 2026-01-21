@@ -280,7 +280,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          OUTPUT_DIR=/tmp/codechecker-reports
+          OUTPUT_DIR=/work/.build/codechecker-reports
           mkdir -p "$OUTPUT_DIR"
 
           echo "=== Starting CodeChecker analysis ==="
