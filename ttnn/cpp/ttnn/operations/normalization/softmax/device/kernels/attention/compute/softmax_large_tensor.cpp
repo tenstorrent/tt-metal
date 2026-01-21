@@ -155,6 +155,9 @@ void MAIN {
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
 #endif
+#ifdef NUMERIC_STABLE
+        cb_wait_front(cb_max, 1);
+#endif
 
         /*
          * --------------------------------------------------------
@@ -255,6 +258,9 @@ void MAIN {
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
         cb_pop_front(cb_recip, 1);
+#ifdef NUMERIC_STABLE
+        cb_pop_front(cb_max, 1);
+#endif
     }
     cb_pop_front(cb_mask_padded, 1);
 }  // MAIN
