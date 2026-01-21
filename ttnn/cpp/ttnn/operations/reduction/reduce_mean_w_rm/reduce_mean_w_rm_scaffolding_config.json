@@ -1,0 +1,62 @@
+{
+  "operation_name": "reduce_mean_w_rm",
+  "operation_name_pascal": "ReduceMeanWRm",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::reduce_mean_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/reduce_mean_w_rm",
+  "parameters": [],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": ">=2",
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input must be at least 2D, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be interleaved",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.padded_shape()[-1] % 32 == 0",
+      "error_message": "Width must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-1]"]
+    },
+    {
+      "condition": "input.padded_shape()[-2] % 32 == 0",
+      "error_message": "Height must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-2]"]
+    }
+  ],
+  "output_shape": {
+    "formula": "input_shape[:-1] + [1]",
+    "cpp_code": "ttnn::SmallVector<uint32_t> logical_dims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    logical_dims.back() = 1;\n    ttnn::Shape output_shape(logical_dims);",
+    "cpp_code_padded": "ttnn::SmallVector<uint32_t> padded_dims(input.padded_shape().cbegin(), input.padded_shape().cend());\n    padded_dims.back() = 32;\n    output_shape = ttnn::Shape(logical_dims, padded_dims);"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Computes the arithmetic mean across the width (last) dimension of a row-major tensor. The output tensor has the same shape as input except the last dimension becomes 1 (logically), padded to 32 (physically)."
+}
