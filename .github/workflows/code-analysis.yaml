@@ -377,20 +377,22 @@ jobs:
           name: CodeChecker-JSON-Report
           path: /tmp
 
-      - name: Check if issues exist and prepare prompt
-        id: prepare-prompt
+      - name: Check for issues and run Copilot fix
+        id: copilot-fix
+        env:
+          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
 
+          # Check for issues
           if [ ! -f "/tmp/codechecker_issues.json" ]; then
-            echo "No CodeChecker issues found"
+            echo "No issues found"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          ISSUE_COUNT=$(jq '.reports | length' /tmp/codechecker_issues.json || echo "0")
-
-          if [ "$ISSUE_COUNT" = "0" ] || [ -z "$ISSUE_COUNT" ]; then
+          ISSUE_COUNT=$(jq '.reports | length' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
+          if [ "$ISSUE_COUNT" = "0" ]; then
             echo "No issues found"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -398,162 +400,60 @@ jobs:
 
           echo "Found $ISSUE_COUNT issues"
           echo "has-issues=true" >> "$GITHUB_OUTPUT"
-          echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
 
-          # Determine max fixes
-          MAX_FIXES="${{ inputs.copilot-max-fixes }}"
-          if [ -z "$MAX_FIXES" ]; then
-            LIMIT=15
-          else
-            LIMIT="$MAX_FIXES"
-          fi
-
-          # Format issues for Copilot prompt
-          ISSUE_LIST=$(jq -r --argjson limit "$LIMIT" '
-            .reports[:$limit] | to_entries | .[] |
-            "- **\(.value.severity)**: `\(.value.checker_name)` in `\(.value.file.path | sub("^/work/"; "")):\(.value.line)` - \(.value.message)"
-          ' /tmp/codechecker_issues.json)
-
-          echo "=== Issues for Copilot ==="
-          echo "$ISSUE_LIST"
-
-          # Save prompt to file (avoids shell escaping issues)
-          cat > /tmp/copilot_prompt.txt << 'EOF'
-          Fix these Clang Static Analyzer issues found in the codebase:
-
-          EOF
-          echo "$ISSUE_LIST" >> /tmp/copilot_prompt.txt
-          cat >> /tmp/copilot_prompt.txt << 'EOF'
-
-          For each issue:
-          1. Verify it's a real bug (skip false positives)
-          2. Apply a minimal, safe fix that doesn't change program behavior
-          3. Follow the project's coding standards
-
-          Create a PR with the fixes. Use a clear commit message describing what was fixed.
-          EOF
-
-          echo "Prompt saved to /tmp/copilot_prompt.txt"
-
-      - name: Authenticate GitHub CLI with OAuth token
-        if: steps.prepare-prompt.outputs.has-issues == 'true'
-        env:
-          # OAuth token from `gh auth token` after interactive login
-          # Required for agent-task command (PATs don't work)
-          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
-        run: |
+          # Authenticate with OAuth token (required for agent-task)
           if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
-            echo "::error::COPILOT_OAUTH_TOKEN secret is not set."
-            echo "To set it up:"
-            echo "  1. Run 'gh auth login' locally"
-            echo "  2. Run 'gh auth token' to get your OAuth token"
-            echo "  3. Add it as a repository secret named COPILOT_OAUTH_TOKEN"
+            echo "::error::COPILOT_OAUTH_TOKEN secret not set. Run 'gh auth login' locally, then 'gh auth token' and add as secret."
             exit 1
           fi
-
           echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
-          echo "Authenticated as: $(gh api user --jq .login)"
 
-      - name: Run Copilot to fix issues and create PR
-        if: steps.prepare-prompt.outputs.has-issues == 'true'
-        id: copilot-fix
-        run: |
-          set -euo pipefail
+          # Build prompt
+          LIMIT="${{ inputs.copilot-max-fixes }}"
+          LIMIT="${LIMIT:-15}"
 
-          # Requires GitHub CLI v2.80.0+ for agent-task command
-          echo "GitHub CLI version: $(gh --version | head -1)"
+          {
+            echo "Fix these Clang Static Analyzer issues:"
+            echo ""
+            jq -r --argjson limit "$LIMIT" '
+              .reports[:$limit][] |
+              "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"
+            ' /tmp/codechecker_issues.json
+            echo ""
+            echo "For each: verify it's real, apply minimal fix, follow coding standards."
+          } > /tmp/prompt.txt
 
-          # Determine base branch
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            BASE_BRANCH="main"
-          else
-            BASE_BRANCH="${{ github.ref_name }}"
-          fi
+          cat /tmp/prompt.txt
 
-          echo "Base branch: $BASE_BRANCH"
-          echo "Repository: ${{ github.repository }}"
-          echo ""
-          echo "=== Copilot Prompt ==="
-          cat /tmp/copilot_prompt.txt
-          echo ""
-          echo "=== Running Copilot Agent ==="
+          # Run Copilot
+          BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
 
-          # Use gh agent-task create (requires gh v2.80.0+)
-          # Copilot handles: branch creation, code changes, commits, and PR
-          # See: https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-a-pr
-          PROMPT=$(cat /tmp/copilot_prompt.txt)
-
-          if gh agent-task create "$PROMPT" \
+          gh agent-task create -F /tmp/prompt.txt \
             --base "$BASE_BRANCH" \
             --repo "${{ github.repository }}" \
-            --follow 2>&1 | tee /tmp/copilot_output.log; then
+            --follow
 
-            echo ""
-            echo "Copilot task completed"
+          # Get the PR that was created
+          PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
 
-            # Try to extract PR URL from output (format may vary)
-            PR_URL=$(grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' /tmp/copilot_output.log | head -1 || true)
-
-            if [ -n "$PR_URL" ]; then
-              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-              echo "pr-created=true" >> "$GITHUB_OUTPUT"
-              echo "Created PR: $PR_URL"
-
-              # Add codeowners ping comment
-              gh pr comment "$PR_URL" --body "/codeowners ping" || true
-            else
-              echo "pr-created=false" >> "$GITHUB_OUTPUT"
-              echo "No PR URL found in output - check Copilot dashboard for status"
-            fi
+          if [ -n "$PR_NUMBER" ]; then
+            echo "pr-url=https://github.com/${{ github.repository }}/pull/${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "pr-created=true" >> "$GITHUB_OUTPUT"
+            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" --body "/codeowners ping" || true
           else
-            echo "Copilot task creation failed"
             echo "pr-created=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Output job summary
         if: always()
         run: |
-          echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ steps.prepare-prompt.outputs.has-issues }}" != "true" ]; then
-            echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🤖 Copilot Auto-Fix" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.copilot-fix.outputs.has-issues }}" != "true" ]; then
+            echo "No issues found." >> "$GITHUB_STEP_SUMMARY"
           elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            echo "✅ **Success!** Copilot created a PR to fix the issues." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Pull Request:** [${{ steps.copilot-fix.outputs.pr-url }}](${{ steps.copilot-fix.outputs.pr-url }})" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Please review the changes carefully before merging." >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ **PR Created:** ${{ steps.copilot-fix.outputs.pr-url }}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ Copilot task did not create a PR." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Possible causes:**" >> "$GITHUB_STEP_SUMMARY"
-            echo "- \`COPILOT_OAUTH_TOKEN\` secret not configured (see setup below)" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Copilot determined all issues were false positives" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Copilot is still processing (check dashboard)" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "<details>" >> "$GITHUB_STEP_SUMMARY"
-            echo "<summary>🔧 Setup: COPILOT_OAUTH_TOKEN secret</summary>" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "The \`gh agent-task\` command requires OAuth authentication (PATs don't work)." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**One-time setup by a team member with Copilot access:**" >> "$GITHUB_STEP_SUMMARY"
-            echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-            echo '# 1. Login interactively' >> "$GITHUB_STEP_SUMMARY"
-            echo 'gh auth login' >> "$GITHUB_STEP_SUMMARY"
-            echo '' >> "$GITHUB_STEP_SUMMARY"
-            echo '# 2. Extract your OAuth token' >> "$GITHUB_STEP_SUMMARY"
-            echo 'gh auth token' >> "$GITHUB_STEP_SUMMARY"
-            echo '' >> "$GITHUB_STEP_SUMMARY"
-            echo '# 3. Add as repository secret: COPILOT_OAUTH_TOKEN' >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "The token owner must have GitHub Copilot access." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Check the [Copilot dashboard](https://github.com/${{ github.repository }}/copilot) for status." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ No PR created. Check [Copilot dashboard](https://github.com/${{ github.repository }}/copilot)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   publish-clangsa-pages:
