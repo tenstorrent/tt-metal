@@ -178,6 +178,80 @@ def compute_selective_tilize_golden(
     return golden_output, expert_token_counts
 
 
+def compute_expert_activation_golden(expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis):
+    """
+    Compute the golden expert_activation tensor for each device.
+
+    For each device, the expert_activation tensor contains rows for tokens that selected
+    at least one expert on that device. Each row format:
+    [token_id, k_idx_0, k_idx_1, ..., score_0, score_1, ...]
+
+    Where:
+    - token_id: global token index (src_device * tokens_per_device + local_token_idx)
+    - k_idx_e: which of the K selected experts (0..K-1) maps to local expert e, or -1 if not selected
+    - score_e: the score for local expert e (as bfloat16 bits in uint32), or 0 if not selected
+
+    The last row is a sentinel with token_id = -1 (0xFFFFFFFF as uint32).
+
+    Returns:
+        golden_activation: dict[device_idx] -> list of activation row dicts
+        Each row dict has: token_id, k_indices (list), scores (list)
+    """
+    devices = mesh_shape[0] * mesh_shape[1]
+    if cluster_axis == 1:
+        dispatch_devices = mesh_shape[1]
+    elif cluster_axis == 0:
+        dispatch_devices = mesh_shape[0]
+    else:
+        dispatch_devices = devices
+
+    tokens_per_device = expert_indices.shape[1]
+    selected_experts_k = expert_indices.shape[2]
+    experts = expert_mapping.shape[1]
+    experts_per_device = experts // devices
+
+    # Build activation rows for each device
+    # golden_activation[device] = list of (token_id, k_indices, scores)
+    golden_activation = {d: [] for d in range(devices)}
+
+    for src_device in range(dispatch_devices):
+        for t in range(tokens_per_device):
+            global_token_id = src_device * tokens_per_device + t
+
+            # Track which local experts this token activated on each device
+            # device -> {local_expert_idx: (k, score)}
+            device_activations = {d: {} for d in range(devices)}
+
+            for k in range(selected_experts_k):
+                expert_id = expert_indices[src_device, t, k].item()
+                target_device = expert_mapping[src_device, expert_id].item()
+                local_expert_idx = expert_id % experts_per_device
+                score = expert_scores[src_device, t, k].item()
+
+                # Store the k-index and score for this local expert
+                device_activations[target_device][local_expert_idx] = (k, score)
+
+            # For each device that has at least one activation, add a row
+            for device_idx in range(devices):
+                if device_activations[device_idx]:
+                    k_indices = [-1] * experts_per_device  # -1 means not activated
+                    scores = [0.0] * experts_per_device
+
+                    for local_exp_idx, (k, score) in device_activations[device_idx].items():
+                        k_indices[local_exp_idx] = k
+                        scores[local_exp_idx] = score
+
+                    golden_activation[device_idx].append(
+                        {
+                            "token_id": global_token_id,
+                            "k_indices": k_indices,
+                            "scores": scores,
+                        }
+                    )
+
+    return golden_activation, experts_per_device
+
+
 def get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim):
     if cluster_axis is None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
@@ -317,6 +391,13 @@ def test_selective_tilize_no_trace(
     logger.info(f"  golden_output shape: {golden_output.shape}")
     logger.info(f"  expert_token_counts:\n{expert_token_counts}")
 
+    # Compute golden expert_activation
+    golden_activation, experts_per_device_check = compute_expert_activation_golden(
+        expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+    )
+    for d in range(devices):
+        logger.info(f"  Device {d} activated tokens: {len(golden_activation[d])}")
+
     # Define core ranges for the operation
     # Grid: 8x9 (Wormhole on Galaxy, 8x10 with 1 row reserved for dispatch)
     # Total: 72 cores = 4 tilize + 36 matmul + 32 combine
@@ -442,7 +523,7 @@ def test_selective_tilize_no_trace(
     logger.info(f"  tt_expert_mapping: {tt_expert_mapping.shape}")
 
     # Run the operation
-    output_tensor = ttnn.experimental.all_to_all_dispatch_selective_tilize(
+    output_tensor, expert_activation_tensor = ttnn.experimental.all_to_all_dispatch_selective_tilize(
         tt_sparse_buffer,
         tt_expert_indices,
         tt_expert_scores,
@@ -455,6 +536,7 @@ def test_selective_tilize_no_trace(
     )
 
     logger.info(f"Output tensor shape: {output_tensor.shape}")
+    logger.info(f"Expert activation tensor shape: {expert_activation_tensor.shape}")
 
     # Convert output to torch for verification
     output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -537,12 +619,116 @@ def test_selective_tilize_no_trace(
                     f"Device {device_idx}, Expert {expert_idx}: " f"PCC={pcc:.6f}, PASSED ({num_valid_tokens} tokens)"
                 )
 
-    # Summary
+    # Summary for tilized output
     accuracy = (total_comparisons - total_mismatches) / total_comparisons * 100 if total_comparisons > 0 else 100
-    logger.info(f"\nVerification Summary:")
+    logger.info(f"\nTilized Output Verification Summary:")
     logger.info(f"  Total comparisons: {total_comparisons}")
     logger.info(f"  Total mismatches: {total_mismatches}")
     logger.info(f"  Accuracy: {accuracy:.2f}%")
     logger.info(f"  Overall result: {'PASSED' if all_passed else 'FAILED'}")
 
-    assert all_passed, f"Output verification failed! Accuracy: {accuracy:.2f}%"
+    # ========== Expert Activation Tensor Validation ==========
+    logger.info(f"\n========== Expert Activation Tensor Validation ==========")
+
+    # Convert expert_activation tensor to torch
+    # Shape per device: [1, total_bytes / 4] as uint32
+    expert_activation_torch = ttnn.to_torch(
+        expert_activation_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )
+    logger.info(f"Expert activation torch shape: {expert_activation_torch.shape}")
+
+    # Row size in uint32 elements (aligned to 16 bytes = 4 uint32s)
+    row_elements_unaligned = 2 * experts_per_device + 1  # token_id + k_indices + scores
+    row_bytes_unaligned = row_elements_unaligned * 4
+    aligned_row_bytes = ((row_bytes_unaligned + 15) // 16) * 16
+    aligned_row_elements = aligned_row_bytes // 4
+
+    activation_all_passed = True
+    for device_idx in range(devices):
+        golden_rows = golden_activation[device_idx]
+        num_expected_rows = len(golden_rows)
+
+        # Extract this device's activation data
+        # The tensor is flattened, so we need to parse rows
+        device_activation = expert_activation_torch[device_idx].flatten().to(torch.int64)
+        max_rows = len(device_activation) // aligned_row_elements
+
+        logger.info(
+            f"Device {device_idx}: expecting {num_expected_rows} activated tokens, tensor has space for {max_rows} rows"
+        )
+
+        # Validate each row in sequential order (kernel preserves global token order)
+        for row_idx, golden_row in enumerate(golden_rows):
+            if row_idx >= max_rows:
+                logger.warning(f"  Device {device_idx}: row {row_idx} out of bounds (max {max_rows})")
+                activation_all_passed = False
+                break
+
+            row_start = row_idx * aligned_row_elements
+
+            # Extract token_id
+            actual_token_id = device_activation[row_start].item()
+            expected_token_id = golden_row["token_id"]
+
+            if actual_token_id != expected_token_id:
+                logger.warning(
+                    f"  Device {device_idx}, Row {row_idx}: token_id mismatch - "
+                    f"expected {expected_token_id}, got {actual_token_id}"
+                )
+                activation_all_passed = False
+                continue
+
+            # Validate k_indices and scores for each local expert
+            for local_exp_idx in range(experts_per_device):
+                expected_k = golden_row["k_indices"][local_exp_idx]
+                expected_score = golden_row["scores"][local_exp_idx]
+
+                if expected_k >= 0:  # This expert was selected
+                    actual_k = device_activation[row_start + 1 + local_exp_idx].item()
+                    actual_score_bits = device_activation[row_start + 1 + experts_per_device + local_exp_idx].item()
+
+                    # Convert score bits back to bfloat16 then float
+                    # The score is stored as uint16 in the lower bits of uint32
+                    actual_score_bf16 = torch.tensor([actual_score_bits & 0xFFFF], dtype=torch.int16).view(
+                        torch.bfloat16
+                    )
+                    actual_score = actual_score_bf16.item()
+
+                    if actual_k != expected_k:
+                        logger.warning(
+                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
+                            f"k_index mismatch - expected {expected_k}, got {actual_k}"
+                        )
+                        activation_all_passed = False
+
+                    # Compare scores with tolerance (bfloat16 precision)
+                    if abs(actual_score - expected_score) > 1e-2:
+                        logger.warning(
+                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
+                            f"score mismatch - expected {expected_score:.4f}, got {actual_score:.4f}"
+                        )
+                        activation_all_passed = False
+
+        # Validate sentinel row (token_id = -1 = 0xFFFFFFFF as uint32)
+        sentinel_row_idx = num_expected_rows
+        if sentinel_row_idx >= max_rows:
+            logger.warning(f"  Device {device_idx}: sentinel row {sentinel_row_idx} out of bounds")
+            activation_all_passed = False
+        else:
+            sentinel_row_start = sentinel_row_idx * aligned_row_elements
+            sentinel_token_id = device_activation[sentinel_row_start].item()
+            # -1 as uint32 (0xFFFFFFFF) becomes -1 when sign-extended to int64
+            is_sentinel = (sentinel_token_id == -1) or (sentinel_token_id == 0xFFFFFFFF)
+
+            if not is_sentinel:
+                logger.warning(
+                    f"  Device {device_idx}: sentinel row token_id mismatch - " f"expected -1, got {sentinel_token_id}"
+                )
+                activation_all_passed = False
+            else:
+                logger.info(f"  Device {device_idx}: {num_expected_rows} tokens validated, sentinel PASSED")
+
+    logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
+
+    assert all_passed, f"Tilized output verification failed! Accuracy: {accuracy:.2f}%"
+    assert activation_all_passed, "Expert activation tensor verification failed!"

@@ -8,12 +8,13 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <array>
 
 namespace ttnn {
 namespace operations::experimental::ccl {
 
 struct ExecuteAllToAllDispatchSelectiveTilize {
-    static ttnn::Tensor invoke(
+    static std::array<ttnn::Tensor, 2> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_scores_tensor,

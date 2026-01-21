@@ -72,7 +72,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     auto input_scores_tensor = tensor_args.expert_scores_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
 
-    const auto& output_tensor = tensor_return_value;
+    const auto& output_tensor = tensor_return_value[0];
+    const auto& expert_activation_output_tensor = tensor_return_value[1];
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -495,6 +496,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tokens_per_tilizer_core", tokens / num_tilizer_cores},
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
+        {"expert_activation_output_page_size", detail::get_page_size_st(expert_activation_output_tensor)},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -503,6 +505,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     tt::tt_metal::TensorAccessorArgs(input_scores_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_activation_output_tensor.buffer()).append_to(compile_time_args);
 
     tt::tt_metal::KernelHandle selective_tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -539,15 +542,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilizer_named_compile_time_args});
 
     std::vector<uint32_t> selective_tilize_runtime_args = {
-        input_tensor.buffer()->address(),         // 0
-        indices_tensor.buffer()->address(),       // 1
-        input_scores_tensor.buffer()->address(),  // 2
-        mapping_tensor.buffer()->address(),       // 3
-        output_tensor.buffer()->address(),        // 4
+        input_tensor.buffer()->address(),                     // 0
+        indices_tensor.buffer()->address(),                   // 1
+        input_scores_tensor.buffer()->address(),              // 2
+        mapping_tensor.buffer()->address(),                   // 3
+        output_tensor.buffer()->address(),                    // 4
+        expert_activation_output_tensor.buffer()->address(),  // 5
     };
 
     [[maybe_unused]] uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 5: is_drain_tilizer_core
+    selective_tilize_runtime_args.push_back(0);  // 6: is_drain_tilizer_core
 
     // Add work split runtime args for tilizer cores
     uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();

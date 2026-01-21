@@ -4,11 +4,13 @@
 
 #include <cstdint>
 #include <utility>
+#include <array>
 
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_dispatch_selective_tilize_device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -59,20 +61,40 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::compute_output_specs(
     ttnn::MemoryConfig dram_memory_config =
         ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    // Output is tiled for matmul
-    auto output_spec = TensorSpec(
+    // Output 0: Tilized output for matmul
+    auto tilized_output_spec = TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), dram_memory_config));
 
-    return output_spec;
+    // Output 1: Expert activation tensor
+    // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]
+    // Row size in uint32_t elements: 2 * experts_per_device + 1
+    // Total size: (tokens + 1) * aligned_row_bytes for sentinel row, stored as single DRAM page
+    constexpr uint32_t l1_alignment = 16;
+    uint32_t activation_row_elements = 2 * experts_per_device + 1;
+    uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
+    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 for sentinel row
+
+    // Single page containing entire tensor (tokens rows + sentinel)
+    auto expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
+    auto expert_activation_spec = TensorSpec(
+        Shape(expert_activation_shape),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            dram_memory_config));
+
+    return std::array<TensorSpec, 2>{tilized_output_spec, expert_activation_spec};
 }
 
 AllToAllDispatchSelectiveTilizeDeviceOperation::tensor_return_value_t
 AllToAllDispatchSelectiveTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    return std::array<Tensor, 2>{
+        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
+        create_device_tensor(output_specs[1], tensor_args.input_tensor.device())};
 }
 
 std::tuple<

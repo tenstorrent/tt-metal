@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <optional>
+#include <array>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -43,9 +44,9 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const Tensor expert_mapping_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
 
-    using tensor_return_value_t = Tensor;
+    using tensor_return_value_t = std::array<Tensor, 2>;
 
     struct AllToAllDispatchSelectiveTilizeSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

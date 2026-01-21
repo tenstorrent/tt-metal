@@ -160,24 +160,26 @@ void kernel_main() {
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
-    [[maybe_unused]] uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);     // 0
-    [[maybe_unused]] uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 1
-    [[maybe_unused]] uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);    // 2
-    [[maybe_unused]] uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);   // 3
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                     // 4
-    [[maybe_unused]] bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 5
-    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                   // 6
-    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                     // 7
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                          // 8
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                            // 9
-    [[maybe_unused]] uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 10
+    [[maybe_unused]] uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);              // 0
+    [[maybe_unused]] uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);            // 1
+    [[maybe_unused]] uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);             // 2
+    [[maybe_unused]] uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);            // 3
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                              // 4
+    [[maybe_unused]] uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);  // 5
+    [[maybe_unused]] bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);           // 6
+    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                            // 7
+    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                              // 8
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                                   // 9
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                                     // 10
+    [[maybe_unused]] uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                  // 11
 
-    // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
+    // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output, expert_activation_output
     constexpr auto input_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
+    // expert_activation_output_args not needed by writer
 
     const auto output_tensor_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
 
