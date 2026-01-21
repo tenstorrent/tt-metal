@@ -7,7 +7,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -223,6 +223,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
 
             cb_reserve_back(in_cb_id, 1);
             uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+            tt::data_movement::common::print_bf16_pages(in_l1_read_base_addr, 256, 32);
             uint32_t processed_sticks = 0;
             // page zeroing is only necessary for tiled block output format so that scale is not affected by
             // junk/padding data
@@ -275,13 +276,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 // tile is partial we have to read the smaller stick width. Therefore we need to write out the next
                 // stick right bellow the previous one and this is when increment of the write pointer and the read
                 // stick size is not compliant.
-                bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
+                bool use_contiguous_read = !is_large_kernel && !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
                                            dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
-                if constexpr (is_large_kernel) {
-                    bool whole_row_remaining =
-                        kernel_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
-                    use_contiguous_read &= whole_row_remaining;
-                }
 
                 if (use_contiguous_read) {
                     process_h(0, kernel_w);
@@ -295,6 +291,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (!is_large_kernel) {
             if (reader_id == 0 || !return_indices) {
                 noc_async_read_barrier();
+                // tt::data_movement::common::print_bf16_pages(get_write_ptr(in_cb_id), 256, 32);
                 cb_push_back(in_cb_id, 1);
             }
             if constexpr (reader_id == 1 && return_indices) {
@@ -448,9 +445,8 @@ void kernel_main() {
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
     constexpr bool need_to_initialize_in_cb =
-        return_indices ||
-        (remaining_elems && face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
-         interm_reduction_chunks <= multi_buffering_factor);
+        return_indices || (face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
+                           interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb

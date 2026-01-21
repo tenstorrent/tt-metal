@@ -29,7 +29,14 @@ def randomize_torch_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        # torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+        for n in range(tensor_shape[0]):
+            for c in range(tensor_shape[1]):
+                for h in range(tensor_shape[2]):
+                    for w in range(tensor_shape[3]):
+                        hw = w + h * tensor_shape[3]
+                        torch_tensor[n, c, h, w] = hw
         tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -199,6 +206,11 @@ def run_max_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
+
+    print("TTNN")
+    print(ttnn_output.flatten())
+    print("Torch")
+    print(torch_output.flatten())
 
     # test for equivalance
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)

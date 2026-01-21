@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -182,6 +182,7 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
+                // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
                 if constexpr (return_indices) {
                     reconfig_data_format_srca(curr_in_cb_id);
                     copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
@@ -235,6 +236,7 @@ void MAIN {
                         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                         num_faces_in_input_tile,
                         face_r_dim);
+                    // dprint_tensix_dest_reg(7);
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
