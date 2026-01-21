@@ -29,7 +29,7 @@ enum class HighLevelTrafficPattern;  // Forward declaration
 struct TrafficEdge {
     MeshCoordinate source;
     MeshCoordinate dest;
-    RoutingDirection direction;
+    RoutingDirection direction{};
 };
 
 class IDeviceInfoProvider {
