@@ -321,7 +321,7 @@ struct WorkerToFabricEdmSenderImpl {
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
             // some time atleast after it copied the wrptr out of the worker_teardown_addr
-            noc_async_read<DM_DYNAMIC_NOC, true>(
+            noc_async_read(
                 remote_buffer_index_addr,
                 reinterpret_cast<size_t>(this->worker_teardown_addr),
                 sizeof(uint32_t),
@@ -332,7 +332,7 @@ struct WorkerToFabricEdmSenderImpl {
                                                edm_worker_location_info_addr +
                                                offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
             // Read the read/pointer or buffer free slots
-            noc_async_read<DM_DYNAMIC_NOC, true>(
+            noc_async_read(
                 edm_read_free_slots_or_read_counter_addr,
                 reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_read_ptr),
                 sizeof(uint32_t),  // also want to read the local write counter
