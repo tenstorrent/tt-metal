@@ -1081,6 +1081,9 @@ class DeepseekGenerator:
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Paged ops expect UINT16 for sharded page tables and INT32 otherwise.
+        if page_table_tt.is_sharded():
+            page_table_tt = ttnn.typecast(page_table_tt, dtype=ttnn.uint16)
 
         return tuple(page_table_tt for _ in range(self.hf_config.num_hidden_layers))
 

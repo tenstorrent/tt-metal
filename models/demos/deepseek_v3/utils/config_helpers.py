@@ -821,9 +821,9 @@ def _get_remove_dim_slices(
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
     """Get mesh coordinates for a given mesh shape and optional row and column indices."""
-    if row:
+    if row is not None:
         assert 0 <= row < mesh_shape[0], "Row index out of bounds"
-    if col:
+    if col is not None:
         assert 0 <= col < mesh_shape[1], "Column index out of bounds"
 
     row_select = range(mesh_shape[0]) if row is None else [row]
