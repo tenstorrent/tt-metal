@@ -79,11 +79,11 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     }
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].insert(src_addr);
+        state.insert_posted_write_not_flushed(noc_id, src_addr, src_addr + event.num_bytes);
         state.posted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_posted_writes[noc_id] = true;
     } else {
-        state.nonposted_writes_not_flushed[noc_id].insert(src_addr);
+        state.insert_nonposted_write_not_flushed(noc_id, src_addr, src_addr + event.num_bytes);
         state.nonposted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_nonposted_writes[noc_id] = true;
     }
@@ -126,7 +126,7 @@ void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
-    state.reads_not_flushed[noc_id].insert(event.dst_addr);
+    state.insert_read_not_flushed(noc_id, event.dst_addr, event.dst_addr + event.num_bytes);
     state.read_counter_snapshot[noc_id] = event.counter_snapshot;
     state.any_reads[noc_id] = true;
 }
@@ -137,7 +137,7 @@ void NOCDebugState::handle_read_barrier_event(
     uint8_t noc_id = event.noc;
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
-    state.reads_not_flushed[noc_id].clear();
+    state.flush_reads(noc_id);
 }
 
 void NOCDebugState::handle_write_barrier_event(
@@ -147,9 +147,9 @@ void NOCDebugState::handle_write_barrier_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].clear();
+        state.flush_posted_writes(noc_id);
     } else {
-        state.nonposted_writes_not_flushed[noc_id].clear();
+        state.flush_nonposted_writes(noc_id);
     }
 }
 
@@ -164,6 +164,26 @@ void NOCDebugState::handle_write_flush_event(
     } else {
         state.nonposted_writes_not_flushed[noc_id].clear();
     }
+}
+
+void NOCDebugState::handle_local_mem_read_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, LocalMemReadEvent event) {
+    // CoreDebugState& state = get_state(core);
+
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+
+    // uint32_t reads_received_counter = event.counter_snapshot;
+
+    // Check if there is a noc async read with destination at this region not yet flushed (read without barrier)
+
+    log_warning(tt::LogMetal, "Local mem read event: {}, {}, {}", event.src_x, event.src_y, event.counter_snapshot);
+}
+
+void NOCDebugState::handle_local_mem_write_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, LocalMemWriteEvent event) {
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+
+    log_warning(tt::LogMetal, "Local mem write event: {}, {}, {}", event.src_x, event.src_y, event.counter_snapshot);
 }
 
 void NOCDebugState::update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp) {
@@ -202,9 +222,11 @@ void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor
                 tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                 handle_write_flush_event(key, processor_id, timestamp, e);
             } else if constexpr (std::is_same_v<T, LocalMemWriteEvent>) {
-                // TODO: handle this case
+                tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                handle_local_mem_write_event(key, processor_id, timestamp, e);
             } else if constexpr (std::is_same_v<T, LocalMemReadEvent>) {
-                // TODO: handle this case
+                tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                handle_local_mem_read_event(key, processor_id, timestamp, e);
             }
         },
         event);

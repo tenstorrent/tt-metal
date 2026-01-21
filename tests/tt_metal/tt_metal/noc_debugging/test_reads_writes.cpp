@@ -286,6 +286,40 @@ void RunInterleavedReadsWritesTest(
         "read barrier");
 }
 
+void RunWriteAfterAsyncWriteTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto src_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+    auto dst_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    auto other_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+    std::map<std::string, std::string> defines = {
+        {"SRC_ADDR", std::to_string(src_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(other_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(other_core_virtual.y)},
+        {"DST_ADDR", std::to_string(dst_buffer->address())},
+    };
+
+    if (use_barrier) {
+        defines["USE_WRITE_BARRIER"] = "1";
+    }
+}
+
 TEST_F(NOCDebuggingFixture, WritesNoBarrier) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
@@ -341,6 +375,26 @@ TEST_F(NOCDebuggingFixture, InterleavedReadsWritesWithBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunInterleavedReadsWritesTest(fixture, mesh_device, true, true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, WriteAfterAsyncWriteNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunWriteAfterAsyncWriteTest(fixture, mesh_device, false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, WriteAfterAsyncWriteWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunWriteAfterAsyncWriteTest(fixture, mesh_device, true);
             },
             mesh_device);
     }
