@@ -363,7 +363,16 @@ void calculate_exponential_first_column(int scale_bf16) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::vFloat result;
+            if constexpr (!DST_ACCUM_MODE) {
+                // bfloat16-accurate implementation of exp ( < 1 ULP)
+                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
+            } else {
+                // float32 version of exp (< 150 float32 ULP)
+                // this is more accurate than exp_21f, but also slower
+                result = ckernel::sfpu::_sfpu_exp_61f_(val);
+            }
+
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -613,7 +622,6 @@ ALWI void cb_matmul_blocks(
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
-                cb_pop_front(mask_cb, out_subblock_num_tiles);
             }
             tile_regs_commit();
             tile_regs_wait();

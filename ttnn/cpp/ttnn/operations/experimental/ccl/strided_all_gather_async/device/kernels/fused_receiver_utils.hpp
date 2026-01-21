@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "dataflow_api.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <array>

@@ -14,9 +14,9 @@ If the reader kernel is run, data is written directly into the L1 memory of the 
 
 If the writer kernel is run, data is written directly into the L1 memory of the master core, and the kernel issues NOC instructions to write this data into the L1 address of the subordinate core using the one_packet APIs. A write barrier is placed after these transactions in order to ensure data validity.
 
-Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

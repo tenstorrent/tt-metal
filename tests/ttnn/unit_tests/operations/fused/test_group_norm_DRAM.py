@@ -16,7 +16,10 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 from models.common.utility_functions import run_for_blackhole
 
 
-def run_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask):
+# perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
+def run_group_norm_DRAM(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask, perf_test_mode=False
+):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -31,10 +34,12 @@ def run_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y,
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.group_norm(
-        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
-    )
-    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    if not perf_test_mode:
+        torch_output_tensor = torch.nn.functional.group_norm(
+            torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
+        )
+        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # input tensor
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
@@ -79,7 +84,7 @@ def run_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y,
 
     num_itr = 2  # second iteration to help catch potential runtime args issue.
 
-    if C > 512 or N > 2:
+    if C > 512 or N > 2 or perf_test_mode:
         num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
@@ -98,10 +103,10 @@ def run_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y,
         )
         ttnn.synchronize_device(device)
 
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+    if not perf_test_mode:
+        output_tensor = ttnn.from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -147,9 +152,22 @@ def run_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y,
     ],
 )
 @pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
+def test_group_norm_DRAM(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, perf_test_mode=False
+):
     run_group_norm_DRAM(
-        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask=True
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=True,
+        perf_test_mode=perf_test_mode,
     )
 
 

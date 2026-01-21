@@ -7,9 +7,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul::group_attn_matmul {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct GroupAttnMatmulParams {
     std::optional<const uint32_t> num_tokens;
     std::optional<const bool> transpose_hw;
     const uint32_t out_subblock_w;
@@ -20,13 +20,10 @@ struct operation_attributes_t {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct GroupAttnMatmulInputs {
     Tensor input_tensor_a;
     Tensor input_tensor_b;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
+}  // namespace ttnn::experimental::prim

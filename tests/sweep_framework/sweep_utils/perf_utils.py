@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
+import shutil
+from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
@@ -18,6 +21,27 @@ DEVICE_PERF_KEYS = [
     "DEVICE BRISC FW DURATION [ns]",
     "DEVICE NCRISC FW DURATION [ns]",
 ]
+
+
+def clear_disk_kernel_cache() -> None:
+    """Clear disk kernel cache for current git hash."""
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short=10", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+
+        cleared_count = 0
+        for kernels_dir in Path.home().glob(f".cache/tt-metal-cache/{git_hash}/*/kernels"):
+            if kernels_dir.exists():
+                shutil.rmtree(kernels_dir)
+                cleared_count += 1
+
+        logger.info(f"Cleared {cleared_count} disk kernel cache directories for git hash {git_hash}")
+    except Exception as e:
+        logger.warning(f"Failed to clear disk kernel cache: {e}")
 
 
 def gather_single_test_perf(device, test_passed):
@@ -72,16 +96,32 @@ def gather_single_test_perf(device, test_passed):
 
 
 def prepare_program_cache_for_comparison(device) -> None:
+    """Clear all cache layers before uncached performance measurement.
+
+    Clears:
+    1. Disk kernel cache (persistent)
+    2. In-memory HashLookup cache (process-lifetime)
+    3. Program cache (keeps it enabled for next run)
+    """
+    import ttnn
+
+    # Clear disk cache
+    clear_disk_kernel_cache()
+
+    # Clear in-memory HashLookup cache
+    logger.info("Clearing in-memory HashLookup cache")
+    ttnn.device.ClearKernelCache()
+
+    # Clear program cache (but keep it enabled)
     num_entries_before = (
         device.num_program_cache_entries() if hasattr(device, "num_program_cache_entries") else "unknown"
     )
-    logger.info(f"Clearing program cache for --perf-with-cache (entries before: {num_entries_before})")
-    device.disable_and_clear_program_cache()
-    device.enable_program_cache()  # Re-enable for cache comparison
+    logger.info(f"Clearing program cache (entries before: {num_entries_before})")
+    device.clear_program_cache()
     num_entries_after = (
         device.num_program_cache_entries() if hasattr(device, "num_program_cache_entries") else "unknown"
     )
-    logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
+    logger.info(f"Program cache cleared (entries after: {num_entries_after})")
 
 
 def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
@@ -107,7 +147,15 @@ def simplify_device_perf(perf: Optional[dict]) -> dict:
 
 def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]]]:
+) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, Dict]]]:
+    # Capture peak memory (NO_DISPATCH mode) if enabled
+    peak_memory = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory
+
+        logger.info("Capturing peak memory in NO_DISPATCH mode")
+        peak_memory = capture_peak_memory(test_module, test_vector, device)
+
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
 
@@ -170,20 +218,27 @@ def run_with_cache_comparison(
             simplified_perf["uncached"] = simplify_device_perf(device_perf_uncached)
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
-        return status, message, e2e_perf, simplified_perf
+        return status, message, e2e_perf, simplified_perf, peak_memory
     else:
-        return status, message, e2e_perf, None
+        return status, message, e2e_perf, None, peak_memory
 
 
 def run_single(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Optional[float], Optional[dict]]:
+) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[Dict]]:
     status, message, e2e_ms = execute_test(test_module, test_vector, device)
+
+    # Capture peak memory if enabled
+    peak_memory = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory
+
+        peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
     if getattr(config, "measure_device_perf", False):
         perf_result = gather_single_test_perf(device, status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
-        return status, message, e2e_ms, simplified_perf
+        return status, message, e2e_ms, simplified_perf, peak_memory
     else:
-        return status, message, e2e_ms, None
+        return status, message, e2e_ms, None, peak_memory

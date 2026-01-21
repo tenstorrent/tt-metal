@@ -30,7 +30,7 @@ Tests:
     parametrization_params:
       size: [1024, 2048, 4096]
       num_packets: [10000]
-      num_links: [1, 2]
+      num_links: [1, 2, 3, 4]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
 
     patterns:

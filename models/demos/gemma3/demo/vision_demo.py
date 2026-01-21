@@ -67,7 +67,6 @@ def create_multimodal_model(
 ):
     from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.gemma3.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
@@ -87,25 +86,15 @@ def create_multimodal_model(
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
 
-    if tt_model_args.is_gemma:
-        model = TtGemmaModel(
-            mesh_device=mesh_device,
-            state_dict=checkpoint,
-            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
-            dtype=ttnn.bfloat8_b,
-            args=tt_model_args,
-            use_paged_kv_cache=use_paged_kv_cache,
-            paged_attention_config=paged_attention_config,
-        )
-    else:
-        model = CrossAttentionTransformer(
-            mesh_device,
-            state_dict=checkpoint,
-            weight_cache_path=tt_model_args.weight_cache_path(dtype),
-            dtype=dtype,
-            configuration=tt_model_args,
-            use_paged_kv_cache=use_paged_kv_cache,
-        )
+    model = TtGemmaModel(
+        mesh_device=mesh_device,
+        state_dict=checkpoint,
+        weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+        dtype=ttnn.bfloat8_b,
+        args=tt_model_args,
+        use_paged_kv_cache=use_paged_kv_cache,
+        paged_attention_config=paged_attention_config,
+    )
     return tt_model_args, model, checkpoint
 
 

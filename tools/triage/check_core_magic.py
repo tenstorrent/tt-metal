@@ -12,19 +12,25 @@ Description:
     the expected firmware type for that location. If there's a mismatch, it
     attempts to read the mailbox using other firmware types to identify what
     firmware is actually present.
+
+Owner:
+    jbaumanTT
 """
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess
+from ttexalens.elf import ParsedElfFile
+from ttexalens.memory_access import MemoryAccess
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from elfs_cache import run as get_elfs_cache, ElfsCache
+from elfs_cache import run as get_elfs_cache
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
+
+MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
 
 
 class CoreMagicValues:
@@ -66,18 +72,18 @@ def get_expected_magic_for_location(location: OnChipCoordinate, magic_values: Co
         return magic_values.worker, "WORKER"
 
 
-def try_read_magic_with_elf(
+def try_read_magic_with_dispatcher_data(
     location: OnChipCoordinate,
     risc_name: str,
-    fw_elf,
+    dispatcher_data: DispatcherData,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
     Returns the magic value or None if reading fails.
     """
     try:
-        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-        return fw_elf.get_global("mailboxes", loc_mem_access).core_info.core_magic_number.read_value()
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        return dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value()
     except Exception as e:
         log_check_location(
             location,
@@ -87,11 +93,21 @@ def try_read_magic_with_elf(
         return None
 
 
+def try_read_magic_with_elf(
+    l1_mem_access: MemoryAccess,
+    fw_elf: ParsedElfFile,
+) -> int | None:
+    """
+    Attempt to read core_magic_number using the given firmware ELF.
+    Returns the magic value or None if reading fails.
+    """
+    return fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value()
+
+
 def check_core_magic(
     location: OnChipCoordinate,
     risc_name: str,
     dispatcher_data: DispatcherData,
-    elfs_cache: ElfsCache,
     magic_values: CoreMagicValues,
 ):
     """
@@ -100,20 +116,8 @@ def check_core_magic(
     """
     expected_magic, expected_type = get_expected_magic_for_location(location, magic_values)
 
-    # Get the firmware ELF for the expected type
-    try:
-        fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
-        fw_elf = elfs_cache[fw_elf_path]
-    except Exception as e:
-        log_check_location(
-            location,
-            False,
-            f"{risc_name}: Failed to get firmware ELF: {e}",
-        )
-        return
-
     # Read the magic number from the expected mailbox location
-    actual_magic = try_read_magic_with_elf(location, risc_name, fw_elf)
+    actual_magic = try_read_magic_with_dispatcher_data(location, risc_name, dispatcher_data)
 
     if actual_magic is None:
         return
@@ -140,7 +144,8 @@ def check_core_magic(
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        other_magic = try_read_magic_with_elf(location, risc_name, other_elf)
+        l1_mem_access = MemoryAccess.create_l1(location)
+        other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
             if other_type_name == type_name:
@@ -153,14 +158,14 @@ def check_core_magic(
             False,
             f"{risc_name}: core_magic_number mismatch! Expected {expected_type} (0x{expected_magic:08X}), "
             f"but found {found_type} firmware at {found_type} mailbox location. "
-            f"Value at expected location: 0x{actual_magic:08X}",
+            f"Value at expected location: 0x{actual_magic:08X}. Triage may have incorrectly identified the firmware type.",
         )
     else:
         log_check_location(
             location,
             False,
             f"{risc_name}: core_magic_number mismatch! Expected {expected_type} (0x{expected_magic:08X}), "
-            f"found unknown value 0x{actual_magic:08X}. Could not identify firmware type at other locations.",
+            f"found unknown value 0x{actual_magic:08X}. Could not identify firmware type at other locations. {MAILBOX_CORRUPTED_MESSAGE}",
         )
 
 
@@ -178,7 +183,7 @@ def run(args, context: Context):
     magic_values = CoreMagicValues(dispatcher_data._brisc_elf)
 
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, elfs_cache, magic_values),
+        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, magic_values),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )

@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 #if defined(WATCHER_OVERHEAD_OK)
 template <bool is_output_cb, bool is_wr_ptr>

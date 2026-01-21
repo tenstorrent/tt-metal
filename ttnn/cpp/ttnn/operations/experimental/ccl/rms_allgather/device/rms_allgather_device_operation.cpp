@@ -8,6 +8,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,11 +16,11 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::experimental::prim {
 
 RMSAllGatherDeviceOperation::program_factory_t RMSAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::RMSAllGatherMeshWorkloadFactory{};
+    return RMSAllGatherMeshWorkloadFactory{};
 }
 
 void RMSAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -34,6 +35,11 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.weight;
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
+    TT_FATAL(
+        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] == 32 &&
+            a.logical_shape()[3] % 32 == 0,
+        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where "
+        "M is a multiple of 32");
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -172,7 +178,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
+TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (args.inplace) {
@@ -207,7 +213,7 @@ spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
             output_padded_shape));
 }
 
-tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
+Tensor RMSAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -222,34 +228,41 @@ tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
+
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = tensor_args.input.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
     auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,
+        args.output_mem_config,
+        args.subblock_wt,
+        args.block_wt,
+        args.inplace,
+        args.grid_size,
+        args.compute_kernel_config,
         args.dtype,
+        args.topology,
         args.num_links,
         args.ring_size,
-        args.output_mem_config,
-        args.topology,
         args.cluster_axis,
-        program_factory.index(),
-        tensor_args.residual_input_tensor.has_value(),
-        tensor_args.weight.has_value(),
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        args.use_noc1_only,
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
-std::tuple<RMSAllGatherDeviceOperation::operation_attributes_t, RMSAllGatherDeviceOperation::tensor_args_t>
-RMSAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
     const Tensor& input_tensor,
-    const layernorm::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -265,6 +278,7 @@ RMSAllGatherDeviceOperation::invoke(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
+    using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
@@ -276,7 +290,7 @@ RMSAllGatherDeviceOperation::invoke(
     auto [subblock_wt, block_wt, inplace, grid_size] = std::visit(
         [](const auto& config) -> std::tuple<uint32_t, uint32_t, bool, CoreCoord> {
             using T = std::decay_t<decltype(config)>;
-            if constexpr (std::is_same_v<T, layernorm::LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<T, ttnn::prim::LayerNormShardedMultiCoreProgramConfig>) {
                 return {
                     static_cast<uint32_t>(config.subblock_w),
                     static_cast<uint32_t>(config.block_w),
@@ -289,7 +303,7 @@ RMSAllGatherDeviceOperation::invoke(
         },
         program_config);
 
-    operation_attributes_t operation_attributes(
+    auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,
         memory_config.value_or(input_tensor.memory_config()),
         subblock_wt,
@@ -306,14 +320,14 @@ RMSAllGatherDeviceOperation::invoke(
         cluster_axis,
         use_noc1_only);
 
-    tensor_args_t tensor_args{
+    auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
         .weight = weight,
         .stats = stats,
         .preallocated_output = persistent_output_tensor};
 
-    return {std::move(operation_attributes), std::move(tensor_args)};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn::prim

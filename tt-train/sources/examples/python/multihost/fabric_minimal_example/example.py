@@ -7,6 +7,7 @@ import sys
 import socket
 
 import click
+import ttnn
 import ttml
 import numpy as np
 from ttml.common.config import load_config, DeviceConfig
@@ -57,7 +58,7 @@ def main(config: str):
     N = 1024
     values = np.ones((1, 1, 1, N), dtype=np.float32) * (rank + 1)
     tt_values = ttml.autograd.Tensor.from_numpy(
-        values, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+        values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
 
     if rank > 0:

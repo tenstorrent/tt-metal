@@ -218,7 +218,7 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
 
         auto connections = node[kConnections].get<std::unordered_set<uint32_t>>();
         for (const auto& tensor_id : connections) {
-            if (output_tensors.find(tensor_id) == output_tensors.end()) {
+            if (!output_tensors.contains(tensor_id)) {
                 continue;
             }
 
@@ -335,6 +335,34 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
         }
     }
     return PeakMemoryUsagePerCore{.peak_cb = peak_cb, .peak_l1 = peak_l1, .peak_total = peak_total};
+}
+
+DRAMUsage extract_dram_usage(const nlohmann::json& trace) {
+    DRAMUsage result;
+    long long current_buffer = 0;
+
+    for (size_t i = 0; i < trace.size(); ++i) {
+        const auto& v = trace[i];
+
+        if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
+            size_t buffer_size = std::stoll(v[kParams][kSize].get<std::string>());
+            current_buffer += buffer_size;
+            result.total_allocations += buffer_size;
+        } else if (v[kNodeType] == kNodeBufferDeallocate) {
+            auto connection = v[kConnections][0].get<int>();
+            auto buffer = trace[connection];
+            if (buffer[kParams][kType] == "DRAM") {
+                size_t buffer_size = std::stoll(buffer[kParams][kSize].get<std::string>());
+                current_buffer -= buffer_size;
+                result.total_deallocations += buffer_size;
+            }
+        }
+
+        // Track peak
+        result.peak = std::max(result.peak, current_buffer);
+    }
+
+    return result;
 }
 
 }  // namespace ttnn::graph

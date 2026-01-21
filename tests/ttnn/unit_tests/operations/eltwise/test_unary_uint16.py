@@ -6,6 +6,8 @@ import torch
 import pytest
 import ttnn
 
+pytestmark = pytest.mark.use_module_device
+
 
 def _run_unary_uint16_test(torch_input_tensor, ttnn_fn, device, memory_config=None):
     """Helper function to run uint16 unary operation tests with consistent setup"""

@@ -20,6 +20,7 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
+#include <memory>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -120,6 +121,10 @@ public:
     // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
     MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    // Get all mesh IDs (includes switches)
+    std::vector<MeshId> get_all_mesh_ids() const;
+
+    // Get compute only mesh IDs (excludes switches)
     std::vector<MeshId> get_mesh_ids() const;
 
     // Get the chip ids for a given mesh_id
@@ -132,6 +137,8 @@ public:
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
+    // Check if a mesh_id corresponds to a switch mesh
+    bool is_switch_mesh(MeshId mesh_id) const;
 
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
@@ -156,6 +163,9 @@ public:
     // Get the number of active channels the user has requested between specific logical devices across meshes
     const RequestedIntermeshPorts& get_requested_intermesh_ports() const;
 
+    // Check if a connection between two meshes should use Z direction
+    bool should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const;
+
     // Query the mapping of logical ports to logical device ids per mesh
     const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
 
@@ -163,6 +173,17 @@ public:
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
+    // Get the MeshGraphDescriptor instance (if available)
+    // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
+    const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
+        TT_FATAL(mesh_graph_descriptor_.has_value(), "MeshGraphDescriptor not available");
+        return mesh_graph_descriptor_.value();
+    }
+
+    // Get the Mesh Graph Descriptor file path (if available)
+    // Returns empty path if MeshGraph was created via generate_mesh_graph_of_shape()
+    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:
     // Private constructor for static factory functions
@@ -195,11 +216,20 @@ private:
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
 
+    // Track which mesh pairs should use Z direction (dev/testing feature)
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> mesh_pairs_assign_z_direction_;
+
     // Switch tracking (switches use MeshId as their identifier)
     std::vector<MeshId> switch_ids_;
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+
+    // Store the MeshGraphDescriptor instance if created from a descriptor file
+    std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
+
+    // Store the file path if MeshGraph was created from a descriptor file
+    std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
 };
 
 }  // namespace tt::tt_fabric

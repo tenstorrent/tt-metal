@@ -8,7 +8,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_math_common.h"
@@ -21,13 +21,15 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-template <bool untilize_en = false, bool skip_inputs = false>
-inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
     std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
-    _llk_math_hw_configure_<untilize_en, skip_inputs>(
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(
         unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
+
+inline void llk_math_reconfig_remap(const bool remap_enable) { _llk_math_reconfig_remap_(remap_enable); }
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");

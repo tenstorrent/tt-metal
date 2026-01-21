@@ -137,4 +137,6 @@ enum class SfpuType {
     reduce,
     add_top_row,
     rdiv,
+    typecast,
+    addcmul,
 };

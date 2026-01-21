@@ -29,19 +29,17 @@ struct SwiGLUForwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& m1,
-        const ttnn::Tensor& m2,
-        const ttnn::Tensor& m3,
-        const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::swiglu_fw::device
 
 namespace ttnn::prim {
-constexpr auto ttml_swiglu_fw = ttnn::register_operation<
-    "ttnn::prim::ttml_swiglu_fw",
-    ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation>();
-}
+
+ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return_value_t ttml_swiglu_fw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& m1,
+    const ttnn::Tensor& m2,
+    const ttnn::Tensor& m3,
+    const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt);
+
+}  // namespace ttnn::prim

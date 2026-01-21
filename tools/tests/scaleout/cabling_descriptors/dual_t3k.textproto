@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Dual T3K Configuration
+# 2 T3K nodes (each 2x4 Wormhole chips) connected together
+
+graph_templates {
+  key: "dual_t3k"
+  value {
+    children {
+      name: "t3k1"
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
+    }
+    children {
+      name: "t3k2"
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # T3K1 to T3K2 connections (8 channels total, 2 per chip pair)
+        # N300 LB: tray 1/4 use port 2, tray 2/3 use port 1
+        connections {
+          port_a { path: ["t3k1"] tray_id: 1 port_id: 2 }
+          port_b { path: ["t3k2"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["t3k1"] tray_id: 2 port_id: 1 }
+          port_b { path: ["t3k2"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["t3k1"] tray_id: 3 port_id: 1 }
+          port_b { path: ["t3k2"] tray_id: 3 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["t3k1"] tray_id: 4 port_id: 2 }
+          port_b { path: ["t3k2"] tray_id: 4 port_id: 2 }
+        }
+      }
+    }
+  }
+}
+
+# Root instance
+root_instance {
+  template_name: "dual_t3k"
+  child_mappings {
+    key: "t3k1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "t3k2"
+    value { host_id: 1 }
+  }
+}

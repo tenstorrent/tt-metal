@@ -47,7 +47,7 @@ run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise $PYTEST_CMD output
   export PYTEST_ADDOPTS="--tb=short"
@@ -166,15 +166,8 @@ run_vgg_func() {
 }
 
 run_bert_tiny_func() {
-  fail=0
 
-  $PYTEST_CMD models/demos/bert_tiny/demo/demo.py || fail=1
-
-  $PYTEST_CMD models/demos/wormhole/bert_tiny/demo/demo.py || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest models/demos/wormhole/bert_tiny/demo/demo.py
 
 }
 
@@ -209,15 +202,8 @@ run_sdxl_func() {
 }
 
 run_distilbert_func() {
-  fail=0
 
-  $PYTEST_CMD models/demos/distilbert/demo/demo.py || fail=1
-
-  $PYTEST_CMD models/demos/wormhole/distilbert/demo/demo.py || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest models/demos/wormhole/distilbert/demo/demo.py
 
 }
 

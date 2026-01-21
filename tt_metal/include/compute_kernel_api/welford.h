@@ -10,7 +10,7 @@
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
 #endif
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 namespace ckernel {
 /**

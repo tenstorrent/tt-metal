@@ -5,13 +5,10 @@
 #include <cstdint>
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_unary/addcmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
 
@@ -69,4 +66,3 @@ void MAIN {
         cb_pop_front(cb_in0, num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE

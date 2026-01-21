@@ -5,8 +5,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
-#include <stddef.h>
-#include <string.h>
+#include <cstddef>
+#include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
@@ -27,10 +27,12 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <random>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "circular_buffer.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "device.hpp"
@@ -38,6 +40,7 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
@@ -310,6 +313,13 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
+    // Mock devices don't have real binaries, skip finalization
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        kernel_text_offset = base_offset;
+        kernel_text_size = 0;
+        return base_offset;
+    }
+
     const auto& hal = MetalContext::instance().hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -415,8 +425,8 @@ void generate_runtime_args_cmds(
     bool no_stride,
     enum DispatchWriteOffsets write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
     thread_local static auto get_runtime_payload_sizeB =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast, bool no_stride) {
@@ -439,7 +449,7 @@ void generate_runtime_args_cmds(
         return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
     };
 
-    constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
+    constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     DeviceCommandCalculator calculator;
@@ -468,7 +478,24 @@ void generate_runtime_args_cmds(
             max_runtime_args_len * sizeof(uint32_t),
             constants.packed_write_max_unicast_sub_cmds,
             no_stride);
-        runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
+        // Watcher only: pre-fill the RTA payload region with 0xBEEF0000 | rand16
+        // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand
+        // This makes any unused runtime-arg slots obvious on device (equality tests likely to fail)
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+            uint32_t total_words = (calculator.write_offset_bytes() - data_offset) / sizeof(uint32_t);
+            uint32_t* command_start_ptr =
+                reinterpret_cast<uint32_t*>(command_obj.data()) + (data_offset / sizeof(uint32_t));
+            thread_local static std::mt19937 gen(std::random_device{}());
+            std::uniform_int_distribution<int> dist(0, 65535);
+            for (uint32_t count = 0; count < total_words; count++) {
+                uint16_t rnd = static_cast<uint16_t>(dist(gen));
+                const uint32_t known_garbage = 0xBEEF0000 | rnd;
+                command_start_ptr[count] = known_garbage;
+            }
+        }
+
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA,
             num_packed_cmds,
@@ -485,7 +512,6 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
-        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
@@ -520,7 +546,7 @@ struct Transfer {
     tt::stl::Span<const uint8_t> data;
     // Keep track of what CBs contributed to this transfer, so we can update the data in
     // update_program_dispatch_commands.
-    std::vector<std::shared_ptr<CircularBuffer>> cbs;
+    std::vector<std::shared_ptr<CircularBufferImpl>> cbs;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
     size_t end() const { return start + data.size(); }
@@ -1017,7 +1043,7 @@ public:
                 auto& cb_config_payload = cb_config_payloads[i];
                 uint32_t max_index = 0;
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
-                for (const std::shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
+                for (const std::shared_ptr<CircularBufferImpl>& cb : circular_buffers_on_corerange) {
                     const uint32_t cb_address = cb->address();
                     const uint32_t cb_size = cb->size();
                     for (const auto& buffer_index : cb->local_buffer_indices()) {
@@ -1725,7 +1751,7 @@ void assemble_device_commands(
     bool use_prefetcher_cache) {
     CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    constants.dispatch_core_type = dispatch_core_config.get_core_type();
+    constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     constants.noc_index = k_dispatch_downstream_noc;
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
@@ -1834,12 +1860,7 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, dev_msgs::launch_msg_buffer_num_entries - 1);
-    if (hal.get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
-        // Keeping it the same
-        config_buffer_mgr.init_add_buffer(0, 1);
-    } else {
-        config_buffer_mgr.init_add_buffer(0, 1);
-    }
+    config_buffer_mgr.init_add_buffer(0, 1);
 }
 
 void reserve_space_in_kernel_config_buffer(
@@ -1972,7 +1993,7 @@ void update_program_dispatch_commands(
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
-        for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+        for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
             const uint32_t cb_address = cb->address();
             const uint32_t cb_size = cb->size();
             for (const auto& buffer_index : cb->local_buffer_indices()) {
@@ -2381,7 +2402,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
             std::vector<uint32_t>(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
         auto& cb_config_payload = all_cb_configs_payloads.back();
         uint32_t first_unused_index = 0;
-        for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+        for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
             const uint32_t cb_address = cb->address();
             const uint32_t cb_size = cb->size();
             for (const auto& buffer_index : cb->local_buffer_indices()) {
@@ -2644,14 +2665,13 @@ void set_core_go_message_mapping_on_device(
     std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
     std::vector<std::pair<uint32_t, uint32_t>> payload;
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
+    auto dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     uint32_t noc_index = k_dispatch_downstream_noc;
     uint32_t max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
-    for (size_t i = 0; i < core_go_message_mapping.size(); ++i) {
-        const auto& [core_range_set, go_msg_offset] = core_go_message_mapping[i];
+    for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
         for (const auto& core_range : core_range_set.ranges()) {
             CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
             CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);

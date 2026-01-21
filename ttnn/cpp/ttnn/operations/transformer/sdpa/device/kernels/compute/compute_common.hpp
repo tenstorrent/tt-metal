@@ -431,7 +431,16 @@ void calculate_exponential_first_column(int scale_bf16) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
-            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::vFloat result;
+            if constexpr (!DST_ACCUM_MODE) {
+                // bfloat16-accurate implementation of exp ( < 1 ULP)
+                result = ckernel::sfpu::_sfpu_exp_21f_<false>(val);
+            } else {
+                // float32 version of exp (< 150 float32 ULP)
+                // this is more accurate than exp_21f, but also slower
+                result = ckernel::sfpu::_sfpu_exp_61f_(val);
+            }
+
             sfpi::dst_reg[0] = result;
 
             // Stride by 2 to skip columns 8:16 of the face
@@ -549,9 +558,9 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 template <bool SDPA_EXP_APPROX_MODE>
 void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    vFloat beta = ckernel::sfpu::Converter::as_float(param0);
-    vFloat beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
-    vFloat threshold = ckernel::sfpu::Converter::as_float(param2);
+    float beta = ckernel::sfpu::Converter::as_float(param0);
+    float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
+    float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         ckernel::sfpu::calculate_softplus_body<APPROX>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;

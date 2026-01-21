@@ -98,19 +98,17 @@ struct Fold {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        uint32_t stride_h,
-        uint32_t stride_w,
-        const std::optional<const ttnn::Shape>& output_shape,
-        uint32_t pad_c,
-        uint32_t pad_h,
-        uint32_t pad_w);
 };
 
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto fold = ttnn::register_operation<"ttnn::prim::fold", ttnn::operations::data_movement::Fold>();
+ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
+    const ttnn::Tensor& input_tensor,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    const std::optional<const ttnn::Shape>& output_shape,
+    uint32_t pad_c,
+    uint32_t pad_h,
+    uint32_t pad_w);
 }  // namespace ttnn::prim

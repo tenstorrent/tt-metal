@@ -673,7 +673,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_EdgeDevice_TwoMeshRouters) {
         auto target_dir = target.target_direction.value();
 
         // Only record if target router exists (FabricBuilder connection logic)
-        if (existing_routers.count(target_dir)) {
+        if (existing_routers.contains(target_dir)) {
             record_archetype_connection(
                 z_router, 1, 0,
                 *existing_routers[target_dir], 1, target.target_sender_channel,

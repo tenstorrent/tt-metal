@@ -10,7 +10,7 @@
 #include <cstring>
 
 #include "tt-metalium/constants.hpp"
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc/noc_parameters.h"
 
 constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes

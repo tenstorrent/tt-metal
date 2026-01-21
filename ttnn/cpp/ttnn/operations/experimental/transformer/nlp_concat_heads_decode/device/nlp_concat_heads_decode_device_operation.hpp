@@ -10,15 +10,15 @@
 #include "nlp_concat_heads_decode_program_factory.hpp"
 #include "nlp_concat_heads_decode_subcoregrids_program_factory.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode {
+namespace ttnn::experimental::prim {
 
 struct NLPConcatHeadsDecodeDeviceOperation {
-    using operation_attributes_t = nlp_concat_heads_decode::operation_attributes_t;
-    using tensor_args_t = nlp_concat_heads_decode::tensor_args_t;
-    using spec_return_value_t = nlp_concat_heads_decode::spec_return_value_t;
-    using tensor_return_value_t = nlp_concat_heads_decode::tensor_return_value_t;
-    using program_factory_t = std::
-        variant<program::NLPConcatHeadsDecodeProgramFactory, program::NLPConcatHeadsDecodeSubcoregridsProgramFactory>;
+    using operation_attributes_t = NlpConcatHeadsDecodeParams;
+    using tensor_args_t = NlpConcatHeadsDecodeInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t =
+        std::variant<NLPConcatHeadsDecodeProgramFactory, NLPConcatHeadsDecodeSubcoregridsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -27,21 +27,16 @@ struct NLPConcatHeadsDecodeDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t num_heads,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& preallocated_output = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto nlp_concat_heads_decode = ttnn::register_operation<
-    "ttnn::prim::nlp_concat_heads_decode",
-    ttnn::operations::experimental::nlp_concat_heads_decode::NLPConcatHeadsDecodeDeviceOperation>();
+Tensor nlp_concat_heads_decode(
+    const Tensor& input_tensor,
+    uint32_t num_heads,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

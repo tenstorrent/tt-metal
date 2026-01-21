@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     FromWeightConfig,
+    KvCacheConfig,
     LinearConfig,
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
@@ -169,7 +170,6 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for prefill mode
         """
-
         grid_size = mesh_device.compute_with_storage_grid_size()
 
         # Extract dimensions from HF config
@@ -303,7 +303,7 @@ class MLA1D(AbstractModule):
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
-            dim=1,
+            dim=2,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -348,7 +348,6 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
-
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
 
@@ -712,9 +711,19 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         caches: Sequence[torch.Tensor] | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
-        kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
-        cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+        if kv_cache_override is None:
+            kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+            cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+        else:
+            kv_cache_shape = kv_cache_override.kv_cache_shape
+            cache_shape = (
+                kv_cache_shape[0] * mesh_device.shape[1],
+                kv_cache_shape[1],
+                kv_cache_shape[2],
+                kv_cache_shape[3],
+            )
 
         assert (
             caches is None
@@ -820,6 +829,8 @@ class MLA1D(AbstractModule):
 
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
 
         tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
 
@@ -932,7 +943,6 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
-
         mesh_shape = cfg["mesh_shape"]
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
@@ -957,9 +967,6 @@ class MLA1D(AbstractModule):
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
@@ -1016,7 +1023,9 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
-        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
+        tt_kvpe_fp16 = tt_kvpe
+        tt_kvpe = ttnn.typecast(tt_kvpe_fp16, dtype=kvpe_cache.dtype)
+        ttnn.deallocate(tt_kvpe_fp16)
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
@@ -1030,8 +1039,6 @@ class MLA1D(AbstractModule):
             batch_idx=local_batch_idx,
             mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/33589
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         # FlashMLA
         attn_out = ttnn.transformer.flash_mla_prefill(
@@ -1040,16 +1047,64 @@ class MLA1D(AbstractModule):
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
+        ttnn.deallocate(tt_kvpe)
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
-        v_out = ttnn.experimental.all_gather_async(
-            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim]
+        ttnn.deallocate(attn_out)
 
-        # wo
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
-        v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-        out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+        # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
+
+        # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
+        # Strategy: Process each chunk independently to keep all_gather buffers small
+        SEQ_LEN_CHUNK_SIZE = 8192
+        if seq_len > SEQ_LEN_CHUNK_SIZE:
+            num_heads_local = v_out.shape[2]
+            v_head_dim = v_out.shape[3]
+            # Use ceiling division instead of even_int_div to handle non-multiples of 8192
+            num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
+
+            # Pad seq_len to be a multiple of SEQ_LEN_CHUNK_SIZE if needed
+            padded_seq_len = num_chunks * SEQ_LEN_CHUNK_SIZE
+            if seq_len != padded_seq_len:
+                # Pad the sequence dimension (dim=1)
+                v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
+
+            output_chunks = []
+            num_heads = cfg["num_heads"]
+            hidden_dim = num_heads * v_head_dim
+            for chunk_idx in range(num_chunks):
+                start = chunk_idx * SEQ_LEN_CHUNK_SIZE
+                end = start + SEQ_LEN_CHUNK_SIZE
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
+                v_chunk = ttnn.experimental.all_gather_async(
+                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
+                out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
+                output_chunks.append(out_chunk)
+                ttnn.deallocate(v_chunk)
+
+            ttnn.deallocate(v_out)
+
+            out = ttnn.concat(output_chunks, dim=2)
+            output_dim = out.shape[3]
+            for chunk in output_chunks:
+                ttnn.deallocate(chunk)
+
+            # Trim padding if we added any
+            if seq_len != padded_seq_len:
+                out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
+        else:
+            # Non-chunked path for shorter sequences
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [1, seq_len, num_heads, v_head_dim]
+
+            # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
+            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            ttnn.deallocate(v_out)
 
         return out

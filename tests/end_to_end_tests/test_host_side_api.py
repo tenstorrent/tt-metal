@@ -9,14 +9,6 @@ import ttnn
 
 @pytest.mark.eager_host_side
 @pytest.mark.post_commit
-def test_global_var_toggle_and_device_eps():
-    # Check that APIs modifying global vars work
-    ttnn.device.EnablePersistentKernelCache()
-    ttnn.device.DisablePersistentKernelCache()
-
-
-@pytest.mark.eager_host_side
-@pytest.mark.post_commit
 def test_device_arch():
     assert ttnn.device.Arch.GRAYSKULL.name == "GRAYSKULL"
     assert ttnn.device.Arch.WORMHOLE_B0.name == "WORMHOLE_B0"

@@ -15,7 +15,7 @@ import pytest
 
 
 @pytest.mark.parametrize("input_spec", parameters_conv_transpose2d["short_sweep_suite"]["input_specs"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_conv_transpose2d_sweep(device, input_spec):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
