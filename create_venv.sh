@@ -123,7 +123,7 @@ validate_python_version() {
     minor=$((10#$minor))
 
     # Require Python 3.10+
-    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 8 ]]; }; then
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 10 ]]; }; then
         echo "Error: Python version must be 3.10 or higher (got: $version)" >&2
         echo "Supported versions: 3.10, 3.11, etc." >&2
         exit 1
@@ -280,7 +280,7 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 # Install Python via uv and create virtual environment
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
-uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # Import functions for detecting OS (use absolute path from SCRIPT_DIR)
