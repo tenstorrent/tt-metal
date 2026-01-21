@@ -588,10 +588,13 @@ using SenderEthChannelBuffers = std::conditional_t<
 // Derived classes implement specific counter management strategies.
 template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
 struct EdmChannelWorkerInterface {
+
+    using connection_live_semaphore_register = std::pair<OverlayRegisterFile::OR0, OverlayRegisterFile::OR1>;
+
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
-        connection_live_semaphore(nullptr),
+//        connection_live_semaphore(nullptr),
         sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
 
     EdmChannelWorkerInterface(
@@ -603,12 +606,12 @@ struct EdmChannelWorkerInterface {
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
-        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+//        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
-        connection_live_semaphore(connection_live_semaphore),
+//        connection_live_semaphore(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         static_cast<DERIVED*>(this)->reset_counters();
@@ -655,7 +658,8 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+        //*this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+        set_connection_live_semaphore(tt::tt_fabric::connection_interface::unused_connection_value);
 
         this->copy_read_counter_to_worker_location_info();
 
@@ -673,13 +677,22 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+        //return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+        return get_connection_live_semaphore() ==
+            tt::tt_fabric::connection_interface::close_connection_request_value;
     }
 
+    FORCE_INLINE uint32_t get_connection_live_semaphore() const {
+        return OverlayRegisterFile::transform<connection_live_semaphore_register::first_type, connection_live_semaphore_register::second_type>();
+    }
+
+    FORCE_INLINE void set_connection_live_semaphore(uint32_t const value) const {
+        OverlayRegisterFile::store<connection_live_semaphore_register::first_type, connection_live_semaphore_register::second_type>(value);
+    }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
-    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
+    //volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
