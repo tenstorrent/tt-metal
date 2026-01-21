@@ -13,6 +13,7 @@
 
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
+#include "api/socket_api.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -45,6 +46,18 @@ constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
+// Perf telemetry socket compile-time arguments
+// These are optional - if PERF_TELEMETRY_SOCKET_CONFIG_ADDR is 0, telemetry is disabled
+#ifdef PERF_TELEMETRY_SOCKET_CONFIG_ADDR
+constexpr uint32_t perf_telemetry_socket_config_addr = PERF_TELEMETRY_SOCKET_CONFIG_ADDR;
+constexpr uint32_t perf_telemetry_page_size = PERF_TELEMETRY_PAGE_SIZE;
+constexpr uint32_t perf_telemetry_enabled = 1;
+#else
+constexpr uint32_t perf_telemetry_socket_config_addr = 0;
+constexpr uint32_t perf_telemetry_page_size = 64;
+constexpr uint32_t perf_telemetry_enabled = 0;
+#endif
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -73,6 +86,15 @@ static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
+
+// Perf telemetry socket state
+static SocketSenderInterface perf_telemetry_socket;
+static bool perf_telemetry_initialized = false;
+static uint32_t perf_telemetry_pcie_xy_enc = 0;
+static uint32_t perf_telemetry_data_addr_hi = 0;
+static uint32_t perf_telemetry_host_write_ptr = 0;
+static uint32_t perf_telemetry_host_fifo_start = 0;
+static uint32_t perf_telemetry_fifo_page_aligned_size = 0;
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -204,6 +226,92 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
+}
+
+// ============================================================================
+// Perf Telemetry Socket Functions
+// ============================================================================
+
+// Initialize the perf telemetry socket interface
+// Must be called once before any perf_telemetry_push() calls
+FORCE_INLINE
+void perf_telemetry_init() {
+    if constexpr (!perf_telemetry_enabled) {
+        return;
+    }
+
+    if (perf_telemetry_initialized) {
+        return;
+    }
+
+    // Create socket interface from config buffer
+    perf_telemetry_socket = create_sender_socket_interface(perf_telemetry_socket_config_addr);
+    set_sender_socket_page_size(perf_telemetry_socket, perf_telemetry_page_size);
+
+    // Read PCIe-specific config from the config buffer
+    // Layout: 8 words MD + 4 words ack + downstream encoding area
+    // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
+    // [2] = data_addr_lo (write_ptr)
+    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(perf_telemetry_socket_config_addr);
+    perf_telemetry_pcie_xy_enc = socket_config_words[12];
+    perf_telemetry_data_addr_hi = socket_config_words[13];
+    uint32_t data_addr_lo = socket_config_words[2];  // Initial write_ptr = data buffer start
+
+    // Calculate page-aligned FIFO size
+    perf_telemetry_fifo_page_aligned_size =
+        perf_telemetry_socket.downstream_fifo_total_size -
+        (perf_telemetry_socket.downstream_fifo_total_size % perf_telemetry_page_size);
+
+    // Initialize write pointer tracking
+    perf_telemetry_host_write_ptr = data_addr_lo;
+    perf_telemetry_host_fifo_start = data_addr_lo;
+
+    // Initialize NOC for PCIe writes
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+
+    perf_telemetry_initialized = true;
+}
+
+// Push a single page of telemetry data to the host
+// src_addr: L1 address of the data to send (must be perf_telemetry_page_size bytes)
+// Returns: true if data was sent, false if socket not initialized
+FORCE_INLINE
+bool perf_telemetry_push(uint32_t src_addr) {
+    if constexpr (!perf_telemetry_enabled) {
+        return false;
+    }
+
+    if (!perf_telemetry_initialized) {
+        return false;
+    }
+
+    // Wait for space in the receiver's FIFO
+    socket_reserve_pages(perf_telemetry_socket, 1);
+
+    // Build 64-bit PCIe destination address
+    uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
+                              static_cast<uint64_t>(perf_telemetry_host_write_ptr);
+
+    // Write data to PCIe-mapped host memory using PCIe write primitive
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, src_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
+
+    // Update host write pointer with wrap-around
+    perf_telemetry_host_write_ptr += perf_telemetry_page_size;
+    if (perf_telemetry_host_write_ptr >= perf_telemetry_host_fifo_start + perf_telemetry_fifo_page_aligned_size) {
+        perf_telemetry_host_write_ptr = perf_telemetry_host_fifo_start;
+    }
+
+    // Update socket state
+    socket_push_pages(perf_telemetry_socket, 1);
+
+    // Notify host via PCIe
+    pcie_socket_notify_receiver(perf_telemetry_socket);
+
+    // Barrier to ensure PCIe write is visible to host
+    noc_async_write_barrier();
+
+    return true;
 }
 
 // Pointer to profiler control buffer for signaling dispatch TRISC to terminate
@@ -357,6 +465,9 @@ void kernel_main() {
                     << REMOTE_DEST_BUF_WORDS_FREE_INC);
         }
     }
+
+    // Initialize perf telemetry socket if enabled
+    perf_telemetry_init();
 
     cmd_ptr = cb_base;
     bool done = false;
