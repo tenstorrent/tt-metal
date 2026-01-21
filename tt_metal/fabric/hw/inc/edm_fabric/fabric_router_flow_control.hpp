@@ -10,6 +10,10 @@
 #include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
+
+static constexpr size_t PACKED_CREDITS_PER_STREAM_AUTOINC_REG = 2;
+static constexpr size_t BITS_PER_PACKED_CREDITS_IN_AUTOINC_REG = 8;
+
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
@@ -58,6 +62,7 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
             if constexpr (ENABLE_FIRST_LEVEL_ACK) {
                 sender_channel_packets_completed_stream_ids[i] = to_receiver_packets_sent_streams[0];
+                sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i / PACKED_CREDITS_PER_STREAM_AUTOINC_REG];
             } else {
                 sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
             }
@@ -159,7 +164,10 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
-        to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
+        to_sender_packets_acked_stream(
+            ENABLE_FIRST_LEVEL_ACK 
+                ? to_sender_packets_acked_streams[sender_channel_index / PACKED_CREDITS_PER_STREAM_AUTOINC_REG]
+                : to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(
             ENABLE_FIRST_LEVEL_ACK ? to_receiver_packets_sent_streams[0]
                                    : to_sender_packets_completed_streams[sender_channel_index]) {}

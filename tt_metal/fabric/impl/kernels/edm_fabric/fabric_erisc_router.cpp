@@ -268,7 +268,6 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
-
 // read and write stream scratch register store values as uint32_t
 enum class CoordinatedEriscContextSwitchState : uint32_t {
     // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
@@ -1657,11 +1656,20 @@ FORCE_INLINE
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-        if (acks_since_last_check > 0) {
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+        auto packed_acks = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        if (packed_acks > 0) {
+            PackedCredits credits{.packed = static_cast<int32_t>(packed_acks)};
+            constexpr size_t byte_index = sender_channel_index % PACKED_CREDITS_PER_STREAM_AUTOINC_REG;
+            auto acks_since_last_check = credits.bytes[byte_index];
+            if (acks_since_last_check > 0) {
+                constexpr size_t shift_amount = byte_index * BITS_PER_PACKED_CREDITS_IN_AUTOINC_REG;
+                uint32_t acks_to_decrement = acks_since_last_check << shift_amount;
+                sender_channel_from_receiver_credits.increment_num_processed_acks(acks_to_decrement);
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface,
+                    acks_since_last_check,
+                    channel_connection_established);
+            }
         }
     }
 
@@ -1871,13 +1879,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
         if (num_packets_to_process > 0) {
             increment_local_update_ptr_val(to_sender_packets_completed_streams[0], -num_packets_to_process);
-            PackedCredits credits{.packed = num_packets_to_process};
-            for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-                if (credits.bytes[i] > 0) {
-                    receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                        receiver_channel_response_credit_sender, i, credits.bytes[i]);
-                }
-            }
+            
+            // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
+            // receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_received_ack<true>(
+                receiver_channel_response_credit_sender, 0, num_packets_to_process);
         }
     }
 
