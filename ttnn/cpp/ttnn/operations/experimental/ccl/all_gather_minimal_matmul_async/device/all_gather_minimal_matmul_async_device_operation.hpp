@@ -22,13 +22,11 @@ namespace ttnn::operations::experimental::all_gather_minimal_matmul_async {
 struct all_gather_minimal_matmul_async_override_variables_t {
     uint32_t num_cores;
     std::vector<CoreCoord> cores;
-    tt::tt_metal::KernelHandle in0_sender_backward_kernels_id;
-    tt::tt_metal::KernelHandle in0_sender_forward_kernels_id;
+    tt::tt_metal::KernelHandle in0_sender_kernels_id;
     tt::tt_metal::KernelHandle in0_receiver_kernels_id;
     tt::tt_metal::KernelHandle in1_sender_kernels_id;
     tt::tt_metal::KernelHandle in1_receiver_kernels_id;
     bool transpose_core_grid;
-    uint32_t in0_forward_core;
 };
 
 struct AllGatherMinimalMatmulAsyncConfig {
