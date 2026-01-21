@@ -379,6 +379,7 @@ jobs:
 
       - name: Check for issues and run Copilot fix
         id: copilot-fix
+        timeout-minutes: 30
         env:
           COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
         run: |
