@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-ttnn::Tensor ExecuteDeepseekMoEReductScatter::invoke(
+ttnn::Tensor ExecuteDeepseekMoEReduceScatter::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
     const ttnn::MemoryConfig& output_memory_config,
     int32_t dim,

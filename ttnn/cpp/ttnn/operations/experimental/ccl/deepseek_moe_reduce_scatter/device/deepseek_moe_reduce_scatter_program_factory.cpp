@@ -21,7 +21,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 using ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::
-    DeepseekMoEReductScatterProgramArtifacts;
+    DeepseekMoEReduceScatterProgramArtifacts;
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
@@ -81,7 +81,7 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     return {clamped_num_links, worker_core_range_set, worker_cores};
 }
 
-DeepseekMoEReductScatterProgramArtifacts build_deepseek_moe_reduce_scatter_program_artifacts(
+DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_program_artifacts(
     tt::tt_metal::Program& program,
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
@@ -548,8 +548,8 @@ void deepseek_moe_reduce_scatter_helper_override_runtime_arguments(
 }
 
 // Mesh Workload Factory implementations
-DeepseekMoEReductScatterMeshWorkloadFactory::cached_mesh_workload_t
-DeepseekMoEReductScatterMeshWorkloadFactory::create_mesh_workload(
+DeepseekMoEReduceScatterMeshWorkloadFactory::cached_mesh_workload_t
+DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -582,8 +582,8 @@ DeepseekMoEReductScatterMeshWorkloadFactory::create_mesh_workload(
     return {std::move(mesh_workload), std::move(shared_variables)};
 }
 
-ttnn::device_operation::CachedProgram<DeepseekMoEReductScatterMeshWorkloadFactory::shared_variables_t>
-DeepseekMoEReductScatterMeshWorkloadFactory::create_at(
+ttnn::device_operation::CachedProgram<DeepseekMoEReduceScatterMeshWorkloadFactory::shared_variables_t>
+DeepseekMoEReduceScatterMeshWorkloadFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -631,7 +631,7 @@ DeepseekMoEReductScatterMeshWorkloadFactory::create_at(
     return {std::move(program), std::move(shared_vars)};
 }
 
-void DeepseekMoEReductScatterMeshWorkloadFactory::override_runtime_arguments(
+void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

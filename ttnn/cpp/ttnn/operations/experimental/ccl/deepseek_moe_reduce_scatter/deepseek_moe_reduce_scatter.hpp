@@ -14,7 +14,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteDeepseekMoEReductScatter {
+struct ExecuteDeepseekMoEReduceScatter {
     static ttnn::Tensor invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
         const ttnn::MemoryConfig& output_memory_config,
@@ -30,7 +30,7 @@ namespace experimental {
 
 constexpr auto deepseek_moe_reduce_scatter = ttnn::register_operation<
     "ttnn::experimental::deepseek_moe_reduce_scatter",
-    ttnn::operations::experimental::ccl::ExecuteDeepseekMoEReductScatter>();
+    ttnn::operations::experimental::ccl::ExecuteDeepseekMoEReduceScatter>();
 
 }  // namespace experimental
 }  // namespace ttnn

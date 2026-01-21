@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-struct DeepseekMoEReductScatterProgramArtifacts {
+struct DeepseekMoEReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
