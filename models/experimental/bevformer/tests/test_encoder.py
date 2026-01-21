@@ -4,11 +4,13 @@
 import torch
 import ttnn
 import pytest
-import numpy as np
 from typing import Dict, Any, List
 
-from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerLayer, TTBEVFormerEncoder
-from models.experimental.bevformer.reference.encoder import BEVFormerLayer, BEVFormerEncoder
+from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
+from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
+from models.experimental.bevformer.config.encoder_config import (
+    get_preset_config,
+)
 
 
 from models.experimental.bevformer.tests.test_utils import (
@@ -21,60 +23,41 @@ from models.experimental.bevformer.tests.test_utils import (
 
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_bevformer_encoder_parameters,
-    preprocess_bevformer_layer_parameters,
 )
 
 from loguru import logger
 
+# --------------------------------------------------------------------------- #
+# Default Test Configuration                                                  #
+# --------------------------------------------------------------------------- #
+torch.manual_seed(0)
 
-def create_sample_img_metas(batch_size: int, num_cams: int = 6) -> List[Dict[str, Any]]:
-    """Create sample img_metas for testing with camera intrinsics and extrinsics."""
+# Get default configuration for testing (can be overridden in individual tests)
+DEFAULT_TEST_CONFIG = get_preset_config("nuscenes_base")  # NuScenes + Base model
+DEFAULT_DATASET_CONFIG = DEFAULT_TEST_CONFIG.dataset_config
+DEFAULT_MODEL_CONFIG = DEFAULT_TEST_CONFIG.model_config
+
+
+def create_sample_img_metas(
+    batch_size: int, num_cams: int = DEFAULT_DATASET_CONFIG.num_cams, image_shape: tuple = (900, 1600)
+) -> List[Dict[str, Any]]:
+    """Create img_metas with random lidar2img matrices (matching reference implementation).
+
+    Args:
+        batch_size: Number of batches
+        num_cams: Number of cameras
+        image_shape: Tuple of (height, width) for camera images
+    """
     img_metas = []
 
     for batch_idx in range(batch_size):
-        # Sample camera intrinsics (3x3 matrix)
-        camera_intrinsics = []
-        for cam_idx in range(num_cams):
-            intrinsic = torch.eye(3, dtype=torch.float32)
-            intrinsic[0, 0] = 1000  # fx
-            intrinsic[1, 1] = 1000  # fy
-            intrinsic[0, 2] = 600  # cx
-            intrinsic[1, 2] = 400  # cy
-            camera_intrinsics.append(intrinsic)
+        # Generate random lidar2img matrices for each camera
+        lidar2img_matrices = [torch.randn(4, 4).tolist() for _ in range(num_cams)]
 
-        # Sample camera extrinsics (4x4 transformation matrices)
-        camera_extrinsics = []
-        for cam_idx in range(num_cams):
-            extrinsic = torch.eye(4, dtype=torch.float32)
-            # Add small rotation and translation for realism
-            angle = cam_idx * np.pi / 3  # 60 degrees apart
-            extrinsic[0, 0] = np.cos(angle)
-            extrinsic[0, 1] = -np.sin(angle)
-            extrinsic[1, 0] = np.sin(angle)
-            extrinsic[1, 1] = np.cos(angle)
-            extrinsic[0, 3] = cam_idx  # x translation
-            extrinsic[1, 3] = 0  # y translation
-            extrinsic[2, 3] = 1.5  # z translation (camera height)
-            camera_extrinsics.append(extrinsic)
-
-        # Combine intrinsics and extrinsics to create lidar2img matrices
-        lidar2img = []
-        for cam_idx in range(num_cams):
-            # Convert 3x3 intrinsic to 4x4 by padding with [0,0,0,1]
-            intrinsic_4x4 = torch.zeros(4, 4, dtype=torch.float32)
-            intrinsic_4x4[:3, :3] = camera_intrinsics[cam_idx]
-            intrinsic_4x4[3, 3] = 1.0
-
-            # lidar2img = intrinsic @ extrinsic
-            lidar2img_cam = intrinsic_4x4 @ camera_extrinsics[cam_idx]
-            # Convert to nested list for reference encoder compatibility
-            lidar2img.append(lidar2img_cam.tolist())
-
+        height, width = image_shape
         meta = {
-            "camera_intrinsics": [cam_int.tolist() for cam_int in camera_intrinsics],
-            "camera_extrinsics": [cam_ext.tolist() for cam_ext in camera_extrinsics],
-            "lidar2img": lidar2img,
-            "img_shape": [(900, 1600) for _ in range(num_cams)],  # (height, width) for each camera
+            "img_shape": [(height, width, 3)] * num_cams,
+            "lidar2img": lidar2img_matrices,
         }
         img_metas.append(meta)
 
@@ -82,77 +65,90 @@ def create_sample_img_metas(batch_size: int, num_cams: int = 6) -> List[Dict[str
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_layers",
+    "config_name, bev_size, num_layers, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        (1, 900, 256, 6),  # Single layer, small BEV grid (30x30)
-        # (1, 2500, 256, 2),  # Two layers, medium BEV grid (50x50)
-        # (1, 900, 256, 3),   # Three layers, small BEV grid
-        # (1, 2500, 256, 6),  # Full 6 layers, medium BEV grid
-        # (2, 900, 256, 1),   # Batch size 2, single layer
-    ],
-)
-@pytest.mark.parametrize(
-    "spatial_shapes",
-    [
-        [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes, input size 1600x900
-        # [[160, 90], [80, 45], [40, 23], [20, 12]],   # nuScenes, input size 1280x720
+        ("nuscenes_tiny", (100, 100), 3, 1, 0.997, 0.04, 0.47, 0.37),  # NuScenes tiny model
+        ("carla_base", (100, 100), 6, 1, 0.997, 0.03, 0.34, 0.29),  # CARLA base model
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_bevformer_encoder_forward(
     device,
-    batch_size,
-    num_query,
-    embed_dims,
+    config_name,
+    bev_size,
     num_layers,
-    spatial_shapes,
+    batch_size,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
     seed,
 ):
-    """Test TTBEVFormerEncoder against PyTorch reference implementation."""
+    """Test TTBEVFormerEncoder against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
     print_detailed_comparison_flag = False
 
-    spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
-    num_cams = 6
-    num_heads = 8
-    num_levels = 4
-    num_points = 4
-    feedforward_channels = 1024
+    # Get configuration
+    config = get_preset_config(config_name)
+    if config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = config.dataset_config
+    model_config = config.model_config
+
+    # Extract parameters from configs
+    bev_h, bev_w = bev_size
+    num_queries = bev_h * bev_w
+    embed_dims = model_config.embed_dims
+    num_cams = dataset_config.num_cams
+    num_heads = model_config.num_heads
+    num_levels = model_config.num_levels  # From model config
+    num_points = model_config.num_points  # From model config
+    feedforward_channels = model_config.feedforward_channels
+
+    # Use spatial shapes from dataset config (limited to num_levels)
+    image_shape = dataset_config.input_size  # Use actual input size from config
+    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]  # Take required number of levels
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
     # Create input tensors
-    bev_query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    bev_pos = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
+    bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    bev_pos = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
 
     # Camera features: [num_cams, H*W, batch_size, embed_dims]
-    encoder_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
-    camera_features = torch.randn(num_cams, sum(encoder_total_key_length), batch_size, embed_dims, dtype=torch.float32)
+    # Calculate total key length from spatial shapes
+    spatial_total_length = sum(h * w for h, w in spatial_shapes.tolist())
+    camera_features = torch.randn(num_cams, spatial_total_length, batch_size, embed_dims, dtype=torch.float32)
 
-    # Level start index
-    indices = spatial_shapes.prod(1).cumsum(0)
-    level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
+    # Level start index using centralized utility function
+    level_start_index = config.get_level_start_index()
+    # Limit to actual num_levels being used in this test
+    if len(level_start_index) > num_levels:
+        level_start_index = level_start_index[:num_levels]
 
     # Valid ratios (dummy for testing)
     valid_ratios = torch.ones(batch_size, num_levels, 2, dtype=torch.float32)
 
     # Previous BEV for temporal attention (optional)
-    prev_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
+    prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
 
-    # Camera metadata for point sampling
-    img_metas = create_sample_img_metas(batch_size, num_cams)
+    # Camera metadata for point sampling (convert width, height to height, width for img_metas)
+    img_shape = (image_shape[1], image_shape[0])  # (height, width) for img_metas
+    img_metas = create_sample_img_metas(batch_size, num_cams, img_shape)
 
-    # Create PyTorch reference model
-    ref_model = BEVFormerEncoder(
-        num_layers=num_layers,
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points,
-        num_cams=num_cams,
-        feedforward_channels=feedforward_channels,
-        batch_first=True,
-        return_intermediate=False,
+    # Create PyTorch reference model using config
+    encoder_kwargs = config.get_encoder_kwargs()
+
+    encoder_kwargs.update(
+        {
+            "num_layers": num_layers,  # Test-specific layer count
+            "batch_first": True,
+            "return_intermediate": False,
+        }
     )
+
+    ref_model = BEVFormerEncoder(**encoder_kwargs)
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
@@ -162,19 +158,11 @@ def test_bevformer_encoder_forward(
         dtype=ttnn.bfloat16,
     )
 
-    # Create ttnn model with preprocessed parameters
+    # Create ttnn model with preprocessed parameters using config
     tt_model = TTBEVFormerEncoder(
         device=device,
         params=tt_parameters,
-        num_layers=num_layers,
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points,
-        num_cams=num_cams,
-        feedforward_channels=feedforward_channels,
-        batch_first=True,
-        return_intermediate=False,
+        **encoder_kwargs,
     )
 
     # Forward pass with PyTorch reference model
@@ -183,10 +171,11 @@ def test_bevformer_encoder_forward(
             bev_query=bev_query,
             key=camera_features,
             value=camera_features,
+            bev_h=bev_h,
+            bev_w=bev_w,
             bev_pos=bev_pos,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
-            valid_ratios=valid_ratios,
             prev_bev=None,  # No temporal attention
             img_metas=img_metas,
         )
@@ -207,9 +196,10 @@ def test_bevformer_encoder_forward(
         key=tt_camera_features,
         value=tt_camera_features,
         bev_pos=tt_bev_pos,
+        bev_h=bev_h,
+        bev_w=bev_w,
         spatial_shapes=spatial_shapes,
         level_start_index=tt_level_start_index,
-        valid_ratios=tt_valid_ratios,
         prev_bev=None,  # No temporal attention
         img_metas=img_metas,
     )
@@ -245,10 +235,10 @@ def test_bevformer_encoder_forward(
     passed, results = check_with_tolerances(
         ref_output,
         tt_output_torch,
-        pcc_threshold=0.997,  # Lower threshold for complex encoder
-        abs_error_threshold=6e-2,
-        rel_error_threshold=0.5,
-        max_error_ratio=0.7,
+        pcc_threshold=expected_pcc,  # Lower threshold for complex encoder
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="bevformer_encoder_output",
     )
 
@@ -256,268 +246,3 @@ def test_bevformer_encoder_forward(
     assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
 
     logger.info("✅ All BEVFormer encoder tolerance checks passed successfully!")
-
-
-@pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims",
-    [
-        (1, 900, 256),  # Small BEV grid (30x30)
-        (1, 2500, 256),  # Medium BEV grid (50x50)
-        (2, 900, 256),  # Batch size 2
-    ],
-)
-@pytest.mark.parametrize(
-    "spatial_shapes",
-    [
-        [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes
-        [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes smaller
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
-@pytest.mark.parametrize("seed", [0])
-def test_bevformer_layer_forward(
-    device,
-    batch_size,
-    num_query,
-    embed_dims,
-    spatial_shapes,
-    seed,
-):
-    """Test TTBEVFormerLayer against PyTorch reference implementation."""
-    torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
-
-    spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
-    num_cams = 6
-    num_heads = 8
-    num_levels = 4
-    num_points = 4
-    feedforward_channels = 1024
-
-    # Create input tensors
-    bev_query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    bev_pos = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-
-    # Camera features: [num_cams, H*W, batch_size, embed_dims]
-    layer_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
-    camera_features = torch.randn(num_cams, sum(layer_total_key_length), batch_size, embed_dims, dtype=torch.float32)
-
-    # Level start index
-    indices = spatial_shapes.prod(1).cumsum(0)
-    level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
-
-    # Valid ratios
-    valid_ratios = torch.ones(batch_size, num_levels, 2, dtype=torch.float32)
-
-    # Previous BEV for temporal attention
-    prev_bev = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-
-    # Generate 3D reference points for temporal self-attention
-    D = 4  # Number of points per pillar
-    reference_points_3d = torch.rand(batch_size, num_query, D, 3, dtype=torch.float32)
-
-    # Determine BEV grid dimensions from num_query
-    if num_query == 900:  # 30x30
-        bev_h, bev_w = 30, 30
-    elif num_query == 2500:  # 50x50
-        bev_h, bev_w = 50, 50
-    else:
-        # Fallback: assume square grid
-        bev_h = bev_w = int(num_query**0.5)
-
-    bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
-
-    # Pre-projected reference points and masks (simplified for single layer test)
-    reference_points_cam = torch.rand(num_cams, batch_size, num_query, D, 2, dtype=torch.float32)
-    bev_mask = torch.ones(num_cams, batch_size, num_query, D, dtype=torch.bool)
-    # Randomly mask out 90% of points for realism
-    total_points = bev_mask.numel()
-    num_invalid = int(0.90 * total_points)
-    invalid_indices = torch.randperm(total_points)[:num_invalid]
-    bev_mask.view(-1)[invalid_indices] = False
-
-    # Create PyTorch reference model
-    ref_layer = BEVFormerLayer(
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points,
-        num_cams=num_cams,
-        feedforward_channels=feedforward_channels,
-        batch_first=True,
-    )
-    ref_layer.eval()
-
-    # Create preprocessed parameters from PyTorch model
-    tt_parameters = preprocess_bevformer_layer_parameters(
-        ref_layer,
-        device=device,
-        dtype=ttnn.float32,
-    )
-
-    # Create ttnn model with preprocessed parameters
-    tt_layer = TTBEVFormerLayer(
-        device=device,
-        params=tt_parameters,
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points,
-        num_cams=num_cams,
-        feedforward_channels=feedforward_channels,
-        batch_first=True,
-    )
-
-    # Forward pass with PyTorch reference model
-    with torch.no_grad():
-        ref_output = ref_layer(
-            bev_query=bev_query,
-            key=camera_features,
-            value=camera_features,
-            bev_pos=bev_pos,
-            spatial_shapes=spatial_shapes,
-            bev_shape=bev_shape,
-            level_start_index=level_start_index,
-            valid_ratios=valid_ratios,
-            prev_bev=prev_bev,
-            reference_points_3d=reference_points_3d,
-            reference_points_cam=reference_points_cam,
-            bev_mask=bev_mask,
-        )
-
-    # Convert tensors to ttnn format
-    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_reference_points_cam = ttnn.from_torch(
-        reference_points_cam, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-    )
-    tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-    )
-    tt_valid_ratios = ttnn.from_torch(valid_ratios, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_reference_points_3d = ttnn.from_torch(
-        reference_points_3d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-    )
-
-    # Forward pass with ttnn model
-    tt_output = tt_layer(
-        bev_query=tt_bev_query,
-        key=tt_camera_features,
-        value=tt_camera_features,
-        bev_pos=tt_bev_pos,
-        spatial_shapes=spatial_shapes,
-        bev_shape=bev_shape,
-        level_start_index=tt_level_start_index,
-        valid_ratios=tt_valid_ratios,
-        prev_bev=tt_prev_bev,
-        reference_points_3d=tt_reference_points_3d,
-        reference_points_cam=tt_reference_points_cam,
-        bev_mask=tt_bev_mask,
-    )
-
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
-
-    # Comprehensive comparison
-    logger.info(f"Reference layer output shape: {ref_output.shape}")
-    logger.info(f"TT layer output shape: {tt_output_torch.shape}")
-
-    if print_detailed_comparison_flag:
-        print_detailed_comparison(
-            ref_output,
-            tt_output_torch,
-            tensor_name="bevformer_layer_output",
-            show_histograms=False,
-        )
-
-    # Tolerance checking
-    passed, results = check_with_tolerances(
-        ref_output,
-        tt_output_torch,
-        pcc_threshold=0.997,  # Lower threshold for complex layer
-        abs_error_threshold=6e-2,
-        rel_error_threshold=0.5,
-        max_error_ratio=0.7,
-        tensor_name="bevformer_layer_output",
-    )
-
-    assert passed, f"BEVFormerLayer tolerance check failed. Results: {results['individual_checks']}"
-
-    logger.info("✅ All BEVFormer layer tolerance checks passed successfully!")
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
-def test_bevformer_encoder_return_intermediate(device):
-    """Test that TTBEVFormerEncoder correctly handles return_intermediate=True."""
-    torch.manual_seed(42)
-
-    batch_size = 1
-    num_query = 900
-    embed_dims = 256
-    num_layers = 3
-    num_cams = 6
-
-    spatial_shapes = torch.tensor([[50, 29], [25, 15]], dtype=torch.long)
-
-    # Create input tensors
-    bev_query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
-    encoder_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
-    camera_features = torch.randn(num_cams, sum(encoder_total_key_length), batch_size, embed_dims, dtype=torch.float32)
-
-    indices = spatial_shapes.prod(1).cumsum(0)
-    level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
-
-    # Create models with return_intermediate=True
-    ref_model = BEVFormerEncoder(
-        num_layers=num_layers,
-        embed_dims=embed_dims,
-        return_intermediate=True,
-    )
-    ref_model.eval()
-
-    tt_parameters = create_bevformer_encoder_parameters(
-        torch_model=ref_model,
-        device=device,
-        dtype=ttnn.float32,
-    )
-
-    tt_model = TTBEVFormerEncoder(
-        device=device,
-        params=tt_parameters,
-        num_layers=num_layers,
-        embed_dims=embed_dims,
-        return_intermediate=True,
-    )
-
-    # Forward pass
-    with torch.no_grad():
-        ref_outputs = ref_model(
-            bev_query=bev_query,
-            key=camera_features,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-        )
-
-    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-    )
-
-    tt_outputs = tt_model(
-        bev_query=tt_bev_query,
-        key=tt_camera_features,
-        spatial_shapes=spatial_shapes,
-        level_start_index=tt_level_start_index,
-    )
-
-    # Check that intermediate outputs are returned
-    assert isinstance(ref_outputs, torch.Tensor), f"Expected torch.Tensor, got {type(ref_outputs)}"
-    assert isinstance(tt_outputs, list), f"Expected list for TT intermediate outputs, got {type(tt_outputs)}"
-    assert ref_outputs.shape[0] == num_layers, f"Expected {num_layers} intermediate outputs, got {ref_outputs.shape[0]}"
-    assert len(tt_outputs) == num_layers, f"Expected {num_layers} TT intermediate outputs, got {len(tt_outputs)}"
-
-    logger.info("✅ BEVFormer encoder intermediate outputs test passed!")

@@ -15,6 +15,7 @@ Based on the reference PyTorch implementation but optimized for TTNN.
 import ttnn
 import torch
 import warnings
+from loguru import logger
 
 # Handle imports for both relative and absolute import contexts
 try:
@@ -124,8 +125,8 @@ class TTTemporalSelfAttention:
         Forward pass of TTNN Temporal Self Attention.
 
         Args:
-            query: Current BEV queries [B, num_query, embed_dims].
-            value: Temporal BEV features [B*num_bev_queue, num_query, embed_dims].
+            query: Current BEV queries [B, num_queries, embed_dims].
+            value: Temporal BEV features [B*num_bev_queue, num_queries, embed_dims].
                 If None, will be constructed from current query and prev_bev.
             identity: Identity connection input.
             query_pos: Query positional encoding.
@@ -133,26 +134,14 @@ class TTTemporalSelfAttention:
             reference_points: Reference points for deformable attention.
             spatial_shapes: Spatial shapes of BEV features.
             level_start_index: Start index of each level.
-            prev_bev: Previous BEV features [B, num_query, embed_dims].
+            prev_bev: Previous BEV features [B, num_queries, embed_dims].
             **kwargs: Additional arguments.
 
         Returns:
-            Output features [B, num_query, embed_dims].
+            Output features [B, num_queries, embed_dims].
         """
         if use_signpost:
             signpost(header="TTNN TSA Forward Start")
-
-        # Convert torch tensors to ttnn tensors if needed
-        if isinstance(query, torch.Tensor):
-            query = ttnn.from_torch(query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        if prev_bev is not None and isinstance(prev_bev, torch.Tensor):
-            prev_bev = ttnn.from_torch(prev_bev, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        if identity is not None and isinstance(identity, torch.Tensor):
-            identity = ttnn.from_torch(identity, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        if reference_points is not None and isinstance(reference_points, torch.Tensor):
-            reference_points = ttnn.from_torch(
-                reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
 
         # Create temporal value features exactly
         if value is None:
@@ -161,19 +150,19 @@ class TTTemporalSelfAttention:
         else:
             # Value already provided in the expected format
             if isinstance(value, torch.Tensor):
-                value = ttnn.from_torch(value, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                value = ttnn.from_torch(value, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
         # Handle defaults
         if identity is None:
-            identity = query
+            identity = ttnn.clone(query)
 
         # Add query positional encoding
         if query_pos is not None:
             if isinstance(query_pos, torch.Tensor):
-                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             query = ttnn.add(query, query_pos)
 
-        bs, num_query, _ = query.shape
+        bs, num_queries, _ = query.shape
 
         # Use reference points as-is for simplified version
         ref_points = reference_points
@@ -188,12 +177,10 @@ class TTTemporalSelfAttention:
                 level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
-        if use_signpost:
-            signpost(header="TSA Tensor Conversion Complete")
+        logger.info("TSA Tensor Conversion Complete")
 
         # Apply deformable attention with integrated temporal processing
-        if use_signpost:
-            signpost(header="TSA Calling Deformable Attention")
+        logger.info("TSA Calling Deformable Attention")
         output = self.deformable_attention(
             query=query,
             value=value,
@@ -208,8 +195,7 @@ class TTTemporalSelfAttention:
         if isinstance(output, torch.Tensor):
             output = ttnn.from_torch(output, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-        if use_signpost:
-            signpost(header="TSA Adding Residual")
+        logger.info("TSA Adding Residual")
 
         # Residual connection
         output = ttnn.add(output, identity)

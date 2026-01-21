@@ -169,7 +169,7 @@ class TTMSDeformableAttention:
 
         if use_signpost:
             signpost(
-                header=f"TT MS Deformable Attn Module Start, num of queries: {query.shape[1]}, num of keys: {spatial_shapes.prod(dim=1).sum()}"
+                header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {spatial_shapes.prod(dim=1).sum()}"
             )
 
         # Handle batch_first format
@@ -238,7 +238,7 @@ class TTMSDeformableAttention:
 
             # Convert spatial_shapes to ttnn for operations
             spatial_shapes_tt = ttnn.from_torch(
-                spatial_shapes, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+                spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
             # Create offset normalizer [num_levels, 2] with [width, height] order
@@ -247,7 +247,7 @@ class TTMSDeformableAttention:
             # Convert reference_points to ttnn if it's not already
             if not isinstance(reference_points, ttnn.Tensor):
                 reference_points = ttnn.from_torch(
-                    reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+                    reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 )
 
             # Expand offset_normalizer for broadcasting [None, :, None, :]

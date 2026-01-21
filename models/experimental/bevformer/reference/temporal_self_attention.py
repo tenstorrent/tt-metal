@@ -100,8 +100,8 @@ class TemporalSelfAttention(nn.Module):
         Forward pass of Temporal Self Attention.
 
         Args:
-            query (torch.Tensor): Current BEV queries [B, num_query, embed_dims].
-            value (torch.Tensor): Temporal BEV features [B, num_query, embed_dims].
+            query (torch.Tensor): Current BEV queries [B, num_queries, embed_dims].
+            value (torch.Tensor): Temporal BEV features [B, num_queries, embed_dims].
                 If None, will be constructed from current query and prev_bev.
             identity (torch.Tensor): Identity connection input.
             query_pos (torch.Tensor): Query positional encoding.
@@ -112,7 +112,7 @@ class TemporalSelfAttention(nn.Module):
             **kwargs: Additional arguments.
 
         Returns:
-            torch.Tensor: Output features [B, num_query, embed_dims].
+            torch.Tensor: Output features [B, num_queries, embed_dims].
         """
         if value is None:
             # For temporal self-attention, just use query as value (no temporal information)
@@ -125,7 +125,7 @@ class TemporalSelfAttention(nn.Module):
         if query_pos is not None:
             query = query + query_pos
 
-        bs, num_query, _ = query.shape
+        bs, num_queries, _ = query.shape
 
         # Use reference points as-is for simplified version
         ref_points = reference_points

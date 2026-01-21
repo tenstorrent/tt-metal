@@ -11,6 +11,10 @@ from models.experimental.bevformer.reference.ms_deformable_attention import MSDe
 
 from models.experimental.bevformer.config import DeformableAttentionConfig
 
+from models.experimental.bevformer.config.encoder_config import (
+    get_preset_config,
+)
+
 from models.experimental.bevformer.tests.test_utils import (
     check_with_tolerances,
 )
@@ -21,50 +25,66 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
-from models.experimental.bevformer.tests.test_configs.ms_deformable_attention_test_config import (
-    MODEL_PARAMS,
-    SPATIAL_SHAPES,
-    MODEL_PARAM_NAMES,
-    SPATIAL_SHAPES_PARAM_NAME,
-    DEFAULT_THRESHOLDS,
+
+@pytest.mark.parametrize(
+    "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
+    [
+        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.38, 0.36),  # NuScenes tiny model
+        ("nuscenes_base", 1, 10000, 0.999, 0.02, 0.21, 0.23),  # NuScenes base model with larger queries
+        ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
+    ],
 )
-
-
-@pytest.mark.parametrize(MODEL_PARAM_NAMES, MODEL_PARAMS)
-@pytest.mark.parametrize(SPATIAL_SHAPES_PARAM_NAME, SPATIAL_SHAPES)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_ms_deformable_attention_forward(
     device,
+    config_name,
     batch_size,
-    num_query,
-    embed_dims,
-    num_levels,
-    num_points_per_anchor,
-    num_anchors,
-    num_heads,
-    spatial_shapes,
+    num_queries,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
     seed,
 ):
+    """Test TTMSDeformableAttention against PyTorch reference implementation using configurations."""
     print_detailed_comparison = False
     torch.manual_seed(seed)
 
-    spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
+    # Get configuration from preset
+    preset_config = get_preset_config(config_name)
+    if preset_config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = preset_config.dataset_config
+    model_config = preset_config.model_config
+
+    # Extract parameters from configs
+    embed_dims = model_config.embed_dims
+    num_heads = model_config.num_heads
+    num_levels = model_config.num_levels
+    num_points = model_config.num_points
+
+    # Use spatial shapes from dataset config (limited to num_levels)
+    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
-    query = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
+    # Create input tensors
+    query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
 
-    reference_points = torch.rand(batch_size, num_query, num_levels, 2, dtype=torch.float32)
+    reference_points = torch.rand(batch_size, num_queries, num_levels, 2, dtype=torch.float32)
 
     indices = spatial_shapes.prod(1).cumsum(0)
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
+    # Create DeformableAttentionConfig from extracted parameters
     config = DeformableAttentionConfig(
         embed_dims=embed_dims,
         num_heads=num_heads,
         num_levels=num_levels,
-        num_points=num_points_per_anchor * num_anchors,
+        num_points=num_points,
     )
 
     # Create PyTorch reference model
@@ -122,8 +142,11 @@ def test_ms_deformable_attention_forward(
     passed, results = check_with_tolerances(
         ref_model_output,
         tt_model_output,
+        pcc_threshold=expected_pcc,
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="ms_deformable_attention_output",
-        **DEFAULT_THRESHOLDS,
     )
 
     # Assert that the comprehensive check passes
