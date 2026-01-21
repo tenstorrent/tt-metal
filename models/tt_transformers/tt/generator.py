@@ -282,7 +282,7 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        # self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -298,6 +298,7 @@ class Generator:
         local_batch_size = getattr(self.model_args[0], "max_local_batch_size", max_batch_size_per_model)
 
         out_list = []
+        self.model[0].prefill_user_id = 0
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup

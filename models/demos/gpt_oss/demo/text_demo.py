@@ -232,15 +232,17 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
         ),
         (
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             1,  # data_parallel
             128,  # batch_size
             1,  # repeat_batches
-            8 * 1024,  # max_seq_len
+            # 8 * 1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            True,  # enable_decode_trace
+            False,  # enable_decode_trace
             False,  # enable_prefill_trace
             True,  # users_row_sharded
             False,  # long_context_mode
@@ -454,6 +456,7 @@ def test_gpt_oss_demo(
         logger.info(f"Row-sharded mode: randomized {num_prompts} prompts per row (seed=42)")
     else:
         input_prompts = real_prompts
+    input_prompts = [input_prompts[0]] * global_batch_size  # Use only the first prompt for all users
 
     profiler.end("loading_inputs")
 
@@ -566,17 +569,17 @@ def test_gpt_oss_demo(
             logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
         else:
             # Standard batch prefill (matching tt_transformers)
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+            # logger.info("Starting prefill warmup...")
+            # profiler.start(f"compile_prefill", iteration=batch_idx)
+            # logits = generator.prefill_forward_text(
+            #     input_tokens_prefill_pt,
+            #     page_table=page_table,
+            #     kv_cache=tt_kv_cache,
+            #     prompt_lens=decoding_pos,
+            #     enable_trace=enable_prefill_trace,
+            # )
+            # profiler.end(f"compile_prefill", iteration=batch_idx)
+            # logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)

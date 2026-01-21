@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -29,6 +31,8 @@ def prefill_forward(
     page_table,
     ccl_manager,
     user_id=0,
+    debug_user_id=None,
+    debug_layer_id=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -100,6 +104,23 @@ def prefill_forward(
         ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
         ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
+    if debug_layer_id == 0:
+        if debug_user_id == 0 or debug_user_id == 2 or debug_user_id == 96:
+            suffix = f"user_id{debug_user_id}"
+            torch.save(
+                ttnn.to_torch(
+                    k_cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape),
+                ),
+                f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_k_cache_{suffix}.pt",
+            )
+            torch.save(
+                ttnn.to_torch(
+                    v_cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape),
+                ),
+                f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_v_cache_{suffix}.pt",
+            )
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,

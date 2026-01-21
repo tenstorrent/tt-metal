@@ -180,6 +180,7 @@ class Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
+        self.prefill_user_id = 0
 
     @classmethod
     def create_transformer_compatible(
@@ -260,6 +261,7 @@ class Model:
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
                 user_id=user_id,
+                debug_user_id=self.prefill_user_id,
             )
         logits = hidden_states
 
@@ -355,6 +357,7 @@ class Model:
             is_decode=False,
             user_id=user_id,
         )
+        self.prefill_user_id += 1
 
         return logits
 
@@ -486,7 +489,29 @@ class Model:
         tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
+            if self.prefill_user_id in self.layers[0].users_to_save:
+                suffix = f"user_id{self.prefill_user_id}"
+                torch.save(
+                    ttnn.to_torch(
+                        tokens,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            self.mesh_device, dims=(0, 1), mesh_shape=self.mesh_device.shape
+                        ),
+                    )[0, 0, :, :],
+                    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_pre_embed_{suffix}.pt",
+                )
             tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            if self.prefill_user_id in self.layers[0].users_to_save:
+                suffix = f"user_id{self.prefill_user_id}"
+                torch.save(
+                    ttnn.to_torch(
+                        tokens_embd,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            self.mesh_device, dims=(0, 1), mesh_shape=self.mesh_device.shape
+                        ),
+                    )[0, :128, :],
+                    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_post_embed_{suffix}.pt",
+                )
             tokens.deallocate(True)
 
             # Ensure proper 4D shape

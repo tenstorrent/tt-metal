@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -22,6 +24,8 @@ def decode_forward(
     position_idx,
     page_table,
     ccl_manager,
+    debug_layer_id=None,
+    debug_decode_iter=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -56,6 +60,14 @@ def decode_forward(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                xqkv_fused,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_pre_create_qkv_heads_iter{debug_decode_iter}.pt",
+        )
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -68,6 +80,25 @@ def decode_forward(
         num_kv_heads=num_local_kv_heads,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                tt_q, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_post_create_qkv_heads_q_iter{debug_decode_iter}.pt",
+        )
+        torch.save(
+            ttnn.to_torch(
+                tt_k, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_post_create_qkv_heads_k_iter{debug_decode_iter}.pt",
+        )
+        torch.save(
+            ttnn.to_torch(
+                tt_v, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_post_create_qkv_heads_v_iter{debug_decode_iter}.pt",
+        )
 
     xqkv_fused.deallocate(True)
 
@@ -117,6 +148,32 @@ def decode_forward(
         use_height_and_width_as_shard_shape=True,
     )
     # Scaled dot-product attention
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                tt_q, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_pre_sdpa_iter{debug_decode_iter}.pt",
+        )
+        torch.save(
+            ttnn.to_torch(
+                k_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_k_cache_iter{debug_decode_iter}.pt",
+        )
+        torch.save(
+            ttnn.to_torch(
+                v_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_v_cache_iter{debug_decode_iter}.pt",
+        )
+        torch.save(
+            ttnn.to_torch(
+                page_table,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape),
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_page_table_iter{debug_decode_iter}.pt",
+        )
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
@@ -148,10 +205,27 @@ def decode_forward(
         )
     tt_q.deallocate(True)
 
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                tt_sdpa_tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=mesh_device.shape),
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_post_sdpa_iter{debug_decode_iter}.pt",
+        )
+
     # Concat heads and apply output projection
 
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                tt_sdpa_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_post_nlpconcat_iter{debug_decode_iter}.pt",
+        )
 
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
@@ -169,6 +243,14 @@ def decode_forward(
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
+    if debug_layer_id == 0 and debug_decode_iter < 10:
+        torch.save(
+            ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            ),
+            f"gpt-oss-bad-outputs-debug/intermediate_tensors/decode_pre_attention_allreduce_iter{debug_decode_iter}.pt",
+        )
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out

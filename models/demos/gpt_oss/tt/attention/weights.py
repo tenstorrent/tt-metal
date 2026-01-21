@@ -124,10 +124,15 @@ def load_attention_weights(
     # HF GPT-OSS behavior is: QK logits are scaled, sinks are NOT additionally scaled.
     # To match HF, we provide sinks in "pre-divided" form: sink_input = sink / scale,
     # so that the kernel's internal multiplication by `scale` yields the original sink values.
+    #
+    # IMPORTANT: Padding with -inf instead of 0 to ensure the max_block operation in
+    # the SDPA decode kernel is not affected by stale L1 values or padding. The
+    # kernel computes max(attention_sink, prev_max) and having -inf in columns 1-31
+    # ensures those positions don't affect the max computation.
     sinks = state_dict["sinks"].reshape(1, config.num_heads, 1, 1)
     sinks_for_sdpa = sinks / config.scaling
     decode_sinks = torch.nn.functional.pad(
-        sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
+        sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=float("-inf")
     )
     decode_sinks /= config.scaling
 
