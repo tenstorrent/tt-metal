@@ -32,6 +32,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -93,6 +94,46 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
         torus_topology_to_fabric_config_map;
 
 public:
+    bool validate_device_frequencies_for_performance_tests() {
+        // Skip if already validated - device frequencies are cached for the lifetime of the fixture
+        if (frequency_validated_) {
+            return true;
+        }
+
+        uint32_t expected_freq = get_expected_baseline_frequency_mhz();
+        uint32_t tolerance = get_frequency_tolerance_mhz();
+
+        std::vector<std::pair<FabricNodeId, uint32_t>> failed_devices;
+        for (const auto& device_id : get_global_node_ids()) {
+            uint32_t actual_freq = get_device_frequency_mhz(device_id);
+            int32_t diff = static_cast<int32_t>(actual_freq) - static_cast<int32_t>(expected_freq);
+            if (std::abs(diff) > static_cast<int32_t>(tolerance)) {
+                failed_devices.emplace_back(device_id, actual_freq);
+            }
+        }
+
+        if (!failed_devices.empty()) {
+            log_error(tt::LogTest, "=== DEVICE FREQUENCY VALIDATION FAILED ===");
+            log_error(tt::LogTest, "Cannot run performance benchmarks - frequency mismatch detected");
+            log_error(tt::LogTest, "Expected: {}MHz ± {}MHz", expected_freq, tolerance);
+            log_error(tt::LogTest, "Failed devices ({} total):", failed_devices.size());
+            for (const auto& [dev_id, actual] : failed_devices) {
+                int32_t diff = static_cast<int32_t>(actual) - static_cast<int32_t>(expected_freq);
+                log_error(tt::LogTest, "  Device {}: {}MHz (diff: {:+}MHz)", dev_id, actual, diff);
+            }
+            return false;
+        }
+
+        log_info(
+            tt::LogTest,
+            "Device frequency validation passed: {} devices at {}MHz ± {}MHz",
+            get_global_node_ids().size(),
+            expected_freq,
+            tolerance);
+        frequency_validated_ = true;
+        return true;
+    }
+
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
         if (physical_mesh_config.has_value()) {
             initialize_and_validate_custom_physical_config(physical_mesh_config.value());
@@ -154,13 +195,14 @@ public:
         }
 
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
-            reliability_mode != current_fabric_reliability_mode_) {
+            reliability_mode != current_fabric_reliability_mode_ ||
+            fabric_setup.max_packet_size != current_max_packet_size_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
-            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
 
             topology_ = topology;
         } else {
@@ -206,6 +248,7 @@ public:
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
         current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        current_max_packet_size_ = std::nullopt;
         are_devices_open_ = false;
     }
 
@@ -485,7 +528,7 @@ public:
         uint32_t size_bytes,
         bool blocking,
         std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
@@ -515,7 +558,7 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         const std::vector<uint8_t>& data) const {
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 
@@ -826,7 +869,7 @@ public:
     }
 
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
-        const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
+        const FabricNodeId& src_node, const std::vector<FabricNodeId>& /*devices*/) const override {
         // Get mesh dimensions
         uint32_t mesh_height = mesh_shape_[NS_DIM];
         uint32_t mesh_width = mesh_shape_[EW_DIM];
@@ -1550,6 +1593,26 @@ public:
     }
 
 private:
+    // Helper methods for device frequency validation (performance testing)
+    static uint32_t get_expected_baseline_frequency_mhz() {
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0: return 1000;
+            case tt::ARCH::BLACKHOLE: return 1350;
+            default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
+        }
+    }
+
+    static uint32_t get_frequency_tolerance_mhz() {
+        // Note: these tolerances are initally set as placeholders and should be calibrated based on empirical data
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0: return 10;
+            case tt::ARCH::BLACKHOLE: return 20;
+            default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
+        }
+    }
+
     Topology topology_{0};
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
@@ -1559,6 +1622,7 @@ private:
     tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
     tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
+    std::optional<uint32_t> current_max_packet_size_{std::nullopt};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1567,9 +1631,12 @@ private:
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
+    mutable bool frequency_validated_ = false;
 
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
-        const auto local_mesh_id = MeshId{std::stoi(std::getenv("TT_MESH_ID"))};
+        const char* mesh_id_str = std::getenv("TT_MESH_ID");
+        TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set");
+        const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
         const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
@@ -1603,9 +1670,23 @@ private:
     void open_devices_internal(
         tt::tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt_fabric::FabricReliabilityMode reliability_mode) {
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        const TestFabricSetup& fabric_setup) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
+        // Create FabricRouterConfig if max_packet_size is specified
+        tt::tt_fabric::FabricRouterConfig router_config{};
+        if (fabric_setup.max_packet_size.has_value()) {
+            router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
+        }
+
+        tt::tt_fabric::SetFabricConfig(
+            fabric_config,
+            reliability_mode,
+            std::nullopt,
+            fabric_tensix_config,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            router_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
@@ -1650,6 +1731,7 @@ private:
         current_fabric_config_ = fabric_config;
         current_fabric_tensix_config_ = fabric_tensix_config;
         current_fabric_reliability_mode_ = reliability_mode;
+        current_max_packet_size_ = fabric_setup.max_packet_size;
         are_devices_open_ = true;
     }
 

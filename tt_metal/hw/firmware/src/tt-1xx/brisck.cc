@@ -22,6 +22,9 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
 #endif
+#ifdef UDM_MODE
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#endif
 
 namespace ckernel {
 // Transition shim
@@ -63,6 +66,9 @@ uint32_t _start() {
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
     }
+#ifdef UDM_MODE
+    tt::tt_fabric::udm::fabric_local_state_init();
+#endif
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif

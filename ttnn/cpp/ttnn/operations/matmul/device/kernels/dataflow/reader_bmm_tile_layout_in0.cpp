@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "pad_tile.hpp"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     // RUNTIME ARGS

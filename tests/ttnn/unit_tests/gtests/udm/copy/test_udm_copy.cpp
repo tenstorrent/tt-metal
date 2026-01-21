@@ -170,7 +170,6 @@ inline void validate(
 void run_udm_copy_test(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::Shape& global_shape,
-    const tt::tt_metal::Shape& local_shape,
     const ShardStrategy& shard_strategy,
     const ShardOrder& shard_order = ShardOrder::NORMAL) {
     // Create tensors based on sharding strategy
@@ -247,7 +246,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy2D_Small) {
     tt::tt_metal::Shape global_shape({128, 512});  // (4, 16) tiles in element count
     tt::tt_metal::Shape local_shape({128, 128});   // (4, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy2D_Large) {
@@ -255,7 +254,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy2D_Large) {
     tt::tt_metal::Shape global_shape({1024, 2048});  // (32, 64) tiles in element count
     tt::tt_metal::Shape local_shape({1024, 512});    // (32, 16) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy3D) {
@@ -264,7 +263,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 512, 8192});  // (2, 16, 256) tiles
     tt::tt_metal::Shape local_shape({2, 512, 2048});   // (2, 16, 64) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH);
 }
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy4D) {
@@ -273,7 +272,7 @@ TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestMeshWidthShardedCopy4D) {
     tt::tt_metal::Shape global_shape({2, 4, 256, 8192});  // (2, 4, 8, 256) tiles
     tt::tt_metal::Shape local_shape({2, 4, 256, 2048});   // (2, 4, 8, 64) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH);
 }
 
 // ============================================================================
@@ -289,7 +288,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy2D_Small) {
     tt::tt_metal::Shape global_shape({256, 512});  // (8, 16) tiles
     tt::tt_metal::Shape local_shape({128, 128});   // (4, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy2D_Large) {
@@ -299,7 +298,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy2D_Large) {
     tt::tt_metal::Shape global_shape({2048, 4096});  // (64, 128) tiles
     tt::tt_metal::Shape local_shape({1024, 1024});   // (32, 32) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy3D) {
@@ -309,7 +308,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 512, 1024});  // (2, 16, 32) tiles
     tt::tt_metal::Shape local_shape({2, 256, 256});    // (2, 8, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy4D) {
@@ -319,7 +318,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedCopy4D) {
     tt::tt_metal::Shape global_shape({2, 4, 512, 1024});  // (2, 4, 16, 32) tiles
     tt::tt_metal::Shape local_shape({2, 4, 256, 256});    // (2, 4, 8, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK);
 }
 
 // ============================================================================
@@ -335,7 +334,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy2D_Small)
     tt::tt_metal::Shape global_shape({512, 256});  // (16, 8) tiles
     tt::tt_metal::Shape local_shape({128, 128});   // (4, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy2D_Large) {
@@ -345,7 +344,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy2D_Large)
     tt::tt_metal::Shape global_shape({4096, 2048});  // (128, 64) tiles
     tt::tt_metal::Shape local_shape({1024, 1024});   // (32, 32) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy3D) {
@@ -355,7 +354,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 1024, 512});  // (2, 32, 16) tiles
     tt::tt_metal::Shape local_shape({2, 256, 256});    // (2, 8, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy4D) {
@@ -365,7 +364,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshBlockShardedSwappedCopy4D) {
     tt::tt_metal::Shape global_shape({2, 4, 1024, 512});  // (2, 4, 32, 16) tiles
     tt::tt_metal::Shape local_shape({2, 4, 256, 256});    // (2, 4, 8, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::BLOCK, ShardOrder::SWAPPED);
 }
 
 // ============================================================================
@@ -380,7 +379,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedCopy2D) {
     tt::tt_metal::Shape global_shape({256, 512});  // (8, 16) tiles
     tt::tt_metal::Shape local_shape({128, 512});   // (4, 16) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::HEIGHT, ShardOrder::NORMAL);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::HEIGHT, ShardOrder::NORMAL);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedCopy3D) {
@@ -390,7 +389,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 256, 512});  // (2, 8, 16) tiles
     tt::tt_metal::Shape local_shape({2, 128, 512});   // (2, 4, 16) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::HEIGHT, ShardOrder::NORMAL);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::HEIGHT, ShardOrder::NORMAL);
 }
 
 // ============================================================================
@@ -405,7 +404,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedSwappedCopy2D) {
     tt::tt_metal::Shape global_shape({512, 256});  // (16, 8) tiles
     tt::tt_metal::Shape local_shape({128, 256});   // (4, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::HEIGHT, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::HEIGHT, ShardOrder::SWAPPED);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedSwappedCopy3D) {
@@ -415,7 +414,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshHeightShardedSwappedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 512, 256});  // (2, 16, 8) tiles
     tt::tt_metal::Shape local_shape({2, 128, 256});   // (2, 4, 8) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::HEIGHT, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::HEIGHT, ShardOrder::SWAPPED);
 }
 
 // ============================================================================
@@ -430,7 +429,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthSharded2DCopy2D) {
     tt::tt_metal::Shape global_shape({256, 512});  // (8, 16) tiles
     tt::tt_metal::Shape local_shape({256, 128});   // (8, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH, ShardOrder::NORMAL);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH, ShardOrder::NORMAL);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthSharded2DCopy3D) {
@@ -440,7 +439,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthSharded2DCopy3D) {
     tt::tt_metal::Shape global_shape({2, 256, 512});  // (2, 8, 16) tiles
     tt::tt_metal::Shape local_shape({2, 256, 128});   // (2, 8, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH, ShardOrder::NORMAL);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH, ShardOrder::NORMAL);
 }
 
 // ============================================================================
@@ -455,7 +454,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthShardedSwappedCopy2D) {
     tt::tt_metal::Shape global_shape({512, 256});  // (16, 8) tiles
     tt::tt_metal::Shape local_shape({512, 128});   // (16, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH, ShardOrder::SWAPPED);
 }
 
 TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthShardedSwappedCopy3D) {
@@ -465,7 +464,7 @@ TEST_F(MeshDevice2x4Fabric2DUDMFixture, TestMeshWidthShardedSwappedCopy3D) {
     tt::tt_metal::Shape global_shape({2, 512, 256});  // (2, 16, 8) tiles
     tt::tt_metal::Shape local_shape({2, 512, 128});   // (2, 16, 4) tiles per device
 
-    run_udm_copy_test(mesh_device_.get(), global_shape, local_shape, ShardStrategy::WIDTH, ShardOrder::SWAPPED);
+    run_udm_copy_test(mesh_device_.get(), global_shape, ShardStrategy::WIDTH, ShardOrder::SWAPPED);
 }
 
 }  // namespace tt::tt_metal::experimental::udm_tests

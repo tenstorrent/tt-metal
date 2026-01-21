@@ -4,10 +4,11 @@
 
 #include "sort_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::sort {
+namespace ttnn::prim {
 
 constexpr uint32_t WT_THRESHOLD = 64;
 
@@ -27,24 +28,24 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const auto index_dtype = output_specs[1].data_type();
 
     const uint32_t total_number_of_tiles_for_hybrid_approach =
-        total_number_of_cores * program::SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
-                                    total_number_of_cores,
-                                    Wt,
-                                    input_dtype,
-                                    index_dtype,
-                                    program::SortProgramFactoryCrossCoreDataExchange::
-                                        CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
+        total_number_of_cores *
+        SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
+            total_number_of_cores,
+            Wt,
+            input_dtype,
+            index_dtype,
+            SortProgramFactoryCrossCoreDataExchange::CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
     if (Wt <= WT_THRESHOLD) {
         // Single-core implementation
-        return program::SortProgramFactorySingleRowSingleCore{};
+        return SortProgramFactorySingleRowSingleCore{};
     }
     if (Wt <= total_number_of_tiles_for_hybrid_approach) {
         // Hybrid implementation
-        return program::SortProgramFactoryCrossCoreDataExchange{};
+        return SortProgramFactoryCrossCoreDataExchange{};
     }
     // DRAM implementation
-    return program::SortProgramFactorySingleRowMultiCore{};
+    return SortProgramFactorySingleRowMultiCore{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(
@@ -148,17 +149,17 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
         create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),  // Index tensor
     };
 }
-}  // namespace ttnn::operations::data_movement::sort
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::sort::SortDeviceOperation::tensor_return_value_t sort(
+ttnn::prim::SortDeviceOperation::tensor_return_value_t sort(
     const Tensor& input_tensor,
     int8_t dim,
     bool descending,
     bool stable,
     const MemoryConfig& output_memory_config,
     const std::vector<std::optional<Tensor>>& output_tensors) {
-    using OperationType = ttnn::operations::data_movement::sort::SortDeviceOperation;
+    using OperationType = ttnn::prim::SortDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, descending, stable, output_memory_config},
         OperationType::tensor_args_t{input_tensor, output_tensors});

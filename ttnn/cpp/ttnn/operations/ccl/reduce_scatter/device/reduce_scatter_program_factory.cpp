@@ -15,14 +15,10 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 
 // Import functions from the new namespace
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-    build_line_reduce_scatter_minimal_async_program_artifacts;
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-    build_ring_reduce_scatter_minimal_async_program_artifacts;
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-    line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-    ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -73,7 +69,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     tt::tt_metal::Program program{};

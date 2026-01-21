@@ -17,17 +17,16 @@
 #include "scatter_program_factory.hpp"
 #include "scatter_reduce_bfloat16_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::scatter {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
 struct ScatterDeviceOperation {
-    using operation_attributes_t = scatter::operation_attributes_t;
-    using tensor_args_t = scatter::tensor_args_t;
-    using spec_return_value_t = scatter::spec_return_value_t;
-    using tensor_return_value_t = scatter::tensor_return_value_t;
-    using program_factory_t =
-        std::variant<scatter::ScatterProgramFactory, scatter::ScatterReduceBfloat16ProgramFactory>;
+    using operation_attributes_t = ScatterParams;
+    using tensor_args_t = ScatterInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<ScatterProgramFactory, ScatterReduceBfloat16ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -41,7 +40,7 @@ struct ScatterDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 ttnn::Tensor scatter(

@@ -155,7 +155,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType math_op,
+    ttnn::operations::reduction::ReduceType /*math_op*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
@@ -262,7 +262,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType math_op,
+    ttnn::operations::reduction::ReduceType /*math_op*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
@@ -403,7 +403,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     uint32_t cluster_axis,
     ttnn::operations::reduction::ReduceType math_op,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& /*memory_config*/,
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
     auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);

@@ -112,7 +112,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 
 template <typename T>
 bool l1_buffer_read(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     const L1Config<T>& test_config,
     const auto& write_info) {
     auto buffer = write_info.first;

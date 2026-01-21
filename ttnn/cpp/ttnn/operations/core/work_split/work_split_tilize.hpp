@@ -324,12 +324,12 @@ struct BlockRep {
 
     BlockRep(uint32_t n_data, uint32_t n_mixed, uint32_t n_pads, uint32_t times) :
         n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times) {
-        if (n_data == 0 && n_mixed == 0) {
-            n_pads *= times;
-            times = 1;
-        } else if (n_pads == 0 && n_mixed == 0) {
-            n_data *= times;
-            times = 1;
+        if (this->n_data == 0 && this->n_mixed == 0) {
+            this->n_pads *= this->times;
+            this->times = 1;
+        } else if (this->n_pads == 0 && this->n_mixed == 0) {
+            this->n_data *= this->times;
+            this->times = 1;
         }
     }
 
