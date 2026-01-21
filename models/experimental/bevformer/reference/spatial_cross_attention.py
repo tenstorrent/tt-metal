@@ -96,42 +96,46 @@ class SpatialCrossAttention(nn.Module):
         Forward pass of Spatial Cross Attention.
 
         Args:
-            query (torch.Tensor): BEV queries [B, num_query, embed_dims].
+            query (torch.Tensor): BEV queries [B, num_queries, embed_dims].
             key (torch.Tensor): Multi-camera features [num_cams, H*W, B, embed_dims].
             value (torch.Tensor): Same as key.
             residual (torch.Tensor): Residual connection input.
             query_pos (torch.Tensor): Query positional encoding.
             key_padding_mask (torch.Tensor): Key padding mask.
-            reference_points_cam (torch.Tensor): Camera projected reference points [num_cams, B, num_query, num_points_in_pillar, 2].
-            bev_mask (torch.Tensor): Valid mask for camera projections [num_cams, B, num_query, num_points_in_pillar].
+            reference_points_cam (torch.Tensor): Camera projected reference points [num_cams, B, num_queries, num_points_in_pillar, 2].
+            bev_mask (torch.Tensor): Valid mask for camera projections [num_cams, B, num_queries, num_points_in_pillar].
             spatial_shapes (torch.Tensor): Spatial shapes of multi-scale features.
             level_start_index (torch.Tensor): Start index of each level.
             **kwargs: Additional arguments.
 
         Returns:
-            torch.Tensor: Output features [B, num_query, embed_dims].
+            torch.Tensor: Output features [B, num_queries, embed_dims].
         """
+        reference_points_cam = reference_points_cam.clamp(-10.0, 10.0)
+        # Handle input defaults
         if key is None:
-            key = query
+            key = query.clone()
         if value is None:
-            value = key
+            value = key.clone()
         if residual is None:
-            inp_residual = query
+            inp_residual = query.clone()
         else:
-            inp_residual = residual
+            inp_residual = residual.clone()
 
+        # Add query positional encoding
         if query_pos is not None:
             query = query + query_pos
 
-        bs, num_query, _ = query.shape
-
-        num_points_in_pillar = reference_points_cam.size(3)
+        bs, num_queries, _ = query.shape
+        # Extract number of depth levels for 3D point sampling
+        # Each BEV query samples points at multiple Z-coordinates (depth levels) in 3D space
+        num_depth_levels = reference_points_cam.size(3)
 
         # Find valid queries for each camera
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
             # Sum over depth levels dimension and check if any point is valid
-            index_query_per_img = mask_per_img.sum(-1) > 0  # [B, num_query]
+            index_query_per_img = mask_per_img.sum(-1) > 0  # [B, num_queries]
             indexes.append(index_query_per_img)
 
         max_len = max([index.sum().max().item() for index in indexes])
@@ -144,7 +148,7 @@ class SpatialCrossAttention(nn.Module):
 
         # Rebatch queries and reference points for each camera
         queries_rebatch = query.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, num_points_in_pillar, 2])
+        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, num_depth_levels, 2])
 
         # Fill rebatched tensors with valid queries
         for j in range(bs):
@@ -165,7 +169,7 @@ class SpatialCrossAttention(nn.Module):
         queries_batched = queries_rebatch.view(bs * self.num_cams, max_len, self.embed_dims)
 
         # [bs, num_cams, max_len, num_points_in_pillar, 2] -> [bs * num_cams, max_len, num_points_in_pillar, 2]
-        reference_points_batched = reference_points_rebatch.view(bs * self.num_cams, max_len, num_points_in_pillar, 2)
+        reference_points_batched = reference_points_rebatch.view(bs * self.num_cams, max_len, num_depth_levels, 2)
 
         # Apply deformable attention with 3D reference points (matching original BEVFormer)
         queries = self.deformable_attention(
@@ -191,8 +195,8 @@ class SpatialCrossAttention(nn.Module):
 
         # Count valid queries per camera
         # Original: count = bev_mask.sum(-1) > 0; count = count.permute(1, 2, 0).sum(-1)
-        count = bev_mask.sum(-1) > 0  # [num_cams, B, num_query]
-        count = count.permute(1, 2, 0).sum(-1)  # [B, num_query]
+        count = bev_mask.sum(-1) > 0  # [num_cams, B, num_queries]
+        count = count.permute(1, 2, 0).sum(-1)  # [B, num_queries]
         count = torch.clamp(count, min=1.0)
         slots = slots / count[..., None]
 

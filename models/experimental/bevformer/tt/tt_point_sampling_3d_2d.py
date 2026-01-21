@@ -152,7 +152,7 @@ def point_sampling_3d_to_2d_ttnn(
     reference_points_y = ttnn.add(ttnn.mul(reference_points_y, y_max - y_min), y_min)
     reference_points_z = ttnn.add(ttnn.mul(reference_points_z, z_max - z_min), z_min)
 
-    ones = ttnn.ones_like(reference_points_x, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    ones = ttnn.ones_like(reference_points_x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     reference_points = ttnn.concat([reference_points_x, reference_points_y, reference_points_z, ones], dim=-1)
     reference_points = ttnn.permute(reference_points, (0, 2, 1, 3))  # [bs, num_points, num_queries, 4]
 
@@ -164,7 +164,7 @@ def point_sampling_3d_to_2d_ttnn(
     for cam_idx in range(num_cams):
         if use_signpost:
             signpost(header=f"Point Sampling Camera {cam_idx}")
-        cam_lidar2img = lidar2img[:, cam_idx, :, :]  # [4, 4] for current camera
+        cam_lidar2img = lidar2img[:, cam_idx, :, :]  # [B, 4, 4] for current camera
         ref_points_flat = ttnn.reshape(reference_points, (batch_size, num_points * num_queries, 4))  # [B, D*Q, 4]
 
         # [B, D*Q, 4] @ [B, 4, 4]
@@ -184,7 +184,7 @@ def point_sampling_3d_to_2d_ttnn(
     bev_mask = depth > eps
 
     depth_safe = ttnn.maximum(
-        depth, ttnn.mul(ttnn.ones_like(depth, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), eps)
+        depth, ttnn.mul(ttnn.ones_like(depth, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), eps)
     )
     reference_points_cam_xy = ttnn.div(reference_points_cam[..., 0:2], depth_safe)
 
@@ -207,9 +207,14 @@ def point_sampling_3d_to_2d_ttnn(
 
     if use_signpost:
         signpost(header="Point Sampling Boundary Validation")
-
-    valid_x = ttnn.logical_and((reference_points_cam[..., 0:1] >= 0.0), (reference_points_cam[..., 0:1] <= 1.0))
-    valid_y = ttnn.logical_and((reference_points_cam[..., 1:2] >= 0.0), (reference_points_cam[..., 1:2] <= 1.0))
+    # Clamp to [-10, 10] and create validity masks
+    reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
+    valid_x = ttnn.logical_and(
+        (reference_points_cam_clamped[..., 0:1] >= 0.0), (reference_points_cam_clamped[..., 0:1] <= 1.0)
+    )
+    valid_y = ttnn.logical_and(
+        (reference_points_cam_clamped[..., 1:2] >= 0.0), (reference_points_cam_clamped[..., 1:2] <= 1.0)
+    )
     valid_bounds = ttnn.logical_and(valid_x, valid_y)
 
     bev_mask = ttnn.logical_and(bev_mask, valid_x)

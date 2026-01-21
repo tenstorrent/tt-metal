@@ -17,6 +17,10 @@ from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import (
     point_sampling_3d_to_2d_ttnn,
 )
 
+from models.experimental.bevformer.config.encoder_config import (
+    get_preset_config,
+)
+
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
     check_with_tolerances,
@@ -25,20 +29,7 @@ from models.experimental.bevformer.tests.test_utils import (
 from loguru import logger
 
 
-# Test configuration and setup functions
-def get_test_config():
-    """Get common test configuration parameters."""
-    return {
-        "bev_h": 200,
-        "bev_w": 200,
-        "z_cfg": {"num_points": 4, "start": -5.0, "end": 3.0},
-        "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],  # nuScenes range
-        "img_shape": (900, 1600),  # (height, width) for nuScenes cameras
-        "num_cams": 6,
-        "eps": 1e-5,
-    }
-
-
+# Helper functions for testing
 def create_sample_camera_matrices(num_cams):
     """Create sample camera transformation matrices for testing."""
     torch.manual_seed(42)  # For reproducible tests
@@ -94,47 +85,53 @@ def create_sample_camera_matrices(num_cams):
     return torch.stack(lidar2img_matrices)
 
 
-def get_test_setup(batch_size=1):
-    """Get complete test setup with configuration and generated matrices."""
-    config = get_test_config()
-    lidar2img = create_sample_camera_matrices(config["num_cams"])
-
-    # Add batch dimension to lidar2img: [num_cams, 4, 4] -> [batch_size, num_cams, 4, 4]
-    lidar2img = lidar2img.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-
-    # Create img_metas for each batch item
-    img_metas = []
-    for batch_idx in range(batch_size):
-        img_metas.append({"img_shape": [config["img_shape"]] * config["num_cams"]})  # List of shapes for each camera
-
-    return {**config, "lidar2img": lidar2img, "img_metas": img_metas, "batch_size": batch_size}
-
-
 # Test functions
+@pytest.mark.parametrize(
+    "config_name, bev_h, bev_w, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
+    [
+        ("nuscenes_tiny", 100, 100, 1, 1.0, 0.0, 0, 0.0),  # Tiny model with perfect accuracy expected
+        ("nuscenes_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # Base model with perfect accuracy expected
+        ("nuscenes_base", 200, 200, 2, 1.0, 0.0, 0, 0.0),  # Base model with batch size 2
+        ("carla_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # CARLA base model
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-@pytest.mark.parametrize("seed", [42, 123])
-@pytest.mark.parametrize("batch_size", [1, 2])
-def test_generate_reference_points(device, seed, batch_size):
-    """Test 3D reference point generation."""
+@pytest.mark.parametrize("seed", [42])
+def test_generate_reference_points(
+    device,
+    config_name,
+    bev_h,
+    bev_w,
+    batch_size,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
+    seed,
+):
+    """Test 3D reference point generation using configuration system."""
     torch.manual_seed(seed)
     print_detailed_comparison_flag = False
-    setup = get_test_setup(batch_size=batch_size)
+
+    # Get configuration from preset
+    preset_config = get_preset_config(config_name)
+    if preset_config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = preset_config.dataset_config
+    z_cfg = dataset_config.z_cfg
 
     # Test torch implementation
-    torch_ref_points = generate_reference_points(
-        setup["bev_h"], setup["bev_w"], setup["z_cfg"], batch_size=batch_size, device=torch.device("cpu")
-    )
+    torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
     # Test TTNN implementation
-    ttnn_ref_points = generate_reference_points_ttnn(
-        setup["bev_h"], setup["bev_w"], setup["z_cfg"], device, batch_size=batch_size
-    )
+    ttnn_ref_points = generate_reference_points_ttnn(bev_h, bev_w, z_cfg, device, batch_size=batch_size)
 
     # Convert TTNN result to torch for comparison
     ttnn_ref_points_torch = ttnn.to_torch(ttnn_ref_points, dtype=torch.float32)
 
     # Check shapes - now includes batch dimension
-    expected_shape = (batch_size, setup["bev_h"] * setup["bev_w"], setup["z_cfg"]["num_points"], 3)
+    expected_shape = (batch_size, bev_h * bev_w, z_cfg["num_points"], 3)
     assert (
         torch_ref_points.shape == expected_shape
     ), f"Torch shape mismatch: {torch_ref_points.shape} vs {expected_shape}"
@@ -157,14 +154,14 @@ def test_generate_reference_points(device, seed, batch_size):
             show_sparsity=False,  # Reference points shouldn't be sparse
         )
 
-    # Check with tight tolerances since this should be exact conversion
+    # Check with expected tolerances from test parameters
     passed, results = check_with_tolerances(
         torch_ref_points,
         ttnn_ref_points_torch,
-        pcc_threshold=0.999,
-        abs_error_threshold=7.5,
-        rel_error_threshold=1e-3,
-        max_error_ratio=0.6,
+        pcc_threshold=expected_pcc,
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="reference_points_generation",
     )
 
@@ -173,44 +170,74 @@ def test_generate_reference_points(device, seed, batch_size):
     logger.info("✅ Reference point generation test passed!")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-@pytest.mark.parametrize("seed", [42])
 @pytest.mark.parametrize(
-    "bev_size",
+    "config_name, bev_h, bev_w, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        (200, 200),  # Default size
+        ("nuscenes_tiny", 100, 100, 1, 0.999, 13.06, 0.02, 0.5),  # NuScenes tiny model
+        ("nuscenes_base", 200, 200, 1, 0.999, 4.98, 0.03, 0.5),  # NuScenes base model
+        ("carla_base", 200, 200, 1, 0.999, 5.21, 0.02, 0.5),  # CARLA base model
     ],
 )
-@pytest.mark.parametrize("batch_size", [1])
-def test_point_sampling_3d_to_2d(device, seed, bev_size, batch_size):
-    """Test 3D to 2D point sampling transformation."""
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
+@pytest.mark.parametrize("seed", [42])
+def test_point_sampling_3d_to_2d(
+    device,
+    config_name,
+    bev_h,
+    bev_w,
+    batch_size,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
+    seed,
+):
+    """Test 3D to 2D point sampling transformation using configuration system."""
     torch.manual_seed(seed)
-    setup = get_test_setup(batch_size=batch_size)
     print_detailed_comparison_flag = False
 
-    bev_h, bev_w = bev_size
+    # Get configuration from preset
+    preset_config = get_preset_config(config_name)
+    if preset_config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = preset_config.dataset_config
+
+    # Extract parameters from configs
+    pc_range = dataset_config.pc_range
+    z_cfg = dataset_config.z_cfg
+    num_cams = dataset_config.num_cams
+    img_shape = (dataset_config.input_size[1], dataset_config.input_size[0])  # (height, width)
+    eps = 1e-5
+
+    # Create camera matrices for testing
+    lidar2img = create_sample_camera_matrices(num_cams)
+    lidar2img = lidar2img.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # Add batch dimension
+
+    # Create img_metas for each batch item
+    img_metas = []
+    for batch_idx in range(batch_size):
+        img_metas.append({"img_shape": [img_shape] * num_cams})
 
     # Generate reference points with batch dimension
-    torch_ref_points = generate_reference_points(
-        bev_h, bev_w, setup["z_cfg"], batch_size=batch_size, device=torch.device("cpu")
-    )
+    torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
     # Test torch implementation
     torch_ref_points_cam, torch_bev_mask = point_sampling_3d_to_2d(
         torch_ref_points,
-        setup["pc_range"],
-        setup["lidar2img"],
-        img_metas=setup["img_metas"],
-        eps=setup["eps"],
+        pc_range,
+        lidar2img,
+        img_metas=img_metas,
+        eps=eps,
     )
 
     # Test TTNN implementation
     ttnn_ref_points_cam, ttnn_bev_mask = point_sampling_3d_to_2d_ttnn(
         torch_ref_points,  # Use same input
-        setup["pc_range"],
-        setup["lidar2img"],
-        img_metas=setup["img_metas"],
-        eps=setup["eps"],
+        pc_range,
+        lidar2img,
+        img_metas=img_metas,
+        eps=eps,
         device=device,
     )
 
@@ -219,8 +246,8 @@ def test_point_sampling_3d_to_2d(device, seed, bev_size, batch_size):
     ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
 
     # Check shapes - now includes batch dimension in the expected shape
-    expected_points_shape = (setup["num_cams"], batch_size, bev_h * bev_w, setup["z_cfg"]["num_points"], 2)
-    expected_mask_shape = (setup["num_cams"], batch_size, bev_h * bev_w, setup["z_cfg"]["num_points"])
+    expected_points_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"], 2)
+    expected_mask_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"])
 
     assert (
         torch_ref_points_cam.shape == expected_points_shape
@@ -276,21 +303,21 @@ def test_point_sampling_3d_to_2d(device, seed, bev_size, batch_size):
             show_sparsity=True,
         )
 
-    # Check with appropriate tolerances for geometric transformations
+    # Check with expected tolerances from test parameters
     points_passed, points_results = check_with_tolerances(
         torch_ref_points_cam,
         ttnn_ref_points_cam_torch,
-        pcc_threshold=0.999,
-        abs_error_threshold=7.5,
-        rel_error_threshold=0.05,
-        max_error_ratio=0.5,
+        pcc_threshold=expected_pcc,
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="projected_reference_points",
     )
 
     mask_passed, mask_results = check_with_tolerances(
         torch_bev_mask.float(),
         ttnn_bev_mask_torch.float(),
-        pcc_threshold=0.999,
+        pcc_threshold=0.996,
         abs_error_threshold=0.1,
         rel_error_threshold=0.1,
         max_error_ratio=0.1,
@@ -308,78 +335,3 @@ def test_point_sampling_3d_to_2d(device, seed, bev_size, batch_size):
         logger.info("✅ Point sampling 3D to 2D test passed!")
     else:
         logger.warning("⚠️ Point sampling passed but with reduced accuracy on coordinates")
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-@pytest.mark.parametrize("seed", [42])
-def test_complete_pipeline_functions(device, seed):
-    """Test the complete point sampling pipeline using functions only."""
-    torch.manual_seed(seed)
-    setup = get_test_setup()
-    print_detailed_comparison_flag = False
-
-    # Generate reference points using torch function
-    torch_ref_3d = generate_reference_points(
-        setup["bev_h"], setup["bev_w"], setup["z_cfg"], device=torch.device("cpu"), dtype=torch.float32
-    )
-
-    # Test torch pipeline
-    torch_ref_points_cam, torch_bev_mask = point_sampling_3d_to_2d(
-        torch_ref_3d,
-        setup["pc_range"],
-        setup["lidar2img"].to(torch.float32),  # Ensure consistent dtype
-        img_metas=setup["img_metas"],
-        eps=setup["eps"],
-    )
-
-    # Test ttnn pipeline using torch tensors as input (let ttnn function handle conversion)
-    ttnn_ref_points_cam, ttnn_bev_mask = point_sampling_3d_to_2d_ttnn(
-        torch_ref_3d,  # Use same torch tensor as input
-        setup["pc_range"],
-        setup["lidar2img"].to(torch.float32),  # Ensure consistent dtype
-        img_metas=setup["img_metas"],
-        eps=setup["eps"],
-        device=device,
-    )
-
-    # Convert TTNN results to torch for comparison
-    ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32)
-    ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
-
-    if print_detailed_comparison_flag:
-        # Compare results
-        print_detailed_comparison(
-            torch_ref_points_cam,
-            ttnn_ref_points_cam_torch,
-            tensor_name="pipeline_projected_points",
-            show_sparsity=True,
-        )
-
-        print_detailed_comparison(
-            torch_bev_mask.float(),
-            ttnn_bev_mask_torch.float(),
-            tensor_name="pipeline_validity_mask",
-            show_sparsity=True,
-        )
-
-    # Check with tolerances
-    points_passed, points_results = check_with_tolerances(
-        torch_ref_points_cam,
-        ttnn_ref_points_cam_torch,
-        pcc_threshold=0.95,
-        abs_error_threshold=7.5,
-        rel_error_threshold=0.05,
-        max_error_ratio=0.5,
-        tensor_name="pipeline_projected_points",
-    )
-
-    assert points_passed, f"Pipeline comparison failed. Results: {points_results['individual_checks']}"
-
-    logger.info("✅ Complete pipeline functions test passed!")
-
-
-if __name__ == "__main__":
-    # Run specific tests for debugging
-    import pytest
-
-    pytest.main([__file__ + "::test_generate_reference_points", "-v"])

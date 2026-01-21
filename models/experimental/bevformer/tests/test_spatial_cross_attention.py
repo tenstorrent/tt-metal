@@ -11,6 +11,10 @@ from models.experimental.bevformer.reference.spatial_cross_attention import Spat
 
 from models.experimental.bevformer.config import DeformableAttentionConfig
 
+from models.experimental.bevformer.config.encoder_config import (
+    get_preset_config,
+)
+
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
     check_with_tolerances,
@@ -27,53 +31,68 @@ from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_query, embed_dims, num_cams",
+    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        (1, 900, 256, 6),  # nuScenes 30x30 BEV grid
-        (1, 2500, 256, 6),  # 50x50 BEV grid
-        (1, 10000, 256, 6),  # 100x100 BEV grid
-        (1, 40000, 256, 6),  # 200x200 BEV grid
-        (2, 900, 256, 6),  # Batch size 2
-    ],
-)
-@pytest.mark.parametrize(
-    "spatial_shapes",
-    [
-        [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes, input size 1600x900
-        [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes, input size 1280x720
-        [[120, 80], [60, 40], [30, 20], [15, 10]],  # Waymo, input size 960x640
+        ("nuscenes_tiny", 1, 30, 30, 0.998, 0.04, 1.3, 0.5),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_base", 1, 50, 50, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 50x50 BEV grid
+        ("nuscenes_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 100x100 BEV grid
+        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 200x200 BEV grid
+        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5),  # CARLA base model
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5),  # Batch size 2
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_spatial_cross_attention_forward(
     device,
+    config_name,
     batch_size,
-    num_query,
-    embed_dims,
-    num_cams,
-    spatial_shapes,
+    bev_h,
+    bev_w,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
     seed,
 ):
+    """Test TTSpatialCrossAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
     print_detailed_comparison_flag = False
 
-    spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long)
+    # Get configuration from preset
+    preset_config = get_preset_config(config_name)
+    if preset_config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = preset_config.dataset_config
+    model_config = preset_config.model_config
+
+    # Extract parameters from configs
+    embed_dims = model_config.embed_dims
+    num_heads = model_config.num_heads
+    num_levels = model_config.num_levels
+    num_points = model_config.num_points
+    num_cams = dataset_config.num_cams
+    num_queries = bev_h * bev_w
+
+    # Use spatial shapes from dataset config (limited to num_levels)
+    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
     sca_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
     # Create input tensors
-    bev_queries = torch.randn(batch_size, num_query, embed_dims, dtype=torch.float32)
+    bev_queries = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
 
     # Camera features: [num_cams, H*W, batch_size, embed_dims] - use only first level
     camera_features = torch.randn(num_cams, sum(sca_total_key_length), batch_size, embed_dims, dtype=torch.float32)
 
-    # Pre-projected reference points: [num_cams, batch_size, num_query, D, 2]
+    # Pre-projected reference points: [num_cams, batch_size, num_queries, D, 2]
     D = 4  # Number of points per pillar
-    reference_points_cam = torch.rand(num_cams, batch_size, num_query, D, 2, dtype=torch.float32)
+    reference_points_cam = torch.rand(num_cams, batch_size, num_queries, D, 2, dtype=torch.float32)
 
-    # Validity mask: [num_cams, batch_size, num_query, D]
-    bev_mask = torch.ones(num_cams, batch_size, num_query, D, dtype=torch.bool)
+    # Validity mask: [num_cams, batch_size, num_queries, D]
+    bev_mask = torch.ones(num_cams, batch_size, num_queries, D, dtype=torch.bool)
     # Randomly mask out some invalid points for realism
     # Randomly mask out 95% of points as invalid for realism
     total_points = bev_mask.numel()
@@ -81,19 +100,26 @@ def test_spatial_cross_attention_forward(
     invalid_indices = torch.randperm(total_points)[:num_invalid]
     bev_mask.view(-1)[invalid_indices] = False
 
-    # Level start index for single level
+    # Level start index
     indices = spatial_shapes.prod(1).cumsum(0)
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
-    # Create configuration
-    config = DeformableAttentionConfig(embed_dims=embed_dims, num_heads=4, num_levels=4, num_points=8, batch_first=True)
+    # Create configuration from extracted parameters
+    config = DeformableAttentionConfig(
+        embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points, batch_first=True
+    )
 
-    # Create PyTorch reference model
+    # Create PyTorch reference model using extracted parameters
     ref_model = SpatialCrossAttention(
         embed_dims=embed_dims,
         num_cams=num_cams,
         batch_first=True,
-        deformable_attention={"embed_dims": embed_dims, "num_levels": 4, "num_points": 8, "num_heads": 4},
+        deformable_attention={
+            "embed_dims": embed_dims,
+            "num_levels": num_levels,
+            "num_points": num_points,
+            "num_heads": num_heads,
+        },
     )
     ref_model.eval()
 
@@ -104,14 +130,19 @@ def test_spatial_cross_attention_forward(
         dtype=ttnn.float32,
     )
 
-    # Create ttnn model with preprocessed parameters
+    # Create ttnn model with preprocessed parameters using extracted parameters
     tt_model = TTSpatialCrossAttention(
         device=device,
         params=tt_parameters,
         embed_dims=embed_dims,
         num_cams=num_cams,
         batch_first=True,
-        deformable_attention={"embed_dims": embed_dims, "num_levels": 4, "num_points": 8, "num_heads": 4},
+        deformable_attention={
+            "embed_dims": embed_dims,
+            "num_levels": num_levels,
+            "num_points": num_points,
+            "num_heads": num_heads,
+        },
     )
 
     # Forward pass with PyTorch reference model
@@ -174,14 +205,14 @@ def test_spatial_cross_attention_forward(
             # block_size=16,  # Analyze sparsity in 16x16 blocks
         )
 
-    # Comprehensive tolerance checking with multiple criteria
+    # Comprehensive tolerance checking with expected metrics from test parameters
     passed, results = check_with_tolerances(
         ref_model_output,
         tt_model_output,
-        pcc_threshold=0.998,  # 0.998 only in case of 200x200 BEV grid
-        abs_error_threshold=4e-2,
-        rel_error_threshold=1.3,
-        max_error_ratio=0.5,
+        pcc_threshold=expected_pcc,
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="spatial_cross_attention_output",
     )
 
