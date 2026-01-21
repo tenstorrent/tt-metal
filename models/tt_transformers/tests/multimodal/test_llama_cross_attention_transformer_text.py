@@ -60,7 +60,7 @@ def test_cross_attention_transformer_text_inference(
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
     kv_cache_dtype = torch.float32
-    n_iter = 1
+    n_iter = 10
     if model_args.is_90b:
         # [INFO] use bfloat16 for in reference model to avoid OOM on host
         torch.set_default_dtype(torch.bfloat16)
