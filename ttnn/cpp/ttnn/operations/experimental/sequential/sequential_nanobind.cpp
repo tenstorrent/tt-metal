@@ -17,6 +17,10 @@ namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::sequential::detail {
 
+// Import types from ttnn::experimental::prim
+using ttnn::experimental::prim::create_sequential_branch;
+using ttnn::experimental::prim::StepDescriptor;
+
 //=============================================================================
 // Binding implementation
 //=============================================================================

@@ -1555,4 +1555,4 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

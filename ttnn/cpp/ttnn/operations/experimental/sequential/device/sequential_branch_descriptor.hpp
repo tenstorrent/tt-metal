@@ -7,7 +7,7 @@
 #include "sequential_device_operation_types.hpp"
 #include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::experimental::prim {
 
 // =============================================================================
 // SequentialBranchDescriptor - Allows sequential to be used as a branch in parallel
@@ -24,11 +24,11 @@ namespace ttnn::operations::experimental::sequential {
 // in sequence, running on the branch's core_range.
 //
 
-struct SequentialBranchDescriptor : parallel::BranchDescriptor {
+struct SequentialBranchDescriptor : BranchDescriptor {
     std::vector<std::shared_ptr<StepDescriptor>> steps;
 
     SequentialBranchDescriptor(const CoreRangeSet& cores, std::vector<std::shared_ptr<StepDescriptor>> steps_) :
-        parallel::BranchDescriptor{cores}, steps(std::move(steps_)) {}
+        BranchDescriptor{cores}, steps(std::move(steps_)) {}
 
     std::vector<const Tensor*> get_input_tensors() const override {
         // Gather input tensors from all steps
@@ -120,9 +120,15 @@ struct SequentialBranchDescriptor : parallel::BranchDescriptor {
 // Factory function to create a sequential branch
 // =============================================================================
 
-inline std::shared_ptr<parallel::BranchDescriptor> create_sequential_branch(
+inline std::shared_ptr<BranchDescriptor> create_sequential_branch(
     const CoreRangeSet& cores, std::vector<std::shared_ptr<StepDescriptor>> steps) {
     return std::make_shared<SequentialBranchDescriptor>(cores, std::move(steps));
 }
 
+}  // namespace ttnn::experimental::prim
+
+// Backward compatibility alias
+namespace ttnn::operations::experimental::sequential {
+using ttnn::experimental::prim::create_sequential_branch;
+using ttnn::experimental::prim::SequentialBranchDescriptor;
 }  // namespace ttnn::operations::experimental::sequential

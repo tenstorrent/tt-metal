@@ -4,7 +4,7 @@
 
 #include "parallel_device_operation.hpp"
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::experimental::prim {
 
 // =============================================================================
 // ParallelDeviceOperation Implementation
@@ -46,7 +46,7 @@ void ParallelDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t ParallelDeviceOperation::compute_output_specs(
+ParallelDeviceOperation::spec_return_value_t ParallelDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     spec_return_value_t specs;
     specs.reserve(operation_attributes.branches.size());
@@ -58,7 +58,7 @@ spec_return_value_t ParallelDeviceOperation::compute_output_specs(
     return specs;
 }
 
-tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
+ParallelDeviceOperation::tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     tensor_return_value_t outputs;
     outputs.reserve(operation_attributes.branches.size());
@@ -71,19 +71,19 @@ tensor_return_value_t ParallelDeviceOperation::create_output_tensors(
     return outputs;
 }
 
-ttsl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     // Hash together the operation type, number of branches, and core ranges
     // Each unique configuration of branches and core ranges should have a distinct hash
-    ttsl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
+    tt::stl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
 
     for (const auto& branch : operation_attributes.branches) {
         // Hash the branch's operation type
-        combined_hash = ttsl::hash::hash_objects(combined_hash, branch->type_info().hash_code());
+        combined_hash = tt::stl::hash::hash_objects(combined_hash, branch->type_info().hash_code());
 
         // Hash the core range to ensure different core configurations get different programs
         for (const auto& range : branch->core_range.ranges()) {
-            combined_hash = ttsl::hash::hash_objects(
+            combined_hash = tt::stl::hash::hash_objects(
                 combined_hash, range.start_coord.x, range.start_coord.y, range.end_coord.x, range.end_coord.y);
         }
     }
@@ -91,13 +91,12 @@ ttsl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
     return combined_hash;
 }
 
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::parallel::ParallelDeviceOperation::tensor_return_value_t parallel(
-    const ttnn::operations::experimental::parallel::operation_attributes_t& operation_attributes) {
-    using OperationType = ttnn::operations::experimental::parallel::ParallelDeviceOperation;
+std::vector<std::vector<Tensor>> parallel(const ttnn::experimental::prim::ParallelParams& operation_attributes) {
+    using OperationType = ttnn::experimental::prim::ParallelDeviceOperation;
     auto tensor_args = OperationType::tensor_args_t{};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

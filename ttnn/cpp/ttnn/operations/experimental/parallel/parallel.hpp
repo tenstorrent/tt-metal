@@ -9,6 +9,13 @@
 
 namespace ttnn::operations::experimental::parallel {
 
+// Import types from ttnn::experimental::prim
+using ttnn::experimental::prim::BranchDescriptor;
+using ttnn::experimental::prim::make_descriptor;
+
+// Each inner vector is the outputs from one branch
+using tensor_return_value_t = std::vector<std::vector<Tensor>>;
+
 // =============================================================================
 // ExecuteParallel - The registered operation
 // =============================================================================
@@ -41,7 +48,7 @@ namespace ttnn {
 
 // Re-export Branch for user convenience
 template <typename DeviceOp>
-using branch = ttnn::operations::experimental::parallel::Branch<DeviceOp>;
+using branch = ttnn::experimental::prim::Branch<DeviceOp>;
 
 // The parallel operation
 constexpr auto parallel =
@@ -56,7 +63,7 @@ constexpr auto parallel =
 // Example 1: Two layer_norm operations on different cores
 //
 // ```cpp
-// using LN = ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation;
+// using LN = ttnn::prim::LayerNormDeviceOperation;
 //
 // auto results = ttnn::parallel(
 //     ttnn::branch<LN>{core_set_1, {.eps = 1e-5, ...}, {.input = t1, .weight = g1}},
@@ -84,7 +91,7 @@ constexpr auto parallel =
 // ```cpp
 // std::vector<std::shared_ptr<BranchDescriptor>> branches;
 // for (size_t i = 0; i < num_branches; ++i) {
-//     branches.push_back(ttnn::operations::experimental::parallel::make_descriptor(
+//     branches.push_back(ttnn::experimental::prim::make_descriptor(
 //         ttnn::branch<LN>{core_sets[i], attrs[i], args[i]}));
 // }
 // auto results = ttnn::parallel(std::move(branches));

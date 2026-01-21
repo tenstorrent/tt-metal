@@ -15,6 +15,9 @@ namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::parallel::detail {
 
+// Import types from ttnn::experimental::prim
+using ttnn::experimental::prim::BranchDescriptor;
+
 //=============================================================================
 // Binding implementation
 //=============================================================================

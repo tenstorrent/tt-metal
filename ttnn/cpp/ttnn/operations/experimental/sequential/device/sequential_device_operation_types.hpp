@@ -20,7 +20,7 @@
 
 #include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::experimental::prim {
 
 // Forward declaration
 struct StepDescriptor;
@@ -29,22 +29,14 @@ struct StepDescriptor;
 // SequentialDeviceOperation Types
 // =============================================================================
 
-struct operation_attributes_t {
+struct SequentialParams {
     std::vector<std::shared_ptr<StepDescriptor>> steps;
     // Each step carries its own core range
     ttnn::MeshDevice* mesh_device = nullptr;
 };
 
-struct tensor_args_t {
-    // Intentionally minimal - actual tensor args live in StepDescriptors
-};
-
-// Sequential returns the outputs from the LAST step only
-// (intermediate outputs are internal to the sequential pipeline)
-using tensor_return_value_t = std::vector<Tensor>;
-
-// Output specs from the last step
-using spec_return_value_t = std::vector<TensorSpec>;
+// Empty inputs - actual tensors are in StepDescriptors
+struct SequentialInputs {};
 
 // =============================================================================
 // StepDescriptor - Abstract interface for type-erased steps
@@ -90,13 +82,6 @@ struct Step {
     typename DeviceOp::operation_attributes_t op_attrs;
     typename DeviceOp::tensor_args_t tensor_args;
 };
-
-// =============================================================================
-// Reuse the supports_add_to trait from parallel namespace
-// =============================================================================
-
-// Bring the supports_add_to template into this namespace
-using parallel::supports_add_to;
 
 // =============================================================================
 // TypedStepDescriptor - Internal implementation
@@ -241,30 +226,34 @@ private:
     static std::vector<const Tensor*> extract_tensors_impl(const TensorArgs& args) {
         std::vector<const Tensor*> result;
 
-        if constexpr (requires { args.input; }) {
-            result.push_back(&args.input);
-        }
-        if constexpr (requires { args.input_tensor; }) {
-            result.push_back(&args.input_tensor);
-        }
-        if constexpr (requires { args.weight; }) {
-            if (args.weight.has_value()) {
-                result.push_back(&args.weight.value());
+        if constexpr (std::is_same_v<std::decay_t<TensorArgs>, Tensor>) {
+            result.push_back(&args);
+        } else {
+            if constexpr (requires { args.input; }) {
+                result.push_back(&args.input);
             }
-        }
-        if constexpr (requires { args.bias; }) {
-            if (args.bias.has_value()) {
-                result.push_back(&args.bias.value());
+            if constexpr (requires { args.input_tensor; }) {
+                result.push_back(&args.input_tensor);
             }
-        }
-        if constexpr (requires { args.residual_input_tensor; }) {
-            if (args.residual_input_tensor.has_value()) {
-                result.push_back(&args.residual_input_tensor.value());
+            if constexpr (requires { args.weight; }) {
+                if (args.weight.has_value()) {
+                    result.push_back(&args.weight.value());
+                }
             }
-        }
-        if constexpr (requires { args.stats; }) {
-            if (args.stats.has_value()) {
-                result.push_back(&args.stats.value());
+            if constexpr (requires { args.bias; }) {
+                if (args.bias.has_value()) {
+                    result.push_back(&args.bias.value());
+                }
+            }
+            if constexpr (requires { args.residual_input_tensor; }) {
+                if (args.residual_input_tensor.has_value()) {
+                    result.push_back(&args.residual_input_tensor.value());
+                }
+            }
+            if constexpr (requires { args.stats; }) {
+                if (args.stats.has_value()) {
+                    result.push_back(&args.stats.value());
+                }
             }
         }
 
@@ -345,17 +334,24 @@ std::shared_ptr<StepDescriptor> create_step(
     return std::make_shared<TypedStepDescriptor<DeviceOp>>(cores, op_attrs, tensor_args);
 }
 
+}  // namespace ttnn::experimental::prim
+
+// Convenience aliases for backward compatibility
+namespace ttnn::operations::experimental::sequential {
+using ttnn::experimental::prim::create_step;
+using ttnn::experimental::prim::SequentialParams;
+using ttnn::experimental::prim::Step;
+using ttnn::experimental::prim::StepDescriptor;
+using ttnn::experimental::prim::TypedStepDescriptor;
 }  // namespace ttnn::operations::experimental::sequential
 
 // Custom fmt::formatter for StepDescriptor shared_ptr
 template <>
-struct fmt::formatter<std::shared_ptr<ttnn::operations::experimental::sequential::StepDescriptor>> {
+struct fmt::formatter<std::shared_ptr<ttnn::experimental::prim::StepDescriptor>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(
-        const std::shared_ptr<ttnn::operations::experimental::sequential::StepDescriptor>& step,
-        FormatContext& ctx) const {
+    auto format(const std::shared_ptr<ttnn::experimental::prim::StepDescriptor>& step, FormatContext& ctx) const {
         if (step) {
             return fmt::format_to(ctx.out(), "{}", step->operation_name());
         }
@@ -365,13 +361,12 @@ struct fmt::formatter<std::shared_ptr<ttnn::operations::experimental::sequential
 
 // Custom formatter for the steps vector
 template <>
-struct fmt::formatter<std::vector<std::shared_ptr<ttnn::operations::experimental::sequential::StepDescriptor>>> {
+struct fmt::formatter<std::vector<std::shared_ptr<ttnn::experimental::prim::StepDescriptor>>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
     auto format(
-        const std::vector<std::shared_ptr<ttnn::operations::experimental::sequential::StepDescriptor>>& steps,
-        FormatContext& ctx) const {
+        const std::vector<std::shared_ptr<ttnn::experimental::prim::StepDescriptor>>& steps, FormatContext& ctx) const {
         auto out = ctx.out();
         out = fmt::format_to(out, "[");
         for (size_t i = 0; i < steps.size(); ++i) {

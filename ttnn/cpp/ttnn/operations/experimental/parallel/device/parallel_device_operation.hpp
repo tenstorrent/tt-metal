@@ -10,17 +10,20 @@
 #include "parallel_device_operation_types.hpp"
 #include "parallel_factory.hpp"
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::experimental::prim {
 
 // =============================================================================
 // ParallelDeviceOperation
 // =============================================================================
 
 struct ParallelDeviceOperation {
-    using operation_attributes_t = parallel::operation_attributes_t;
-    using tensor_args_t = parallel::tensor_args_t;
-    using spec_return_value_t = parallel::spec_return_value_t;
-    using tensor_return_value_t = parallel::tensor_return_value_t;
+    using operation_attributes_t = ParallelParams;
+    // tensor_args_t is empty since actual tensors are in BranchDescriptors
+    using tensor_args_t = ParallelInputs;
+    // Each inner vector is the outputs from one branch
+    using tensor_return_value_t = std::vector<std::vector<Tensor>>;
+    // Each inner vector is the specs from one branch
+    using spec_return_value_t = std::vector<std::vector<TensorSpec>>;
     using program_factory_t = std::variant<ParallelProgramFactory>;
 
     static program_factory_t select_program_factory(
@@ -39,15 +42,14 @@ struct ParallelDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     // Hash together all branch hashes
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
 // Launch the parallel device operation
-ttnn::operations::experimental::parallel::ParallelDeviceOperation::tensor_return_value_t parallel(
-    const ttnn::operations::experimental::parallel::operation_attributes_t& operation_attributes);
+std::vector<std::vector<Tensor>> parallel(const ttnn::experimental::prim::ParallelParams& operation_attributes);
 
 }  // namespace ttnn::prim

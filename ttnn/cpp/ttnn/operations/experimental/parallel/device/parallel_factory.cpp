@@ -6,11 +6,11 @@
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::experimental::prim {
 
 ParallelProgramFactory::cached_program_t ParallelProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const ParallelParams& operation_attributes,
+    const ParallelInputs& /*tensor_args*/,
     tensor_return_value_t& tensor_return_value) {
     const auto& branches = operation_attributes.branches;
     TT_FATAL(!branches.empty(), "ParallelProgramFactory requires at least one branch");
@@ -33,8 +33,8 @@ ParallelProgramFactory::cached_program_t ParallelProgramFactory::create(
 
 void ParallelProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const ParallelParams& operation_attributes,
+    const ParallelInputs& /*tensor_args*/,
     tensor_return_value_t& tensor_return_value) {
     const auto& branches = operation_attributes.branches;
 
@@ -52,4 +52,4 @@ void ParallelProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::experimental::prim

@@ -56,9 +56,9 @@ private:
     // Implementation that adds all kernels/CBs to the program
     static shared_variables_t add_to_impl(
         tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value);
 
 public:
     static void override_runtime_arguments(

@@ -30,7 +30,8 @@ tensor_return_value_t ExecuteParallel::invoke_impl(std::vector<std::shared_ptr<B
     }
     TT_FATAL(mesh_device != nullptr, "Could not find mesh device from input tensors");
 
-    operation_attributes_t operation_attributes{.branches = std::move(branches), .mesh_device = mesh_device};
+    ttnn::experimental::prim::ParallelParams operation_attributes{
+        .branches = std::move(branches), .mesh_device = mesh_device};
 
     return ttnn::prim::parallel(operation_attributes);
 }

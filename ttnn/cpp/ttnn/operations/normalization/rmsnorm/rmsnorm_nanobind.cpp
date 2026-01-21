@@ -116,7 +116,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
            const std::optional<const ttnn::Tensor>& bias,
            const std::optional<const ttnn::Tensor>& residual_input_tensor,
            const std::optional<MemoryConfig>& memory_config,
-           const std::optional<const LayerNormProgramConfig>& program_config,
+           const std::optional<const prim::LayerNormProgramConfig>& program_config,
            std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
             return ExecuteRMSNorm::branch(
                 input_tensor,
@@ -180,7 +180,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
            const std::optional<const ttnn::Tensor>& bias,
            const std::optional<const ttnn::Tensor>& residual_input_tensor,
            const std::optional<MemoryConfig>& memory_config,
-           const std::optional<const LayerNormProgramConfig>& program_config,
+           const std::optional<const prim::LayerNormProgramConfig>& program_config,
            std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
             return ExecuteRMSNorm::step(
                 input_tensor,

@@ -18,7 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::experimental::prim {
 
 // Forward declaration
 struct BranchDescriptor;
@@ -27,20 +27,13 @@ struct BranchDescriptor;
 // ParallelDeviceOperation Types
 // =============================================================================
 
-struct operation_attributes_t {
+struct ParallelParams {
     std::vector<std::shared_ptr<BranchDescriptor>> branches;
     ttnn::MeshDevice* mesh_device = nullptr;  // Required for device operation infrastructure
 };
 
-struct tensor_args_t {
-    // Intentionally minimal - actual tensor args live in BranchDescriptors
-};
-
-// Each inner vector is the outputs from one branch
-using tensor_return_value_t = std::vector<std::vector<Tensor>>;
-
-// Each inner vector is the specs from one branch
-using spec_return_value_t = std::vector<std::vector<TensorSpec>>;
+// Empty inputs - actual tensors are in BranchDescriptors
+struct ParallelInputs {};
 
 // =============================================================================
 // BranchDescriptor - Abstract interface for type-erased branches
@@ -293,30 +286,34 @@ private:
     static std::vector<const Tensor*> extract_tensors_impl(const TensorArgs& args) {
         std::vector<const Tensor*> result;
 
-        if constexpr (requires { args.input; }) {
-            result.push_back(&args.input);
-        }
-        if constexpr (requires { args.input_tensor; }) {
-            result.push_back(&args.input_tensor);
-        }
-        if constexpr (requires { args.weight; }) {
-            if (args.weight.has_value()) {
-                result.push_back(&args.weight.value());
+        if constexpr (std::is_same_v<std::decay_t<TensorArgs>, Tensor>) {
+            result.push_back(&args);
+        } else {
+            if constexpr (requires { args.input; }) {
+                result.push_back(&args.input);
             }
-        }
-        if constexpr (requires { args.bias; }) {
-            if (args.bias.has_value()) {
-                result.push_back(&args.bias.value());
+            if constexpr (requires { args.input_tensor; }) {
+                result.push_back(&args.input_tensor);
             }
-        }
-        if constexpr (requires { args.residual_input_tensor; }) {
-            if (args.residual_input_tensor.has_value()) {
-                result.push_back(&args.residual_input_tensor.value());
+            if constexpr (requires { args.weight; }) {
+                if (args.weight.has_value()) {
+                    result.push_back(&args.weight.value());
+                }
             }
-        }
-        if constexpr (requires { args.stats; }) {
-            if (args.stats.has_value()) {
-                result.push_back(&args.stats.value());
+            if constexpr (requires { args.bias; }) {
+                if (args.bias.has_value()) {
+                    result.push_back(&args.bias.value());
+                }
+            }
+            if constexpr (requires { args.residual_input_tensor; }) {
+                if (args.residual_input_tensor.has_value()) {
+                    result.push_back(&args.residual_input_tensor.value());
+                }
+            }
+            if constexpr (requires { args.stats; }) {
+                if (args.stats.has_value()) {
+                    result.push_back(&args.stats.value());
+                }
             }
         }
 
@@ -403,7 +400,7 @@ std::shared_ptr<BranchDescriptor> make_descriptor(const Branch<DeviceOp>& branch
 //
 //   static std::shared_ptr<BranchDescriptor> branch(
 //       const Tensor& input, float epsilon, const CoreRangeSet& cores, ...) {
-//       return ttnn::parallel::create_branch<LayerNormDeviceOperation>(
+//       return ttnn::experimental::prim::create_branch<LayerNormDeviceOperation>(
 //           cores,
 //           operation_attributes_t{.eps = epsilon, ...},
 //           tensor_args_t{.input = input, ...}
@@ -418,23 +415,32 @@ std::shared_ptr<BranchDescriptor> create_branch(
     return std::make_shared<TypedBranchDescriptor<DeviceOp>>(cores, op_attrs, tensor_args);
 }
 
+}  // namespace ttnn::experimental::prim
+
+// Convenience aliases for backward compatibility and easier access
+namespace ttnn::operations::experimental::parallel {
+using ttnn::experimental::prim::Branch;
+using ttnn::experimental::prim::BranchDescriptor;
+using ttnn::experimental::prim::create_branch;
+using ttnn::experimental::prim::make_descriptor;
+using ttnn::experimental::prim::ParallelParams;
+using ttnn::experimental::prim::supports_add_to;
+using ttnn::experimental::prim::TypedBranchDescriptor;
 }  // namespace ttnn::operations::experimental::parallel
 
-// Convenience alias for easier access
+// Additional convenience alias for easier access
 namespace ttnn::parallel_internal {
-using ttnn::operations::experimental::parallel::BranchDescriptor;
-using ttnn::operations::experimental::parallel::create_branch;
+using ttnn::experimental::prim::BranchDescriptor;
+using ttnn::experimental::prim::create_branch;
 }  // namespace ttnn::parallel_internal
 
 // Custom fmt::formatter for BranchDescriptor shared_ptr to show operation names in profiler
 template <>
-struct fmt::formatter<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>> {
+struct fmt::formatter<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(
-        const std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>& branch,
-        FormatContext& ctx) const {
+    auto format(const std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>& branch, FormatContext& ctx) const {
         if (branch) {
             return fmt::format_to(ctx.out(), "{}", branch->operation_name());
         }
@@ -444,12 +450,12 @@ struct fmt::formatter<std::shared_ptr<ttnn::operations::experimental::parallel::
 
 // Custom formatter for the branches vector to show as a list of operation names
 template <>
-struct fmt::formatter<std::vector<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>>> {
+struct fmt::formatter<std::vector<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
     auto format(
-        const std::vector<std::shared_ptr<ttnn::operations::experimental::parallel::BranchDescriptor>>& branches,
+        const std::vector<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>>& branches,
         FormatContext& ctx) const {
         auto out = ctx.out();
         out = fmt::format_to(out, "[");
