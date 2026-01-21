@@ -363,13 +363,13 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      pr-url: ${{ steps.create-pr.outputs.pr-url }}
-      pr-created: ${{ steps.create-pr.outputs.pr-created }}
+      pr-url: ${{ steps.copilot-fix.outputs.pr-url }}
+      pr-created: ${{ steps.copilot-fix.outputs.pr-created }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Download CodeChecker JSON report
         uses: actions/download-artifact@v4
@@ -377,10 +377,11 @@ jobs:
           name: CodeChecker-JSON-Report
           path: /tmp
 
-      - name: Check if issues exist and prepare list
-        id: select-issue
+      - name: Check if issues exist and prepare prompt
+        id: prepare-prompt
         run: |
           set -euo pipefail
+
           if [ ! -f "/tmp/codechecker_issues.json" ]; then
             echo "No CodeChecker issues found"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
@@ -399,49 +400,51 @@ jobs:
           echo "has-issues=true" >> "$GITHUB_OUTPUT"
           echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
 
-          # Format a list of issues for Copilot to choose from (max 15 to keep prompt reasonable)
-          ISSUE_LIST=$(jq -r '
-            .reports[:15] | to_entries | .[] |
-            "\(.key + 1). **\(.value.severity)** - `\(.value.checker_name)` in `\(.value.file.path | sub("^/work/"; "")):\(.value.line)`\n   Message: \(.value.message)"
+          # Determine max fixes
+          MAX_FIXES="${{ inputs.copilot-max-fixes }}"
+          if [ -z "$MAX_FIXES" ]; then
+            LIMIT=15
+          else
+            LIMIT="$MAX_FIXES"
+          fi
+
+          # Format issues for Copilot prompt
+          ISSUE_LIST=$(jq -r --argjson limit "$LIMIT" '
+            .reports[:$limit] | to_entries | .[] |
+            "- **\(.value.severity)**: `\(.value.checker_name)` in `\(.value.file.path | sub("^/work/"; "")):\(.value.line)` - \(.value.message)"
           ' /tmp/codechecker_issues.json)
 
-          echo "=== Issues to present to Copilot ==="
+          echo "=== Issues for Copilot ==="
           echo "$ISSUE_LIST"
 
-          # Save to file for the next step (avoiding output escaping issues)
-          echo "$ISSUE_LIST" > /tmp/issue_list.txt
+          # Save prompt to file (avoids shell escaping issues)
+          cat > /tmp/copilot_prompt.txt << 'EOF'
+          Fix these Clang Static Analyzer issues found in the codebase:
 
-      - name: Re-checkout repo for Copilot with full history
-        if: steps.select-issue.outputs.has-issues == 'true'
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          clean: true
+          EOF
+          echo "$ISSUE_LIST" >> /tmp/copilot_prompt.txt
+          cat >> /tmp/copilot_prompt.txt << 'EOF'
 
-      - name: Setup Node.js
-        if: steps.select-issue.outputs.has-issues == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+          For each issue:
+          1. Verify it's a real bug (skip false positives)
+          2. Apply a minimal, safe fix that doesn't change program behavior
+          3. Follow the project's coding standards
 
-      - name: Install GitHub Copilot CLI
-        if: steps.select-issue.outputs.has-issues == 'true'
-        run: |
-          npm install -g @github/copilot
-          copilot --version || (echo "Copilot CLI installation failed" && exit 1)
+          Create a PR with the fixes. Use a clear commit message describing what was fixed.
+          EOF
 
-      - name: Run Copilot to fix issue and create PR
-        if: steps.select-issue.outputs.has-issues == 'true'
+          echo "Prompt saved to /tmp/copilot_prompt.txt"
+
+      - name: Run Copilot to fix issues and create PR
+        if: steps.prepare-prompt.outputs.has-issues == 'true'
         id: copilot-fix
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
           GH_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Configure git
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Requires GitHub CLI v2.80.0+ for agent-task command
+          echo "GitHub CLI version: $(gh --version | head -1)"
 
           # Determine base branch
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -450,664 +453,70 @@ jobs:
             BASE_BRANCH="${{ github.ref_name }}"
           fi
 
-          # Build prompt
-          ISSUE_LIST=$(cat /tmp/issue_list.txt)
-
-          # Determine max fixes (empty = all)
-          MAX_FIXES="${{ inputs.copilot-max-fixes }}"
-          if [ -z "$MAX_FIXES" ]; then
-            MAX_FIXES_TEXT="as many as you can safely fix"
-            MAX_FIXES_INSTRUCTION="Fix all issues that are genuine bugs and safe to fix."
-          elif [ "$MAX_FIXES" = "1" ]; then
-            MAX_FIXES_TEXT="1 issue"
-            MAX_FIXES_INSTRUCTION="Choose and fix exactly ONE issue."
-          else
-            MAX_FIXES_TEXT="up to $MAX_FIXES issues"
-            MAX_FIXES_INSTRUCTION="Fix UP TO $MAX_FIXES issues (you may fix fewer if some are false positives or too complex)."
-          fi
-
-          read -r -d '' PROMPT << 'PROMPT_EOF' || true
-          You are operating in a CI environment. Your task is to analyze Clang Static Analyzer issues and fix them.
-
-          The Clang Static Analyzer found issues in this repository. Here are some of them:
-
-          PROMPT_EOF
-
-          PROMPT="${PROMPT}
-
-          ${ISSUE_LIST}
-
-          YOUR TASK: Fix ${MAX_FIXES_TEXT}.
-          ${MAX_FIXES_INSTRUCTION}
-
-          For each issue you fix:
-          1. Verify it is a real bug (not a false positive)
-          2. Ensure the fix is safe and doesn't change program behavior
-          3. Read the source file to understand the context
-          4. Apply a minimal fix that addresses the root cause
-          5. Follow the project's coding standards
-
-          IMPORTANT: After you make ALL your fixes:
-          - Save the unified diff to a file at /tmp/copilot_fix.patch using:
-            git diff > /tmp/copilot_fix.patch
-          - Write a SHORT PR title (max 60 chars) to /tmp/copilot_fix_description.txt
-            Examples:
-            - Single file:  fix core.uninitialized.Assign in utils.cpp
-            - Multi-file:   fix core.uninitialized.Assign in 3 files
-            - Mixed issues: fix uninitialized fields in program_factory files
-            Keep it concise - this becomes the PR title!
-
-          Do NOT create branches, commits, or PRs - we will handle that after you generate the patch.
-
-          Note: Some issues may be false positives. Use your judgment and skip those.
-          "
-
-          echo "=== Prompt ==="
-          echo "$PROMPT"
-          echo "=== End of prompt ==="
-
-          echo ""
-          echo "=== Launching GitHub Copilot CLI ==="
-
-          # Save base branch for later steps
-          echo "base-branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
-
-          # Debug: Show current directory and git status before Copilot
-          echo "=== Pre-Copilot state ==="
-          echo "Working directory: $(pwd)"
-          echo "Git branch: $(git branch --show-current)"
-          echo "Git status:"
-          git status --short
-          echo ""
-
-          # Use programmatic mode with --allow-all-tools for CI environment
-          # Run in the workspace directory explicitly
-          copilot -p "$PROMPT" --allow-all-tools 2>&1 | tee /tmp/copilot_output.log || {
-            echo "Copilot execution failed"
-            echo "=== Copilot output ==="
-            cat /tmp/copilot_output.log || true
-            echo "copilot-success=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-
-          echo ""
-          echo "=== Post-Copilot state ==="
-          echo "Git branch: $(git branch --show-current)"
-          echo "Git status:"
-          git status --short
-          echo "All branches:"
-          git branch -a
-          echo ""
-
-          # Check if any files were modified directly
-          MODIFIED_FILES=$(git status --porcelain 2>/dev/null | wc -l)
-          echo "Modified files count (direct): $MODIFIED_FILES"
-
-          # Check if Copilot created a patch file
-          if [ -f /tmp/copilot_fix.patch ]; then
-            echo "=== Copilot created patch file ==="
-            echo "Patch file size: $(wc -c < /tmp/copilot_fix.patch) bytes"
-            echo "Patch contents:"
-            cat /tmp/copilot_fix.patch
-            echo "=== End of patch ==="
-
-            # Check if patch is non-empty
-            if [ -s /tmp/copilot_fix.patch ]; then
-              echo "patch-file=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "Patch file is empty"
-              echo "patch-file=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "No patch file created by Copilot"
-            echo "patch-file=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          # Check for description file
-          if [ -f /tmp/copilot_fix_description.txt ]; then
-            echo "=== Fix description ==="
-            cat /tmp/copilot_fix_description.txt
-            echo "=== End of description ==="
-          fi
-
-          # Check if we're on a different branch now
-          CURRENT_BRANCH=$(git branch --show-current)
-          if [[ "$CURRENT_BRANCH" == copilot/* ]]; then
-            echo "Copilot switched to branch: $CURRENT_BRANCH"
-            echo "Commits on this branch:"
-            git log --oneline -5
-          fi
-
-          echo "copilot-success=true" >> "$GITHUB_OUTPUT"
-
-      - name: Save patch files and generate apply script
-        if: steps.copilot-fix.outputs.copilot-success == 'true'
-        id: save-patch-early
-        env:
-          BASE_BRANCH: ${{ steps.copilot-fix.outputs.base-branch }}
-        run: |
-          mkdir -p /tmp/copilot-patch-artifact
-
-          PATCH_EXISTS="false"
-          PATCH_FILE=""
-
-          # Save the patch file if Copilot created one
-          if [ -f /tmp/copilot_fix.patch ] && [ -s /tmp/copilot_fix.patch ]; then
-            cp /tmp/copilot_fix.patch /tmp/copilot-patch-artifact/
-            echo "Saved copilot_fix.patch"
-            PATCH_EXISTS="true"
-            PATCH_FILE="copilot_fix.patch"
-          fi
-
-          # Save the description if it exists
-          FIX_DESCRIPTION=""
-          if [ -f /tmp/copilot_fix_description.txt ]; then
-            cp /tmp/copilot_fix_description.txt /tmp/copilot-patch-artifact/
-            FIX_DESCRIPTION=$(cat /tmp/copilot_fix_description.txt)
-            echo "Saved copilot_fix_description.txt"
-          fi
-
-          # Also generate a diff from current uncommitted changes
-          if ! git diff --quiet 2>/dev/null; then
-            git diff > /tmp/copilot-patch-artifact/uncommitted_changes.patch
-            echo "Generated uncommitted_changes.patch from working directory"
-            PATCH_EXISTS="true"
-            # Prefer uncommitted_changes.patch if copilot_fix.patch doesn't exist
-            if [ -z "$PATCH_FILE" ]; then
-              PATCH_FILE="uncommitted_changes.patch"
-            fi
-          fi
-
-          echo "patch-exists=$PATCH_EXISTS" >> "$GITHUB_OUTPUT"
-
-          # Generate the bash script with embedded patch
-          if [ "$PATCH_EXISTS" = "true" ]; then
-            BRANCH_NAME="users/${{ github.actor }}/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
-            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-
-            if [ -n "$FIX_DESCRIPTION" ]; then
-              COMMIT_MSG="fix(clangsa): $FIX_DESCRIPTION"
-            else
-              COMMIT_MSG="fix(clangsa): Automated fix from Clang Static Analyzer"
-            fi
-
-            # Get the patch content and base64 encode it
-            PATCH_SOURCE="/tmp/copilot-patch-artifact/$PATCH_FILE"
-            PATCH_BASE64=$(base64 -w0 "$PATCH_SOURCE")
-
-            # Generate the self-contained apply script using printf
-            SCRIPT_FILE="/tmp/copilot-patch-artifact/apply_fix.sh"
-            printf '%s\n' '#!/bin/bash' > "$SCRIPT_FILE"
-            printf '%s\n' 'set -euo pipefail' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' '# Clang Static Analyzer Fix - Self-contained Apply Script' >> "$SCRIPT_FILE"
-            printf '%s\n' '# This script contains the patch embedded - no additional files needed' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' "BRANCH_NAME=\"$BRANCH_NAME\"" >> "$SCRIPT_FILE"
-            printf '%s\n' "BASE_BRANCH=\"$BASE_BRANCH\"" >> "$SCRIPT_FILE"
-            printf '%s\n' "COMMIT_MSG=\"$COMMIT_MSG\"" >> "$SCRIPT_FILE"
-            printf '%s\n' "GENERATED=\"$TIMESTAMP\"" >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' '# Embedded patch (base64 encoded)' >> "$SCRIPT_FILE"
-            printf '%s\n' "PATCH_BASE64=\"$PATCH_BASE64\"" >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "=== Clang Static Analyzer Fix Apply Script ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Generated: $GENERATED"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Branch: $BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if ! git rev-parse --git-dir > /dev/null 2>&1; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Error: Not in a git repository. Run from tt-metal root."' >> "$SCRIPT_FILE"
-            printf '%s\n' '    exit 1' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'PATCH_FILE=$(mktemp)' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "$PATCH_BASE64" | base64 -d > "$PATCH_FILE"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'trap "rm -f $PATCH_FILE" EXIT' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if [ "${1:-}" = "--show-patch" ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "=== Embedded Patch Content ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' '    cat "$PATCH_FILE"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    exit 0' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if [ "${1:-}" = "--undo" ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "=== Undoing apply_fix.sh ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    CURRENT=$(git branch --show-current)' >> "$SCRIPT_FILE"
-            printf '%s\n' '    if [ "$CURRENT" = "$BRANCH_NAME" ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "Currently on the fix branch. Switching to $BASE_BRANCH..."' >> "$SCRIPT_FILE"
-            printf '%s\n' '        git checkout "$BASE_BRANCH"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Deleting local branch: $BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    git branch -D "$BRANCH_NAME" 2>/dev/null || echo "Local branch not found (may not exist)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Deleting remote branch (this will close any PR): $BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    git push origin --delete "$BRANCH_NAME" 2>/dev/null || echo "Remote branch not found (may not have been pushed)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "=== Undo complete ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "You are now on branch: $(git branch --show-current)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    exit 0' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Usage: ./apply_fix.sh [OPTION]"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Options:"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "  (no option)    Apply the fix locally (review before pushing)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "  --push         Apply the fix and create a PR"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "  --show-patch   Display the embedded patch without applying"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "  --undo         Delete the branch (local and remote) and switch to base"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "  --help, -h     Show this help message"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    exit 0' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 1: Fetching latest changes..."' >> "$SCRIPT_FILE"
-            printf '%s\n' 'git fetch origin' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 2: Checking out $BASE_BRANCH and updating..."' >> "$SCRIPT_FILE"
-            printf '%s\n' 'git checkout "$BASE_BRANCH"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'git pull origin "$BASE_BRANCH"' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 2b: Updating submodules..."' >> "$SCRIPT_FILE"
-            printf '%s\n' 'git submodule update --init --recursive' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 3: Creating new branch: $BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'git checkout -b "$BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 4: Applying patch..."' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if git apply "$PATCH_FILE"; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Patch applied successfully!"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'elif patch -p1 < "$PATCH_FILE"; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Patch applied with patch command!"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'else' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "Error: Failed to apply patch."' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "View patch with: ./apply_fix.sh --show-patch"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    exit 1' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Step 5: Staging and committing changes..."' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "(Pre-commit hooks like clang-format may modify files)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' '# Commit with retry loop to handle pre-commit hooks that modify files' >> "$SCRIPT_FILE"
-            printf '%s\n' 'MAX_RETRIES=3' >> "$SCRIPT_FILE"
-            printf '%s\n' 'for i in $(seq 1 $MAX_RETRIES); do' >> "$SCRIPT_FILE"
-            printf '%s\n' '    git add -A' >> "$SCRIPT_FILE"
-            printf '%s\n' '    if git commit -m "$COMMIT_MSG' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'Generated by GitHub Copilot from Clang Static Analyzer findings.' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "Commit successful!"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        break' >> "$SCRIPT_FILE"
-            printf '%s\n' '    else' >> "$SCRIPT_FILE"
-            printf '%s\n' '        if [ $i -lt $MAX_RETRIES ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '            echo "Pre-commit hooks modified files. Re-staging and retrying... (attempt $((i+1))/$MAX_RETRIES)"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        else' >> "$SCRIPT_FILE"
-            printf '%s\n' '            echo "Commit failed after $MAX_RETRIES attempts."' >> "$SCRIPT_FILE"
-            printf '%s\n' '            echo "You may need to manually resolve formatting issues."' >> "$SCRIPT_FILE"
-            printf '%s\n' '            echo "Run: git add -A && git commit"' >> "$SCRIPT_FILE"
-            printf '%s\n' '            exit 1' >> "$SCRIPT_FILE"
-            printf '%s\n' '        fi' >> "$SCRIPT_FILE"
-            printf '%s\n' '    fi' >> "$SCRIPT_FILE"
-            printf '%s\n' 'done' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "=== Changes committed locally ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Next steps:"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "  1. Review: git diff HEAD~1"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "  2. Push:   git push -u origin $BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "  3. PR:     gh pr create --base $BASE_BRANCH"' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' 'echo "Or run: ./apply_fix.sh --push"' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'if [ "${1:-}" = "--push" ]; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo "=== Pushing and creating PR ==="' >> "$SCRIPT_FILE"
-            printf '%s\n' '    git push -u origin "$BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    # Get the repo URL for manual PR creation link' >> "$SCRIPT_FILE"
-            printf '%s\n' '    REPO_URL=$(git remote get-url origin | sed "s/git@github.com:/https:\/\/github.com\//" | sed "s/\.git$//")'  >> "$SCRIPT_FILE"
-            printf '%s\n' '    PR_URL="${REPO_URL}/compare/${BASE_BRANCH}...${BRANCH_NAME}?expand=1"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    if command -v gh &> /dev/null; then' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "Creating draft PR with gh CLI..."' >> "$SCRIPT_FILE"
-            printf '%s\n' '        PR_TITLE="[AUTO] $COMMIT_MSG"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        gh pr create --draft --assignee @me --title "$PR_TITLE" --body "## Automated Clang Static Analyzer Fix' >> "$SCRIPT_FILE"
-            printf '%s\n' '' >> "$SCRIPT_FILE"
-            printf '%s\n' 'Generated by GitHub Copilot. Please review carefully before marking ready for review." --base "$BASE_BRANCH" --head "$BRANCH_NAME"' >> "$SCRIPT_FILE"
-            printf '%s\n' '    else' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "gh CLI not found. Create the PR manually:"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  $PR_URL"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "Or install gh CLI and run ./apply_fix.sh --push again:"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  # Install gh CLI (choose one):"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  # macOS:  brew install gh"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  # Ubuntu: sudo apt install gh"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  # Other:  https://cli.github.com/manual/installation"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  # Then authenticate:"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo "  gh auth login"' >> "$SCRIPT_FILE"
-            printf '%s\n' '        echo ""' >> "$SCRIPT_FILE"
-            printf '%s\n' '    fi' >> "$SCRIPT_FILE"
-            printf '%s\n' 'fi' >> "$SCRIPT_FILE"
-
-            chmod +x "$SCRIPT_FILE"
-            echo "Generated self-contained apply_fix.sh with embedded patch"
-          fi
-
-          # Show what was saved
-          echo "=== Saved files ==="
-          ls -la /tmp/copilot-patch-artifact/ 2>/dev/null || echo "No files saved"
-
-      - name: Check for changes and create PR if needed
-        if: steps.copilot-fix.outputs.copilot-success == 'true'
-        id: create-pr
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          BASE_BRANCH="${{ steps.copilot-fix.outputs.base-branch }}"
-          CHANGES_APPLIED="false"
-          FIX_DESCRIPTION=""
-
-          echo "=== Checking for Copilot changes ==="
-          echo ""
-
-          # Method 1: Check if Copilot created a patch file
-          if [ -f /tmp/copilot_fix.patch ] && [ -s /tmp/copilot_fix.patch ]; then
-            echo "Found patch file from Copilot - applying it"
-
-            # Reset any existing changes first
-            git checkout -- . 2>/dev/null || true
-            git clean -fd 2>/dev/null || true
-
-            # Apply the patch
-            if git apply /tmp/copilot_fix.patch; then
-              echo "Patch applied successfully"
-              CHANGES_APPLIED="true"
-              if [ -f /tmp/copilot_fix_description.txt ]; then
-                FIX_DESCRIPTION=$(cat /tmp/copilot_fix_description.txt)
-              fi
-            else
-              echo "Failed to apply patch with git apply, trying patch command"
-              if patch -p1 < /tmp/copilot_fix.patch; then
-                echo "Patch applied with patch command"
-                CHANGES_APPLIED="true"
-                if [ -f /tmp/copilot_fix_description.txt ]; then
-                  FIX_DESCRIPTION=$(cat /tmp/copilot_fix_description.txt)
-                fi
-              else
-                echo "Failed to apply patch - patch may be malformed"
-              fi
-            fi
-          fi
-
-          # Method 2: Check if Copilot made direct changes (uncommitted)
-          if [ "$CHANGES_APPLIED" = "false" ]; then
-            if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-              echo "Found direct uncommitted changes from Copilot"
-              CHANGES_APPLIED="true"
-            fi
-          fi
-
-          # Method 3: Check if Copilot switched to a copilot/ branch with commits
-          CURRENT_BRANCH=$(git branch --show-current)
-          if [[ "$CURRENT_BRANCH" == copilot/* ]]; then
-            echo "Copilot switched to branch: $CURRENT_BRANCH"
-            COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$CURRENT_BRANCH" 2>/dev/null || echo "0")
-            if [ "$COMMITS_AHEAD" -gt 0 ]; then
-              echo "Found $COMMITS_AHEAD commit(s) on $CURRENT_BRANCH - pushing and creating PR"
-              # Configure git credentials with token in URL
-              git config --local --unset-all http.https://github.com/.extraheader || true
-              git config --local credential.helper ""
-              git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-              git push -u origin "$CURRENT_BRANCH"
-              COMMIT_MSG=$(git log -1 --format=%s)
-              PR_URL=$(gh pr create \
-                --title "$COMMIT_MSG" \
-                --body "## 🤖 Automated Clang Static Analyzer Fix
-
-          This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
-
-          **Generated by:** GitHub Copilot CLI
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Please review the changes carefully before merging." \
-                --base "$BASE_BRANCH" \
-                --head "$CURRENT_BRANCH")
-              echo "Created PR: $PR_URL"
-
-              # Add codeowners ping comment
-              gh pr comment "$PR_URL" --body "/codeowners ping"
-
-              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-              echo "pr-created=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
-          # Method 5: Check for any local copilot/ branches
-          COPILOT_BRANCHES=$(git branch --list 'copilot/*' 2>/dev/null | tr -d ' *' || true)
-          if [ -n "$COPILOT_BRANCHES" ]; then
-            COPILOT_BRANCH=$(echo "$COPILOT_BRANCHES" | head -1)
-            echo "Found local branch: $COPILOT_BRANCH"
-            COMMITS_AHEAD=$(git rev-list --count "origin/$BASE_BRANCH".."$COPILOT_BRANCH" 2>/dev/null || echo "0")
-            if [ "$COMMITS_AHEAD" -gt 0 ]; then
-              echo "Found $COMMITS_AHEAD commit(s) on $COPILOT_BRANCH - pushing and creating PR"
-              git checkout "$COPILOT_BRANCH"
-              # Configure git credentials with token in URL
-              git config --local --unset-all http.https://github.com/.extraheader || true
-              git config --local credential.helper ""
-              git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-              git push -u origin "$COPILOT_BRANCH"
-              COMMIT_MSG=$(git log -1 --format=%s)
-              PR_URL=$(gh pr create \
-                --title "$COMMIT_MSG" \
-                --body "## 🤖 Automated Clang Static Analyzer Fix
-
-          This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
-
-          **Generated by:** GitHub Copilot CLI
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Please review the changes carefully before merging." \
-                --base "$BASE_BRANCH" \
-                --head "$COPILOT_BRANCH")
-              echo "Created PR: $PR_URL"
-
-              # Add codeowners ping comment
-              gh pr comment "$PR_URL" --body "/codeowners ping"
-
-              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-              echo "pr-created=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
-          # If no changes were applied by any method, exit
-          if [ "$CHANGES_APPLIED" = "false" ]; then
-            echo "No changes detected from Copilot"
-            echo "pr-created=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Create branch, commit, push, and create PR from the applied changes
-          echo "=== Creating PR from applied changes ==="
-
-          # Show what changed
-          echo "Changes to be committed:"
-          git status --short
-          git diff --stat
-          echo ""
-
-          # === Debug: Check GitHub authentication and permissions ===
-          echo "=== GitHub CLI Auth Status ==="
-          gh auth status || true
-          echo ""
-          echo "=== Repository Permissions ==="
-          gh api "/repos/${{ github.repository }}" --jq '.permissions' || echo "Could not get repo permissions"
-          echo ""
-          echo "=== Authenticated User ==="
-          gh api user --jq '.login' 2>/dev/null || echo "Could not determine authenticated user"
-          echo ""
+          echo "Base branch: $BASE_BRANCH"
           echo "Repository: ${{ github.repository }}"
-          echo "Token length: ${#GH_TOKEN} characters"
           echo ""
+          echo "=== Copilot Prompt ==="
+          cat /tmp/copilot_prompt.txt
+          echo ""
+          echo "=== Running Copilot Agent ==="
 
-          # Configure git credentials - embed token directly in URL
-          echo "=== Configuring Git credentials ==="
-          # Clear any cached credentials
-          git config --local --unset-all http.https://github.com/.extraheader || true
-          git config --local credential.helper ""
+          # Use gh agent-task create (requires gh v2.80.0+)
+          # Copilot handles: branch creation, code changes, commits, and PR
+          # See: https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-a-pr
+          PROMPT=$(cat /tmp/copilot_prompt.txt)
 
-          # Use GITHUB_TOKEN for git operations (has write access)
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          echo "Configured remote URL with embedded token"
-
-          # Verify the remote (hide the token in output)
-          echo "Remote URL configured (token hidden): https://x-access-token:***@github.com/${{ github.repository }}.git"
-
-          # Create a branch with timestamp
-          # Use automated/ prefix for bot-created branches
-          BRANCH_NAME="automated/clangsa-fix-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH_NAME"
-
-          # Stage all changes
-          git add -A
-
-          # Build commit message
-          if [ -n "$FIX_DESCRIPTION" ]; then
-            COMMIT_MSG="fix(clangsa): $FIX_DESCRIPTION"
-          else
-            COMMIT_MSG="fix(clangsa): Automated fix from Clang Static Analyzer"
-          fi
-
-          # Commit
-          git commit -m "$COMMIT_MSG
-
-          This fix was generated by GitHub Copilot based on Clang Static Analyzer findings.
-
-          Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-
-          # Push
-          echo "=== Pushing branch ==="
-          git push -u origin "$BRANCH_NAME"
-
-          # Create PR
-          PR_TITLE="$COMMIT_MSG"
-          PR_BODY="## 🤖 Automated Clang Static Analyzer Fix
-
-          This PR was automatically generated by GitHub Copilot to fix a Clang Static Analyzer issue.
-
-          **Generated by:** GitHub Copilot CLI
-          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          if [ -n "$FIX_DESCRIPTION" ]; then
-            PR_BODY="${PR_BODY}
-
-          **Fix description:** $FIX_DESCRIPTION"
-          fi
-
-          PR_BODY="${PR_BODY}
-
-          Please review the changes carefully before merging."
-
-          PR_URL=$(gh pr create \
-            --title "$PR_TITLE" \
-            --body "$PR_BODY" \
+          if gh agent-task create "$PROMPT" \
             --base "$BASE_BRANCH" \
-            --head "$BRANCH_NAME")
+            --repo "${{ github.repository }}" \
+            --follow 2>&1 | tee /tmp/copilot_output.log; then
 
-          echo "Created PR: $PR_URL"
+            echo ""
+            echo "Copilot task completed"
 
-          # Add codeowners ping comment
-          gh pr comment "$PR_URL" --body "/codeowners ping"
+            # Try to extract PR URL from output (format may vary)
+            PR_URL=$(grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' /tmp/copilot_output.log | head -1 || true)
 
-          echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-          echo "pr-created=true" >> "$GITHUB_OUTPUT"
+            if [ -n "$PR_URL" ]; then
+              echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+              echo "pr-created=true" >> "$GITHUB_OUTPUT"
+              echo "Created PR: $PR_URL"
 
-      - name: Upload patch artifact
-        if: always() && steps.save-patch-early.outputs.patch-exists == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Copilot-Fix-Patch
-          path: /tmp/copilot-patch-artifact/
-          retention-days: 30
+              # Add codeowners ping comment
+              gh pr comment "$PR_URL" --body "/codeowners ping" || true
+            else
+              echo "pr-created=false" >> "$GITHUB_OUTPUT"
+              echo "No PR URL found in output - check Copilot dashboard for status"
+            fi
+          else
+            echo "Copilot task creation failed"
+            echo "pr-created=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Output to job summary
-        if: always() && steps.select-issue.outputs.has-issues == 'true'
+      - name: Output job summary
+        if: always()
         run: |
           echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "${{ steps.create-pr.outputs.pr-created }}" = "true" ]; then
-            echo "✅ **Success!** GitHub Copilot analyzed the Clang Static Analyzer issues and created a fix." >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.prepare-prompt.outputs.has-issues }}" != "true" ]; then
+            echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
+            echo "✅ **Success!** Copilot created a PR to fix the issues." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Pull Request:** [${{ steps.create-pr.outputs.pr-url }}](${{ steps.create-pr.outputs.pr-url }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Pull Request:** [${{ steps.copilot-fix.outputs.pr-url }}](${{ steps.copilot-fix.outputs.pr-url }})" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Please review the changes carefully before merging." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ steps.copilot-fix.outputs.copilot-success }}" = "true" ] || [ "${{ steps.create-pr.outcome }}" = "failure" ]; then
-            echo "⚠️ Copilot generated a fix but automated PR creation failed (likely due to push permissions)." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            if [ "${{ steps.save-patch-early.outputs.patch-exists }}" = "true" ]; then
-              echo "📦 **Fix ready to apply!** Copy the script below or download from the \`Copilot-Fix-Patch\` artifact." >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "### Quick Start" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-              echo '# Save apply_fix.sh to your tt-metal repo root, then:' >> "$GITHUB_STEP_SUMMARY"
-              echo 'chmod +x apply_fix.sh' >> "$GITHUB_STEP_SUMMARY"
-              echo './apply_fix.sh              # Apply locally (review before pushing)' >> "$GITHUB_STEP_SUMMARY"
-              echo './apply_fix.sh --push       # Apply and create PR (requires gh CLI)' >> "$GITHUB_STEP_SUMMARY"
-              echo './apply_fix.sh --show-patch # View the patch without applying' >> "$GITHUB_STEP_SUMMARY"
-              echo './apply_fix.sh --undo       # Delete branch and close PR' >> "$GITHUB_STEP_SUMMARY"
-              echo './apply_fix.sh --help       # Show all options' >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "### apply_fix.sh (copy this entire script)" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              if [ -f /tmp/copilot-patch-artifact/apply_fix.sh ]; then
-                echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-                cat /tmp/copilot-patch-artifact/apply_fix.sh >> "$GITHUB_STEP_SUMMARY"
-                echo '' >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
-              else
-                echo "*Script file not found - download from artifact instead.*" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "<details>" >> "$GITHUB_STEP_SUMMARY"
-              echo "<summary>What does this script do?</summary>" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "The script is self-contained (patch embedded as base64) and will:" >> "$GITHUB_STEP_SUMMARY"
-              echo "1. Checkout and update the base branch" >> "$GITHUB_STEP_SUMMARY"
-              echo "2. Create a new branch" >> "$GITHUB_STEP_SUMMARY"
-              echo "3. Apply the embedded patch" >> "$GITHUB_STEP_SUMMARY"
-              echo "4. Commit the changes" >> "$GITHUB_STEP_SUMMARY"
-              echo "5. (with --push) Push and create a PR" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "No patch file was generated. This could mean:" >> "$GITHUB_STEP_SUMMARY"
-              echo "- All issues were determined to be false positives" >> "$GITHUB_STEP_SUMMARY"
-              echo "- The issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
-              echo "- Copilot decided not to make changes" >> "$GITHUB_STEP_SUMMARY"
-            fi
           else
-            echo "❌ Copilot task did not complete successfully. Check the logs for details." >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Copilot task was submitted but no PR was created yet." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "This could mean:" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Copilot is still processing the request" >> "$GITHUB_STEP_SUMMARY"
+            echo "- All issues were determined to be false positives" >> "$GITHUB_STEP_SUMMARY"
+            echo "- The issues were too complex to fix automatically" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Check the [Copilot dashboard](https://github.com/${{ github.repository }}/copilot) for status." >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Output no issues summary
-        if: steps.select-issue.outputs.has-issues != 'true'
-        run: |
-          echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
 
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
