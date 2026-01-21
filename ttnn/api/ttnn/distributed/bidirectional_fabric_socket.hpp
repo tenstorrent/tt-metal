@@ -32,6 +32,8 @@ public:
     tt::tt_metal::distributed::multihost::Rank get_rank() const override;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const override;
 
+    const std::vector<tt::tt_metal::distributed::SocketConnection>& get_socket_connections() const;
+
     static std::unique_ptr<BidirectionalFabricSocket> create(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
         tt::tt_metal::distributed::multihost::Rank rank,
