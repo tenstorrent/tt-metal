@@ -150,7 +150,7 @@ void MAIN {
         cb_push_back(cb_c2w_rdy, 1);
 
         //---------------------------------------------------------------------
-        // Compute in @ W2 (in pairs of 2)
+        // Compute in2 @ W2 (in pairs of 2)
         //---------------------------------------------------------------------
         for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
             uint32_t dm1_step = 0;
@@ -176,6 +176,7 @@ void MAIN {
                         cb_pop_front(cb_w2c_rdy, 1);
                         cb_wait_front(cb_w2c_rdy, 1);
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        in0_index = 0;
                     }
                     dm1_tiles_remaining--;
 
@@ -196,8 +197,11 @@ void MAIN {
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2w_out, /*output_tile_index=*/0);
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2w_out, /*output_tile_index=*/1);
+
+            // TODO(nsoraba): Pack two and ship it out for dm1 to write
+            // Alternatively, Pack this to a local sharded buffer
+            // pack_tile(0, cb_c2w_out, /*output_tile_index=*/0);
+            // pack_tile(1, cb_c2w_out, /*output_tile_index=*/1);
 
             // Signal to DM1 that we finished using this in2
             // Also serves to signal that we have packed 2 output tiles
