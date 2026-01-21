@@ -30,6 +30,10 @@ void kernel_main() {
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
 
+    // TOOD: Add fused ternary op support in kernel
+    // constexpr uint32_t in4_tile_size = get_compile_time_arg_val(19);
+    // constexpr uint32_t in5_tile_size = get_compile_time_arg_val(20);
+
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
@@ -45,6 +49,13 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
+
+    // TOOD: Add fused ternary op support in kernel
+    // const uint32_t in4_addr = get_arg_val<uint32_t>(argidx++);
+    // const uint32_t in5_addr = get_arg_val<uint32_t>(argidx++);
+    // #ifdef FUSE_TERNARY
+    //     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
+    // #endif
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<21>();
@@ -74,6 +85,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#endif
+#ifdef FUSE_TERNARY
+    constexpr uint32_t cb_id_in4 = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_in5 = tt::CBIndex::c_6;
 #endif
 
 #ifdef FUSE_AG
