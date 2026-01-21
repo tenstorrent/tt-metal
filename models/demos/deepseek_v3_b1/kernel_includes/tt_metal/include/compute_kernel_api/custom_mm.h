@@ -86,7 +86,10 @@ ALWI void custom_mm_block_init(
  * | kt_dim         | The inner dimension (K reduction dimension).                            | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
-template <bool partial_acc = false>
+// Template parameters:
+//   partial_acc: false = full accumulation with finalization, true = partial K accumulation
+//   in0_tile_r_dim: tile row dimension for constexpr branching (default TILE_R_DIM=32)
+template <bool partial_acc = false, uint32_t in0_tile_r_dim = TILE_R_DIM>
 ALWI void custom_mm_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -96,7 +99,7 @@ ALWI void custom_mm_block(
     const uint32_t transpose,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_custom_mm(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim)));
-    MATH((llk_math_custom_mm<MATH_FIDELITY, partial_acc>(in0_cb_id, idst, transpose, kt_dim)));
+    MATH((llk_math_custom_mm<MATH_FIDELITY, partial_acc, in0_tile_r_dim>(in0_cb_id, idst, transpose, kt_dim)));
 }
 
 ALWI void custom_mm_block_unpack(

@@ -51,6 +51,7 @@ void MAIN {
     constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
     constexpr uint32_t num_subblocks_k = get_compile_time_arg_val(6);
+    constexpr uint32_t in0_tile_r_dim = get_compile_time_arg_val(7);  // tile row dimension for constexpr branching
 
     constexpr uint32_t transpose = false;
     constexpr uint32_t num_subblocks_n = per_core_N / subblock_w;
@@ -79,12 +80,13 @@ void MAIN {
             // Intermediate K subblocks: partial accumulation (no finalization)
             for (uint32_t sb_k = 0; sb_k < num_subblocks_k - 1; sb_k++) {
                 cb_wait_front(cb_id_in1, subblock_k);
-                custom_mm_block<true>(cb_id_in0, cb_id_in1, sb_k * subblock_k, 0, w, transpose, subblock_k);
+                custom_mm_block<true, in0_tile_r_dim>(
+                    cb_id_in0, cb_id_in1, sb_k * subblock_k, 0, w, transpose, subblock_k);
                 cb_pop_front(cb_id_in1, subblock_k);
             }
             // Final K subblock: full accumulation with finalization
             cb_wait_front(cb_id_in1, subblock_k);
-            custom_mm_block<false>(
+            custom_mm_block<false, in0_tile_r_dim>(
                 cb_id_in0, cb_id_in1, (num_subblocks_k - 1) * subblock_k, 0, w, transpose, subblock_k);
             cb_pop_front(cb_id_in1, subblock_k);
         }

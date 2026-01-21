@@ -205,9 +205,9 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     )
 
     if k == 7168:
-        subblock_k = k // tile_w // 1
+        subblock_k = k // tile_w // 4
     else:
-        subblock_k = k // tile_w // 1
+        subblock_k = k // tile_w // 2
 
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""

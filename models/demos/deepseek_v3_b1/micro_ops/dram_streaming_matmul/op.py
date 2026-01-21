@@ -290,6 +290,7 @@ class DRAMStreamingMatmul:
             per_core_N,
             subblock_w,
             num_subblocks_k,
+            in0_tile_shape[0],  # in0_tile_r_dim for constexpr branching
         ]
 
         # Runtime args (per-core: bank_id and vc)

@@ -245,34 +245,41 @@ inline void _llk_math_custom_mm_init_(
 
 // Optimized implementation with direct face accumulation via negative indexing.
 // Supports 1x32 (14 instr), 16x32 (8 MVMULs), and 32x32 (16 MVMULs) tile shapes.
-template <bool partial_acc = false>
+// in0_tile_r_dim is a template parameter for constexpr branching (no runtime overhead).
+template <bool partial_acc = false, uint32_t in0_tile_r_dim = TILE_R_DIM>
 inline void _llk_math_custom_mm_(
-    uint dst_index,
-    [[maybe_unused]] const bool transpose = false,
-    [[maybe_unused]] const std::uint32_t kt_dim = 1,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM) {
+    uint dst_index, [[maybe_unused]] const bool transpose = false, [[maybe_unused]] const std::uint32_t kt_dim = 1) {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    const bool is_in0_32x32 = (in0_tile_r_dim == TILE_R_DIM);
-    const bool is_in0_16x32 = (in0_tile_r_dim == 16);
+    constexpr bool is_in0_32x32 = (in0_tile_r_dim == TILE_R_DIM);
+    constexpr bool is_in0_16x32 = (in0_tile_r_dim == 16);
 
-    if (is_in0_32x32) {
+    if constexpr (is_in0_32x32) {
         // 32x32: 16 MVMULs per iteration
         for (uint32_t i = 0; i < kt_dim; i++) {
             lltt::replay(ckernel::math::replay_buf_offset, 16);
         }
-    } else if (is_in0_16x32) {
+    } else if constexpr (is_in0_16x32) {
         // 16x32: 8 MVMULs per iteration
         for (uint32_t i = 0; i < kt_dim; i++) {
             lltt::replay(ckernel::math::replay_buf_offset, 8);
         }
     } else {
-        // 1x32: First (kt_dim-1) iterations use 4 MVMULs, last iteration uses remaining 10
-        // Non-last iterations: 4 MVMULs with CLR_AB (allows new srcA/srcB to be loaded)
-        for (uint32_t i = 0; i < kt_dim - 1; i++) {
-            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        // 1x32 case
+        if constexpr (partial_acc) {
+            // Partial K accumulation: run all kt_dim iterations with CLR_AB (instructions 0-3)
+            // MVMUL accumulates into dest, results persist for next K subblock
+            // NO finalization - skip instructions 4-13
+            for (uint32_t i = 0; i < kt_dim; i++) {
+                lltt::replay(ckernel::math::replay_buf_offset, 4);
+            }
+        } else {
+            // Full accumulation with finalization
+            for (uint32_t i = 0; i < kt_dim - 1; i++) {
+                lltt::replay(ckernel::math::replay_buf_offset, 4);
+            }
+            // Final K tile + finalization (MOVD2A/MOVD2B/ELWADD)
+            lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
         }
-        // Last iteration: skip first 4, replay remaining 10 (4 MVMULs + MOVD2A/MOVD2B + ELWADD)
-        lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
     }
 }
