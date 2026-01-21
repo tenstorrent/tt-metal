@@ -176,7 +176,11 @@ int main(int argc, char** argv) {
     std::cout << "Starting DeiT Encoder test..." << std::endl;
 
     // Default model path (relative path)
-    std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+        return -1;
+    }
+    std::string model_path = argv[1];
 
     // Check if model path is provided as command line argument
     if (argc > 1) {
