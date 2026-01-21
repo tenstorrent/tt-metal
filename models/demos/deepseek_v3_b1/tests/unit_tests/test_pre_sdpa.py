@@ -319,24 +319,6 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     # ========================================================================
     # Verify results
     # ========================================================================
-    # #region agent log - DEBUG: Print all 16 tiles for detailed comparison
-    logger.info("=== DETAILED COMPARISON: All 16 output tiles for head 0 (core 0,0) ===")
-    head0_golden = torch_qnope_expected_flat[0, :]  # [512] values
-    device_head0 = qnope_output_torch[0, :]  # [512] values
-
-    for tile_idx in range(16):
-        col = tile_idx * 32
-        g_val = head0_golden[col].item()
-        d_val = device_head0[col].item()
-        diff = abs(g_val - d_val)
-        status = "✓" if diff < 50 else "✗ MISMATCH"
-        logger.info(
-            f"Tile {tile_idx:2d} (col {col:3d}): Golden={g_val:10.2f}, Device={d_val:10.2f}, Diff={diff:8.2f} {status}"
-        )
-
-    # #endregion
-    # #endregion
-
     logger.info("Verifying Qnope results...")
     qnope_passing, qnope_pcc_message = comp_pcc(torch_qnope_expected_flat, qnope_output_torch, 0.98)
     logger.info(f"Qnope PCC: {qnope_pcc_message}")

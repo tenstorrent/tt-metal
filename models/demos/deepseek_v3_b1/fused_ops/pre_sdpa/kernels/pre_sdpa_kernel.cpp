@@ -406,19 +406,13 @@ KERNEL_ENTRY {
         matmul2(matmul2_args);
     }
 
-    // Debug code removed - TRISC cannot use get_read_ptr/TYPED_U16_AS_BFLOAT16
-
     // ========================================================================
     // Matmul3: Batched matmul for Qnope heads
     // After matmul2, Qnope cores have [1, 128] data (1 head) in matmul2_output_cb
     // Batched matmul: [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
     // Each of 64 Qnope cores computes one head's KV projection
+    // Process in 4-tile subblocks to avoid DST register aliasing issues
     // ========================================================================
-    // #region agent log - HYPOTHESIS D: Force DST reinitialization for larger out_w
-    // Evidence shows tiles 4,5,6,7 = sum of golden tiles (4+8+12), (5+9+13), (6+10+14), (7+11+15)
-    // This indicates DST[4-7] is being written to by tiles 4,8,12 etc. (mod 4 aliasing)
-    // Root cause: matmul2's mm_block_init configured DST for out_w=4, and matmul3 needs out_w=16
-    // Try: Process in 4-tile subblocks with explicit DST management
 #if defined(COMPILE_FOR_TRISC)
     if constexpr (Core::is_qnope_core) {
         constexpr uint32_t matmul3_in0 = get_named_compile_time_arg_val("matmul3_in0");
@@ -466,14 +460,6 @@ KERNEL_ENTRY {
         cb_push_back(matmul3_out, out_w);
     }
 #endif
-    // #endregion
-    // Skip the template call since we're doing inline subblock processing
-    // {
-    //     DeviceZoneScopedN("MATMUL3");
-    //     deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
-    //     matmul3(matmul3_args);
-    // }
-    // Debug code removed - TRISC cannot use get_read_ptr/TYPED_U16_AS_BFLOAT16
 
     // ========================================================================
     // Qrope output: Copy matmul2 output to qrope_output_cb on Qrope cores
@@ -509,10 +495,7 @@ KERNEL_ENTRY {
         cb_pop_front(matmul2_out_cb, matmul2_out_w);
         cb_push_back(qrope_out_cb, matmul2_out_w);
     }
-    DPRINT << "QROPE_COPY done" << ENDL();
 #endif
-
-    // Debug code removed - BRISC doesn't have matmul3_out_w_per_core compile-time arg
 
     // ========================================================================
     // TODO: RoPE for Qrope heads
