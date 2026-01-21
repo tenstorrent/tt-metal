@@ -258,6 +258,141 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     noc_async_writes_flushed();
 }
 
+// ============================================================================
+// Point-to-Point Unicast Dispatch Algorithm
+// ============================================================================
+// Dispatches tokens to target devices based on expert selection using point-to-point
+// unicast sends. For each token, iterates through selected experts and sends to the
+// device that owns each expert (with deduplication to avoid sending twice to same device).
+//
+// Pros: Only sends to devices that need the token (sparse dispatch)
+// Cons: In ring/torus topology, may send same token multiple times over same links
+//       (e.g., token from device 0 to device 2 doesn't pass through device 1)
+//
+// Template parameters:
+//   LinearizedSrcMeshCoord - Source device's linearized mesh coordinate
+//   Topology - Network topology (RING, etc.)
+//   MeshRows, MeshCols - Mesh dimensions
+//   Axis - Dispatch axis (ROWS or COLS)
+//   FabricMaxPacketSize - Maximum fabric packet size in bytes
+//   NumDevices - Total number of devices
+//   SelectedExpertsK - Number of experts selected per token
+//   OutputAddrGenT - Type of the output address generator (TensorAccessor)
+// ============================================================================
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t FabricMaxPacketSize,
+    uint32_t NumDevices,
+    uint32_t SelectedExpertsK,
+    typename OutputAddrGenT>
+FORCE_INLINE bool dispatch_token_point_to_point_unicast(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* unicast_packet_header,
+    const OutputAddrGenT& output_addr_gen,
+    const uint16_t* expert_mapping,
+    uint8_t* send_preparation_buffer,
+    const uint16_t* token_indices,
+    uint32_t input_token_read_addr,
+    uint64_t output_token_write_addr,
+    uint32_t output_page_size,
+    uint32_t global_token,
+    uint32_t local_token,
+    uint32_t token_start_idx,
+    uint32_t alignment) {
+    using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
+    using ttnn::operations::ccl::common::is_configured_target;
+
+    bool needs_barrier = false;
+
+    for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+        // Get the expert that is chosen for the current token
+        uint16_t expert_chosen = token_indices[k];
+        // Direct lookup: get target device from expert mapping
+        uint16_t target_device = expert_mapping[expert_chosen];
+
+        // Check if we've already sent to this device for this token (avoid duplicate sends)
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
+
+            if (target_device == LinearizedSrcMeshCoord) {
+                // If the expert lives on the current device, we dispatch the input token to it
+                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                needs_barrier = true;
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+                // If the expert lives on a remote device, we dispatch the input token to it
+                // If axis is specified then we only send to the devices that are along the axis
+                // If axis is not specified then we send to all devices
+                fabric_send_chip_unicast_noc_unicast_1d<
+                    LinearizedSrcMeshCoord,
+                    Topology,
+                    MeshRows,
+                    MeshCols,
+                    FabricMaxPacketSize>(
+                    output_addr_gen,
+                    fabric_connections,
+                    unicast_packet_header,
+                    target_device,
+                    input_token_read_addr,
+                    global_token,
+                    (int)output_page_size,
+                    alignment);
+            }
+        }
+    }
+
+    return needs_barrier;
+}
+
+// ============================================================================
+// Bidirectional Multicast Dispatch Algorithm (Broadcast All)
+// ============================================================================
+// Dispatches all tokens to all devices via bidirectional multicast in a ring topology.
+// Sends in both directions to minimize hop count (tokens travel at most half the ring).
+//
+// Pros: Optimal for ring topology - each packet traverses minimum hops
+//       Simple implementation - no per-token routing decisions
+// Cons: Every device receives every token, even if no expert on that device needs it
+//       Relies on downstream filtering (selective_tilize) to ignore unneeded tokens
+//
+// Template parameters:
+//   FabricMaxPacketSize - Maximum fabric packet size in bytes
+//   LinearizedSrcMeshCoord - Source device's linearized mesh coordinate
+//   MeshRows, MeshCols - Mesh dimensions
+//   Axis - Dispatch axis (ROWS or COLS)
+// ============================================================================
+template <
+    uint32_t FabricMaxPacketSize,
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis>
+FORCE_INLINE void dispatch_token_bidirectional_multicast(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    uint32_t input_token_read_addr,
+    uint64_t output_token_write_addr,
+    uint32_t input_page_size,
+    uint32_t alignment) {
+    fabric_multicast_bidirectional_write_ring_1d_async<
+        FabricMaxPacketSize,
+        LinearizedSrcMeshCoord,
+        MeshRows,
+        MeshCols,
+        Axis>(
+        fabric_connections,
+        packet_header_pos,
+        packet_header_neg,
+        input_token_read_addr,
+        output_token_write_addr,
+        (int32_t)input_page_size,
+        alignment);
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -402,6 +537,24 @@ void kernel_main() {
     cb_wait_front(mapping_tensor_cb_id, 1);
     uint16_t* expert_mapping = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id));
     uint8_t* send_preparation_buffer = (uint8_t*)send_preparation_buffer_address;
+
+    // ============================================================================
+    // Token Dispatch Algorithm Selection
+    // ============================================================================
+    // USE_BIDIRECTIONAL_MULTICAST: Broadcasts all tokens to all devices via bidirectional
+    //   multicast. Simple and optimal for ring topology hop count, but sends tokens to
+    //   devices that may not need them. Downstream selective_tilize filters unneeded tokens.
+    //
+    // USE_POINT_TO_POINT_UNICAST: Sends tokens only to devices that need them based on
+    //   expert selection. More selective/sparse, but in ring topology may send same token
+    //   over same links multiple times (e.g., device 0 -> device 2 doesn't pass device 1).
+    //
+    // TODO: Implement sparse multicast that collects target devices and sends optimally
+    //   through the ring (e.g., device 0 sends to device 1 which forwards to device 2).
+    // ============================================================================
+    constexpr bool USE_BIDIRECTIONAL_MULTICAST = false;
+    constexpr bool USE_POINT_TO_POINT_UNICAST = true;
+
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
         // we need the global token index to write to the output buffer – each global token that could potentially be
@@ -413,59 +566,48 @@ void kernel_main() {
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
-        detail::fabric_multicast_bidirectional_write_ring_1d_async<
-            fabric_max_packet_size,
-            linearized_mesh_coord,
-            mesh_rows,
-            mesh_cols,
-            axis>(
-            fabric_connections,
-            unicast_packet_header_pos,
-            unicast_packet_header_neg,
-            input_token_read_addr,
-            output_token_write_addr,
-            (int32_t)input_page_size,
-            alignment);
-        // New expert mapping format: [devices, experts] where mapping[expert] = target_device_id
-        // We read the source device's row, so expert_mapping[expert_chosen] gives the target device directly
 
-        // for (uint32_t k = 0; k < selected_experts_k; k++) {
-        //     // get the expert that is chosen for the current token
-        //     uint16_t expert_chosen = token_indices[k];
-        //     // Direct lookup: get target device from expert mapping
-        //     uint16_t target_device = expert_mapping[expert_chosen];
+        if constexpr (USE_BIDIRECTIONAL_MULTICAST) {
+            // Broadcast token to all devices via bidirectional multicast
+            detail::dispatch_token_bidirectional_multicast<
+                fabric_max_packet_size,
+                linearized_mesh_coord,
+                mesh_rows,
+                mesh_cols,
+                axis>(
+                fabric_connections,
+                unicast_packet_header_pos,
+                unicast_packet_header_neg,
+                input_token_read_addr,
+                output_token_write_addr,
+                input_page_size,
+                alignment);
+        } else if constexpr (USE_POINT_TO_POINT_UNICAST) {
+            // Send token only to devices that need it based on expert selection
+            needs_barrier |= detail::dispatch_token_point_to_point_unicast<
+                linearized_mesh_coord,
+                topology,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                fabric_max_packet_size,
+                num_devices,
+                selected_experts_k>(
+                fabric_connections,
+                unicast_packet_header_neg,
+                output_addr_gen,
+                expert_mapping,
+                send_preparation_buffer,
+                token_indices,
+                input_token_read_addr,
+                output_token_write_addr,
+                output_page_size,
+                global_token,
+                local_token,
+                token_start_idx,
+                alignment);
+        }
 
-        //     // Check if we've already sent to this device for this token (avoid duplicate sends)
-        //     if (send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] == 0) {
-        //         send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] = 1;
-
-        //         if (target_device == linearized_mesh_coord) {
-        //             // if the expert lives on the current device, we dispatch the input token to it
-        //             detail::dispatch_input_local_device_flushed(
-        //                 input_token_read_addr, output_token_write_addr, output_page_size);
-        //             needs_barrier = true;
-        //         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(target_device)) {
-        //             // if the expert lives on a remote device, we dispatch the input token to it
-        //             // if axis is specified then we only send to the devices that are along the axis
-        //             // if axis is not specified then we send to all devices
-
-        //             fabric_send_chip_unicast_noc_unicast_1d<
-        //                 linearized_mesh_coord,
-        //                 topology,
-        //                 mesh_rows,
-        //                 mesh_cols,
-        //                 fabric_max_packet_size>(
-        //                 output_addr_gen,
-        //                 fabric_connections,
-        //                 unicast_packet_header_neg,
-        //                 target_device,
-        //                 input_token_read_addr,
-        //                 global_token,
-        //                 (int)output_page_size,
-        //                 alignment);
-        //         }
-        //     }
-        // }
         cb_pop_front(indices_tensor_cb_id, 1);
         cb_pop_front(scores_tensor_cb_id, 1);
         cb_pop_front(input_tensor_cb_id, 1);
