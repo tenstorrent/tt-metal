@@ -411,12 +411,11 @@ jobs:
           # Save to file for the next step (avoiding output escaping issues)
           echo "$ISSUE_LIST" > /tmp/issue_list.txt
 
-      - name: Re-checkout repo for Copilot with full history and token
+      - name: Re-checkout repo for Copilot with full history
         if: steps.select-issue.outputs.has-issues == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.AUTO_TRIAGE_TOKEN }}
           clean: true
 
       - name: Setup Node.js
@@ -807,7 +806,7 @@ jobs:
         id: create-pr
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -957,7 +956,7 @@ jobs:
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --local credential.helper ""
 
-          # Use token directly in the remote URL (standard PAT approach)
+          # Use GITHUB_TOKEN for git operations (has write access)
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           echo "Configured remote URL with embedded token"
 
@@ -965,9 +964,8 @@ jobs:
           echo "Remote URL configured (token hidden): https://x-access-token:***@github.com/${{ github.repository }}.git"
 
           # Create a branch with timestamp
-          # Use the authenticated user from the token (not the workflow actor)
-          TOKEN_USER=$(gh api user --jq '.login' 2>/dev/null || echo "bot")
-          BRANCH_NAME="users/${TOKEN_USER}/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
+          # Use automated/ prefix for bot-created branches
+          BRANCH_NAME="automated/clangsa-fix-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH_NAME"
 
           # Stage all changes
