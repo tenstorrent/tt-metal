@@ -107,10 +107,9 @@ class CoreLocalMem {
             RECORD_LOCAL_MEM_EVENT(
                 KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_WRITE, target_address_, sizeof(T));
             auto ptr = reinterpret_cast<tt_l1_ptr T*>(target_address_);
-
-            T temp = *ptr;
-            ++temp;
-            *ptr = temp;
+            T old_val = *ptr;
+            T new_val = old_val + 1;
+            *ptr = new_val;
             return *this;
         }
 
@@ -122,6 +121,16 @@ class CoreLocalMem {
             T new_val = old_val + 1;
             *ptr = new_val;
             return old_val;
+        }
+
+        FORCE_INLINE Proxy& operator--() {
+            RECORD_LOCAL_MEM_EVENT(
+                KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_WRITE, target_address_, sizeof(T));
+            auto ptr = reinterpret_cast<tt_l1_ptr T*>(target_address_);
+            T old_val = *ptr;
+            T new_val = old_val - 1;
+            *ptr = new_val;
+            return *this;
         }
 
         FORCE_INLINE T operator--(int) {
@@ -183,7 +192,7 @@ public:
      */
     Proxy operator[](uint32_t index) const {
         DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
-        return Proxy(address_ + (index + 1) * sizeof(T));
+        return Proxy(address_ + (index * sizeof(T)));
     }
 
     /** @brief Dereference operator to get reference to the value

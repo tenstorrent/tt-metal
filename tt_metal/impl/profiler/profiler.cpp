@@ -114,10 +114,18 @@ NOCDebugEvent make_noc_debug_event(
         switch (event.noc_xfer_type) {
             case EMD::NocEventType::LOCAL_MEM_WRITE:
                 return NOCDebugEvent(LocalMemWriteEvent{
-                    event.getStartAddr(), event.getEndAddr(), static_cast<uint32_t>(event.counter_value)});
+                    event.getStartAddr(),
+                    event.getEndAddr(),
+                    static_cast<uint32_t>(event.counter_value),
+                    src_x,
+                    src_y});
             case EMD::NocEventType::LOCAL_MEM_READ:
                 return NOCDebugEvent(LocalMemReadEvent{
-                    event.getStartAddr(), event.getEndAddr(), static_cast<uint32_t>(event.counter_value)});
+                    event.getStartAddr(),
+                    event.getEndAddr(),
+                    static_cast<uint32_t>(event.counter_value),
+                    src_x,
+                    src_y});
             case EMD::NocEventType::LOCAL_MEM_READ_WRITE: [[fallthrough]];  // TODO: handle this case
             default: return NOCDebugEvent(UnknownNocEvent{});
         }
@@ -179,6 +187,18 @@ uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_ty
     return static_cast<uint32_t>(offset);
 }
 
+DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
+    const auto& hal = MetalContext::instance().hal();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::control_vector);
+    return control_vector_addr;
+}
+
+#endif
+
 int get_processor_id(tracy::RiscType risc_type) {
     switch (risc_type) {
         case tracy::RiscType::BRISC: return 0;
@@ -188,16 +208,6 @@ int get_processor_id(tracy::RiscType risc_type) {
         case tracy::RiscType::TRISC_2: return 4;
         default: TT_THROW("Invalid RISC type {}", risc_type);
     }
-}
-
-DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
-    const auto& hal = MetalContext::instance().hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
-    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
-    DeviceAddr control_vector_addr =
-        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
-                                dev_msgs::profiler_msg_t::Field::control_vector);
-    return control_vector_addr;
 }
 
 void push_data_to_noc_debug_state(
@@ -228,8 +238,6 @@ void push_data_to_noc_debug_state(
             make_noc_debug_event(virtual_core, event_metadata, trailer_metadata.getLocalNocEventDstTrailer()));
     }
 }
-
-#endif
 
 }  // namespace
 
