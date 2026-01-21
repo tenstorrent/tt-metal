@@ -64,18 +64,6 @@ struct OverlayRegisterFile : public RegisterFile {
     using NumUpperBits = std::integral_constant<std::uint32_t, 8U>;
     using NumReserveBits = std::integral_constant<std::uint32_t, 8U>;
 
-    // serves as convenient storage for bitfield manipulations (masks)
-    // used in load/store of combined registers
-    //
-    static union {
-        uint32_t value;
-        struct {
-            uint16_t lower_addr : NumLowerBits::value;
-            uint8_t upper_addr : NumUpperBits::value;
-            uint8_t reserved : NumReserveBits::value;
-        } fields;
-    } storage;
-
     template<typename T>
     static FORCE_INLINE uint32_t load() {
         static_assert(is_overlay_register_type<T>::value, "T must be an Overlay Register");
@@ -84,7 +72,20 @@ struct OverlayRegisterFile : public RegisterFile {
 
     template<typename T>
     static FORCE_INLINE void store(uint32_t const value) {
+        // serves as convenient storage for bitfield manipulations (masks)
+        // used in load/store of combined registers
+        //
+        union {
+            uint32_t value;
+            struct {
+                uint16_t lower_addr : NumLowerBits::value;
+                uint8_t upper_addr : NumUpperBits::value;
+                uint8_t reserved : NumReserveBits::value;
+            } fields;
+        } storage;
+
         static_assert(is_overlay_register_type<T>::value, "T must be an Overlay Register");
+
         storage.value = value;
         storage.fields.reserved = 0U;
         write_stream_scratch_register<T::ADDRESS>(storage.value);
