@@ -1,0 +1,14 @@
+{"ts":"2026-01-21T13:47:13+00:00","event":"start","agent":"ttnn-kernel-designer","operation":"reduce_mean_w_rm","input_files":["reduce_mean_w_rm_spec.md"],"predecessor_agent":"ttnn-factory-builder"}
+{"event":"input_parse","field":"operation_name","value":"reduce_mean_w_rm","confidence":"HIGH","ts":"2026-01-21T13:47:19+00:00"}
+{"event":"input_parse","field":"cb_configuration","value":"c_0,c_1,c_2,c_3,c_16","confidence":"HIGH","ts":"2026-01-21T13:47:19+00:00"}
+{"event":"helper_analysis","file":"tilize_helpers.hpp","applicable":true,"functions":["tilize()"],"ts":"2026-01-21T13:47:27+00:00"}
+{"event":"helper_analysis","file":"reduce_helpers.hpp","applicable":true,"functions":["reduce<SUM, REDUCE_ROW>()"],"ts":"2026-01-21T13:47:28+00:00"}
+{"event":"helper_analysis","file":"untilize_helpers.hpp","applicable":true,"functions":["untilize<1,cb_in,cb_out>()"],"ts":"2026-01-21T13:47:28+00:00"}
+{"event":"helper_analysis","file":"binary_op_helpers.hpp","applicable":false,"functions":[],"ts":"2026-01-21T13:47:28+00:00"}
+{"event":"helper_analysis","file":"dest_helpers.hpp","applicable":true,"functions":["DEST_AUTO_LIMIT"],"ts":"2026-01-21T13:47:28+00:00"}
+{"event":"design_decision","phase":"tilize","choice":"USE HELPER","helper":"compute_kernel_lib::tilize()","rationale":"Helper handles CB ops and tilize_block internally","ts":"2026-01-21T13:49:14+00:00"}
+{"event":"design_decision","phase":"reduce","choice":"USE HELPER","helper":"compute_kernel_lib::reduce<SUM, REDUCE_ROW>()","rationale":"Helper handles DST management and reduce_tile internally; using SUM because scaler has 1/W","ts":"2026-01-21T13:49:14+00:00"}
+{"event":"design_decision","phase":"untilize","choice":"USE HELPER","helper":"compute_kernel_lib::untilize<1>()","rationale":"Helper auto-dispatches pack_untilize or standard untilize based on width and datatype","ts":"2026-01-21T13:49:14+00:00"}
+{"event":"design_decision","phase":"reader_scaler","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use generate_reduce_scaler pattern","ts":"2026-01-21T13:49:14+00:00"}
+{"event":"design_decision","phase":"reader_data","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use noc_async_read with TensorAccessor","ts":"2026-01-21T13:49:14+00:00"}
+{"event":"design_decision","phase":"writer","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use noc_async_write with TensorAccessor","ts":"2026-01-21T13:49:15+00:00"}
