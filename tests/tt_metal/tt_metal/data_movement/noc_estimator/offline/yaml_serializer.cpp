@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "yaml_serializer.hpp"
 #include <yaml-cpp/yaml.h>
 #include <fstream>
@@ -29,8 +33,8 @@ bool save_latency_data_to_yaml(
         if (key.num_transactions != DEFAULT_NUM_TRANSACTIONS) {
             out << YAML::Key << "num_transactions" << YAML::Value << key.num_transactions;
         }
-        if (key.num_peers != DEFAULT_NUM_PEERS) {
-            out << YAML::Key << "num_peers" << YAML::Value << key.num_peers;
+        if (key.num_subordinates != DEFAULT_NUM_SUBORDINATES) {
+            out << YAML::Key << "num_subordinates" << YAML::Value << key.num_subordinates;
         }
         if (key.same_axis != DEFAULT_SAME_AXIS) {
             out << YAML::Key << "same_axis" << YAML::Value << key.same_axis;
@@ -67,6 +71,12 @@ bool save_latency_data_to_yaml(
     }
 
     file << out.c_str();
+    file.flush();
+    if (!file) {
+        std::cerr << "Failed to write YAML data to file: " << yaml_path << std::endl;
+        file.close();
+        return false;
+    }
     file.close();
 
     return true;

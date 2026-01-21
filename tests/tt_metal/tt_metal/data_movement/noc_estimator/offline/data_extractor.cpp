@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "data_extractor.hpp"
 #include <map>
 
@@ -12,6 +16,9 @@ common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
     std::map<uint32_t, double> size_to_latency;
     for (const auto& p : points) {
         size_to_latency[p.transaction_size_bytes] = p.latency_cycles;
+    }
+    if (size_to_latency.empty()) {
+        return result;
     }
 
     // Extract latency for each standard size
