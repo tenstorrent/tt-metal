@@ -76,8 +76,37 @@ permissions:
   packages: write
 
 jobs:
+  # Parse platform for docker builds - runs once for all downstream jobs
+  parse-platform:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
+  # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
+  build-docker-images:
+    needs: parse-platform
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
+      architecture: amd64
+
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: build-docker-images
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -89,6 +118,13 @@ jobs:
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Pass pre-built docker images to avoid duplicate builds
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -154,6 +190,7 @@ jobs:
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: build-docker-images
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -170,6 +207,13 @@ jobs:
       skip-tt-train: true
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Pass pre-built docker images to avoid duplicate builds
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
   build-tt-train:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -300,15 +344,6 @@ jobs:
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
 
-  docker-image:
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      distro: ubuntu
-      version: 22.04
-      architecture: amd64
-
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
   model-charts-sync:
@@ -331,10 +366,10 @@ jobs:
   # enough to run during PRs without bringing infra to a grinding halt.
   # A proper scan is run in Merge Gate to ensure only clean code lands.
   clang-tidy-light:
-    needs: [docker-image]
+    needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
-    container: ${{ needs.docker-image.outputs.ci-build-tag }}
+    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
     permissions:
       pull-requests: write
       contents: write # to allow auto-closing conversations
