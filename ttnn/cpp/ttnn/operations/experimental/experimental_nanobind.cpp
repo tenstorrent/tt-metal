@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,6 +54,7 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -125,6 +126,7 @@ void py_module(nb::module_& mod) {
     operations::experimental::ternary::detail::bind_where(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+    minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);
 }
