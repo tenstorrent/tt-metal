@@ -420,27 +420,27 @@ class Generator:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=empty_slots
+                    user_id=user_id
                     if use_batched_prefill
-                    else group_user_id,  # Pass valid slot indices for batched
+                    else group_user_id,  # Batched: empty_slots. Non-batched: 0 (matches main branch)
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
-                    batch_size=padded_batch if use_batched_prefill else 1,  # Galaxy 70B uses padded_batch
+                    batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
                 )
             else:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=empty_slots
+                    user_id=user_id
                     if use_batched_prefill
-                    else group_user_id,  # Pass valid slot indices for batched
+                    else group_user_id,  # Batched: empty_slots. Non-batched: 0 (matches main branch)
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
-                    batch_size=padded_batch if use_batched_prefill else 1,  # Galaxy 70B uses padded_batch
+                    batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
                 )
             if use_batched_prefill:
@@ -1929,7 +1929,9 @@ class Generator:
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
         else:
-            padded_page_table[user_id, :] = page_table[0, :]
+            # Non-batched path: always put page table at slot 0 (matches main branch behavior)
+            # The model will be called with user_id=0 (group_user_id)
+            padded_page_table[0, :] = page_table[0, :]
         return padded_page_table
 
     ## Destructor
