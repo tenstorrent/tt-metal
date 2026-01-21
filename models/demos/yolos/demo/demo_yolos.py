@@ -1,7 +1,5 @@
 import torch
-import torch.nn as nn
 import ttnn
-import transformers
 from PIL import Image
 import requests
 from transformers import YolosImageProcessor, YolosForObjectDetection
@@ -29,43 +27,52 @@ def run_demo():
 
     # Initialize TTNN
     device_id = 0
-    device = ttnn.open_device(device_id=device_id)
+    device = None
+    try:
+        device = ttnn.open_device(device_id=device_id)
 
-    # Convert parameters
-    parameters = ttnn.model_preprocessing.preprocess_model_parameters(
-        initialize_model=lambda: torch_model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
+        # Convert parameters
+        parameters = ttnn.model_preprocessing.preprocess_model_parameters(
+            initialize_model=lambda: torch_model,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
+        )
 
-    # Prepare inputs for TTNN
-    # NHWC and BFloat16
-    pixel_values_tt = torch.permute(pixel_values, (0, 2, 3, 1))
-    pixel_values_tt = ttnn.from_torch(pixel_values_tt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    
-    # Config
-    config = torch_model.config
+        # Prepare inputs for TTNN
+        # NHWC and BFloat16
+        pixel_values_tt = torch.permute(pixel_values, (0, 2, 3, 1))
+        pixel_values_tt = ttnn.from_torch(
+            pixel_values_tt,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
 
-    # Run TTNN Model
-    cls_logits, bbox_pred = yolos(
-        config,
-        pixel_values_tt,
-        parameters.cls_token,
-        parameters.detection_tokens,
-        parameters.position_embeddings,
-        parameters=parameters
-    )
+        # Config
+        config = torch_model.config
 
-    # Compare shapes
-    print(f"PyTorch Logits: {torch_outputs.logits.shape}")
-    print(f"TTNN Logits: {cls_logits.shape}")
-    print(f"PyTorch Bboxes: {torch_outputs.pred_boxes.shape}")
-    print(f"TTNN Bboxes: {bbox_pred.shape}")
-    
-    # Close device
-    ttnn.close_device(device)
-    
-    print("Demo execution finished!")
+        # Run TTNN Model
+        cls_logits, bbox_pred = yolos(
+            config,
+            pixel_values_tt,
+            parameters.cls_token,
+            parameters.detection_tokens,
+            parameters.position_embeddings,
+            parameters=parameters,
+        )
+
+        # Compare shapes
+        print(f"PyTorch Logits: {torch_outputs.logits.shape}")
+        print(f"TTNN Logits: {cls_logits.shape}")
+        print(f"PyTorch Bboxes: {torch_outputs.pred_boxes.shape}")
+        print(f"TTNN Bboxes: {bbox_pred.shape}")
+
+        print("Demo execution finished!")
+    except Exception as e:
+        print(f"Error during TTNN demo: {e}")
+    finally:
+        if device is not None:
+            ttnn.close_device(device)
 
 if __name__ == "__main__":
     run_demo()

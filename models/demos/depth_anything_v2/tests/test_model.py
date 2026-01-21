@@ -10,7 +10,7 @@ from models.demos.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custo
 from models.utility_functions import comp_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"batch_size": 1}], indirect=True)
+@pytest.mark.parametrize("device", [{"batch_size": 1}], indirect=True)
 def test_depth_anything_v2_pcc(device):
     # This test compares the ttnn model output against the torch reference
     # Note: Requires hardware to run real ttnn operations.

@@ -198,11 +198,13 @@ def custom_preprocessor(torch_model, name):
         bias = embed.patch_embeddings.projection.bias
         
         three_times_hidden_size, c, _, _ = weight.shape
-        pad_value = 4 - c
+        # Pad 3 input channels to 4 for alignment (NHWC to 4-channel aligned layout).
+        alignment_channels = 4
+        pad_value = alignment_channels - c
         preprocessed_weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, pad_value))
         preprocessed_weight = torch.permute(preprocessed_weight, (2, 3, 1, 0))
         preprocessed_weight = torch.reshape(
-            preprocessed_weight, (int(three_times_hidden_size * (4 / c)), three_times_hidden_size)
+            preprocessed_weight, (int(three_times_hidden_size * (alignment_channels / c)), three_times_hidden_size)
         )
         
         parameters["vit"] = {"embeddings": {"patch_embeddings": {"projection": {}}}}
@@ -224,9 +226,10 @@ def custom_preprocessor(torch_model, name):
         for layer in torch_model.vit.encoder.layer:
             layer_params = {}
             # LayerNorm Before
-            layer_params["layernorm_before"] = preprocess_linear(torch.zeros_like(layer.layernorm_before.weight), dtype=ttnn.bfloat16)  # Dummy weight for structure
-            layer_params["layernorm_before"]["weight"] = ttnn.from_torch(layer.layernorm_before.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            layer_params["layernorm_before"]["bias"] = ttnn.from_torch(layer.layernorm_before.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            layer_params["layernorm_before"] = {
+                "weight": ttnn.from_torch(layer.layernorm_before.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                "bias": ttnn.from_torch(layer.layernorm_before.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            }
             
             # Attention
             layer_params["attention"] = {}
@@ -236,9 +239,10 @@ def custom_preprocessor(torch_model, name):
             layer_params["attention"]["output"] = {"dense": preprocess_linear(layer.attention.output.dense.weight, layer.attention.output.dense.bias)}
 
             # LayerNorm After
-            layer_params["layernorm_after"] = preprocess_linear(torch.zeros_like(layer.layernorm_after.weight), dtype=ttnn.bfloat16)
-            layer_params["layernorm_after"]["weight"] = ttnn.from_torch(layer.layernorm_after.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            layer_params["layernorm_after"]["bias"] = ttnn.from_torch(layer.layernorm_after.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            layer_params["layernorm_after"] = {
+                "weight": ttnn.from_torch(layer.layernorm_after.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                "bias": ttnn.from_torch(layer.layernorm_after.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            }
             
             # Intermediate
             layer_params["intermediate"] = {"dense": preprocess_linear(layer.intermediate.dense.weight, layer.intermediate.dense.bias)}

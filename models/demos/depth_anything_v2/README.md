@@ -20,7 +20,7 @@ Depth Anything V2 is a state-of-the-art monocular depth estimation model. This i
 The demo script downloads the model from Hugging Face and initializes it on the Tenstorrent device.
 
 ```bash
-python models/demos/depth_anything_v2/demo/demo.py --model_id "depth-anything/Depth-Anything-V2-Large-hf"
+python models/demos/depth_anything_v2/demo/demo.py
 ```
 
 ## Running the Tests

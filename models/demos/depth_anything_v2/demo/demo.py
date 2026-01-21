@@ -37,7 +37,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     device = None
     try:
         device_id = 0
-        device = ttnn.CreateDevice(device_id=device_id)
+        device = ttnn.open_device(device_id=device_id)
         print(f"Device {device_id} opened.")
     except Exception as e:
         print(f"Warning: Failed to open Tenstorrent device (HW not present?): {e}")

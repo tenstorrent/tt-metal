@@ -6,6 +6,15 @@ import torch
 import ttnn
 
 # ----------------------------------------------------------------------------
+# Constants
+# ----------------------------------------------------------------------------
+
+IMAGE_SIZE = 518  # Standard input image size for Depth Anything V2
+PATCH_SIZE = 14  # ViT patch size
+PATCH_GRID_SIZE = 37  # IMAGE_SIZE / PATCH_SIZE = 37
+CLS_TOKEN_SIZE = 32  # CLS token padding size (1 tile)
+
+# ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
 
@@ -68,14 +77,13 @@ class TtDPTReassembleLayer:
     def __call__(self, x):
         # x is (B, Seq, Hidden) - Padded to 2048 (64 tiles)
         batch_size, seq_len, hidden_size = x.shape
-        grid_h, grid_w = 37, 37  # 518/14 = 37
+        grid_h, grid_w = PATCH_GRID_SIZE, PATCH_GRID_SIZE
         patch_count_all = grid_h * grid_w  # 1369
 
         # 1. Remove CLS tokens and Padding: (B, 2048, Hidden) -> (B, 1369, Hidden)
-        # CLS is 32 tokens (1 tile). Patches start at index 32.
+        # CLS is CLS_TOKEN_SIZE tokens (1 tile). Patches start at index CLS_TOKEN_SIZE.
         # This slice is core-aligned in our 64-core grid!
-        cls_size = 32
-        x = ttnn.slice(x, (0, cls_size, 0), (batch_size, cls_size + patch_count_all, hidden_size))
+        x = ttnn.slice(x, (0, CLS_TOKEN_SIZE, 0), (batch_size, CLS_TOKEN_SIZE + patch_count_all, hidden_size))
 
         # 2. Reshape to Grid: (B, 1369, Hidden) -> (B, Hidden, 37, 37)
         # Move to RM for reshape/permute
@@ -159,9 +167,9 @@ class TtDPTFusionStage:
 
         # Move back to tile for addition
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        res = ttnn.add_inplace(residual, x)
+        ttnn.add_inplace(residual, x)
         ttnn.deallocate(x)
-        return res
+        return residual
 
     def __call__(self, features):
         x = None
@@ -431,8 +439,8 @@ def vit_layer(hidden_states, parameters, config):
 
 class TtDepthAnythingV2:
     def __init__(self, config, parameters, device):
-        # Initialize optimized config
-        self.config = get_model_config(1, device)
+        # Initialize config: use provided config if available, otherwise derive one
+        self.config = config if config is not None else get_model_config(1, device)
         self.device = device
         self.parameters = self._move_to_device(parameters, device)
         self.reassemble = [
@@ -509,6 +517,12 @@ class TtDepthAnythingV2:
 
 
 def get_model_config(batch_size, device):
+    """Get model configuration for Depth Anything V2.
+    
+    Args:
+        batch_size: Currently unused, reserved for future batch size-specific configs.
+        device: The Tenstorrent device to get compute grid from.
+    """
     if device is not None:
         core_grid = device.compute_with_storage_grid_size()
     else:

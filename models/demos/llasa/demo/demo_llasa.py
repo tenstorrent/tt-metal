@@ -1,6 +1,6 @@
 import torch
 import ttnn
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from transformers import AutoModelForCausalLM, AutoConfig
 from models.demos.llasa.tt.model_def import TtLlasaModel, custom_preprocessor
 
 def run_demo():

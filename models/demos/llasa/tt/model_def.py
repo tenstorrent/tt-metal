@@ -22,10 +22,7 @@ class TtLlasaMLP:
         self.down_proj = parameters.down_proj
 
     def __call__(self, x):
-        # SwiGLU: (gate(x) * x) * up(x) -> wait, standard is (swish(gate(x)) * up(x)) ?
-        # Llama MLP: down(act(gate(x)) * up(x))
-        # where act is SiLU (Swish)
-        
+        # Llama MLP: down(silu(gate(x)) * up(x))
         gate = x @ self.gate_proj.weight
         gate = ttnn.silu(gate)
         
@@ -65,22 +62,26 @@ class TtLlasaAttention:
         xk = ttnn.reshape(xk, (batch, seq_len, self.num_kv_heads, self.head_dim))
         xv = ttnn.reshape(xv, (batch, seq_len, self.num_kv_heads, self.head_dim))
         
-        # RoPE Rotation (Simplified placeholder - assuming inputs are pre-rotated or using ttnn.rope if straightforward)
-        # For now, let's assume valid RoPE implementation is needed.
-        # This is a critical part.
+        # Apply RoPE rotation to queries and keys if frequency coefficients are provided.
+        # This injects positional information into the attention mechanism as in Llama.
+        if freqs_cis is not None:
+            xq = ttnn.experimental.rotary_embedding(xq, freqs_cis)
+            xk = ttnn.experimental.rotary_embedding(xk, freqs_cis)
         
         # Transpose for attention: [Batch, Heads, Seq, HeadDim]
         xq = ttnn.permute(xq, (0, 2, 1, 3))
         xk = ttnn.permute(xk, (0, 2, 1, 3))
         xv = ttnn.permute(xv, (0, 2, 1, 3))
         
-        # Repeat KV heads for GQA
+        # Repeat KV heads for GQA to match the number of query heads.
+        # Shapes before:
+        #   xq: [batch, num_heads, seq_len, head_dim]
+        #   xk/xv: [batch, num_kv_heads, seq_len, head_dim]
+        # We need:
+        #   xk/xv: [batch, num_heads, seq_len, head_dim]
         if self.num_kv_groups > 1:
-            # Need to repeat k and v
-             # ttnn.repeat_interleave equivalent?
-             # Or expand?
-             # For simpler bringup, assume MQA/GQA handling via repeat
-             pass
+            xk = ttnn.concat([xk] * self.num_kv_groups, dim=1)
+            xv = ttnn.concat([xv] * self.num_kv_groups, dim=1)
         
         # Attention Scores: Q @ K^T
         xk_t = ttnn.permute(xk, (0, 1, 3, 2))
