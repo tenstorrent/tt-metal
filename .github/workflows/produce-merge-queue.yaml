@@ -1,10 +1,14 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # Manual trigger for testing / debugging
+  # TEMPORARY — REQUIRED to run on branch + PR
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  # Keep for later (works only on main)
   workflow_dispatch:
 
-  # Scheduled execution (primary trigger after merge)
+  # Keep for later (works only on main)
   schedule:
     - cron: "*/5 * * * *"   # every 5 minutes
 
