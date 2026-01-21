@@ -38,6 +38,8 @@ struct Core {
     // Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
     static constexpr bool is_qnope_core = get_named_compile_time_arg_val("is_qnope_core") == 1;
     static constexpr bool is_qrope_core = get_named_compile_time_arg_val("is_qrope_core") == 1;
+    // SDPA core: receives interleaved QNOPE/QROPE unicasts (1 per row = 8 cores)
+    static constexpr bool is_sdpa_core = get_named_compile_time_arg_val("is_sdpa_core") == 1;
 };
 
 KERNEL_ENTRY {
@@ -460,5 +462,189 @@ KERNEL_ENTRY {
     // Qrope cores have [2, 1, 64] data (2 heads per core)
     // Apply rotary position embedding (not implemented in this kernel)
     // ========================================================================
+
+    // ========================================================================
+    // Unicast: QNOPE/QROPE -> SDPA interleaved transfer
+    // QNOPE cores (cols 0-7): unicast [1, 512] to SDPA at offset = head_idx * 576
+    // QROPE cores (cols 8-11): unicast 2x [1, 64] to SDPA at offsets:
+    //   - head_idx * 576 + 512
+    //   - (head_idx + 1) * 576 + 512
+    // ========================================================================
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (Core::is_qnope_core) {
+        DeviceZoneScopedN("UNICAST_QNOPE");
+
+        // Get compile-time args
+        constexpr uint32_t unicast_sdpa_noc_x = get_named_compile_time_arg_val("unicast_sdpa_noc_x");
+        constexpr uint32_t unicast_head_stride_bytes = get_named_compile_time_arg_val("unicast_head_stride_bytes");
+        constexpr uint32_t unicast_receiver_semaphore_id =
+            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
+        constexpr uint32_t unicast_qnope_src_cb = get_named_compile_time_arg_val("unicast_qnope_src_cb");
+        constexpr uint32_t unicast_qnope_src_num_pages = get_named_compile_time_arg_val("unicast_qnope_src_num_pages");
+
+        // NOC y-coordinates for each row's SDPA core (lookup table)
+        constexpr uint32_t sdpa_noc_y_table[] = {
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row0"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row1"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row2"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row3"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row4"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row5"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row6"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row7"),
+        };
+
+        // Compute head index based on logical x coordinate
+        uint32_t head_idx = my_logical_x_;  // 0-7 for QNOPE cores
+
+        // Wait for matmul3 output to be ready
+        cb_wait_front(unicast_qnope_src_cb, unicast_qnope_src_num_pages);
+
+        // Get source and destination addresses
+        uint32_t src_addr = get_read_ptr(unicast_qnope_src_cb);
+        uint32_t tile_size = get_tile_size(unicast_qnope_src_cb);
+        uint32_t data_size = unicast_qnope_src_num_pages * tile_size;
+
+        // Get SDPA destination NOC coordinates based on row
+        uint32_t sdpa_noc_y = sdpa_noc_y_table[my_logical_y_];
+        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
+        uint32_t sdpa_dst_addr = get_write_ptr(unicast_receive_cb);
+
+        // Compute destination offset: QNOPE at offset = head_idx * stride
+        uint32_t dst_offset = head_idx * unicast_head_stride_bytes;
+
+        // NOC write to SDPA core
+        uint64_t dst_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset);
+        noc_async_write(src_addr, dst_noc_addr, data_size);
+        noc_async_write_barrier();
+
+        // Increment receiver semaphore (1 head sent)
+        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
+        uint64_t dst_semaphore_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, receiver_semaphore_addr);
+        noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+        noc_async_posted_writes_flushed();
+
+        // Pop source CB
+        cb_pop_front(unicast_qnope_src_cb, unicast_qnope_src_num_pages);
+    }
+
+    if constexpr (Core::is_qrope_core) {
+        DeviceZoneScopedN("UNICAST_QROPE");
+
+        // Get compile-time args
+        constexpr uint32_t unicast_sdpa_noc_x = get_named_compile_time_arg_val("unicast_sdpa_noc_x");
+        constexpr uint32_t unicast_head_stride_bytes = get_named_compile_time_arg_val("unicast_head_stride_bytes");
+        constexpr uint32_t unicast_qnope_data_size_bytes =
+            get_named_compile_time_arg_val("unicast_qnope_data_size_bytes");
+        constexpr uint32_t unicast_qrope_data_size_bytes =
+            get_named_compile_time_arg_val("unicast_qrope_data_size_bytes");
+        constexpr uint32_t unicast_receiver_semaphore_id =
+            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
+        constexpr uint32_t unicast_qrope_src_cb = get_named_compile_time_arg_val("unicast_qrope_src_cb");
+        constexpr uint32_t unicast_qrope_src_num_pages = get_named_compile_time_arg_val("unicast_qrope_src_num_pages");
+        constexpr uint32_t unicast_qnope_grid_cols = get_named_compile_time_arg_val("unicast_qnope_grid_cols");
+
+        // NOC y-coordinates for each row's SDPA core (lookup table)
+        constexpr uint32_t sdpa_noc_y_table[] = {
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row0"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row1"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row2"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row3"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row4"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row5"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row6"),
+            get_named_compile_time_arg_val("unicast_sdpa_noc_y_row7"),
+        };
+
+        // Compute head indices: QROPE core at col X has heads 2*(X-8) and 2*(X-8)+1
+        uint32_t qrope_col_idx = my_logical_x_ - unicast_qnope_grid_cols;  // 0-3
+        uint32_t head_idx0 = 2 * qrope_col_idx;                            // 0, 2, 4, 6
+        uint32_t head_idx1 = 2 * qrope_col_idx + 1;                        // 1, 3, 5, 7
+
+        // Wait for qrope output to be ready
+        cb_wait_front(unicast_qrope_src_cb, unicast_qrope_src_num_pages);
+
+        // Get source and destination addresses
+        uint32_t src_addr = get_read_ptr(unicast_qrope_src_cb);
+
+        // Get SDPA destination NOC coordinates based on row
+        uint32_t sdpa_noc_y = sdpa_noc_y_table[my_logical_y_];
+        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
+        uint32_t sdpa_dst_addr = get_write_ptr(unicast_receive_cb);
+
+        // QROPE unicast: each QROPE core sends 2 heads interleaved
+        // Head 0: offset = head_idx0 * stride + qnope_data_size
+        // Head 1: offset = head_idx1 * stride + qnope_data_size
+        uint32_t dst_offset0 = head_idx0 * unicast_head_stride_bytes + unicast_qnope_data_size_bytes;
+        uint32_t dst_offset1 = head_idx1 * unicast_head_stride_bytes + unicast_qnope_data_size_bytes;
+
+        // Single head size (64 elements * 2 bytes = 128 bytes)
+        uint32_t single_head_size = unicast_qrope_data_size_bytes;
+
+        // NOC write head 0
+        uint64_t dst_noc_addr0 = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset0);
+        noc_async_write(src_addr, dst_noc_addr0, single_head_size);
+
+        // NOC write head 1 (offset by single_head_size in source)
+        uint64_t dst_noc_addr1 = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, sdpa_dst_addr + dst_offset1);
+        noc_async_write(src_addr + single_head_size, dst_noc_addr1, single_head_size);
+
+        noc_async_write_barrier();
+
+        // Increment receiver semaphore (2 heads sent)
+        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
+        uint64_t dst_semaphore_noc_addr = get_noc_addr(unicast_sdpa_noc_x, sdpa_noc_y, receiver_semaphore_addr);
+        noc_semaphore_inc(dst_semaphore_noc_addr, 2);
+        noc_async_posted_writes_flushed();
+
+        // Pop source CB
+        cb_pop_front(unicast_qrope_src_cb, unicast_qrope_src_num_pages);
+    }
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+    // ========================================================================
+    // SDPA Receiver: Wait for all unicasts to complete, then copy to output CB
+    // ========================================================================
+    if constexpr (Core::is_sdpa_core) {
+        DeviceZoneScopedN("UNICAST_SDPA_RECEIVER");
+
+        constexpr uint32_t unicast_num_senders = get_named_compile_time_arg_val("unicast_num_senders");
+        constexpr uint32_t unicast_receiver_semaphore_id =
+            get_named_compile_time_arg_val("unicast_receiver_semaphore_id");
+        constexpr uint32_t unicast_receive_cb = get_named_compile_time_arg_val("unicast_receive_cb");
+        constexpr uint32_t unicast_output_cb = get_named_compile_time_arg_val("unicast_output_cb");
+        constexpr uint32_t unicast_dst_num_pages = get_named_compile_time_arg_val("unicast_dst_num_pages");
+
+        // Reserve space in receive CB (senders write directly here)
+        cb_reserve_back(unicast_receive_cb, unicast_dst_num_pages);
+
+        // Wait for all senders (8 QNOPE + 8 QROPE = 16)
+        uint32_t receiver_semaphore_addr = get_semaphore(unicast_receiver_semaphore_id);
+        volatile tt_l1_ptr uint32_t* receiver_semaphore_ptr = (volatile tt_l1_ptr uint32_t*)receiver_semaphore_addr;
+        noc_semaphore_wait(receiver_semaphore_ptr, unicast_num_senders);
+        noc_semaphore_set(receiver_semaphore_ptr, 0);
+
+        // Push to receive CB (data arrived)
+        cb_push_back(unicast_receive_cb, unicast_dst_num_pages);
+
+        // Now copy from receive CB to output CB (which is linked to tensor)
+        cb_wait_front(unicast_receive_cb, unicast_dst_num_pages);
+        cb_reserve_back(unicast_output_cb, unicast_dst_num_pages);
+
+        uint32_t src_addr = get_read_ptr(unicast_receive_cb);
+        uint32_t dst_addr = get_write_ptr(unicast_output_cb);
+        uint32_t tile_size = get_tile_size(unicast_receive_cb);
+        uint32_t copy_size = unicast_dst_num_pages * tile_size;
+
+        // Local copy within same core's L1
+        uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
+        noc_async_write(src_addr, noc_dst_addr, copy_size);
+        noc_async_write_barrier();
+
+        cb_pop_front(unicast_receive_cb, unicast_dst_num_pages);
+        cb_push_back(unicast_output_cb, unicast_dst_num_pages);
+    }
+#endif
 }
 KERNEL_END

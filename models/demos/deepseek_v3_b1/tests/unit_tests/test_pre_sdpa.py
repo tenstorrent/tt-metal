@@ -256,15 +256,44 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         tile=tile,
     )
 
+    # SDPA output tensor - height sharded on SDPA grid (col 12, rows 0-7)
+    # Each SDPA core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
+    SDPA_GRID_COL = QNOPE_GRID_COLS + QROPE_GRID_COLS  # Column 12
+    SDPA_NUM_CORES = matmul2_grid_y  # 8 cores (1 per row)
+    COMBINED_HEAD_SIZE = QNOPE_OUT_DIM + QROPE_HEAD_DIM  # 512 + 64 = 576
+    SDPA_ELEMENTS_PER_CORE = HEADS_PER_ROW * COMBINED_HEAD_SIZE  # 8 * 576 = 4608
+
+    sdpa_grid = ttnn.CoreRange(ttnn.CoreCoord(SDPA_GRID_COL, 0), ttnn.CoreCoord(SDPA_GRID_COL, matmul2_grid_y - 1))
+    sdpa_output_shape = (SDPA_NUM_CORES, SDPA_ELEMENTS_PER_CORE)  # [8, 4608] total
+    sdpa_output_shard_shape = (1, SDPA_ELEMENTS_PER_CORE)  # [1, 4608] per core
+    sdpa_output_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({sdpa_grid}),
+        sdpa_output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_output_shard_spec
+    )
+    torch_sdpa_output = torch.zeros(sdpa_output_shape, dtype=torch.bfloat16)
+    ttnn_sdpa_output = ttnn.from_torch(
+        torch_sdpa_output,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sdpa_output_mem_config,
+        tile=tile,
+    )
+
     logger.info(f"Created all tensors for pre-SDPA operation")
     logger.info(f"Qnope output shape: {qnope_output_shape}, shard: {qnope_output_shard_shape}")
     logger.info(f"Qrope output shape: {qrope_output_shape}, shard: {qrope_output_shard_shape}")
+    logger.info(f"SDPA output shape: {sdpa_output_shape}, shard: {sdpa_output_shard_shape}")
 
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
     logger.info("Running pre-SDPA operation...")
-    ttnn_qnope_result, ttnn_qrope_result = PreSDPA.op(
+    ttnn_qnope_result, ttnn_qrope_result, ttnn_sdpa_result = PreSDPA.op(
         ttnn_input,
         ttnn_gamma,
         ttnn_matmul_weights,
@@ -273,6 +302,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         ttnn_matmul3_weights,
         ttnn_qnope_output,
         ttnn_qrope_output,
+        ttnn_sdpa_output,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
     )
@@ -280,9 +310,11 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     # Convert back to torch for verification
     qnope_output_torch = ttnn.to_torch(ttnn_qnope_result)
     qrope_output_torch = ttnn.to_torch(ttnn_qrope_result)
+    sdpa_output_torch = ttnn.to_torch(ttnn_sdpa_result)
 
     logger.info(f"Device Qnope output shape: {qnope_output_torch.shape}")
     logger.info(f"Device Qrope output shape: {qrope_output_torch.shape}")
+    logger.info(f"Device SDPA output shape: {sdpa_output_torch.shape}")
 
     # ========================================================================
     # Compute golden reference
@@ -290,7 +322,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info("Computing golden reference...")
 
     # Golden uses shuffled weights to produce same interleaved output
-    torch_qnope_expected, torch_qrope_expected = PreSDPA.golden(
+    torch_qnope_expected, torch_qrope_expected, torch_sdpa_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
@@ -307,6 +339,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     logger.info(f"Golden Qnope output shape: {torch_qnope_expected.shape}")
     logger.info(f"Golden Qrope output shape: {torch_qrope_expected.shape}")
+    logger.info(f"Golden SDPA output shape: {torch_sdpa_expected.shape}")
 
     # Reshape golden outputs to match device output shapes
     # Golden: [num_heads, 1, head_dim] -> Device: [num_heads, head_dim] (no middle dim)
@@ -332,8 +365,21 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     qrope_passing, qrope_pcc_message = comp_pcc(torch_qrope_expected_grouped, qrope_output_torch, 0.98)
     logger.info(f"Qrope PCC: {qrope_pcc_message}")
 
-    # Assert both pass
+    # Verify SDPA interleaved output
+    logger.info("Verifying SDPA interleaved results...")
+    # Golden SDPA shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
+    torch_sdpa_expected_flat = torch_sdpa_expected.reshape(SDPA_NUM_CORES, SDPA_ELEMENTS_PER_CORE)
+    sdpa_max_diff = torch.max(torch.abs(sdpa_output_torch - torch_sdpa_expected_flat)).item()
+    sdpa_mean_diff = torch.mean(torch.abs(sdpa_output_torch - torch_sdpa_expected_flat)).item()
+    logger.info(f"SDPA max absolute difference: {sdpa_max_diff}")
+    logger.info(f"SDPA mean absolute difference: {sdpa_mean_diff}")
+
+    sdpa_passing, sdpa_pcc_message = comp_pcc(torch_sdpa_expected_flat, sdpa_output_torch, 0.98)
+    logger.info(f"SDPA PCC: {sdpa_pcc_message}")
+
+    # Assert all pass
     assert qnope_passing, f"Qnope verification failed: {qnope_pcc_message}"
     assert qrope_passing, f"Qrope verification failed: {qrope_pcc_message}"
+    assert sdpa_passing, f"SDPA verification failed: {sdpa_pcc_message}"
 
     logger.info("✓ PreSDPA test passed!")
