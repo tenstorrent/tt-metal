@@ -3,20 +3,27 @@
 Detailed Guide: From Basic Multi-Core to Optimized Data Reuse
 **************************************************************
 
-This section provides a comprehensive explanation for implementing ``matmul_multicore_reuse``
-starting from a working ``matmul_multi_core`` implementation. The goal is to help you
-understand the motivation, design decisions, and step-by-step changes required to achieve
-significant performance improvements through data reuse.
+This section provides a comprehensive explanation for implementing a multi-core
+matrix multiplication with data reuse, starting from a working basic multi-core
+implementation. The goal is to help you understand the motivation, design decisions,
+and step-by-step changes required to achieve significant performance improvements
+through data reuse.
+
+**Assumptions for this guide:**
+
+1. All matrix dimensions (M, N, K) are larger than the number of available cores.
+2. ``TILE_HEIGHT`` equals ``TILE_WIDTH`` (both are 32), and all matrix dimensions
+   are divisible by this tile size.
 
 
 Motivation: Why the Basic Multi-Core Implementation is Suboptimal
 =================================================================
 
-In the basic multi-core implementation (``matmul_multi_core.cpp``), each core computes
-one output tile at a time. For each output tile ``C[i,j]``, the reader kernel fetches
-**all** tiles along the inner dimension ``K`` for both the corresponding row of ``A``
-and column of ``B``. This approach has a critical inefficiency: **tiles from input
-matrices are re-fetched from DRAM multiple times**.
+In the basic multi-core implementation, each core computes one output tile at a time.
+For each output tile ``C[i,j]``, the reader kernel fetches **all** tiles along the
+inner dimension ``K`` for both the corresponding row of ``A`` and column of ``B``.
+This approach has a critical inefficiency: **tiles from input matrices are re-fetched
+from DRAM multiple times**.
 
 Consider a concrete example with matrices A (4x4 tiles), B (4x4 tiles), producing
 C (4x4 tiles). To compute output tiles ``C[0,0]`` and ``C[0,1]``:
@@ -103,9 +110,9 @@ The optimized implementation introduces a hierarchical structure:
     The fundamental unit of computation on Tenstorrent hardware.
 
 **Subblocks** (small groups of tiles, e.g., 2x4 tiles)
-    The unit of partial result accumulation. Subblock dimensions are chosen from
-    hardware-efficient configurations such as {4,2}, {2,4}, {8,1}, {1,8}, etc.
-    These dimensions are constrained by the number of destination registers available.
+    The unit of partial result accumulation. Subblock dimensions are constrained
+    by the number of destination registers available on the Tensix core (see
+    :ref:`subblock-constraints` below for details).
 
 **Blocks** (groups of subblocks)
     The unit of work assigned to each core. A core processes its entire block of
@@ -186,87 +193,245 @@ The intermediate buffer and output buffer share the same L1 memory region but us
 different indices, allowing efficient toggling between accumulation and output phases.
 
 
-Implementing get_large_matmul_params Without bmm_op.hpp
-=======================================================
+Determining Block and Subblock Dimensions
+=========================================
 
-The ``get_large_matmul_params`` function determines optimal block and subblock dimensions.
-Here is the logic you need to implement:
+This section explains how to determine optimal values for ``per_core_M``, ``per_core_N``,
+``out_subblock_h``, and ``out_subblock_w``.
 
-**Step 1: Find minimum per-core dimensions**
 
-For each dimension (M and N), find prime factors that exceed the number of cores
-in that dimension. These factors must be included in ``per_core_M`` or ``per_core_N``
-because they cannot be distributed across cores::
+Why Evenly Divisible Dimensions Matter
+--------------------------------------
 
-    # Example: Mt=20, num_cores_y=8
-    # Prime factors of 20: [2, 2, 5]
-    # Factor 5 > 8? No. All factors can be distributed.
-    # Mpc_min = 1
+For a clean work distribution, we need:
 
-    # Example: Mt=21, num_cores_y=8
-    # Prime factors of 21: [3, 7]
-    # Factor 7 > 8? No. Factor 3 > 8? No.
-    # Mpc_min = 1
+- ``Mt`` (tiles in M) to be divisible by ``per_core_M``
+- ``Nt`` (tiles in N) to be divisible by ``per_core_N``
+- ``per_core_M`` to be divisible by ``out_subblock_h``
+- ``per_core_N`` to be divisible by ``out_subblock_w``
 
-    # Example: Mt=35, num_cores_y=4
-    # Prime factors of 35: [5, 7]
-    # Factor 5 > 4? Yes! Factor 7 > 4? Yes!
-    # Mpc_min = 5 * 7 = 35 (single core handles all M tiles)
+This ensures that each core gets the same amount of work and that subblocks tile
+evenly within each core's assigned region.
 
-**Step 2: Maximize per-core dimensions within L1 constraints**
 
-Given the minimum per-core dimensions, try to increase them while respecting:
+A Note on Prime Factorization (Advanced)
+----------------------------------------
 
-- L1 memory constraints: The formula ``(400 - 2 * in0_block_w * dim) / (2 * in0_block_w + dim)``
-  gives the maximum allowable size for the other dimension.
-- Core count constraints: ``Mt / per_core_M <= num_cores_y`` and ``Nt / per_core_N <= num_cores_x``
+Some implementations use prime factorization to find minimum per-core dimensions.
+The idea is: if ``Mt`` has a prime factor larger than the number of available cores
+in that dimension, that factor cannot be "distributed" across cores and must be
+handled within a single core.
 
-**Step 3: Select subblock dimensions**
+**However, under our simplifying assumption that all matrix dimensions are larger
+than the number of cores**, this complexity is unnecessary. We can simply choose
+``per_core_M`` and ``per_core_N`` to evenly divide ``Mt`` and ``Nt`` respectively,
+ensuring that:
 
-Iterate through hardware-efficient subblock configurations and find one that divides
-evenly into the per-core dimensions::
+.. code-block:: cpp
 
-    SUBBLOCK_CHOICES = [(4,2), (2,4), (8,1), (1,8), (7,1), (1,7),
-                        (3,2), (2,3), (6,1), (1,6), (5,1), (1,5),
-                        (2,2), (4,1), (1,4), (3,1), (1,3), (2,1), (1,2), (1,1)]
+    // Simple approach: divide tiles evenly among cores
+    uint32_t per_core_M = Mt / num_cores_y;  // Must divide evenly
+    uint32_t per_core_N = Nt / num_cores_x;  // Must divide evenly
 
-    for (subblock_h, subblock_w) in SUBBLOCK_CHOICES:
-        if per_core_M % subblock_h == 0 and per_core_N % subblock_w == 0:
-            return (per_core_M, per_core_N, subblock_h, subblock_w)
+    // Verify divisibility
+    TT_ASSERT(Mt % per_core_M == 0, "Mt must be divisible by per_core_M");
+    TT_ASSERT(Nt % per_core_N == 0, "Nt must be divisible by per_core_N");
+
+If exact division is not possible, you can adjust the number of cores used or
+pad the matrices.
+
+
+.. _subblock-constraints:
+
+Subblock Dimension Constraints
+------------------------------
+
+Subblock dimensions are constrained by the **destination register file** on the
+Tensix core. During matrix multiplication:
+
+1. Partial results for a subblock are accumulated in destination registers.
+2. The number of destination registers is limited (typically enough for 8 tiles
+   in a single dimension or certain 2D configurations).
+3. After accumulation, tiles are packed from registers to L1 circular buffers.
+
+The constraint is: ``out_subblock_h * out_subblock_w <= 8``.
+
+This means the total number of tiles in a subblock cannot exceed 8, because that
+is how many tiles can be held in the destination register file simultaneously.
+
+Valid subblock configurations that satisfy this constraint include:
+
++------------------+------------------+--------------------+
+| out_subblock_h   | out_subblock_w   | Total tiles        |
++==================+==================+====================+
+| 4                | 2                | 8                  |
++------------------+------------------+--------------------+
+| 2                | 4                | 8                  |
++------------------+------------------+--------------------+
+| 8                | 1                | 8                  |
++------------------+------------------+--------------------+
+| 1                | 8                | 8                  |
++------------------+------------------+--------------------+
+| 2                | 2                | 4                  |
++------------------+------------------+--------------------+
+| 4                | 1                | 4                  |
++------------------+------------------+--------------------+
+| 1                | 4                | 4                  |
++------------------+------------------+--------------------+
+| 2                | 1                | 2                  |
++------------------+------------------+--------------------+
+| 1                | 2                | 2                  |
++------------------+------------------+--------------------+
+| 1                | 1                | 1                  |
++------------------+------------------+--------------------+
+
+**Choosing the right subblock size:** Larger subblocks (closer to 8 tiles) are
+generally more efficient because they amortize the overhead of loading/storing
+partial results. However, the subblock dimensions must evenly divide the per-core
+dimensions:
+
+.. code-block:: cpp
+
+    // Subblock must divide evenly into per-core dimensions
+    TT_ASSERT(per_core_M % out_subblock_h == 0);
+    TT_ASSERT(per_core_N % out_subblock_w == 0);
+
+A simple selection algorithm:
+
+.. code-block:: cpp
+
+    // Ordered from largest (most efficient) to smallest
+    std::vector<std::pair<uint32_t, uint32_t>> SUBBLOCK_CHOICES = {
+        {4, 2}, {2, 4},           // 8 tiles - most efficient
+        {8, 1}, {1, 8},           // 8 tiles - for narrow/tall blocks
+        {2, 2},                   // 4 tiles
+        {4, 1}, {1, 4},           // 4 tiles - for narrow/tall blocks
+        {2, 1}, {1, 2},           // 2 tiles
+        {1, 1}                    // 1 tile - fallback
+    };
+
+    for (auto [subblock_h, subblock_w] : SUBBLOCK_CHOICES) {
+        if (per_core_M % subblock_h == 0 && per_core_N % subblock_w == 0) {
+            out_subblock_h = subblock_h;
+            out_subblock_w = subblock_w;
+            break;
+        }
+    }
+
+
+L1 Memory Constraints
+---------------------
+
+Each core has limited L1 memory for circular buffers. The data reuse implementation
+requires space for:
+
+1. **Input buffer for A tiles** (``cb_in0``): Holds tiles from matrix A
+2. **Input buffer for B tiles** (``cb_in1``): Holds tiles from matrix B
+3. **Output buffer** (``cb_out``): Holds computed output tiles
+4. **Intermediate buffer** (``cb_interm``): Holds partial results between blocks
+
+The total L1 usage depends on:
+
+- ``per_core_M``: Number of M-dimension tiles per core
+- ``per_core_N``: Number of N-dimension tiles per core
+- ``in0_block_w``: Inner block width (tiles along K per iteration)
+- ``single_tile_size``: Size of one tile in bytes (typically 2 * 32 * 32 = 2048 bytes for bfloat16)
+
+The memory required is approximately:
+
+.. code-block:: cpp
+
+    // Double-buffered input CBs
+    uint32_t in0_cb_size = 2 * per_core_M * in0_block_w * single_tile_size;
+    uint32_t in1_cb_size = 2 * per_core_N * in0_block_w * single_tile_size;
+
+    // Output and intermediate CBs (shared memory region)
+    uint32_t out_cb_size = per_core_M * per_core_N * single_tile_size;
+
+    uint32_t total_cb_memory = in0_cb_size + in1_cb_size + out_cb_size;
+
+
+Querying Available L1 Memory from the Device
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The available L1 memory for circular buffers can be queried programmatically from
+the device allocator. The ``Allocator`` class (accessible via ``mesh_device->allocator()``)
+provides two key methods:
+
+- ``get_worker_l1_size()``: Returns the total L1 memory size per Tensix core in bytes.
+- ``get_base_allocator_addr(HalMemType::L1)``: Returns the starting byte address where
+  circular buffer allocation begins (i.e., the portion of L1 reserved for firmware,
+  kernel configuration, etc. is below this address).
+
+The difference between these values gives the L1 memory available for circular buffers:
+
+.. code-block:: cpp
+
+    #include <tt-metalium/allocator.hpp>
+    #include <tt-metalium/hal_types.hpp>
+
+    // Get the allocator from the mesh device
+    const auto& allocator = mesh_device->allocator();
+
+    // Query L1 memory parameters
+    size_t worker_l1_size = allocator->get_worker_l1_size();
+    size_t l1_cb_base_addr = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    // Available L1 memory for circular buffers
+    size_t l1_cb_memory_bytes = worker_l1_size - l1_cb_base_addr;
+
+With the available memory queried from the device, you can validate your chosen
+parameters at runtime:
+
+.. code-block:: cpp
+
+    uint32_t total_cb_memory = in0_cb_size + in1_cb_size + out_cb_size;
+
+    TT_ASSERT(
+        total_cb_memory <= l1_cb_memory_bytes,
+        "Circular buffer memory ({} bytes) exceeds available L1 ({} bytes). "
+        "Reduce per_core_M, per_core_N, or in0_block_w.",
+        total_cb_memory,
+        l1_cb_memory_bytes
+    );
+
+This data-driven approach ensures your code works correctly across different
+Tenstorrent device generations, which may have different L1 memory sizes.
 
 
 Step-by-Step Transformation Guide
 =================================
 
-The following steps describe how to transform ``matmul_multi_core.cpp`` into
-``matmul_multicore_reuse.cpp``. Each step identifies which components change and how.
+The following steps describe how to transform the basic multi-core implementation
+into a data reuse implementation. Each step identifies which components change and how.
 
 
 Step 1: Replace Work Distribution Logic
 ---------------------------------------
 
-**What changes:** Remove ``split_work_to_cores`` and implement 2D core assignment based
-on output blocks.
+**What changes:** Instead of distributing individual output tiles across cores using
+``split_work_to_cores``, assign 2D blocks of output tiles to cores.
 
-**In matmul_multi_core.cpp:**
+**Before (basic multi-core):**
 
 .. code-block:: cpp
 
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
         split_work_to_cores(core_grid, num_output_tiles_total);
 
-**In matmul_multicore_reuse.cpp:**
+**After (data reuse):**
 
 .. code-block:: cpp
 
-    // Get block/subblock parameters
-    auto matmul_params = get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
-    uint32_t per_core_M = std::get<0>(matmul_params);
-    uint32_t per_core_N = std::get<1>(matmul_params);
-    uint32_t out_subblock_h = std::get<2>(matmul_params);
-    uint32_t out_subblock_w = std::get<3>(matmul_params);
+    // Determine per-core block sizes
+    uint32_t per_core_M = Mt / num_cores_y;
+    uint32_t per_core_N = Nt / num_cores_x;
 
-    // Calculate core grid dimensions
+    // Select subblock dimensions (see subblock constraints section)
+    uint32_t out_subblock_h = /* chosen value */;
+    uint32_t out_subblock_w = /* chosen value */;
+
+    // Calculate number of cores needed
     uint32_t num_blocks_y = Mt / per_core_M;
     uint32_t num_blocks_x = Nt / per_core_N;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
@@ -301,14 +466,14 @@ Step 3: Resize Circular Buffers
 
 **What changes:** Increase CB sizes to hold full blocks (not just 2 tiles for double-buffering).
 
-**In matmul_multi_core.cpp:**
+**Before (basic multi-core):**
 
 .. code-block:: cpp
 
     uint32_t num_input_tiles = 2;  // Double buffer: 2 tiles per CB
     // CB size = 2 * single_tile_size
 
-**In matmul_multicore_reuse.cpp:**
+**After (data reuse):**
 
 .. code-block:: cpp
 
@@ -347,20 +512,29 @@ Step 4: Add Intermediate Circular Buffer
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
 
-Step 5: Replace Kernels with Block-Aware Versions
--------------------------------------------------
+Step 5: Update Kernels for Block-Aware Processing
+--------------------------------------------------
 
-**What changes:** Use different kernel files that understand block/subblock structure.
+**What changes:** The reader, compute, and writer kernels must be modified to understand
+the block/subblock structure.
 
-+------------------+-----------------------------------------------+-----------------------------------------------+
-| Kernel Type      | matmul_multi_core                             | matmul_multicore_reuse                        |
-+==================+===============================================+===============================================+
-| Reader           | reader_mm_output_tiles_partitioned.cpp        | reader_bmm_tile_layout.cpp                    |
-+------------------+-----------------------------------------------+-----------------------------------------------+
-| Compute          | mm.cpp                                        | bmm_large_block_zm.cpp                        |
-+------------------+-----------------------------------------------+-----------------------------------------------+
-| Writer           | writer_unary_interleaved_start_id.cpp         | writer_bmm_tile_layout.cpp                    |
-+------------------+-----------------------------------------------+-----------------------------------------------+
+**Reader kernel changes:**
+
+- Read entire blocks of A and B tiles at once (not one tile at a time)
+- Use stride-based addressing to navigate the block structure
+- Iterate over ``num_blocks`` along the K dimension
+
+**Compute kernel changes:**
+
+- Process subblocks within each block
+- For blocks after the first: reload partial results from intermediate buffer
+- For blocks before the last: store partial results to intermediate buffer
+- For the last block: write final results to output buffer
+
+**Writer kernel changes:**
+
+- Write output tiles organized by subblocks
+- Use stride-based addressing for proper 2D output layout
 
 
 Step 6: Update Compute Kernel Compile-Time Arguments
@@ -368,14 +542,14 @@ Step 6: Update Compute Kernel Compile-Time Arguments
 
 **What changes:** Pass block/subblock structure as compile-time arguments.
 
-**In matmul_multi_core.cpp:**
+**Before (basic multi-core):**
 
 .. code-block:: cpp
 
-    // No compile-time args for compute kernel
+    // Minimal compile-time args
     tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
-**In matmul_multicore_reuse.cpp:**
+**After (data reuse):**
 
 .. code-block:: cpp
 
@@ -466,7 +640,7 @@ Step 8: Update Core Iteration Loop
 
 **What changes:** Iterate over 2D core indices instead of linear work offsets.
 
-**In matmul_multi_core.cpp:**
+**Before (basic multi-core):**
 
 .. code-block:: cpp
 
@@ -480,7 +654,7 @@ Step 8: Update Core Iteration Loop
         }
     }
 
-**In matmul_multicore_reuse.cpp:**
+**After (data reuse):**
 
 .. code-block:: cpp
 
@@ -503,7 +677,7 @@ Summary of Key Differences
 ==========================
 
 +---------------------------+------------------------------------------+------------------------------------------+
-| Aspect                    | matmul_multi_core                        | matmul_multicore_reuse                   |
+| Aspect                    | Basic Multi-Core                         | Data Reuse                               |
 +===========================+==========================================+==========================================+
 | Work unit                 | Single output tile                       | Block of output tiles (subblocks)        |
 +---------------------------+------------------------------------------+------------------------------------------+
