@@ -1724,6 +1724,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     uint32_t scratch_write_addr;
     // Add back start_offset to amt_to_read to ensure all bytes from scratch_db are transferred
     amt_to_read += start_offset;
+    // Calculate the largest multiple of scratch_db_half_size that can fit in a uint32_t. This allows most of the math
+    // to be done in 32 bits.
     constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
     while (wlength != 0) {
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
