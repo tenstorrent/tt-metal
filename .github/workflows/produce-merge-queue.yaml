@@ -1,16 +1,21 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # TEMPORARY — REQUIRED to run on branch + PR
+  # REQUIRED for testing on your branch
+  push:
+    branches:
+      - ashah/merge-queue
+
+  # REQUIRED for testing on PRs
   pull_request:
     types: [opened, synchronize, reopened]
 
-  # Keep for later (works only on main)
+  # Keep for later (manual testing)
   workflow_dispatch:
 
-  # Keep for later (works only on main)
+  # Keep for later (only meaningful on main)
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
@@ -23,29 +28,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ------------------------------------------------------------------
-      # Build merge-queue snapshot derived from public GitHub APIs
-      # ------------------------------------------------------------------
-      - name: Build merge queue snapshot (derived from PRs)
+      # ------------------------------------------------------------
+      # Sanity check: does GH_TOKEN work at all?
+      # ------------------------------------------------------------
+      - name: Check GitHub API rate limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Checking GitHub API rate limit"
+          gh api rate_limit
+
+      # ------------------------------------------------------------
+      # Try simplest possible PR fetch (no flags, no vars)
+      # ------------------------------------------------------------
+      - name: Fetch open PRs (hardcoded endpoint)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          echo "[Info] Fetching open pull requests"
+          gh api /repos/tenstorrent/tt-metal/pulls > pulls.json
+          echo "[Info] PR count:"
+          jq 'length' pulls.json
+
+      # ------------------------------------------------------------
+      # Build merge-queue snapshot JSON
+      # ------------------------------------------------------------
+      - name: Build merge queue snapshot
+        run: |
+          set -euo pipefail
 
           mkdir -p generated/merge_queue
-
-          REPO="tenstorrent/tt-metal"
           COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          echo "Fetching open pull requests..."
-          gh api repos/${REPO}/pulls \
-            -f state=open \
-            -f per_page=100 \
-            > pulls.json
-
-          echo "Building merge queue snapshot JSON..."
-
-          jq --arg repo "${REPO}" --arg ts "${COLLECTED_AT}" '
+          jq --arg repo "tenstorrent/tt-metal" --arg ts "$COLLECTED_AT" '
           {
             repository: $repo,
             collected_at: $ts,
@@ -56,10 +72,7 @@ jobs:
                 pr_title: .title,
                 pr_author_login: .user.login,
                 head_sha: .head.sha,
-
-                # Derived state (public-signal only)
                 state: "AWAITING_CHECKS",
-
                 queue_position: null,
                 enqueued_at: null,
                 estimated_time_to_merge_sec: null,
@@ -69,26 +82,23 @@ jobs:
           }
           ' pulls.json > generated/merge_queue/merge_queue_snapshot.json
 
-          echo "Snapshot preview:"
+          echo "[Info] Snapshot preview:"
           jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
           jq '.merge_queue[0]' generated/merge_queue/merge_queue_snapshot.json || true
 
-      # ------------------------------------------------------------------
-      # Add timestamp to filename
-      # ------------------------------------------------------------------
+      # ------------------------------------------------------------
+      # Timestamp filename
+      # ------------------------------------------------------------
       - name: Add timestamp to filename
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
-
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
-
-          echo "Generated files:"
           ls -lh generated/merge_queue
 
-      # ------------------------------------------------------------------
-      # Upload snapshot via existing SFTP mechanism
-      # ------------------------------------------------------------------
+      # ------------------------------------------------------------
+      # Upload via SFTP
+      # ------------------------------------------------------------
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
