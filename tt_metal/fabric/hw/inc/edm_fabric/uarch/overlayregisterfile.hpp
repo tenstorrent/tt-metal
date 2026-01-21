@@ -14,28 +14,33 @@
 struct RegisterFile {};
 
 struct OverlayRegisterFile : public RegisterFile {
-    static constexpr uint32_t const BEG_ADDR = 0xFFB40000; // base
-    static constexpr uint32_t const END_ADDR = 0xFFB5FFFF; // offset
-    static constexpr uint32_t const ADDR_RNG = END_ADDR - BEG_ADDR + 1U;
 
+    using OverlayRegisterType = uint8_t[3U]; // 3 bytes per overlay register (24 bits)
+
+    static constexpr uint32_t const BEG_ADDR_VALUE = 0xFFB40000U; // base
+    static constexpr uint32_t const END_ADDR_VALUE = 0xFFB5FFFFU; // offset
+    static constexpr uint32_t const ADDR_RNG_VALUE = END_ADDR_VALUE - BEG_ADDR_VALUE + 1U;
+    
+    //static constexpr OverlayRegisterType* const BEG_ADDR = reinterpret_cast<OverlayRegisterType*>(BEG_ADDR_VALUE); // base
+    //static constexpr OverlayRegisterType* const END_ADDR = reinterpret_cast<OverlayRegisterType*>(END_ADDR_VALUE); // offset
+    
     template<uint32_t Index>
     struct OverlayRegister {
-        static constexpr uint32_t index = Index;
-        static constexpr uint32_t ADDRESS = OverlayRegisterFile::BEG_ADDR + Index;
+        using size_of_register = std::integral_constant<std::uint32_t, sizeof(OverlayRegisterType)>; // 3 bytes per overlay register (24 bits)
 
-        static volatile uint32_t* get_address_ptr() {
-            return reinterpret_cast<volatile uint32_t*>(get_stream_scratch_register_address<ADDRESS>());
-        }
+        static constexpr uint32_t INDEX = Index;
+        static constexpr uint32_t OFFSET = INDEX * size_of_register::value;        
+        static constexpr uint32_t ADDRESS = OverlayRegisterFile::BEG_ADDR_VALUE + OFFSET;
 
         static FORCE_INLINE uint32_t load() {
-            return *get_address_ptr();
+            return *(reinterpret_cast<uint32_t*>(get_stream_scratch_register_address<ADDRESS>()));
         }
 
         static FORCE_INLINE void store(uint32_t const value) {
             // serves as convenient storage for bitfield manipulations (masks)
             // used in load/store of combined registers
             //
-            union {
+            static union {
                 uint32_t value;
                 struct {
                     uint16_t lower_addr : NumLowerBits::value;
@@ -57,6 +62,17 @@ struct OverlayRegisterFile : public RegisterFile {
     using OR1 = OverlayRegister<1U>;
     using OR2 = OverlayRegister<2U>;
     using OR3 = OverlayRegister<3U>;
+    using OR4 = OverlayRegister<4U>;
+    using OR5 = OverlayRegister<5U>;
+    using OR6 = OverlayRegister<6U>;
+    using OR7 = OverlayRegister<7U>;
+    using OR8 = OverlayRegister<8U>;
+    using OR9 = OverlayRegister<9U>;
+    using OR10 = OverlayRegister<10U>;
+    using OR11 = OverlayRegister<11U>;
+    using OR12 = OverlayRegister<12U>;
+    using OR13 = OverlayRegister<13U>;
+    using OR14 = OverlayRegister<14U>;
     
     // variant type to hold all overlay register types;
     // used for type checking in template functions
@@ -66,7 +82,18 @@ struct OverlayRegisterFile : public RegisterFile {
         OR0,
         OR1,
         OR2,
-        OR3
+        OR3,
+        OR4,
+        OR5,
+        OR6,
+        OR7,
+        OR8,
+        OR9,
+        OR10,
+        OR11,
+        OR12,
+        OR13,
+        OR14
     >;
 
     // uses variant type to check if T is a valid overlay register type
@@ -76,13 +103,24 @@ struct OverlayRegisterFile : public RegisterFile {
         std::is_same<T, OR0>,
         std::is_same<T, OR1>,
         std::is_same<T, OR2>,
-        std::is_same<T, OR3>
+        std::is_same<T, OR3>,
+        std::is_same<T, OR4>,
+        std::is_same<T, OR5>,
+        std::is_same<T, OR6>,
+        std::is_same<T, OR7>,
+        std::is_same<T, OR8>,
+        std::is_same<T, OR9>,
+        std::is_same<T, OR10>,
+        std::is_same<T, OR11>,
+        std::is_same<T, OR12>,
+        std::is_same<T, OR13>,
+        std::is_same<T, OR14>
     > {};
 
     // uses ADDRESS field to check if T is a valid overlay register address
     //
     template<typename T>
-    using IsValidOverlayRegisterAddress = std::conditional_t<T::ADDRESS >= BEG_ADDR && T::ADDRESS <= END_ADDR, std::true_type, std::false_type>;
+    using IsValidOverlayRegisterAddress = std::conditional_t<T::ADDRESS >= BEG_ADDR_VALUE && T::ADDRESS <= END_ADDR_VALUE, std::true_type, std::false_type>;
 
     // used to define bit widths of overlay register fields
     //
