@@ -40,7 +40,7 @@ def vae_device_config(func):
     )(func)
     func = pytest.mark.parametrize(
         "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
+        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}],
         indirect=True,
     )(func)
     return func
@@ -141,7 +141,7 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
 
     logger.info("Run TtConv1x1 forward (Conv3d mode)")
     tt_output = tt_model(tt_input)
-    logger.info("End TtResBlock forward")
+    logger.info("End TtConv1x1 forward (Conv3d mode)")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor

@@ -16,6 +16,8 @@ struct ParallelConfig;
 
 namespace ttnn::operations::conv::conv2d {
 
+using ttnn::prim::Conv2dSliceConfig;
+
 // Device validation functions for conv2d tensors (after preparation/on device)
 bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,
@@ -133,6 +135,7 @@ struct Conv2dWeightsBiasPrepConfig {
         const std::optional<sliding_window::ParallelConfig>& output_parallel_config_,
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
+        uint32_t input_height_,
         uint32_t input_width_,
         bool interleaved_mm_conv,
         uint32_t out_channels_,
@@ -149,6 +152,7 @@ struct Conv2dWeightsBiasPrepConfig {
         output_parallel_config(output_parallel_config_),
         groups(groups_),
         act_block_h_ntiles(act_block_h_ntiles_),
+        input_height(input_height_),
         input_width(input_width_),
         has_bias(has_bias_),
         enable_kernel_stride_folding(enable_kernel_stride_folding_),
@@ -169,6 +173,7 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::optional<sliding_window::ParallelConfig> output_parallel_config;
     const uint32_t groups;
     const uint32_t act_block_h_ntiles;
+    const uint32_t input_height;
     const uint32_t input_width;
     const bool has_bias;
 
@@ -192,6 +197,7 @@ struct Conv2dWeightsBiasPrepConfig {
         "output_parallel_config",
         "groups",
         "act_block_h_ntiles",
+        "input_height",
         "input_width",
         "has_bias",
         "enable_kernel_stride_folding",
@@ -210,6 +216,7 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->output_parallel_config),
             std::cref(this->groups),
             std::cref(this->act_block_h_ntiles),
+            std::cref(this->input_height),
             std::cref(this->input_width),
             std::cref(this->has_bias),
             std::cref(this->enable_kernel_stride_folding),

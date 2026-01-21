@@ -77,9 +77,8 @@ std::string get_default_root_path() {
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
-    } else {
-        return "/tmp/tt-metal-cache/";
     }
+    return "/tmp/tt-metal-cache/";
 }
 
 JitBuildEnv::JitBuildEnv() = default;
@@ -104,14 +103,14 @@ void JitBuildEnv::init(
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(
-            std::filesystem::directory_iterator{root_path},
-            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            check_built_dir(dir_entry.path(), git_hash_path);
+        });
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 
-    this->out_root_ = this->out_root_  + git_hash + "/";
+    this->out_root_ = this->out_root_ + git_hash + "/";
 #endif
 
     // Tools
@@ -125,10 +124,7 @@ void JitBuildEnv::init(
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
     // Ordered by precedence
-    const std::array<std::string, 2> sfpi_roots = {
-        this->root_ + "runtime/sfpi",
-        "/opt/tenstorrent/sfpi"
-    };
+    const std::array<std::string, 2> sfpi_roots = {this->root_ + "runtime/sfpi", "/opt/tenstorrent/sfpi"};
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
@@ -148,6 +144,10 @@ void JitBuildEnv::init(
     // Flags
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
+    if (rtoptions.get_jit_analytics_enabled()) {
+        common_flags += "-fdump-rtl-all -fdump-tree-original ";
+    }
+
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
     }
@@ -164,8 +164,8 @@ void JitBuildEnv::init(
 
     // Defines
     this->defines_ = "";
-    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
-        this->defines_ += "-D" + it->first + "=" + it->second + " ";
+    for (const auto& device_kernel_define : device_kernel_defines) {
+        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
@@ -192,6 +192,9 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
@@ -272,8 +275,8 @@ void JitBuildEnv::init(
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
-    for (size_t i = 0; i < includeDirs.size(); ++i) {
-        oss << "-I" << includeDirs[i] << " ";
+    for (const auto& includeDir : includeDirs) {
+        oss << "-I" << includeDir << " ";
     }
     this->includes_ = oss.str();
 
@@ -300,7 +303,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     env_(env),
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
-    dispatch_message_addr_(build_config.dispatch_message_addr),
+    core_type_(build_config.core_type),
+    processor_class_(build_config.processor_class),
+    processor_id_(build_config.processor_id),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
@@ -323,10 +328,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_,
-        build_config.core_type,
-        build_config.processor_class,
-        static_cast<uint32_t>(build_config.processor_id)};
+        this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -343,7 +345,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         for (const auto& define : jit_build_query.defines(params)) {
             fmt::format_to(it, "-D{} ", define);
         }
-        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", this->dispatch_message_addr_);
+        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -456,6 +458,10 @@ void JitBuildState::compile_one(
     // Append common args provided by the build state
     cmd += this->cflags_;
     cmd += this->includes_;
+    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
+    if (settings) {
+        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
+    }
     cmd += fmt::format("-c -o {} {} ", obj, src);
     cmd += defines;
 
@@ -566,7 +572,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
+    static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     if (this->firmware_is_kernel_object_) {
         elf.ObjectifyExecutable();
@@ -575,8 +581,16 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 std::string JitBuildState::weakened_firmware_name() const {
+    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+    const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
+        {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
     std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
+    return fmt::format(
+        "{}{}/{}_{}",
+        this->env_.out_firmware_root_,
+        weakened_firmware_target_name,
+        weakened_firmware_target_name,
+        name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {

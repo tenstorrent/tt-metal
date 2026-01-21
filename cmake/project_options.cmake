@@ -3,7 +3,6 @@
 #   The following options and their defaults impact what artifacts get built
 ###########################################################################################
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
-option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" ON)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
@@ -17,7 +16,7 @@ option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
 option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
-option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" ON)
+option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" OFF)
 option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI)" ON)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
@@ -26,12 +25,7 @@ option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile fir
 ###########################################################################################
 
 if(WITH_PYTHON_BINDINGS)
-    if(EXPERIMENTAL_NANOBIND_BINDINGS)
-        set(PY_BINDING "nanobind")
-    else()
-        set(PY_BINDING "pybind")
-    endif()
-    message(STATUS "Python Binding Backend: ${PY_BINDING}")
+    message(STATUS "Building with Python Bindings: nanobind")
 endif()
 
 if(CMAKE_CXX_CLANG_TIDY AND TT_UNITY_BUILDS)

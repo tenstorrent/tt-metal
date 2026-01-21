@@ -17,6 +17,9 @@ Description:
     This script will try to connect to Inspector RPC.
     If RPC is not available, it will try to load serialized RPC data from the log directory.
     If RPC data is not available, it will try to parse inspector logs.
+
+Owner:
+    tt-vjovanovic
 """
 
 from dataclasses import dataclass

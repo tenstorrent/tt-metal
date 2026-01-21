@@ -13,6 +13,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "input_shapes",

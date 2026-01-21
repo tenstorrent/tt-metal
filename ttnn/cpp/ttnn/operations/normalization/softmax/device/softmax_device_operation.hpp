@@ -5,27 +5,34 @@
 #pragma once
 
 #include "softmax_operation_types.hpp"
-#include "softmax_program_factory.hpp"
+#include "softmax_program_factory_general.hpp"
+#include "softmax_program_factory_general_w_small.hpp"
+#include "softmax_program_factory_general_w_large.hpp"
+#include "softmax_program_factory_general_h_small.hpp"
+#include "softmax_program_factory_general_h_large.hpp"
+#include "softmax_program_factory_general_c_large.hpp"
+#include "softmax_program_factory_attention_optimized.hpp"
+#include "softmax_program_factory_attention_optimized_sharded.hpp"
 
 #include "ttnn/decorators.hpp"
 
 #include <optional>
 
-namespace ttnn::operations::normalization::softmax {
+namespace ttnn::prim {
 struct SoftmaxDeviceOperation {
-    using operation_attributes_t = softmax::operation_attributes_t;
-    using tensor_args_t = softmax::tensor_args_t;
-    using spec_return_value_t = softmax::spec_return_value_t;
-    using tensor_return_value_t = softmax::tensor_return_value_t;
+    using operation_attributes_t = SoftmaxParams;
+    using tensor_args_t = SoftmaxInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
-        program::SoftmaxProgramFactoryGeneralWSmall,
-        program::SoftmaxProgramFactoryGeneralWLarge,
-        program::SoftmaxProgramFactoryGeneralHSmall,
-        program::SoftmaxProgramFactoryGeneralHLarge,
-        program::SoftmaxProgramFactoryGeneralCLarge,
-        program::SoftmaxShardedProgramFactoryAttentionOptimized,
-        program::SoftmaxProgramFactoryAttentionOptimized>;
+        SoftmaxProgramFactoryGeneralWSmall,
+        SoftmaxProgramFactoryGeneralWLarge,
+        SoftmaxProgramFactoryGeneralHSmall,
+        SoftmaxProgramFactoryGeneralHLarge,
+        SoftmaxProgramFactoryGeneralCLarge,
+        SoftmaxShardedProgramFactoryAttentionOptimized,
+        SoftmaxProgramFactoryAttentionOptimized>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,33 +45,19 @@ struct SoftmaxDeviceOperation {
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        SoftmaxOperationType softmax_type,
-        const Tensor& input_tensor,
-        int8_t dim = -1,
-        const std::optional<const Tensor>& mask = std::nullopt,
-        std::optional<float> scale = std::nullopt,
-        bool inplace = false,
-        tt::tt_metal::MemoryConfig output_mem_config = {},
-        SoftmaxProgramConfig program_config = {},
-        bool is_causal_mask = false,
-        DeviceComputeKernelConfig compute_kernel_config = {},
-        bool is_scale_causal_mask_hw_dims_softmax = false,
-        bool numeric_stable = true);
 };
 
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim = -1,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
 Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
@@ -89,11 +82,19 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     SoftmaxProgramConfig program_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
-}  // namespace ttnn::operations::normalization::softmax
 
-namespace ttnn::prim {
-
-constexpr auto softmax =
-    ttnn::register_operation<"ttnn::prim::softmax", ttnn::operations::normalization::softmax::SoftmaxDeviceOperation>();
+Tensor softmax(
+    SoftmaxOperationType softmax_type,
+    const Tensor& input_tensor,
+    int8_t dim = -1,
+    const std::optional<const Tensor>& mask = std::nullopt,
+    std::optional<float> scale = std::nullopt,
+    bool inplace = false,
+    tt::tt_metal::MemoryConfig output_mem_config = {},
+    SoftmaxProgramConfig program_config = {},
+    bool is_causal_mask = false,
+    DeviceComputeKernelConfig compute_kernel_config = {},
+    bool is_scale_causal_mask_hw_dims_softmax = false,
+    bool numeric_stable = true);
 
 }  // namespace ttnn::prim

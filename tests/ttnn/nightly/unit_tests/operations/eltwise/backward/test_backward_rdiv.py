@@ -17,7 +17,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     ),
 )
 @pytest.mark.parametrize(
-    "round_mode",
+    "rounding_mode",
     (
         None,
         "trunc",
@@ -25,14 +25,14 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     ),
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
-def test_bw_rdiv(input_shapes, scalar, round_mode, device):
+def test_bw_rdiv(input_shapes, scalar, rounding_mode, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
 
-    tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
+    tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, rounding_mode=rounding_mode)
 
     golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
-    golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
+    golden_tensor = golden_function(grad_data, in_data, scalar, rounding_mode)
 
     status = compare_results(tt_output_tensor_on_device, golden_tensor)
     assert status

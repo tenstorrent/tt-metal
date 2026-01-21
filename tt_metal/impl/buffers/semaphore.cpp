@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "semaphore.hpp"
-#include <stdint.h>
+#include <cstdint>
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

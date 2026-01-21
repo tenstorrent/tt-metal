@@ -13,18 +13,18 @@
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 
 struct TilizeDeviceOperation {
-    using operation_attributes_t = data_movement::tilize::operation_attributes_t;
-    using tensor_args_t = data_movement::tilize::tensor_args_t;
-    using spec_return_value_t = data_movement::tilize::spec_return_value_t;
-    using tensor_return_value_t = data_movement::tilize::tensor_return_value_t;
+    using operation_attributes_t = ttnn::prim::TilizeParams;
+    using tensor_args_t = ttnn::prim::TilizeInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::TilizeMultiCoreInterleavedProgramFactory,
-        program::TilizeMultiCoreBlockProgramFactory,
-        program::TilizeSingleCoreProgramFactory,
-        program::TilizeMultiCoreShardedProgramFactory>;
+        TilizeMultiCoreInterleavedProgramFactory,
+        TilizeMultiCoreBlockProgramFactory,
+        TilizeSingleCoreProgramFactory,
+        TilizeMultiCoreShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,21 +35,15 @@ struct TilizeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensors,
-        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
-        const std::optional<tt::tt_metal::DataType>& output_dtype,
-        bool use_multicore,
-        bool enough_space_width,
-        bool enough_space_height,
-        bool use_low_perf,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-constexpr auto tilize =
-    ttnn::register_operation<"ttnn::prim::tilize", ttnn::operations::data_movement::TilizeDeviceOperation>();
+ttnn::Tensor tilize(
+    const Tensor& input_tensors,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
+    bool use_low_perf,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

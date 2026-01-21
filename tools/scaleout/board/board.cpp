@@ -110,7 +110,7 @@ Board::Board(
     for (const auto& [port_type, port_mapping] : ports) {
         for (const auto& [port_id, asic_channels] : port_mapping) {
             for (const auto& asic_channel : asic_channels) {
-                if (found_asic_channels.find(asic_channel) != found_asic_channels.end()) {
+                if (found_asic_channels.contains(asic_channel)) {
                     throw std::runtime_error("Duplicate ASIC channel found");
                 }
                 found_asic_channels.insert(asic_channel);

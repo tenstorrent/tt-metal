@@ -14,31 +14,19 @@
 #include "reduce_op_multi_core_h_program_factory.hpp"
 #include "reduce_op_multi_core_w_program_factory.hpp"
 
-namespace ttnn::operations::reduction::generic {
+namespace ttnn::prim {
 
 struct ReduceDeviceOperation {
-    using operation_attributes_t = generic::operation_attributes_t;
-    using tensor_args_t = generic::tensor_args_t;
-    using spec_return_value_t = generic::spec_return_value_t;
-    using tensor_return_value_t = generic::tensor_return_value_t;
+    using operation_attributes_t = ReduceParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<
-        program::ReduceSingleCoreHwProgramFactory,
-        program::ReduceMultiCoreHProgramFactory,
-        program::ReduceMultiCoreWProgramFactory>;
+    using program_factory_t =
+        std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        tt::tt_metal::ReduceOpMath reduce_math,
-        tt::tt_metal::ReduceOpDim reduce_dim,
-        float scaler,
-        const MemoryConfig& output_mem_config,
-        const std::optional<DataType>& output_dtype,
-        const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -56,9 +44,14 @@ struct ReduceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::reduction::generic
+ttnn::Tensor reduce(
+    const Tensor& input_tensor,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    float scaler,
+    const MemoryConfig& output_mem_config,
+    const std::optional<DataType>& output_dtype,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
-namespace ttnn::prim {
-constexpr auto reduce =
-    ttnn::register_operation<"ttnn::prim::reduce", ttnn::operations::reduction::generic::ReduceDeviceOperation>();
 }  // namespace ttnn::prim

@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <optional>
 
-namespace ttnn::operations::dram_prefetcher {
+namespace ttnn::prim {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::DramPrefetcherProgramFactory{};
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return DramPrefetcherProgramFactory{};
 }
 
 void DramPrefetcherOperation::validate_on_program_cache_miss(
@@ -77,8 +79,8 @@ void DramPrefetcherOperation::validate_on_program_cache_hit(
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-spec_return_value_t DramPrefetcherOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+TensorSpec DramPrefetcherOperation::compute_output_specs(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
@@ -93,19 +95,19 @@ DramPrefetcherOperation::tensor_return_value_t DramPrefetcherOperation::create_o
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 
-std::tuple<DramPrefetcherOperation::operation_attributes_t, DramPrefetcherOperation::tensor_args_t>
-DramPrefetcherOperation::invoke(
+ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
-    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode) {
-    return {
-        operation_attributes_t{
-            .num_layers = num_layers,
-            .enable_performance_mode = enable_performance_mode,
-            .global_cb = global_cb,
-        },
-        tensor_args_t{.input_tensors = tensors}};
+    auto operation_attributes = DramPrefetcherParams{
+        .num_layers = num_layers,
+        .enable_performance_mode = enable_performance_mode,
+        .global_cb = global_cb,
+    };
+    auto tensor_args = DramPrefetcherInputs{.input_tensors = tensors};
+
+    return ttnn::device_operation::launch<DramPrefetcherOperation>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::dram_prefetcher
+}  // namespace ttnn::prim

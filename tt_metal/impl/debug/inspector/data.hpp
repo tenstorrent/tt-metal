@@ -8,6 +8,7 @@
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "debug/inspector/runtime_rpc_channel_generated.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <deque>
 
 namespace tt::tt_metal::inspector {
 
@@ -26,6 +27,7 @@ private:
     void rpc_get_programs(rpc::RuntimeInspector::GetProgramsResults::Builder& results);
     void rpc_get_mesh_devices(rpc::RuntimeInspector::GetMeshDevicesResults::Builder& results);
     void rpc_get_mesh_workloads(rpc::RuntimeInspector::GetMeshWorkloadsResults::Builder& results);
+    void rpc_get_mesh_workloads_runtime_ids(rpc::RuntimeInspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results);
     void rpc_get_devices_in_use(rpc::RuntimeInspector::GetDevicesInUseResults::Builder& results);
     void rpc_get_kernel(
         rpc::RuntimeInspector::GetKernelParams::Reader params,
@@ -52,6 +54,7 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;
+    std::mutex runtime_ids_mutex;
     // mutex to protect dispatch core info
     std::mutex dispatch_core_info_mutex;
     // mutex to protect dispatch_s core info
@@ -62,6 +65,8 @@ private:
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
+    std::deque<inspector::MeshWorkloadRuntimeIdEntry> runtime_ids;
+    static constexpr size_t MAX_RUNTIME_ID_ENTRIES = 10000;
     // store dispatch core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_core_info;
     // store dispatch_s core info by virtual core

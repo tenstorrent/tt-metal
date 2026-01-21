@@ -22,13 +22,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
-UntilizeMultiCoreProgramFactory::cached_program_t
-UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& output) {
+UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactory::create(
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& output) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -65,45 +64,6 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
          cliff_compute_core_range,
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
-
-    constexpr uint32_t threshold_row_block = 32;
-    if (!input_is_sharded and !output_is_sharded) {
-        if (num_tiles_per_row > threshold_row_block) {
-            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
-
-                auto
-                    [ncores_block,
-                     all_cores_block,
-                     core_range_block,
-                     cliff_row_core_range,
-                     cliff_col_core_range,
-                     cliff_col_row_core_range,
-                     nblocks_per_core_block,
-                     single_block_size,
-                     single_block_size_cliff_row,
-                     single_block_size_cliff_col,
-                     has_cliff_row,
-                     has_cliff_col,
-                     full_cores_per_row,
-                     full_cores_per_col] =
-                        ttnn::split_blocks_for_tilize_wh(
-                            grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-                if (num_compute_cores < ncores_block) {
-                    return UntilizeMultiCoreBlockProgramFactory::create(operation_attributes, tensor_args, output);
-                }
-            }
-        }
-    }
-
-    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
-    // Need to debug this to work on wide tensors that are higher than a single tile
-    auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, a);
-    if (pf_option == 0) {
-        return UntilizeMultiCoreParallelizeColumnProgramFactory::create(operation_attributes, tensor_args, output);
-    } else if (pf_option == 1) {
-        return UntilizeSingleCoreProgramFactory::create(operation_attributes, tensor_args, output);
-    }
 
     // Default values are for interleaved input.
     // Cliff core applicable interleaved input only, it is the only core not processing the
@@ -191,12 +151,6 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // Writer compute defines
-    std::map<std::string, std::string> writer_compute_defines;
-    if (output_is_sharded) {
-        writer_compute_defines["SHARDED"] = "1";
-    }
-
     // Writer compile-time args
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -218,11 +172,7 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
     };
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-    } else {
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -230,7 +180,7 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multi_core.cpp",
         compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
@@ -437,9 +387,9 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
 
 void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -471,4 +421,4 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
         runtime_args[0] = dst_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

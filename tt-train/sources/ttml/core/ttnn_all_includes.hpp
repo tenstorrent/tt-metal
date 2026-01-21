@@ -52,6 +52,7 @@
 #include <ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp>                          // NOLINT
 #include <ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp>  // NOLINT
 #include <ttnn/operations/experimental/dropout/dropout.hpp>                                                // NOLINT
+#include <ttnn/operations/experimental/slice_write/slice_write.hpp>                                        // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp>                  // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp>          // NOLINT
 #include <ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp>      // NOLINT

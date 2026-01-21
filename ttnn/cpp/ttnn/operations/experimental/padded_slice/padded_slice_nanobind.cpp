@@ -41,8 +41,8 @@ void bind_padded_slice(nb::module_& mod) {
                 [1, 1, 32, 32]
                 )doc";
 
-    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
-    // a vector with a fixed size default value
+    // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
+    // than a vector with a fixed size default value
     using OperationType = decltype(ttnn::experimental::padded_slice);
     ttnn::bind_registered_operation(
         mod,
@@ -56,7 +56,7 @@ void bind_padded_slice(nb::module_& mod) {
                const std::optional<ttnn::SmallVector<int>>& step,
                const MemoryConfig& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value) {
+               const std::optional<float>& /*pad_value*/) {
                 const auto step_value = step.value_or(ttnn::SmallVector<int>(padded_slice_end.size(), 1));
                 return self(
                     input_tensor,

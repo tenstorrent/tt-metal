@@ -31,6 +31,8 @@ from ttexalens.coordinate import OnChipCoordinate
 
 triage.progress_disabled = True
 
+triage.progress_disabled = True  # Disable progress bars for tests
+
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
 HANG_APP_EXPECTED_RESULTS = {
@@ -78,6 +80,7 @@ def cause_hang_with_app(request):
     app, args, app_configuration, timeout = request.param
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
+    os.environ.pop("TT_METAL_LOGS_PATH", None)
     proc = subprocess.Popen(
         [app_path_str] + args,
         stdout=subprocess.PIPE,
@@ -104,6 +107,9 @@ def cause_hang_with_app(request):
     request.cls.app_configuration = app_configuration
     request.cls.expected_results = app_configuration.get("expected_results", {})
     request.cls.exalens_context = init_ttexalens()
+    if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
+        metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
+        os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
     try:
         yield
     finally:
@@ -142,7 +148,22 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+            },
+            20,
+        ),
+        (
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            HANG_APP_ADD_2_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
@@ -375,7 +396,7 @@ class TestTriage:
             filtered_results = [
                 check
                 for check in result
-                if check.location == expected_coord and check.device_description.device.id() == device_to_check
+                if check.location == expected_coord and check.device_description.device.id == device_to_check
             ]
 
         results_by_risc = {check.risc_name: check for check in filtered_results if check.risc_name in cores_to_check}

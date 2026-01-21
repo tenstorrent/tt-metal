@@ -20,7 +20,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
     check_ttnn_output,
-    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
 )
 
@@ -29,15 +29,15 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
     "pcc_values, skip_check",
     [
         (
-            {"pcc": 0.99, "abs_err": 0.03, "rel_err": 0.4},
+            {"pcc": 0.998, "abs_err": 0.03, "rel_err": 0.45},
             skip_if_not_blackhole_20_cores,
         ),
         (
             {"pcc": 0.998, "abs_err": 0.04, "rel_err": 0.5},
-            skip_if_not_blackhole_130_cores,
+            skip_if_not_blackhole_110_cores,
         ),
     ],
-    ids=["20_cores", "130_cores"],
+    ids=["20_cores", "110_cores"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_aspp(device, pcc_values, skip_check, model_location_generator):
@@ -101,6 +101,7 @@ def test_ttnn_aspp(device, pcc_values, skip_check, model_location_generator):
 
         # Create centralized configuration
         model_configs = ModelOptimisations(
+            device=device,
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )

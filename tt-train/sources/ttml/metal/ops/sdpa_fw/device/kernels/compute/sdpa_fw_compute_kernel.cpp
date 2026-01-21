@@ -61,8 +61,6 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-constexpr uint32_t cb_mm_result_holder = tt::CBIndex::c_16;  // used for holding current matmul output
-
 const uint32_t onetile = 1U;
 
 void MAIN {
@@ -158,12 +156,8 @@ void MAIN {
                 cb_pop_front(alias_cb_prev_sum_exp, onetile);
 
                 // update previous matmul output with exp_max_diff and add it to current matmul output
-#ifndef FP32_DEST_ACC_EN
                 update_cur_mm_out(qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
-#else
-                update_cur_mm_out(
-                    qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
-#endif
+
                 cb_pop_front(cb_exp_max_diff, onetile);
                 cb_pop_front(alias_cb_prev_mm_out, qWt);
             }
@@ -181,9 +175,13 @@ void MAIN {
         cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
 #ifdef RETURN_INTERMEDIATES
-        // pack recip exp sum into intermediates buffer
-        // TODO(vmelnykov): we need to pack max value per head to intermediates also
-        pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
+        // Pack intermediates: max_val (col 0) and recip_sum_exp (col 32)
+        // Total 2 tiles: [max_val_tile, recip_sum_exp_tile]
+        // Writer will write these to shape (B, H, S, 64)
+        // cb_matmul_reduce is used as mask tile (1.0 in col 0, 0.0 elsewhere) to ensure zeros elsewhere
+        pack_intermediate_result(alias_cb_prev_max, cb_intermediates, cb_matmul_reduce);      // tile 0: max_val at col 0
+        pack_intermediate_result(
+            alias_cb_prev_sum_exp, cb_intermediates, cb_matmul_reduce);  // tile 1: recip_sum_exp at col 32
 #endif
 
         cb_reserve_back(cb_output, qWt);

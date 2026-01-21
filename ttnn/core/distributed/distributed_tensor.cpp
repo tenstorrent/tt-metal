@@ -10,7 +10,6 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>
-
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -349,7 +348,7 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
             dst_buffer = dst_buffer.transform(
                 [&tensor](const tt::tt_metal::HostBuffer& shard) {
                     return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());

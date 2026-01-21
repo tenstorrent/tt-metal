@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/nlp_create_qkv_heads_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
@@ -19,7 +19,7 @@ struct NlpCreateHeadsOperation {
         std::optional<uint32_t> num_kv_heads,
         bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors = std::nullopt);
+        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 };
 }  // namespace operations::experimental::transformer
 

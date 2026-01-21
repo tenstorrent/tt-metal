@@ -56,11 +56,10 @@ constexpr uint32_t kQKResultTiles = 1U;
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kSingleTileBuffer = 1U;
+constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp at col 32
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -234,10 +233,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
     }
+
     // create intermediate buffer only if we need to return intermediates
+    // Intermediate shape: (B, H, S, 64) = 2 tiles wide (max_val at col 0, recip_sum_exp at col 32)
     if (args.return_intermediates) {
         [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
@@ -273,9 +274,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
-
-    [[maybe_unused]] auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -335,13 +333,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     if (use_attn_mask) {
         defines[kUseAttnMaskDefKey] = "1";
-    }
-
-    // TODO(vmelnykov): #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
-    // Currently, this define is only used to support L1 accumulation when fp32_dest_acc_en = false.
-    // It should be removed once L1 accumulation is properly fixed for fp32_dest_acc_en = true.
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
     }
 
     SDPAForwardKernels kernels;

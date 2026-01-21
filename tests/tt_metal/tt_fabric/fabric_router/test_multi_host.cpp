@@ -337,6 +337,58 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
+TEST(MultiHost, TestBHGalaxyTorusXYControlPlaneQueries) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    // 64 devices * 4 edges per device * 2 links per edge
+    EXPECT_EQ(intramesh_connections.size(), 64 * 4 * 2);
+    FabricNodeId src_node_id(MeshId{0}, 0);
+    MeshCoordinate src_mesh_coord(0, 0);
+    FabricNodeId dst_node_id(MeshId{0}, 7);
+    MeshCoordinate dst_mesh_coord(0, 7);
+    FabricNodeId dst_node_id_2(MeshId{0}, 56);
+    MeshCoordinate dst_mesh_coord_2(7, 0);
+    // Validate XY Torus connectivity
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        TT_FATAL(direction.has_value(), "No direction found");
+        EXPECT_EQ(*direction, RoutingDirection::W);
+        const auto& direction_2 = control_plane.get_forwarding_direction(src_node_id, dst_node_id_2);
+        TT_FATAL(direction_2.has_value(), "No direction found");
+        EXPECT_EQ(*direction_2, RoutingDirection::N);
+        const auto& reverse_direction_2 = control_plane.get_forwarding_direction(dst_node_id_2, src_node_id);
+        TT_FATAL(reverse_direction_2.has_value(), "No reverse direction found");
+        EXPECT_EQ(*reverse_direction_2, RoutingDirection::S);
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans_by_direction_2 =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id_2, *direction_2);
+        EXPECT_TRUE(!eth_chans_by_direction_2.empty());
+        const auto& reverse_eth_chans_by_direction_2 =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id_2, src_node_id, *reverse_direction_2);
+        EXPECT_TRUE(!reverse_eth_chans_by_direction_2.empty());
+    } else {
+        TT_FATAL(host_local_coord_range.contains(dst_mesh_coord), "Dst mesh coord not in local range");
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        TT_FATAL(reverse_direction.has_value(), "No reverse direction found");
+        EXPECT_EQ(*reverse_direction, RoutingDirection::E);
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, *reverse_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
 TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
@@ -665,7 +717,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
 
     EXPECT_EQ(*switch_id, 3) << "Switch should have a mapped mesh_id";
     // Verify switch mesh_id is unique (not used by regular meshes)
-    const auto& all_mesh_ids = mesh_graph.get_mesh_ids();
+    const auto& all_mesh_ids = mesh_graph.get_all_mesh_ids();
     size_t switch_mesh_id_count = 0;
     for (const auto& mesh_id : all_mesh_ids) {
         if (mesh_id == switch_mesh_id) {
@@ -684,9 +736,9 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
         connected_mesh_id_values.insert(*mesh_id);
     }
     EXPECT_EQ(connected_mesh_id_values.size(), 3) << "Should have 3 unique connected meshes";
-    EXPECT_TRUE(connected_mesh_id_values.find(0) != connected_mesh_id_values.end());
-    EXPECT_TRUE(connected_mesh_id_values.find(1) != connected_mesh_id_values.end());
-    EXPECT_TRUE(connected_mesh_id_values.find(2) != connected_mesh_id_values.end());
+    EXPECT_TRUE(connected_mesh_id_values.contains(0));
+    EXPECT_TRUE(connected_mesh_id_values.contains(1));
+    EXPECT_TRUE(connected_mesh_id_values.contains(2));
 
     // Test is_mesh_connected_to_switch() for each connected mesh
     for (const auto& mesh_id : connected_meshes) {

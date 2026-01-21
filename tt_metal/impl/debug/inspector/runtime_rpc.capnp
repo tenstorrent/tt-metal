@@ -64,6 +64,15 @@ struct MeshWorkloadData {
     meshWorkloadId @0 :UInt64;
     programs @1 :List(MeshWorkloadProgramData);
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
+    # High-level operation metadata
+    # Empty if workload was not created by a tracked operation
+    name @3 :Text;        # Operation name
+    parameters @4 :Text;  # Operation parameters
+}
+
+struct MeshWorkloadRuntimeIdEntry {
+    workloadId @0 :UInt64;
+    runtimeId @1 :UInt64;
 }
 
 # Build environment info for a specific device
@@ -154,4 +163,7 @@ interface RuntimeInspector extends(Rpc.InspectorChannel) {
 
     # Get mapping from metal device ID to unique ID for all devices
     getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
+
+    # Get runtime IDs for mesh workloads
+    getMeshWorkloadsRuntimeIds @8 () -> (runtimeIds :List(MeshWorkloadRuntimeIdEntry));
 }

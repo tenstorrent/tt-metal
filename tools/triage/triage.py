@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -22,6 +22,7 @@ Options:
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
+    --disable-progress               Disable progress bars. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -31,17 +32,22 @@ Description:
         ./build_metal.sh --build-programming-examples
         build/programming_examples/matmul_multi_core
         triage
+
+Owner:
+    tt-vjovanovic
 """
 
 # Check if tt-exalens is installed
 import inspect
 import os
+import shutil
 import threading
 from time import time
 import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
+import re
 
 
 def find_install_debugger_script() -> str:
@@ -69,7 +75,8 @@ except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -203,6 +210,7 @@ class TriageScript:
     config: ScriptConfig
     module: ModuleType
     run_method: Callable[..., Any]
+    documentation: str
     depends: list["TriageScript"] = field(default_factory=list)
     failed: bool = False
     failure_message: str | None = None
@@ -243,6 +251,15 @@ class TriageScript:
                 # This script does not have a configuration, which means it is not tt-triage script, skipping...
                 raise ValueError(f"Script {script_path} does not have script_config.")
 
+            # Check if script has a docstring and an owner
+            if not script_module.__doc__:
+                raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
+
+            if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
+                raise ValueError(
+                    f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
+                )
+
             # Check if script has a run method with two arguments (args and context)
             run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
             if run_method is not None:
@@ -264,6 +281,7 @@ class TriageScript:
                 config=deepcopy(script_config),
                 module=script_module,
                 run_method=run_method,
+                documentation=script_module.__doc__,
             )
 
             if triage_script.config.depends is None:
@@ -333,19 +351,36 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-console: Console
-progress_disabled = False
+# Purposely uninitialized global console object to ensure proper initialization only once later
+console: Console = None  # type: ignore[assignment]
+progress_disabled: bool = False
 
 
-def init_console(args: ScriptArguments) -> None:
+def init_console_and_verbosity(args: ScriptArguments) -> None:
     global console
+    global progress_disabled
+
+    if console is not None:
+        return
 
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
-
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"])
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"] or 0
+    set_verbose_level(verbose_level)
+
+    # Setting verbosity level
+    try:
+        verbosity = int(args["--verbosity"])
+        utils.Verbosity.set(verbosity)
+    except:
+        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
+    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
 
 
 def create_progress() -> Progress:
@@ -365,24 +400,14 @@ def create_progress() -> Progress:
 
 
 def process_arguments(args: ScriptArguments) -> None:
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
-    # Initialize console
-    init_console(args)
-
-    # Setting verbosity level
-    try:
-        verbosity = int(args["--verbosity"])
-        utils.Verbosity.set(verbosity)
-    except:
-        utils.WARN("Verbosity level must be an integer. Falling back to default value.")
-    utils.VERBOSE(f"Verbosity level: {utils.Verbosity.get().name} ({utils.Verbosity.get().value})")
+    init_console_and_verbosity(args)
 
 
 def parse_arguments(
-    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+    scripts: dict[str, TriageScript] = {},
+    script_path: str | None = None,
+    argv: list[str] | None = None,
+    only_triage_script_args=False,
 ) -> ScriptArguments:
     from docopt import (
         parse_defaults,
@@ -403,8 +428,7 @@ def parse_arguments(
     my_name = os.path.splitext(os.path.basename(__file__))[0]
     docs[my_name] = __doc__
     for script in scripts.values():
-        if hasattr(script.module, "__doc__") and script.module.__doc__:
-            docs[script.name] = script.module.__doc__
+        docs[script.name] = script.documentation
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
@@ -428,15 +452,13 @@ def parse_arguments(
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
-    if matched and left == []:
+    if only_triage_script_args or (matched and left == []):
         arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
         process_arguments(arguments)
         return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
-    doc = __doc__ if script_path is None else scripts[script_path].module.__doc__
-    if doc is None:
-        doc = __doc__
+    doc = __doc__ if script_path is None else scripts[script_path].documentation
     if detailed_help:
         help_message = doc
         if script_path is None:
@@ -444,19 +466,19 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    help_message += f"\n{script.module.__doc__}\n"
+                    help_message += f"\n{script.documentation}\n"
         print(help_message)
         sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != script_path and hasattr(script.module, "__doc__") and script.module.__doc__:
-                script_options = parse_defaults(script.module.__doc__)
+            if script.path != script_path:
+                script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
-                    usage = printable_usage(script.module.__doc__)
+                    usage = printable_usage(script.documentation)
                     help_message += " " + " ".join(usage.split()[2:])
 
     DocoptExit.usage = help_message
@@ -475,7 +497,7 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 
@@ -510,6 +532,11 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"    {failure}")
             if script.failed:
                 utils.ERROR(f"    {script.failure_message}")
+
+                import textwrap
+
+                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
+                utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
         return
@@ -649,6 +676,8 @@ def run_script(
     argv: list[str] | None = None,
     return_result: bool = False,
 ) -> Any:
+    force_exit = False
+
     # Resolve script path
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
@@ -656,6 +685,7 @@ def run_script(
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
+        force_exit = True
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
@@ -695,6 +725,10 @@ def run_script(
         return result
     serialize_result(script, result)
 
+    if force_exit:
+        # Remove nanobind leak check to avoid false positives on exit
+        os._exit(0)
+
 
 class TTTriageError(Exception):
     """Base class for TT Triage errors."""
@@ -704,6 +738,9 @@ class TTTriageError(Exception):
 
 def main():
     triage_start = time()
+
+    # Parse only tt-triage script arguments first to initialize logging and console
+    parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
     application_path = os.path.abspath(os.path.dirname(__file__))
@@ -805,6 +842,9 @@ def main():
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    # Remove nanobind leak check to avoid false positives on exit
+    os._exit(0)
 
 
 if __name__ == "__main__":

@@ -34,7 +34,8 @@ class Emb(torch.nn.Module):
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_model_inference(mesh_device, reset_seeds, batch):
     valid_pcc = 0.942
     dtype = ttnn.bfloat8_b
     iterations = 10
@@ -48,7 +49,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -66,7 +67,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
 
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -104,7 +105,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, seqlen, -1)
             .detach()

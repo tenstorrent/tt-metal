@@ -35,7 +35,7 @@ namespace decorators {
 namespace nb = nanobind;
 
 template <typename T, typename return_t, typename... args_t>
-constexpr auto resolve_call_method(return_t (*function)(args_t...)) {
+constexpr auto resolve_call_method(return_t (* /*function*/)(args_t...)) {
     return [](const T& self, args_t... args) { return self(std::forward<args_t>(args)...); };
 }
 
@@ -105,7 +105,7 @@ template <
     typename py_operation_t,
     typename function_t,
     typename... py_args_t>
-    requires PrimitiveOperationConcept<operation_t>
+    requires device_operation::DeviceOperationConcept<operation_t>
 void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {
@@ -120,7 +120,7 @@ template <
     typename py_operation_t,
     typename function_t,
     typename... py_args_t>
-    requires CompositeOperationConcept<operation_t>
+    requires(!device_operation::DeviceOperationConcept<operation_t>)
 void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {  // afuller
@@ -152,13 +152,7 @@ auto bind_registered_operation(
         "Fully qualified name of the api");
 
     // Attribute to identify of ttnn operations
-    py_operation.def_prop_ro(
-        "__ttnn_operation__", [](const registered_operation_t& self) { return std::nullopt; });
-
-    py_operation.def_prop_ro(
-        "is_primitive",
-        [](const registered_operation_t& self) -> bool { return registered_operation_t::is_primitive; },
-        "Specifies if the operation maps to a single program");
+    py_operation.def_prop_ro("__ttnn_operation__", [](const registered_operation_t& /*self*/) { return std::nullopt; });
 
     (
         [&py_operation](auto&& overload) {
