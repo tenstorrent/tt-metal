@@ -221,8 +221,8 @@ void kernel_main() {
                             // DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
                             for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice;
                                  chunk_piece_idx++) {
-                                uint32_t tiles_to_read_in_current_direction = chunk_width;
-                                uint32_t direction_offset = 0;
+                                uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
+                                uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                                 uint32_t input_row_offset = start_row_offset;
 
                                 // cb_wait_front(cb_output_id, tile_granularity);
@@ -246,8 +246,8 @@ void kernel_main() {
                             }
                         } else {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
-                            uint32_t tiles_to_read_in_current_direction = chunk_width;
-                            uint32_t direction_offset = 0;
+                            uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
+                            uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                             uint32_t input_row_offset = start_row_offset;
                             // cb_wait_front(cb_output_id, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
