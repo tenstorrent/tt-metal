@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, final
 
 import torch
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -434,9 +435,13 @@ class MLP(AbstractModule):
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
+        print("MLP prefill start, input shape: ", x.shape)
+        # print("MLP prefill start, input tensor: ", x)
 
         # All gather for efficient matmuls
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        print("MLP all_gather_async output shape: ", x.shape)
+        # print("Input tensor after all_gather_async: ", x)
 
         # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -447,17 +452,22 @@ class MLP(AbstractModule):
         w1_out = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w1"]
         )
+        # print("cfg['w1']: ", cfg["w1"])
+
+        print("mlp w1_out shape: ", w1_out.shape)
         w3_out = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w3"]
         )
+        # print("cfg['w3']: ", cfg["w3"])
         ttnn.deallocate(x)
+        print("mlp w3_out shape: ", w3_out.shape)
 
         # Apply silu
         # w1_out_activated = cls._silu_workaround(w1_out)
         # ttnn.deallocate(w1_out)
-
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        print("Activate shape: ", activated.shape)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
@@ -467,12 +477,16 @@ class MLP(AbstractModule):
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
             **cfg["w2"],
         )
+        # print("cfg['w2']: ", cfg["w2"])
+        print("ff2 output shape: ", output.shape)
         ttnn.deallocate(activated)
 
         # Reduce-scatter across devices to sum partial results
         output = ttnn.experimental.reduce_scatter_minimal_async(
             output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
         )
+
+        print("MLP reduce_scatter_minimal_async output shape: ", output.shape)
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -486,6 +500,11 @@ class MLP(AbstractModule):
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
+
+        signpost(header="MLP-Start-Decode")
+        print("MLP start decode")
+
+        print("Input shape: ", x.shape)
 
         # All gather
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
@@ -516,7 +535,10 @@ class MLP(AbstractModule):
         output = ttnn.experimental.reduce_scatter_minimal_async(
             w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
         )
+        print("w2_out shape: ", w2_out.shape)
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]
+        signpost(header="MLP-Stop-Decode")
+        print("MLP stop decode")
         return output

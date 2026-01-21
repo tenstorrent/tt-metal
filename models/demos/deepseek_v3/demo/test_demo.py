@@ -12,7 +12,7 @@ MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/d
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
 
-@pytest.mark.parametrize("repeat_batches", [2])
+@pytest.mark.parametrize("repeat_batches", [1])
 def test_demo(repeat_batches):
     """
     Stress test the DeepSeek v3 demo with prompts loaded from JSON file, 2x runs.

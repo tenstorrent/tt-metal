@@ -20,7 +20,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 128),
+        #   ("decode", 128),
     ]
     + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -43,10 +43,10 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights

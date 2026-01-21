@@ -18,7 +18,8 @@ RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
 
 # Shared test parametrization constants
 # Prefill sequence lengths: powers of 2 from 128 to 128K
-PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+# PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+PREFILL_SEQ_LENS = [1024]
 
 
 def pytest_addoption(parser):

@@ -628,7 +628,28 @@ def get_test_weight_config(
     force_recalculate: bool,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    # Sanitize the test name from PYTEST_CURRENT_TEST to create a shorter, filesystem-safe path
+    # PYTEST_CURRENT_TEST format: "path/to/test_file.py::test_function[param1-param2-...] (call)"
+    pytest_test = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
+
+    # Extract just the test function name and parameters, removing the file path
+    if "::" in pytest_test:
+        # Get the part after the last "::" (test function name with params)
+        test_part = pytest_test.split("::")[-1]
+        # Remove the " (call)" suffix if present
+        test_part = test_part.replace(" (call)", "").replace(" (setup)", "").replace(" (teardown)", "")
+        # Replace special characters that are problematic in file paths
+        sanitized = test_part.replace("::", "_").replace("[", "_").replace("]", "_").replace(" ", "_")
+        # Limit length to avoid filesystem issues (most filesystems have 255 char limit per component)
+        if len(sanitized) > 200:
+            sanitized = sanitized[:200]
+    else:
+        # Fallback: use a hash of the full test name if it doesn't match expected format
+        import hashlib
+
+        sanitized = hashlib.md5(pytest_test.encode()).hexdigest()[:16]
+
+    per_test_weight_cache_path = cache_path / "tests_cache" / sanitized
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )

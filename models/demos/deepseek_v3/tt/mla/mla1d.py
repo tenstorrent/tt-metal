@@ -60,6 +60,7 @@ class MLA1D(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        print("MLA1D convert_weights start")
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
@@ -145,6 +146,7 @@ class MLA1D(AbstractModule):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
     ) -> SavedWeight:
+        print("Converting weights, shard_dims: ", dims)
         return shard_and_save(
             path,
             torch_metaweight.transpose(-2, -1),
@@ -780,8 +782,13 @@ class MLA1D(AbstractModule):
         """
         _, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
 
+        print("MLA1D-Start-Decode")
+
         num_heads = cfg["num_heads"]
+        print("Num attn heads: ", num_heads)
+        print("MLA TP Factor: ", mla_tp_factor)
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
+        print("Num Local Heads: ", num_heads_local)
         kv_lora_rank = cfg["kv_lora_rank"]
         qk_nope_head_dim = cfg["qk_nope_head_dim"]
         qk_rope_head_dim = cfg["qk_rope_head_dim"]
@@ -793,6 +800,8 @@ class MLA1D(AbstractModule):
 
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
+
+        print("Input shape: ", x.shape)
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
@@ -915,6 +924,9 @@ class MLA1D(AbstractModule):
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        from tracy import signpost
+
+        signpost(header="MLA1D-Stop-Decode")
 
         return out
 
@@ -941,6 +953,7 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
+        print("MLA1D prefill start, input shape: ", x.shape)
         mesh_shape = cfg["mesh_shape"]
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
@@ -958,8 +971,13 @@ class MLA1D(AbstractModule):
 
         seq_len = x.shape[2]
 
+        print("Num heads: ", num_heads)
+        print("Num heads local: ", num_heads_local)
+
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        print("tt_q shape: ", tt_q.shape)
+        # print("cfg['wq_a']: ", cfg["wq_a"])
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])

@@ -745,6 +745,7 @@ class DeepseekGenerator:
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
+        print("Prefill seq_len is: ", seq_len)
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(

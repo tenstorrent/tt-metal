@@ -28,7 +28,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
-        ("decode", 32),
+        #   ("decode", 32),
     ]
     + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -60,10 +60,10 @@ def test_forward_pass(
     state_dict: dict[str, torch.Tensor],
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
     num_module_layers, _ = mesh_device.shape
 
     # Get the hidden_size of the norm

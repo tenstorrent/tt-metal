@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import torch
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -46,6 +47,7 @@ class MLA2D(MLA1D):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         (state_dict,) = state_dicts
+        print("MLA2D convert_weights start")
         assert state_dict is not None, "State dict must be provided for weight conversion."
         return {
             "mla1d": super().convert_weights(hf_config, (state_dict,) * mesh_device.shape[0], output_path, mesh_device)
@@ -59,6 +61,7 @@ class MLA2D(MLA1D):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
     ) -> SavedWeight:
+        print("MLA2D _convert_weight start, dims: ", dims)
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
             assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
@@ -163,6 +166,8 @@ class MLA2D(MLA1D):
             Output tensor after MLA computation
 
         """
+        signpost(header="MLA2D-Start-Decode")
+        print("MLA2D-Start-Decode")
         return super().forward_decode(
             x,
             position_idxs=position_idxs,
@@ -194,11 +199,14 @@ class MLA2D(MLA1D):
             Output tensor after MLP computation
         """
 
+        print("====== Multi head latent attention start prefill =======")
+        print("MLA prefill start, input shape: ", x.shape)
         scale = 1 / cfg["mla1d"]["mesh_shape"][0]
 
         ccl = cfg["ccl"]
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        print("MLA all_gather_async output shape: ", x_next.shape)
         x_out = super().forward_prefill(
             x_next,
             batch_idx=batch_idx % USERS_PER_ROW,
@@ -215,4 +223,6 @@ class MLA2D(MLA1D):
             )
             * scale
         )
+        print("MLA output shape: ", x_rs.shape)
+        print("====== Multi head latent attention end prefill =======")
         return x_rs

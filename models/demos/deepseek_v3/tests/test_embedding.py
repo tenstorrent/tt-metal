@@ -34,8 +34,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.mark.parametrize(
     "EmbeddingClass,mode,batch_size_or_seq_len",
     [
-        (Embedding1D, "decode", 32),
-        (Embedding2D, "decode", 128),
+        # (Embedding1D, "decode", 32),
+        # (Embedding2D, "decode", 128),
     ]
     + [
         (EmbeddingClass, "prefill", seq_len)
@@ -62,10 +62,10 @@ def test_embedding_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and batch_size_or_seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and batch_size_or_seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 

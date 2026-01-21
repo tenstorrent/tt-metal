@@ -95,13 +95,18 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        print("MOE Decoder Block 2d Prefill forward")
         mlp_out = MoE.forward_prefill(x, cfg["moe"])
+        print("Shared expert prefill forward")
         mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
         return mlp_out
 
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        print("MOE Decoder Block 2d Decode forward")
         mlp_out = MoE.forward_decode(x, cfg["moe"])
+        print("Calling SharedExpert.forward_decode")
         mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
+        print("SharedExpert.forward_decode returned")
         return mlp_out

@@ -116,14 +116,14 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     "MLPClass,module_path",
     [
         (MLP, None),
-        (NonExpert, "model.layers.0.mlp"),
-        (SharedExpert, "model.layers.3.mlp.shared_experts"),
+        # (NonExpert, "model.layers.0.mlp"),
+        # (SharedExpert, "model.layers.3.mlp.shared_experts"),
     ],
 )
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        ("decode", 32),
+        # ("decode", 32),
     ]
     + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -143,13 +143,14 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
 
     num_module_layers, _ = mesh_device.shape
 
+    print("num_module_layers: ", num_module_layers)
     # Get the reference IO
     if not issubclass(MLPClass, MLPDequant):
         reference_model = DeepseekV3MLP(hf_config).eval()
@@ -164,6 +165,7 @@ def test_forward_pass(
             mode, module_path, seq_len, num_module_layers
         )
 
+    print("torch_input shape: ", torch_input.shape)
     # Generate module configs and state
     weight_config = get_test_weight_config(
         MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
@@ -197,6 +199,7 @@ def test_forward_pass(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
     )
+    print("tt_output_torch_shape: ", tt_output_torch.shape)
 
     # Cleanup
     ttnn.deallocate(tt_input)

@@ -190,19 +190,32 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        print("============= Mixture of experts start decode =============")
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
+        print("cfg['revert_tp']: ", cfg["revert_tp"])
+        print("Mixture of experts start decode, input shape: ", x.shape)
+
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
+
+        print("moe first all_gather_async output shape: ", x.shape)
+        # print("tensor after all_gather_async: ", x)
 
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
             -2
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
+        print("batch_size_per_device: ", batch_size_per_device)
+        print("global batch size: ", batch_size)
 
         # 1. MoE gate
         topk_experts_weights, topk_experts_indices = MoEGate.forward(x, cfg["moe_gate"])
+        print("topk_experts_weights shape: ", topk_experts_weights.shape)
+        # print("topk_expert_weights tensor: ", topk_experts_weights)
+        print("topk_experts_indices shape: ", topk_experts_indices.shape)
+        # print("topk_experts_indices tensor: ", topk_experts_indices)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]))
 
@@ -210,24 +223,37 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
+
+        print("x_rm shape: ", x_rm.shape)
+        # print("x_rm tensor: ", x_rm)
         all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
             x_rm,
             topk_experts_indices_rm,
             cfg["expert_mapping_tensors"],
             **cfg["all_to_all_dispatch"],
         )
+        print("cfg['all_to_all_dispatch']: ", cfg["all_to_all_dispatch"])
+        print("all_to_all_dispatch_output_tensors shape: ", all_to_all_dispatch_output_tensors.shape)
+        print("all_to_all_dispatch_metadata_tensors shape: ", all_to_all_dispatch_metadata_tensors.shape)
+        # all_to_all_dispatch_output_tensors -> [1, NUM_TOKENS, 1, HIDDEN_SIZE] shape for all-to-all dispatch output. Sparsely populated with tokens that each device needs to compute with experts it holds. The non-dispatched tokens have placeholder rows populated with garbage.
+        # all_to_all_dispatch_metadata_tensors -> [1, NUM_TOKENS, 1, NUM_EXPERTS_PER_DEVICE] -> sparsely populated again. For each token, it contains which experts on that device were selected by gate.
+        # all_to_all_dispatch_metadata_tensors ->
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
         post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
         # repeat remap_topk_mask for the num_tokens known at runtime
         remap_topk_mask = ttnn.repeat(cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        # this creates the sparsity tensor for the experts.
         _, sparsity_t = ttnn.moe_expert_token_remap(
             remap_topk_mask,
             cfg["expert_mapping_tensors"],
             all_to_all_dispatch_metadata_tensors,
             reduction_size=cfg["sparsity_block_size"],
         )
+        # print("sparsity_t shape: ", sparsity_t.shape)
+        # print("sparsity_t tensor: ", sparsity_t)
+        print("Post all to all dispatch output shape: ", post_all_to_all_dispatch_output.shape)
         experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
         ttnn.deallocate(post_all_to_all_dispatch_output)
         experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -240,10 +266,12 @@ class MoE(SharedStateAddOn, AbstractModule):
             cfg["expert_mapping_tensors"],
             **cfg["all_to_all_combine"],
         )
+        print("All to all combine output tensors shape: ", all_to_all_combine_output_tensors.shape)
         post_combine_output_tensor = ttnn.reshape(
             all_to_all_combine_output_tensors,
             shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
         )
+        print("Post combine output tensor shape: ", post_combine_output_tensor.shape)
         post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
@@ -254,10 +282,12 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
+        print("Post combine output tensor after sum shape: ", post_combine_output_tensor.shape)
         post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
         )
-
+        print("Post combine output tensor after reduce scatter shape: ", post_combine_output_tensor.shape)
+        print("============= Mixture of experts stop decode =============")
         return post_combine_output_tensor
 
     @classmethod

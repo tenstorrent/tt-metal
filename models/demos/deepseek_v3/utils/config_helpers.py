@@ -656,16 +656,24 @@ def shard_and_save(
 
     # Always convert absolute paths to relative paths for portability
     # This ensures SavedWeight objects always have relative paths
-    if path.is_absolute():
-        path_str = str(path)
-        mesh_idx = path_str.find("mesh_")
-        if mesh_idx == -1:
-            raise ValueError(f"Expected 'mesh_' in path: {path}")
-        # Skip past "mesh_<rows>x<cols>/" to get relative path
-        parts = path_str[mesh_idx:].split("/", 1)
-        if len(parts) < 2:
-            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
-        path = Path(parts[1])
+    # The path should be relative to the mesh directory (e.g., "embedding.weight.tensorbin")
+    path_str = str(path)
+    mesh_idx = path_str.find("mesh_")
+    if mesh_idx == -1:
+        raise ValueError(f"Expected 'mesh_' in path: {path}")
+
+    # Find the "/" after "mesh_<rows>x<cols>" to get past the mesh directory
+    # Look for the pattern "mesh_<rows>x<cols>/" and extract everything after it
+    mesh_part_end = path_str.find("/", mesh_idx)
+    if mesh_part_end == -1:
+        # No "/" after mesh_, so just use the filename
+        path = Path(path.name)
+    else:
+        # Extract everything after "mesh_<rows>x<cols>/"
+        relative_part = path_str[mesh_part_end + 1 :]
+        if not relative_part:
+            raise ValueError(f"Invalid path structure after 'mesh_<rows>x<cols>/': {path}")
+        path = Path(relative_part)
 
     return SavedWeight(path, memory_config)
 

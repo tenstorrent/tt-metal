@@ -66,8 +66,10 @@ class DecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        print("Decoder Block 2d Prefill forward")
         return NonExpert.forward_prefill(x, cfg)
 
     @classmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        print("Decoder Block 2d Decode forward")
         return NonExpert.forward_decode(x, cfg)

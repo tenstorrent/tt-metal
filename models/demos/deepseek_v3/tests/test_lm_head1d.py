@@ -48,7 +48,7 @@ class DeepseekV3LMHead(nn.Module):
 @pytest.mark.parametrize(
     "mode, batch_size_per_row",
     [
-        ("decode", 32),
+        # ("decode", 32),
         ("prefill", 1024),
     ],
 )

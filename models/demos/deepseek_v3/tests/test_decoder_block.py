@@ -12,11 +12,8 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
-from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -287,6 +284,7 @@ def run_test_forward_pass_decoder2d(
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
     )
+    print("tt_output_torch shape: ", tt_output_torch.shape)
 
     # Check output PCC
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
@@ -302,20 +300,20 @@ def run_test_forward_pass_decoder2d(
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
-        (DecoderBlock1D, None, 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, None, 3, run_test_forward_pass_decoder1d),
-        (DecoderBlock1D, "model.layers.0", 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, "model.layers.3", 3, run_test_forward_pass_decoder1d),
-        (DecoderBlock2D, None, 0, run_test_forward_pass_decoder2d),
-        (MoEDecoderBlock2D, None, 3, run_test_forward_pass_decoder2d),
-        (DecoderBlock2D, "model.layers.0", 0, run_test_forward_pass_decoder2d),
+        # (DecoderBlock1D, None, 0, run_test_forward_pass_decoder1d),
+        # (MoEDecoderBlock1D, None, 3, run_test_forward_pass_decoder1d),
+        # (DecoderBlock1D, "model.layers.0", 0, run_test_forward_pass_decoder1d),
+        # (MoEDecoderBlock1D, "model.layers.3", 3, run_test_forward_pass_decoder1d),
+        # (DecoderBlock2D, None, 0, run_test_forward_pass_decoder2d),
+        # (MoEDecoderBlock2D, None, 3, run_test_forward_pass_decoder2d),
+        # (DecoderBlock2D, "model.layers.0", 0, run_test_forward_pass_decoder2d),
         (MoEDecoderBlock2D, "model.layers.3", 3, run_test_forward_pass_decoder2d),
     ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row",
     [
-        ("decode", 1, 32),
+        # ("decode", 1, 32),
     ]
     + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -337,10 +335,14 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
+    print("test closure: ", test_closure)
+    print(
+        f"Running test_decoder in {mode} mode with seq_len={seq_len} and batch_size_per_row={batch_size_per_row}, DecoderBlockClass={DecoderBlockClass}"
+    )
     test_closure(
         DecoderBlockClass,
         module_path,

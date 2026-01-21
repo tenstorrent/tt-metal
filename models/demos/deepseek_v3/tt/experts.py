@@ -212,18 +212,24 @@ class Experts(AbstractModule):
     def _forward(cls, x: ttnn.Tensor, sparsity: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
+        print("Experts forward input shape: ", x.shape)
+
         _, _, num_tokens, hidden_size = x.shape
         num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
         x = ttnn.reshape(x, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size))
+        print("Experts forward input reshaped shape: ", x.shape)
 
         # Gate and up projections
+        # reshaped x is going into experts.
         w1_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w1_experts"])
+        print("experts w1_out shape: ", w1_out.shape)
         w3_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w3_experts"])
-
+        print("experts w3_out shape: ", w3_out.shape)
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
+        print("experts activated shape: ", activated.shape)
 
         # Reshape for down projection
         # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
@@ -231,12 +237,16 @@ class Experts(AbstractModule):
         activated = ttnn.squeeze(activated, 1)
 
         # Down projection
+        print("Experts down projection input shape: ", activated.shape)
         output = ttnn.sparse_matmul(activated, sparsity=sparsity, **cfg["w2_experts"])
+        print("experts output shape: ", output.shape)
         ttnn.deallocate(activated)
 
         # Reshape for output
         output = ttnn.permute(output, (1, 0, 2, 3))
         output = ttnn.reshape(output, shape=(1, cfg["num_experts_per_device"], num_tokens, hidden_size))
+
+        print("Experts output shape: ", output.shape)
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output

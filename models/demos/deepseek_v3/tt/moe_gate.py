@@ -226,12 +226,15 @@ class MoEGate(AbstractModule):
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert x.memory_config() == cfg["input_memory_config"]
 
+        print("MoE Gate start decode, input shape: ", x.shape)
+
         # Gate projections
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
         # Sigmoid activation
+        print("MoE gate after expert selection shape: ", logits.shape)
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
         # Add score correction bias

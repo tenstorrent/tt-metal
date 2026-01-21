@@ -204,6 +204,7 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
 
     @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        print("MOE Decoder Block 1d Prefill forward")
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]
         DP_SIZE = even_int_div(num_tokens_to_route, DP_FACTOR)
@@ -221,6 +222,7 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        print("MOE Decoder Block 1d Decode forward")
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]
         DP_SIZE = even_int_div(num_tokens_to_route, DP_FACTOR)

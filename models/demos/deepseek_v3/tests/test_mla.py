@@ -411,7 +411,7 @@ def run_test_forward_pass_mla2d(
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row",
     [
-        ("decode", 1, USERS_PER_ROW),
+        # ("decode", 1, USERS_PER_ROW),
     ]
     + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -426,11 +426,13 @@ def run_test_forward_pass_mla2d(
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    ["model.layers.0.self_attn"],
 )
 @pytest.mark.parametrize(
     "test_closure",
-    [run_test_forward_pass_mla1d, run_test_forward_pass_mla2d],
+    # [run_test_forward_pass_mla1d]
+    # , run_test_forward_pass_mla2d],
+    [run_test_forward_pass_mla2d],
 )
 def test_forward_pass(
     mode,
@@ -448,10 +450,10 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
 
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0

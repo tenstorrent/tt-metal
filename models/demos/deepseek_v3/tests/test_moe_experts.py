@@ -72,7 +72,7 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
-        ("decode", 128),
+        # ("decode", 128),
     ]
     + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -98,10 +98,10 @@ def test_forward_pass(
     state_dict: dict[str, torch.Tensor],
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
 
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())

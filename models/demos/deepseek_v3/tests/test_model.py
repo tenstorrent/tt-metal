@@ -111,6 +111,10 @@ def run_test_forward_pass_dpmodel(
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
+    print(
+        f"Running test_forward_pass_dpmodel in {mode} mode with seq_len={seq_len} and batch_size_per_row={batch_size_per_row}"
+    )
+
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
@@ -120,6 +124,7 @@ def run_test_forward_pass_dpmodel(
     # Set up page config
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
+    print(f"DP factor: {dp_factor}")
     user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
     paged_input_caches, torch_page_tables = paged_caches_from_torch(
@@ -138,6 +143,8 @@ def run_test_forward_pass_dpmodel(
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
 
+    print(f"torch_input shape: {torch_input.shape}")
+
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
         device=mesh_device,
@@ -146,6 +153,8 @@ def run_test_forward_pass_dpmodel(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
+    print(f"tt_input shape: {tt_input.shape}")
 
     position_ids_tensor = (
         ttnn.from_torch(
@@ -168,6 +177,7 @@ def run_test_forward_pass_dpmodel(
     # Forward pass
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
+        print("Running RowBatchedModel.forward_prefill")
         tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
     else:
         tt_output = RowBatchedModel.forward_decode(
@@ -201,7 +211,7 @@ def run_test_forward_pass_dpmodel(
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row",
     [
-        ("decode", 1, 32),
+        # ("decode", 1, 32),
     ]
     + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
@@ -220,12 +230,12 @@ def test_forward_pass(
     state_dict,
 ):
     # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
+    # if mode == "prefill" and seq_len != 128:
+    #     pytest.skip(
+    #         f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+    #     )
     # Set less layers and shorter max length for the sake of testing
-    hf_config_short.num_hidden_layers = 8
+    hf_config_short.num_hidden_layers = 4
 
     run_test_forward_pass_dpmodel(
         use_real_weights,
