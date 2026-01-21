@@ -456,6 +456,12 @@ void kernel_main() {
     constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
     constexpr uint32_t e_t_buffer_ready_semaphore_id = get_named_compile_time_arg_val("e_t_buffer_ready_semaphore_id");
+    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
+    constexpr uint32_t drain_core_noc_x = get_named_compile_time_arg_val("drain_core_noc_x");
+    constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
+    constexpr uint32_t remote_counts_cb_id = get_named_compile_time_arg_val("remote_counts_cb_id");
+    constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t tile_width = 32;
 
@@ -484,6 +490,18 @@ void kernel_main() {
     bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                 // 5
     uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                 // 6
     uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                   // 7
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                        // 8
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                          // 9
+    uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);                        // 10
+
+    // NOC coordinates for all tilizer cores (for cross-core communication)
+    // Runtime args 11+: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
+    uint32_t tilizer_noc_x[num_tilizer_cores];
+    uint32_t tilizer_noc_y[num_tilizer_cores];
+    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+        tilizer_noc_x[i] = get_arg_val<uint32_t>(rt_args_idx++);
+        tilizer_noc_y[i] = get_arg_val<uint32_t>(rt_args_idx++);
+    }
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -513,7 +531,35 @@ void kernel_main() {
     init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
         expert_activation_cb_id);
 
+    // ========== NON-DRAIN CORES: Read indices/scores from drain core ==========
+    // IMPORTANT: This must happen BEFORE pushing mapping_tensor_cb_id, since BRISC waits on that
+    // and will immediately start reading indices/scores. Race condition otherwise!
+    // Non-drain cores need to fetch their portion of the indices/scores tensors from drain core's L1 shard
+    if (!is_drain_tilizer_core) {
+        // Calculate the byte offset for this core's token range within the indices/scores buffers
+        uint32_t token_byte_offset_indices = core_token_start * aligned_indices_page_size;
+        uint32_t token_byte_offset_scores = core_token_start * aligned_scores_page_size;
+        uint32_t num_tokens_this_core = core_token_end - core_token_start;
+
+        // Get local CB addresses (same relative address as drain core)
+        uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
+        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+
+        // Calculate drain core's source addresses
+        // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
+        // and apply it to drain core's NOC address
+        uint64_t drain_indices_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_indices_addr);
+        uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
+
+        // NOC read indices and scores for this core's token range
+        noc_async_read(drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
+        noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
+    }
+
+    // Wait for all reads to complete (mapping + indices/scores for non-drain)
     noc_async_read_barrier();
+
+    // Now safe to signal BRISC - all data is in place
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
     cb_push_back(expert_activation_cb_id, tokens);
 
@@ -543,159 +589,229 @@ void kernel_main() {
     const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
     const uint32_t e_t_buffer_base = get_write_ptr(e_t_buffer_id);
 
-    // Array to hold per-expert token counts (filled by drain core or read from CB for non-drain)
+    // Array to hold per-expert token counts (filled by all cores now)
     uint32_t num_activated_tokens_per_expert[experts_per_device] = {0};
 
-    if (is_drain_tilizer_core) {
-        // ========== DRAIN TILIZER CORE: Build e_t buffer and per-expert counts ==========
-        // NCRISC processes FIRST HALF of tokens (0 to tokens/2-1)
-        // BRISC processes SECOND HALF of tokens (tokens/2 to tokens-1) in parallel
-        constexpr uint32_t ncrisc_token_start = 0;
-        constexpr uint32_t ncrisc_token_end = tokens / 2;
-        constexpr uint32_t brisc_tokens_capacity = tokens / 2;
+    // ========== ALL CORES: Build e_t buffer and per-expert counts for their token range ==========
+    // Each core processes a portion of total tokens: [core_token_start, core_token_end)
+    // Within each core: NCRISC processes first half, BRISC processes second half
+    uint32_t tokens_this_core = core_token_end - core_token_start;
+    uint32_t ncrisc_token_start = core_token_start;
+    uint32_t ncrisc_token_end = core_token_start + tokens_this_core / 2;
+    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
 
-        // indices is already in CB as it's sharded in L1 on drain core
-        uint32_t num_activated_tokens = 0;
+    // indices/scores are in CB - drain has shard, non-drain read via NOC in Step 2
+    uint32_t num_activated_tokens = 0;
 
-        const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
-        const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
-        const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
+    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
+    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
+    const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
 
-        // Cache source_device_mapping - only changes every tokens_per_device tokens
-        // Reduces mapping loads from 512 to 16 (dispatch_devices)
-        uint32_t prev_device_in_group = UINT32_MAX;
-        const uint16_t* source_device_mapping = nullptr;
+    // Cache source_device_mapping - only changes every tokens_per_device tokens
+    // Reduces mapping loads from 512 to 16 (dispatch_devices)
+    uint32_t prev_device_in_group = UINT32_MAX;
+    const uint16_t* source_device_mapping = nullptr;
 
-        // NCRISC processes first half of tokens
-        for (uint32_t t = ncrisc_token_start; t < ncrisc_token_end; t++) {
-            // source_device only changes every tokens_per_device tokens
-            const uint32_t device_in_group = t / tokens_per_device;
+    // NCRISC processes first half of this core's tokens
+    for (uint32_t t = ncrisc_token_start; t < ncrisc_token_end; t++) {
+        // source_device only changes every tokens_per_device tokens
+        const uint32_t device_in_group = t / tokens_per_device;
 
-            // Only update mapping pointer when device_in_group changes
-            if (device_in_group != prev_device_in_group) {
-                const uint32_t source_device = get_device_idx_from_global_token_idx<
-                    linearized_mesh_coord,
-                    tokens_per_device,
-                    mesh_rows,
-                    mesh_cols,
-                    axis>(t);
-                source_device_mapping =
-                    reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
-                prev_device_in_group = device_in_group;
+        // Only update mapping pointer when device_in_group changes
+        if (device_in_group != prev_device_in_group) {
+            const uint32_t source_device = get_device_idx_from_global_token_idx<
+                linearized_mesh_coord,
+                tokens_per_device,
+                mesh_rows,
+                mesh_cols,
+                axis>(t);
+            source_device_mapping =
+                reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+            prev_device_in_group = device_in_group;
+        }
+
+        const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
+        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+
+        // Defer pointer calculation until we know token is activated
+        uint32_t* expert_activation_l1_ptr = nullptr;
+        bool activated = false;
+
+        for (uint32_t k = 0; k < selected_experts_k; k++) {
+            const uint16_t selected_expert = token_indices[k];
+
+            // Check if this expert maps to our device first (likely to fail, skip early)
+            if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
+                continue;
             }
 
-            const uint16_t* token_indices =
-                reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
-            const uint16_t* token_scores =
-                reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+            // Now check if it's one of our local experts
+            for (uint32_t e = 0; e < local_expert_count; e++) {
+                if (selected_expert == local_expert_ids[e]) {
+                    // First activation for this token - set up pointer and write token id
+                    if (!activated) {
+                        expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                            expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
+                        expert_activation_l1_ptr[0] = t;
+                        activated = true;
+                    }
 
-            // Defer pointer calculation until we know token is activated
-            uint32_t* expert_activation_l1_ptr = nullptr;
-            bool activated = false;
+                    // Write k-index and score for this expert
+                    expert_activation_l1_ptr[1 + e] = k;
+                    expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
-            for (uint32_t k = 0; k < selected_experts_k; k++) {
-                const uint16_t selected_expert = token_indices[k];
+                    // Write to e_t buffer (16B aligned entries for NOC DMA compatibility)
+                    const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * e_t_entry_size;
+                    *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
+                    num_activated_tokens_per_expert[e]++;
 
-                // Check if this expert maps to our device first (likely to fail, skip early)
-                if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
-                    continue;
+                    break;  // Each k can only match one local expert, no need to check others
                 }
+            }
+        }
 
-                // Now check if it's one of our local experts
-                for (uint32_t e = 0; e < local_expert_count; e++) {
-                    if (selected_expert == local_expert_ids[e]) {
-                        // First activation for this token - set up pointer and write token id
-                        if (!activated) {
-                            expert_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                                expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
-                            expert_activation_l1_ptr[0] = t;
-                            activated = true;
-                        }
+        if (activated) {
+            num_activated_tokens++;
+        }
+    }
 
-                        // Write k-index and score for this expert
-                        expert_activation_l1_ptr[1 + e] = k;
-                        expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+    // ========== ALL CORES: WAIT FOR BRISC AND MERGE ==========
+    // Wait for BRISC to finish processing second half and push its counts
+    cb_wait_front(brisc_expert_counts_cb_id, 1);
+    volatile tt_l1_ptr uint32_t* brisc_counts =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_expert_counts_cb_id));
 
-                        // Write to e_t buffer (16B aligned entries for NOC DMA compatibility)
-                        const uint32_t e_t_offset = (e * tokens + num_activated_tokens_per_expert[e]) * e_t_entry_size;
-                        *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
-                        num_activated_tokens_per_expert[e]++;
+    // Wait for BRISC's e_t buffer to be ready
+    cb_wait_front(brisc_e_t_buffer_id, 1);
+    const uint32_t brisc_e_t_buffer_base = get_read_ptr(brisc_e_t_buffer_id);
 
-                        break;  // Each k can only match one local expert, no need to check others
+    // Wait for BRISC's expert_activation buffer and count
+    cb_wait_front(brisc_activated_count_cb_id, 1);
+    uint32_t brisc_activated_count =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_activated_count_cb_id));
+    cb_wait_front(brisc_expert_activation_cb_id, 1);
+    const uint32_t brisc_expert_activation_base = get_read_ptr(brisc_expert_activation_cb_id);
+
+    // Merge BRISC's e_t buffer entries into main e_t buffer using NOC DMA
+    // For each expert: copy BRISC's tokens after NCRISC's tokens
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        uint32_t ncrisc_count = num_activated_tokens_per_expert[e];
+        uint32_t brisc_count = brisc_counts[e];
+
+        if (brisc_count > 0) {
+            // Source: BRISC's e_t buffer for expert e (16B aligned entries)
+            uint32_t brisc_e_t_src_addr = brisc_e_t_buffer_base + e * brisc_tokens_capacity * e_t_entry_size;
+
+            // Destination: main e_t buffer, after NCRISC's entries (16B aligned entries)
+            uint32_t e_t_dst_addr = e_t_buffer_base + (e * tokens + ncrisc_count) * e_t_entry_size;
+
+            // Use NOC DMA for L1-to-L1 copy (local loopback)
+            uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
+            noc_async_read(src_noc_addr, e_t_dst_addr, brisc_count * e_t_entry_size);
+        }
+
+        // Update total count for this expert
+        num_activated_tokens_per_expert[e] = ncrisc_count + brisc_count;
+    }
+
+    // Merge BRISC's expert_activation buffer using NOC DMA
+    // Copy all of BRISC's activated rows after NCRISC's activated rows
+    if (brisc_activated_count > 0) {
+        uint32_t expert_activation_dst_addr =
+            expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
+        uint64_t brisc_activation_src_noc_addr = get_noc_addr(brisc_expert_activation_base);
+        noc_async_read(
+            brisc_activation_src_noc_addr,
+            expert_activation_dst_addr,
+            brisc_activated_count * aligned_activation_row_bytes);
+    }
+
+    // Wait for all NOC DMA copies to complete
+    noc_async_read_barrier();
+
+    // Update total activated token count to include BRISC's tokens
+    num_activated_tokens += brisc_activated_count;
+
+    // Pop BRISC's CBs (cleanup)
+    cb_pop_front(brisc_expert_counts_cb_id, 1);
+    cb_pop_front(brisc_e_t_buffer_id, 1);
+    cb_pop_front(brisc_expert_activation_cb_id, 1);
+    cb_pop_front(brisc_activated_count_cb_id, 1);
+
+    // ========== CROSS-CORE CONSOLIDATION (Steps 4-6) ==========
+    // Non-drain cores: send counts to drain and wait for consolidated buffer
+    // Drain core: receive from non-drain, consolidate, multicast
+    if (is_drain_tilizer_core) {
+        // ========== Step 5: Drain receives counts from non-drain cores and consolidates ==========
+        if (num_tilizer_cores > 1) {
+            // Wait for all non-drain cores to send their counts
+            volatile tt_l1_ptr uint32_t* metadata_sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
+            noc_semaphore_wait(metadata_sem, num_tilizer_cores - 1);
+
+            // Read counts from each non-drain core and consolidate their buffers
+            // tilizer_noc_x and tilizer_noc_y arrays were populated from runtime args earlier
+            const uint32_t remote_counts_base = get_read_ptr(remote_counts_cb_id);
+
+            for (uint32_t core_idx = 1; core_idx < num_tilizer_cores; core_idx++) {
+                // Read this core's counts from remote_counts_cb
+                uint32_t* remote_counts =
+                    reinterpret_cast<uint32_t*>(remote_counts_base + (core_idx - 1) * remote_counts_entry_size);
+
+                uint32_t remote_e_t_counts[experts_per_device];
+                for (uint32_t e = 0; e < experts_per_device; e++) {
+                    remote_e_t_counts[e] = remote_counts[e];
+                }
+                uint32_t remote_activated_count = remote_counts[experts_per_device];
+
+                // Get remote core's NOC coordinates
+                uint32_t remote_noc_x = tilizer_noc_x[core_idx];
+                uint32_t remote_noc_y = tilizer_noc_y[core_idx];
+
+                // Pull this core's e_t buffer entries for each expert
+                // Remote core's e_t buffer is at the same CB address, entries start at offset 0 for each expert
+                for (uint32_t e = 0; e < experts_per_device; e++) {
+                    uint32_t remote_count = remote_e_t_counts[e];
+                    if (remote_count > 0) {
+                        // Source: remote core's e_t buffer, expert e's section starts at 0
+                        uint32_t remote_e_t_addr = get_write_ptr(e_t_buffer_id) + e * tokens * e_t_entry_size;
+                        uint64_t remote_e_t_noc_addr = get_noc_addr(remote_noc_x, remote_noc_y, remote_e_t_addr);
+
+                        // Destination: drain's e_t buffer, after current entries for this expert
+                        uint32_t local_e_t_dst =
+                            e_t_buffer_base + (e * tokens + num_activated_tokens_per_expert[e]) * e_t_entry_size;
+
+                        noc_async_read(remote_e_t_noc_addr, local_e_t_dst, remote_count * e_t_entry_size);
+
+                        // Update drain's count for this expert
+                        num_activated_tokens_per_expert[e] += remote_count;
                     }
                 }
+
+                // Pull this core's expert_activation buffer rows
+                if (remote_activated_count > 0) {
+                    // Source: remote core's expert_activation buffer, rows start at 0
+                    uint32_t remote_activation_addr = get_write_ptr(expert_activation_cb_id);
+                    uint64_t remote_activation_noc_addr =
+                        get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
+
+                    // Destination: drain's expert_activation buffer, after current rows
+                    uint32_t local_activation_dst =
+                        expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
+
+                    noc_async_read(
+                        remote_activation_noc_addr,
+                        local_activation_dst,
+                        remote_activated_count * aligned_activation_row_bytes);
+
+                    // Update drain's total activated count
+                    num_activated_tokens += remote_activated_count;
+                }
             }
 
-            if (activated) {
-                num_activated_tokens++;
-            }
+            // Wait for all consolidation reads to complete
+            noc_async_read_barrier();
         }
-
-        // ========== WAIT FOR BRISC AND MERGE ==========
-        // Wait for BRISC to finish processing second half and push its counts
-        cb_wait_front(brisc_expert_counts_cb_id, 1);
-        volatile tt_l1_ptr uint32_t* brisc_counts =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_expert_counts_cb_id));
-
-        // Wait for BRISC's e_t buffer to be ready
-        cb_wait_front(brisc_e_t_buffer_id, 1);
-        const uint32_t brisc_e_t_buffer_base = get_read_ptr(brisc_e_t_buffer_id);
-
-        // Wait for BRISC's expert_activation buffer and count
-        cb_wait_front(brisc_activated_count_cb_id, 1);
-        uint32_t brisc_activated_count =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(brisc_activated_count_cb_id));
-        cb_wait_front(brisc_expert_activation_cb_id, 1);
-        const uint32_t brisc_expert_activation_base = get_read_ptr(brisc_expert_activation_cb_id);
-
-        // Merge BRISC's e_t buffer entries into main e_t buffer using NOC DMA
-        // For each expert: copy BRISC's tokens after NCRISC's tokens
-        for (uint32_t e = 0; e < experts_per_device; e++) {
-            uint32_t ncrisc_count = num_activated_tokens_per_expert[e];
-            uint32_t brisc_count = brisc_counts[e];
-
-            if (brisc_count > 0) {
-                // Source: BRISC's e_t buffer for expert e (16B aligned entries)
-                uint32_t brisc_e_t_src_addr = brisc_e_t_buffer_base + e * brisc_tokens_capacity * e_t_entry_size;
-
-                // Destination: main e_t buffer, after NCRISC's entries (16B aligned entries)
-                uint32_t e_t_dst_addr = e_t_buffer_base + (e * tokens + ncrisc_count) * e_t_entry_size;
-
-                // Use NOC DMA for L1-to-L1 copy (local loopback)
-                uint64_t src_noc_addr = get_noc_addr(brisc_e_t_src_addr);
-                noc_async_read(src_noc_addr, e_t_dst_addr, brisc_count * e_t_entry_size);
-            }
-
-            // Update total count for this expert
-            num_activated_tokens_per_expert[e] = ncrisc_count + brisc_count;
-        }
-
-        // Merge BRISC's expert_activation buffer using NOC DMA
-        // Copy all of BRISC's activated rows after NCRISC's activated rows
-        if (brisc_activated_count > 0) {
-            uint32_t expert_activation_dst_addr =
-                expert_activation_base + num_activated_tokens * aligned_activation_row_bytes;
-            uint64_t brisc_activation_src_noc_addr = get_noc_addr(brisc_expert_activation_base);
-            noc_async_read(
-                brisc_activation_src_noc_addr,
-                expert_activation_dst_addr,
-                brisc_activated_count * aligned_activation_row_bytes);
-        }
-
-        // Wait for all NOC DMA copies to complete
-        noc_async_read_barrier();
-
-        // Update total activated token count to include BRISC's tokens
-        num_activated_tokens += brisc_activated_count;
-
-        // Pop BRISC's CBs (cleanup)
-        cb_pop_front(brisc_expert_counts_cb_id, 1);
-        cb_pop_front(brisc_e_t_buffer_id, 1);
-        cb_pop_front(brisc_expert_activation_cb_id, 1);
-        cb_pop_front(brisc_activated_count_cb_id, 1);
-
-        // DPRINT << "Number of activated tokens: " << num_activated_tokens << ENDL();
-        // print_expert_activation_buffer<experts_per_device, l1_alignment>(expert_activation_cb_id, 0, tokens);
 
         // cap off e_t buffer with -1 (now includes merged counts, 16B aligned entries)
         for (uint32_t e = 0; e < experts_per_device; e++) {
@@ -784,6 +900,36 @@ void kernel_main() {
         }
     }  // End of is_drain_tilizer_core block
     else {
+        // ========== NON-DRAIN TILIZER CORE: Step 4 - Send counts to drain ==========
+        // Each non-drain core writes its counts to drain core's remote_counts_cb
+        // Layout in remote_counts_cb: [core1_counts][core2_counts][core3_counts]...
+        // Each entry: [e_t_count_expert0, e_t_count_expert1, ..., activated_count] (16B aligned)
+
+        // Calculate offset in drain's remote_counts_cb for this core
+        // tilizer_core_idx is 1, 2, 3... for non-drain cores, so offset is (idx-1) * entry_size
+        uint32_t remote_counts_offset = (tilizer_core_idx - 1) * remote_counts_entry_size;
+
+        // Get drain core's remote_counts_cb address
+        uint32_t local_counts_addr = get_read_ptr(remote_counts_cb_id);
+        uint64_t drain_counts_noc_addr =
+            get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_counts_addr + remote_counts_offset);
+
+        // Pack counts into local buffer first (we can use the local remote_counts_cb space temporarily)
+        uint32_t* counts_ptr = reinterpret_cast<uint32_t*>(local_counts_addr);
+        for (uint32_t e = 0; e < experts_per_device; e++) {
+            counts_ptr[e] = num_activated_tokens_per_expert[e];
+        }
+        counts_ptr[experts_per_device] = num_activated_tokens;
+
+        // Write counts to drain core's remote_counts_cb
+        noc_async_write(local_counts_addr, drain_counts_noc_addr, remote_counts_entry_size);
+        noc_async_write_barrier();
+
+        // Signal drain core via semaphore increment
+        uint64_t drain_semaphore_noc_addr =
+            get_noc_addr(drain_core_noc_x, drain_core_noc_y, get_semaphore(metadata_ready_semaphore_id));
+        noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+
         // ========== NON-DRAIN TILIZER CORE: Wait for drain core to multicast data ==========
         // Wait for the semaphore signal from drain core
         volatile tt_l1_ptr uint32_t* semaphore_addr =
@@ -835,4 +981,6 @@ void kernel_main() {
             cb_push_back(tilizer_input_cb_id, tokens_per_chunk);  // Push full chunk (padding is garbage, that's OK)
         }
     }
+
+    noc_async_atomic_barrier();
 }

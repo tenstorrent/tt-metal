@@ -226,6 +226,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Create semaphores for synchronizing the drain tilizer to non-drain tilizers
     auto e_t_buffer_ready_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, INVALID);
+    // Semaphore for non-drain tilizers to signal drain tilizer that metadata processing is complete
+    // Non-drain cores increment this after writing their counts to remote_counts_cb
+    auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, INVALID);
     // Semaphore for drain tilizer to signal non-drain tilizers that E-D table computation is complete
     // auto combine_and_matmul_core_range_set =
     // operation_attributes.matmul_core_range_set.merge(operation_attributes.combine_core_range_set)
@@ -257,6 +260,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // We'll use NOC 0 by default, but pass both orderings and let the kernel handle it
     // Or we can determine the NOC here and swap if needed
     // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
+
+    // Store physical NOC coordinates of all tilizer cores for cross-core communication
+    // Used by drain core to read from non-drain cores, and non-drain to write to drain
+    std::vector<CoreCoord> tilizer_cores_physical;
+    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+        tilizer_cores_physical.push_back(mesh_device->worker_core_from_logical_core(selective_tilize_cores.at(i)));
+    }
+    // Drain core is always the first tilizer core (index 0)
+    CoreCoord drain_core_physical = tilizer_cores_physical.at(0);
 
     // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
     constexpr uint32_t e_t_entry_size = 16;  // 16B per token entry for NOC alignment
@@ -368,6 +380,20 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         1,
         tt::DataFormat::UInt32);
 
+    // CB for receiving counts from non-drain tilizer cores (only used on drain core)
+    // Each non-drain core sends: [e_t_count_expert0, e_t_count_expert1, activated_count]
+    // Layout: 3 values per core × (num_tilizer_cores - 1) cores, 16B aligned per core's data
+    uint32_t remote_counts_cb_id = tt::CBIndex::c_13;
+    uint32_t counts_per_remote_core = experts_per_device + 1;  // e_t counts + activated count
+    uint32_t remote_counts_entry_size = tt::align(counts_per_remote_core * sizeof(uint32_t), l1_alignment);
+    tt::tt_metal::create_cb(
+        remote_counts_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        remote_counts_entry_size,
+        num_tilizer_cores - 1,  // one entry per non-drain core
+        tt::DataFormat::UInt32);
+
     // CB for passing total_chunks from writer to compute kernel
     // Single page holding one uint32_t value
     tt::tt_metal::create_cb(
@@ -410,6 +436,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"brisc_expert_counts_cb_id", brisc_expert_counts_cb_id},
         {"brisc_expert_activation_cb_id", brisc_expert_activation_cb_id},
         {"brisc_activated_count_cb_id", brisc_activated_count_cb_id},
+        {"remote_counts_cb_id", remote_counts_cb_id},
+        {"remote_counts_entry_size", remote_counts_entry_size},
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
         {"mapping_pages", mapping_pages},
@@ -463,6 +491,10 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"max_tiles_per_chunk", max_tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
         {"e_t_buffer_ready_semaphore_id", e_t_buffer_ready_semaphore_id},
+        {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
+        {"tokens_per_tilizer_core", tokens / num_tilizer_cores},
+        {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
+        {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -523,6 +555,24 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
     selective_tilize_runtime_args.push_back(0);  // 7: tilizer_subtoken_size
 
+    // Token range for parallel metadata processing across tilizer cores
+    uint32_t core_token_start_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 8: core_token_start
+    uint32_t core_token_end_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 9: core_token_end
+    uint32_t tilizer_core_idx_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 10: tilizer_core_idx (0 = drain, 1-3 = non-drain)
+
+    // NOC coordinates for all tilizer cores (for cross-core communication)
+    // Runtime args starting at index 11: [core0_noc_x, core0_noc_y, core1_noc_x, core1_noc_y, ...]
+    for (uint32_t i = 0; i < num_tilizer_cores; i++) {
+        selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).x);
+        selective_tilize_runtime_args.push_back((uint32_t)tilizer_cores_physical.at(i).y);
+    }
+
+    // Calculate tokens per tilizer core for parallel metadata processing
+    uint32_t tokens_per_tilizer_core = tokens / num_tilizer_cores;
+
     std::vector<CoreCoord> drain_tilizer_cores;
     uint32_t tilizer_subtoken_offset = 0;
 
@@ -532,6 +582,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
         // First tilizer core is the drain tilizer core (has indices/scores sharded to it)
         selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = (i == 0) ? 1 : 0;
+
+        // Set token range for this core's metadata processing
+        // Each core processes a contiguous range of tokens
+        uint32_t core_token_start = i * tokens_per_tilizer_core;
+        uint32_t core_token_end = (i == num_tilizer_cores - 1) ? tokens : (i + 1) * tokens_per_tilizer_core;
+        selective_tilize_runtime_args.at(core_token_start_idx) = core_token_start;
+        selective_tilize_runtime_args.at(core_token_end_idx) = core_token_end;
+        selective_tilize_runtime_args.at(tilizer_core_idx_idx) = i;
 
         // Set work split parameters based on which group the core is in
         uint32_t tilizer_subtoken_size = 0;

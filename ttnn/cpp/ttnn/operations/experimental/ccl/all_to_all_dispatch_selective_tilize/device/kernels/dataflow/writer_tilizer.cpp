@@ -143,10 +143,12 @@ void kernel_main() {
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
 
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
+    constexpr uint32_t tokens_per_tilizer_core = get_named_compile_time_arg_val("tokens_per_tilizer_core");
 
-    // For parallel metadata processing - BRISC processes second half of tokens
-    constexpr uint32_t brisc_token_start = tokens / 2;
-    constexpr uint32_t brisc_token_end = tokens;
+    // For parallel metadata processing - BRISC processes second half of this core's token range
+    // Note: These are computed at runtime based on core_token_start/end in Step 3
+    constexpr uint32_t brisc_token_start = tokens / 2;  // TODO: Will be replaced with runtime calculation
+    constexpr uint32_t brisc_token_end = tokens;        // TODO: Will be replaced with runtime calculation
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
@@ -166,6 +168,9 @@ void kernel_main() {
     [[maybe_unused]] bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);  // 5
     uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                   // 6
     uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                     // 7
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                          // 8
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                            // 9
+    [[maybe_unused]] uint32_t tilizer_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 10
 
     // TensorAccessorArgs are provided in order: input, indices, scores, mapping, output
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -185,152 +190,150 @@ void kernel_main() {
     // Compute width tile offset for this core
     uint32_t width_tile_start = tilizer_subtoken_offset / tile_width_bytes;
 
-    // ========== BRISC PARALLEL METADATA PROCESSING ==========
-    // BRISC processes second half of tokens (tokens/2 to tokens) in parallel with NCRISC
+    // ========== ALL CORES: BRISC PARALLEL METADATA PROCESSING ==========
+    // BRISC processes second half of this core's token range in parallel with NCRISC
     // Aligned row size for expert_activation buffer (in bytes)
     constexpr uint32_t aligned_activation_row_bytes =
         ((2 * experts_per_device + 1) * sizeof(uint32_t) + l1_alignment - 1) / l1_alignment * l1_alignment;
 
-    if (is_drain_tilizer_core) {
-        // Wait for NCRISC to finish reading the mapping tensor
-        cb_wait_front(mapping_tensor_cb_id, num_devices);
+    // Calculate BRISC's token range for this core
+    uint32_t tokens_this_core = core_token_end - core_token_start;
+    uint32_t brisc_token_start_runtime = core_token_start + tokens_this_core / 2;
+    uint32_t brisc_token_end_runtime = core_token_end;
+    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
 
-        // Get mapping base pointer (read by NCRISC)
-        const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
+    // Wait for NCRISC to finish reading the mapping tensor
+    cb_wait_front(mapping_tensor_cb_id, num_devices);
 
-        // Build local_expert_ids array - experts that map to this device
-        uint16_t* expert_to_device_map =
-            reinterpret_cast<uint16_t*>(mapping_base + linearized_mesh_coord * aligned_mapping_page_size);
-        uint16_t local_expert_ids[experts_per_device];
-        uint32_t local_expert_count = 0;
-        for (uint32_t i = 0; i < experts; i++) {
-            uint16_t expert_mesh_coord = expert_to_device_map[i];
-            if (expert_mesh_coord == linearized_mesh_coord) {
-                if (local_expert_count < experts_per_device) {
-                    local_expert_ids[local_expert_count] = i;
-                    local_expert_count++;
-                }
+    // Get mapping base pointer (read by NCRISC)
+    const uint32_t mapping_base = get_read_ptr(mapping_tensor_cb_id);
+
+    // Build local_expert_ids array - experts that map to this device
+    uint16_t* expert_to_device_map =
+        reinterpret_cast<uint16_t*>(mapping_base + linearized_mesh_coord * aligned_mapping_page_size);
+    uint16_t local_expert_ids[experts_per_device];
+    uint32_t local_expert_count = 0;
+    for (uint32_t i = 0; i < experts; i++) {
+        uint16_t expert_mesh_coord = expert_to_device_map[i];
+        if (expert_mesh_coord == linearized_mesh_coord) {
+            if (local_expert_count < experts_per_device) {
+                local_expert_ids[local_expert_count] = i;
+                local_expert_count++;
             }
         }
-
-        // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
-        cb_reserve_back(brisc_e_t_buffer_id, 1);
-        const uint32_t brisc_e_t_buffer_base = get_write_ptr(brisc_e_t_buffer_id);
-        constexpr uint32_t brisc_tokens_capacity = tokens / 2;  // Max tokens per expert for BRISC
-
-        // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
-        cb_reserve_back(brisc_expert_activation_cb_id, 1);
-        const uint32_t brisc_expert_activation_base = get_write_ptr(brisc_expert_activation_cb_id);
-
-        // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
-        for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
-            uint32_t* row_ptr =
-                reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
-            row_ptr[0] = 0;  // token_id placeholder
-            for (uint32_t e = 0; e < experts_per_device; e++) {
-                row_ptr[1 + e] = selected_experts_k;      // sentinel for k-index
-                row_ptr[1 + experts_per_device + e] = 0;  // score placeholder
-            }
-        }
-
-        // Indices and scores are sharded on drain core, accessible via CB
-        const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
-        const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
-
-        // Per-expert token counts for BRISC's half
-        uint32_t brisc_num_tokens_per_expert[experts_per_device] = {0};
-        uint32_t brisc_num_activated_tokens = 0;
-
-        // Cache source_device_mapping - only changes every tokens_per_device tokens
-        uint32_t prev_device_in_group = UINT32_MAX;
-        const uint16_t* source_device_mapping = nullptr;
-
-        // Process BRISC's token range: [brisc_token_start, brisc_token_end)
-        for (uint32_t t = brisc_token_start; t < brisc_token_end; t++) {
-            const uint32_t device_in_group = t / tokens_per_device;
-
-            // Only update mapping pointer when device_in_group changes
-            if (device_in_group != prev_device_in_group) {
-                const uint32_t source_device = get_device_idx_from_global_token_idx<
-                    linearized_mesh_coord,
-                    tokens_per_device,
-                    mesh_rows,
-                    mesh_cols,
-                    axis>(t);
-                source_device_mapping =
-                    reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
-                prev_device_in_group = device_in_group;
-            }
-
-            const uint16_t* token_indices =
-                reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
-            const uint16_t* token_scores =
-                reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
-
-            // Track if this token is activated for any local expert
-            uint32_t* brisc_activation_l1_ptr = nullptr;
-            bool activated = false;
-
-            for (uint32_t k = 0; k < selected_experts_k; k++) {
-                const uint16_t selected_expert = token_indices[k];
-
-                // Check if this expert maps to our device first
-                if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
-                    continue;
-                }
-
-                // Check if it's one of our local experts
-                for (uint32_t e = 0; e < local_expert_count; e++) {
-                    if (selected_expert == local_expert_ids[e]) {
-                        // First activation for this token - set up pointer and write token id
-                        if (!activated) {
-                            brisc_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                                brisc_expert_activation_base +
-                                brisc_num_activated_tokens * aligned_activation_row_bytes);
-                            brisc_activation_l1_ptr[0] = t;
-                            activated = true;
-                        }
-
-                        DPRINT << "Token " << t << " activated expert " << selected_expert << " with k-index " << k
-                               << ENDL();
-                        // Write k-index and score for this expert
-                        brisc_activation_l1_ptr[1 + e] = k;
-                        brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
-
-                        // Write to BRISC's e_t buffer (16B aligned entries)
-                        const uint32_t brisc_e_t_offset =
-                            (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
-                        *reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset) = t;
-                        brisc_num_tokens_per_expert[e]++;
-                        break;
-                    }
-                }
-            }
-
-            if (activated) {
-                brisc_num_activated_tokens++;
-            }
-        }
-
-        // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)
-        cb_push_back(brisc_e_t_buffer_id, 1);
-
-        // Push BRISC's expert_activation buffer
-        cb_push_back(brisc_expert_activation_cb_id, 1);
-
-        // Push BRISC's per-expert counts to CB for NCRISC to read
-        cb_reserve_back(brisc_expert_counts_cb_id, 1);
-        uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(brisc_expert_counts_cb_id));
-        for (uint32_t e = 0; e < experts_per_device; e++) {
-            brisc_counts_ptr[e] = brisc_num_tokens_per_expert[e];
-        }
-        cb_push_back(brisc_expert_counts_cb_id, 1);
-
-        // Push BRISC's activated token count
-        cb_reserve_back(brisc_activated_count_cb_id, 1);
-        *reinterpret_cast<uint32_t*>(get_write_ptr(brisc_activated_count_cb_id)) = brisc_num_activated_tokens;
-        cb_push_back(brisc_activated_count_cb_id, 1);
     }
+
+    // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
+    cb_reserve_back(brisc_e_t_buffer_id, 1);
+    const uint32_t brisc_e_t_buffer_base = get_write_ptr(brisc_e_t_buffer_id);
+
+    // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
+    cb_reserve_back(brisc_expert_activation_cb_id, 1);
+    const uint32_t brisc_expert_activation_base = get_write_ptr(brisc_expert_activation_cb_id);
+
+    // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
+    for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
+        uint32_t* row_ptr =
+            reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
+        row_ptr[0] = 0;  // token_id placeholder
+        for (uint32_t e = 0; e < experts_per_device; e++) {
+            row_ptr[1 + e] = selected_experts_k;      // sentinel for k-index
+            row_ptr[1 + experts_per_device + e] = 0;  // score placeholder
+        }
+    }
+
+    // Indices and scores accessible via CB (drain has shard, non-drain read via NOC in reader)
+    const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
+    const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
+
+    // Per-expert token counts for BRISC's half
+    uint32_t brisc_num_tokens_per_expert[experts_per_device] = {0};
+    uint32_t brisc_num_activated_tokens = 0;
+
+    // Cache source_device_mapping - only changes every tokens_per_device tokens
+    uint32_t prev_device_in_group = UINT32_MAX;
+    const uint16_t* source_device_mapping = nullptr;
+
+    // Process BRISC's token range: [brisc_token_start_runtime, brisc_token_end_runtime)
+    for (uint32_t t = brisc_token_start_runtime; t < brisc_token_end_runtime; t++) {
+        const uint32_t device_in_group = t / tokens_per_device;
+
+        // Only update mapping pointer when device_in_group changes
+        if (device_in_group != prev_device_in_group) {
+            const uint32_t source_device = get_device_idx_from_global_token_idx<
+                linearized_mesh_coord,
+                tokens_per_device,
+                mesh_rows,
+                mesh_cols,
+                axis>(t);
+            source_device_mapping =
+                reinterpret_cast<const uint16_t*>(mapping_base + source_device * aligned_mapping_page_size);
+            prev_device_in_group = device_in_group;
+        }
+
+        const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
+        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+
+        // Track if this token is activated for any local expert
+        uint32_t* brisc_activation_l1_ptr = nullptr;
+        bool activated = false;
+
+        for (uint32_t k = 0; k < selected_experts_k; k++) {
+            const uint16_t selected_expert = token_indices[k];
+
+            // Check if this expert maps to our device first
+            if (source_device_mapping[selected_expert] != linearized_mesh_coord) {
+                continue;
+            }
+
+            // Check if it's one of our local experts
+            for (uint32_t e = 0; e < local_expert_count; e++) {
+                if (selected_expert == local_expert_ids[e]) {
+                    // First activation for this token - set up pointer and write token id
+                    if (!activated) {
+                        brisc_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                            brisc_expert_activation_base + brisc_num_activated_tokens * aligned_activation_row_bytes);
+                        brisc_activation_l1_ptr[0] = t;
+                        activated = true;
+                    }
+
+                    // Write k-index and score for this expert
+                    brisc_activation_l1_ptr[1 + e] = k;
+                    brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+
+                    // Write to BRISC's e_t buffer (16B aligned entries)
+                    const uint32_t brisc_e_t_offset =
+                        (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
+                    *reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset) = t;
+                    brisc_num_tokens_per_expert[e]++;
+                    break;
+                }
+            }
+        }
+
+        if (activated) {
+            brisc_num_activated_tokens++;
+        }
+    }
+
+    // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)
+    cb_push_back(brisc_e_t_buffer_id, 1);
+
+    // Push BRISC's expert_activation buffer
+    cb_push_back(brisc_expert_activation_cb_id, 1);
+
+    // Push BRISC's per-expert counts to CB for NCRISC to read
+    cb_reserve_back(brisc_expert_counts_cb_id, 1);
+    uint32_t* brisc_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(brisc_expert_counts_cb_id));
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        brisc_counts_ptr[e] = brisc_num_tokens_per_expert[e];
+    }
+    cb_push_back(brisc_expert_counts_cb_id, 1);
+
+    // Push BRISC's activated token count
+    cb_reserve_back(brisc_activated_count_cb_id, 1);
+    *reinterpret_cast<uint32_t*>(get_write_ptr(brisc_activated_count_cb_id)) = brisc_num_activated_tokens;
+    cb_push_back(brisc_activated_count_cb_id, 1);
 
     // Wait for reader to push per-expert token counts (includes merged NCRISC + BRISC counts)
     cb_wait_front(per_expert_total_tokens_cb_id, experts_per_device);
