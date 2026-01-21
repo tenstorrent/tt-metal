@@ -132,7 +132,7 @@ void py_module(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
         )doc");
 
@@ -163,7 +163,7 @@ void py_module(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
         )doc");
 }

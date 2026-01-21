@@ -57,7 +57,7 @@ void bind_binary_backward_ops(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -131,7 +131,7 @@ void bind_binary_backward_concat(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -220,7 +220,7 @@ void bind_binary_backward_addalpha(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -305,7 +305,7 @@ void bind_binary_backward_bias_gelu(
                * - Dtypes
                  - Layouts
                * - {8}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -395,7 +395,7 @@ void bind_binary_backward_sub_alpha(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -473,7 +473,7 @@ void bind_binary_backward_rsub(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -548,7 +548,7 @@ void bind_binary_bw_mul(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
@@ -655,7 +655,7 @@ void bind_binary_bw(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -771,7 +771,7 @@ void bind_binary_bw_div(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -884,7 +884,7 @@ void bind_binary_backward_overload(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -961,7 +961,7 @@ void bind_binary_backward_assign(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
         )doc",
         operation.base_name(),

@@ -59,7 +59,7 @@ void bind_unary_backward_two_float(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -186,7 +186,7 @@ void bind_unary_backward_rsqrt(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -248,7 +248,7 @@ void bind_unary_backward_op_reciprocal(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -318,7 +318,7 @@ void bind_unary_backward_op_overload_abs(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -391,7 +391,7 @@ void bind_unary_backward_float(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -462,7 +462,7 @@ void bind_unary_backward_two_float_with_default(
                * - Dtypes
                  - Layouts
                * - {9}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -533,7 +533,7 @@ void bind_unary_backward_float_with_default(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -603,7 +603,7 @@ void bind_unary_backward_optional_float_params_with_default(
                * - Dtypes
                  - Layouts
                * - {9}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -693,7 +693,7 @@ void bind_unary_backward_rdiv(
                * - Dtypes
                  - Layouts
                * - {8}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
             {9}
@@ -764,7 +764,7 @@ void bind_unary_backward_unary_optional_float(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -830,7 +830,7 @@ void bind_unary_backward_shape(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -954,7 +954,7 @@ void bind_unary_backward_neg(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -1010,7 +1010,7 @@ void bind_unary_backward_prod_bw(nb::module_& mod, const unary_backward_operatio
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
         )doc",
@@ -1071,7 +1071,7 @@ void bind_unary_backward_gelu(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
