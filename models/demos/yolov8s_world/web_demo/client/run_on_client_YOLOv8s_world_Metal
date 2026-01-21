@@ -1,0 +1,2 @@
+#!/bin/bash
+streamlit run yolov8s_world.py -- "$@"
