@@ -575,6 +575,7 @@ D2HSocket::D2HSocket(
         // Round up to smallest multiple of page size
         l1_data_buffer_size_ = ((l1_data_buffer_size + default_page_size - 1) / default_page_size) * default_page_size;
 
+        // ShardOrientation::ROW_MAJOR is a placeholder - with a single sender core, orientation is irrelevant
         auto l1_data_shard_params = ShardSpecBuffer(
             sender_core_range_set, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
 

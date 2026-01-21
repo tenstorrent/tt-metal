@@ -95,6 +95,8 @@ static uint32_t perf_telemetry_data_addr_hi = 0;
 static uint32_t perf_telemetry_host_write_ptr = 0;
 static uint32_t perf_telemetry_host_fifo_start = 0;
 static uint32_t perf_telemetry_fifo_page_aligned_size = 0;
+static uint32_t perf_telemetry_l1_data_addr = 0;
+static uint32_t perf_telemetry_l1_data_size = 0;
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -251,10 +253,13 @@ void perf_telemetry_init() {
     // Read PCIe-specific config from the config buffer
     // Layout: 8 words MD + 4 words ack + downstream encoding area
     // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
+    // [15] = l1_data_buffer_address, [16] = l1_data_buffer_size
     // [2] = data_addr_lo (write_ptr)
     tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(perf_telemetry_socket_config_addr);
     perf_telemetry_pcie_xy_enc = socket_config_words[12];
     perf_telemetry_data_addr_hi = socket_config_words[13];
+    perf_telemetry_l1_data_addr = socket_config_words[15];
+    perf_telemetry_l1_data_size = socket_config_words[16];
     uint32_t data_addr_lo = socket_config_words[2];  // Initial write_ptr = data buffer start
 
     // Calculate page-aligned FIFO size
@@ -272,16 +277,16 @@ void perf_telemetry_init() {
     perf_telemetry_initialized = true;
 }
 
-// Push a single page of telemetry data to the host
-// src_addr: L1 address of the data to send (must be perf_telemetry_page_size bytes)
-// Returns: true if data was sent, false if socket not initialized
+// Push the L1 data buffer contents to the host as a telemetry page
+// Uses the pre-allocated L1 data buffer address from the socket config
+// Returns: true if data was sent, false if socket not initialized or no L1 buffer
 FORCE_INLINE
-bool perf_telemetry_push(uint32_t src_addr) {
+bool perf_telemetry_push() {
     if constexpr (!perf_telemetry_enabled) {
         return false;
     }
 
-    if (!perf_telemetry_initialized) {
+    if (!perf_telemetry_initialized || perf_telemetry_l1_data_addr == 0) {
         return false;
     }
 
@@ -292,9 +297,9 @@ bool perf_telemetry_push(uint32_t src_addr) {
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
                               static_cast<uint64_t>(perf_telemetry_host_write_ptr);
 
-    // Write data to PCIe-mapped host memory using PCIe write primitive
+    // Write L1 data buffer to PCIe-mapped host memory
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_0, src_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
+        NOC_0, perf_telemetry_l1_data_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
 
     // Update host write pointer with wrap-around
     perf_telemetry_host_write_ptr += perf_telemetry_page_size;

@@ -1206,7 +1206,9 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
 
     // Configuration for perf telemetry socket
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
-    constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
+    constexpr uint32_t kPerfTelemetryFifoSize = 4096;               // 4KB FIFO for telemetry data
+    constexpr uint32_t kPerfTelemetryPageSize = 64;                 // 64 bytes per telemetry page
+    constexpr uint32_t kL1DataBufferSize = kPerfTelemetryPageSize;  // 1 page of L1 data buffer
 
     // Get the dispatch_s core which runs the dispatch_subordinate kernel
     // This is the core that will push telemetry data to host
@@ -1232,8 +1234,35 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         dispatch_core.x,
         dispatch_core.y);
 
-    perf_telemetry_socket_ =
-        std::make_unique<D2HSocket>(mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize);
+    // Create socket with L1 data buffer for telemetry data
+    perf_telemetry_socket_ = std::make_unique<D2HSocket>(
+        mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize, kL1DataBufferSize);
+
+    // Populate L1 data buffer with test data (series of numbers)
+    if (perf_telemetry_socket_->get_l1_data_buffer_size() > 0) {
+        uint32_t num_words = perf_telemetry_socket_->get_l1_data_buffer_size() / sizeof(uint32_t);
+        std::vector<uint32_t> test_data(num_words);
+        for (uint32_t i = 0; i < num_words; i++) {
+            test_data[i] = i;  // Simple series: 0, 1, 2, 3, ...
+        }
+
+        // Write test data to L1 buffer on the sender core
+        auto l1_buffer_addr = perf_telemetry_socket_->get_l1_data_buffer_address();
+        auto virtual_core = ref_device->virtual_core_from_logical_core(
+            dispatch_core, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
+        tt::tt_metal::detail::WriteToDeviceL1(
+            ref_device,
+            virtual_core,
+            l1_buffer_addr,
+            test_data,
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
+
+        log_info(
+            tt::LogMetal,
+            "Perf telemetry L1 data buffer at 0x{:x} (size={}) populated with test data",
+            l1_buffer_addr,
+            perf_telemetry_socket_->get_l1_data_buffer_size());
+    }
 }
 
 D2HSocket* MeshDeviceImpl::get_perf_telemetry_socket() const { return perf_telemetry_socket_.get(); }
