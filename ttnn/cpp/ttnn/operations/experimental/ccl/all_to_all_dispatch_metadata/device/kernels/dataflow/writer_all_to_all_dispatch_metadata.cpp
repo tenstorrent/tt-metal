@@ -554,6 +554,7 @@ void kernel_main() {
     // ============================================================================
     constexpr bool USE_BIDIRECTIONAL_MULTICAST = true;
     constexpr bool USE_POINT_TO_POINT_UNICAST = false;
+    constexpr bool USE_SPARSE_MULTICAST = false;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token

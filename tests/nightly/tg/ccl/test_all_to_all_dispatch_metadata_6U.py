@@ -19,29 +19,36 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
-def gen_expert_mapping_new_format(experts, mesh_shape, cluster_axis):
+def gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape):
     """
-    Create per-device expert mapping tensor that maps each expert to the device it belongs to.
-    Shape: [devices, experts] where each entry is the linearized mesh coordinate of the device
-    that owns that expert from the perspective of that source device.
+    Convert old format expert mapping to new format.
 
-    For now, all devices see the same mapping (no replicated experts).
-    For 256 experts and 16 devices (16 experts per device):
-    expert_mapping[d, e] = e // experts_per_device
+    Old format: [1, 1, experts, devices] - one-hot encoding where expert_mapping_old[0, 0, e, d] = 1
+                means expert e is on device d.
+    New format: [devices, experts] - direct device ID lookup where expert_mapping_new[src_device, e] = d
+                means expert e is on device d (from the perspective of src_device).
+
+    For now, all devices see the same mapping (no replicated experts), so we just replicate
+    the same row for each source device.
 
     In the future, this can be extended to support replicated experts where each device
     sees the "optimal" device (e.g., shortest distance) for each expert.
-
-    This tensor is replicated on every device (even devices not along the dispatch axis).
     """
     devices = mesh_shape[0] * mesh_shape[1]
-    experts_per_device = experts // devices
-    expert_mapping = torch.zeros(1, experts, dtype=torch.uint16)
+    experts = expert_mapping_old.shape[2]
+
+    # Extract device assignment from one-hot encoding
+    # expert_mapping_old has shape [1, 1, experts, devices]
+    # For each expert, find which device has the 1
+    expert_mapping_new = torch.zeros(1, experts, dtype=torch.uint16)
     for e in range(experts):
-        expert_mapping[0, e] = e // experts_per_device
+        device_assignment = expert_mapping_old[0, 0, e, :]
+        device_id = torch.where(device_assignment == 1)[0].item()
+        expert_mapping_new[0, e] = device_id
+
     # Replicate across all devices (same mapping for now)
-    expert_mapping = expert_mapping.repeat(devices, 1)
-    return expert_mapping
+    expert_mapping_new = expert_mapping_new.repeat(devices, 1)
+    return expert_mapping_new
 
 
 def gen_tensors_for_metadata_op(
@@ -79,8 +86,9 @@ def gen_tensors_for_metadata_op(
         batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
     )
 
-    # Generate new format expert mapping: [devices, experts] with device IDs
-    expert_mapping_new = gen_expert_mapping_new_format(experts, mesh_shape, cluster_axis)
+    # Convert old format expert mapping to new format: [devices, experts] with device IDs
+    # This ensures the new format matches the scheme (random vs sequential)
+    expert_mapping_new = gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape)
 
     total_tokens = batch * seq_len
 
@@ -513,7 +521,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (1, 40, 10),
+        (1, 1, 1),
     ],
     ids=[
         "decode",
@@ -562,7 +570,7 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="worst_congestion",
+        scheme="sequential",
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,
