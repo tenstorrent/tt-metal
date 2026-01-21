@@ -88,6 +88,14 @@ using ReceiverChannelResponseCreditSender = typename std::conditional_t<
     ReceiverChannelCounterBasedResponseCreditSender,
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
 
+// Packed credit flags: determine whether credits are packed into shared registers
+// or sent individually per channel.
+// - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK is true
+// - BH (multi_txq_enabled): Uses counter-based mechanism (via function calls) regardless of ENABLE_FIRST_LEVEL_ACK
+constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
+constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
+constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK && !multi_txq_enabled;
+
 template <typename T = void>
 struct init_receiver_channel_response_credit_senders_impl;
 
@@ -284,13 +292,7 @@ FORCE_INLINE void receiver_send_received_ack(
  */
 template <uint8_t sender_channel_index>
 FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
-    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-        // Should never be called - this path doesn't use ACKs
-        return packed_acks;
-    } else if constexpr (multi_txq_enabled) {
-        // BH: Counter-based, already unpacked (one counter per channel)
-        return packed_acks;
-    } else {
+    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         // WH: Stream register with packing - need to extract this channel's credits
         auto packed_acks_named =
             tt::tt_fabric::PackedCreditValue<NUM_SENDER_CHANNELS, tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS>{packed_acks};
@@ -298,6 +300,9 @@ FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
             NUM_SENDER_CHANNELS,
             tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
             to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
+    } else {
+        // BH or !ENABLE_FIRST_LEVEL_ACK: Counter-based, already unpacked (one counter per channel)
+        return packed_acks;
     }
 }
 
@@ -307,19 +312,16 @@ FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
  */
 template <uint8_t sender_channel_index>
 FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
-    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-        // Should never be called - this path doesn't use ACKs
-        return acks_count;
-    } else if constexpr (multi_txq_enabled) {
-        // BH: Direct value, no packing
-        return acks_count;
-    } else {
+    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         // WH: Pack into register position for this channel
         return tt::tt_fabric::PackedCredits<
                    NUM_SENDER_CHANNELS,
                    tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
                    to_sender_packets_acked_streams[0]>::template pack_value<sender_channel_index>(acks_count)
             .get();
+    } else {
+        // BH or !ENABLE_FIRST_LEVEL_ACK: Direct value, no packing
+        return acks_count;
     }
 }
 
@@ -329,19 +331,16 @@ FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
  */
 template <uint8_t sender_channel_index, uint32_t to_receiver_pkts_sent_id>
 FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
-    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-        // No first-level ACK: just send 1
-        return 1;
-    } else if constexpr (multi_txq_enabled) {
-        // BH: Always 1 (counter-based, no packing needed)
-        return 1;
-    } else {
+    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
         // WH: Pack 1 credit into this channel's position
         return tt::tt_fabric::PackedCredits<
                    NUM_SENDER_CHANNELS,
                    tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
                    to_receiver_pkts_sent_id>::template pack_value<sender_channel_index>(1)
             .get();
+    } else {
+        // BH or !ENABLE_FIRST_LEVEL_ACK: Always 1 (counter-based, no packing needed)
+        return 1;
     }
 }
 
@@ -350,18 +349,15 @@ FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
  * WH: Unpack and sum all channels. BH: Direct value (no packing).
  */
 FORCE_INLINE uint32_t accumulate_receiver_channel_credits(uint32_t packed_value) {
-    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-        // No first-level ACK: value is already the count
-        return packed_value;
-    } else if constexpr (multi_txq_enabled) {
-        // BH: Already unpacked (direct count)
-        return packed_value;
-    } else {
+    if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
         // WH: Unpack and sum across all sender channels
         using PC = tt::tt_fabric::PackedCredits<
             NUM_SENDER_CHANNELS,
             tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
             to_sender_packets_completed_streams[0]>;
         return PC::get_sum(typename PC::PackedCreditValueType(packed_value));
+    } else {
+        // BH or !ENABLE_FIRST_LEVEL_ACK: Already unpacked (direct count)
+        return packed_value;
     }
 }

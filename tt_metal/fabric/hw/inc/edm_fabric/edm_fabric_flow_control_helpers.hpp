@@ -236,6 +236,9 @@ struct ReceiverChannelPointersMembers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     uint32_t unsent_first_level_acks;
     uint8_t unsent_messages;
+    // Always include src_chan_ids for ENABLE_FIRST_LEVEL_ACK=true to support both
+    // packed credits (WH) and unpacked credits (BH). Small memory overhead but simpler.
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
@@ -287,9 +290,13 @@ struct ReceiverChannelPointers {
         m.src_chan_ids[buffer_index.get()] = src_chan_id;
     }
 
-    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return m.src_chan_ids[buffer_index.get()]; }
+    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const {
+        return m.src_chan_ids[buffer_index.get()];
+    }
 
-    FORCE_INLINE uint8_t get_src_chan_id() const { return m.src_chan_ids[0]; }
+    FORCE_INLINE uint8_t get_src_chan_id() const {
+        return m.src_chan_ids[0];
+    }
 
     FORCE_INLINE void init() { reset(); }
 

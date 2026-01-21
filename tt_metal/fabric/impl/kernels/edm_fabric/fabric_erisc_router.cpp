@@ -1757,7 +1757,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter();
     uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
-    if constexpr (enable_first_level_ack) {
+    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+        // WH with ENABLE_FIRST_LEVEL_ACK: Packed credits - read from shared stream register
         uint32_t packed_num_packets_raw = get_ptr_val(to_sender_packets_completed_streams[0]);
         // Track newly received packets that need first-level acks
         if (packed_num_packets_raw != 0) {
@@ -1767,6 +1768,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
+        // BH (multi_txq_enabled) or !ENABLE_FIRST_LEVEL_ACK: Use stream register
         pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
         unwritten_packets = pkts_received_since_last_check != 0;
     }
@@ -1787,7 +1789,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-        if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
+        // Store src_ch_id for BH (counter-based) or when not using packed credits
+        if constexpr (!skip_src_ch_id_update && !USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
@@ -1851,10 +1854,25 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            if constexpr (!enable_first_level_ack) {
-                increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            } else {
+            if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
+                // WH with ENABLE_FIRST_LEVEL_ACK: Packed credits - just decrement unsent_messages
                 receiver_channel_pointers.m.unsent_messages--;
+            } else {
+                // BH or !ENABLE_FIRST_LEVEL_ACK: Decrement stream register
+                increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                
+                // For BH with ENABLE_FIRST_LEVEL_ACK, send first-level ACK via counter
+                if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+                    uint8_t src_ch_id;
+                    if constexpr (skip_src_ch_id_update) {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id();
+                    } else {
+                        src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+                    }
+                    // Send first-level ACK via receiver_send_received_ack (counter-based for BH)
+                    receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                        receiver_channel_response_credit_sender, src_ch_id, 1);
+                }
             }
         }
     }
@@ -1862,10 +1880,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
-    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
-        // Track newly received packets that need first-level acks
-        // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-
+    // For WH with ENABLE_FIRST_LEVEL_ACK (packed credits), send accumulated ACKs to channel 0
+    // For BH, ACKs are sent immediately per packet above via receiver_send_received_ack
+    if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
         if (receiver_channel_pointers.m.unsent_first_level_acks) {
             // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
             bool can_send = true;
@@ -1875,7 +1892,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             if (can_send) {
                 receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                     receiver_channel_response_credit_sender, 0, receiver_channel_pointers.m.unsent_first_level_acks);
-                    receiver_channel_pointers.m.unsent_first_level_acks = 0;
+                receiver_channel_pointers.m.unsent_first_level_acks = 0;
             }
         }
     }
@@ -1893,9 +1910,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     }
     if (can_send_completion) {
         uint8_t src_ch_id;
-        if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        if constexpr (USE_PACKED_COMPLETION_ACK_CREDITS) {
+            // WH with ENABLE_FIRST_LEVEL_ACK: Send to channel 0 (packed register)
             src_ch_id = 0;
         } else {
+            // BH or !ENABLE_FIRST_LEVEL_ACK: Send to specific sender channel via counter
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
@@ -1903,6 +1922,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
         }
         // WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
+        // Send completion ACK via receiver_send_completion_ack (counter-based for BH, stream for WH)
         receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
             receiver_channel_response_credit_sender, src_ch_id);
         receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
