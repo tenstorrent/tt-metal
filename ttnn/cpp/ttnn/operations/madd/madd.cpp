@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::madd {
 
-ttnn::Tensor Madd::invoke(
+ttnn::Tensor MAdd::invoke(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
     const ttnn::Tensor& c,

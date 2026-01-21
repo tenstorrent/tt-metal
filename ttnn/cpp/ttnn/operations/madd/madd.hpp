@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"  // Tensor
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::madd {
