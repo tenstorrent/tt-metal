@@ -16,8 +16,8 @@ from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 collected = set()
-if os.path.exists("attn_1d_performance.csv"):
-    with open("attn_1d_performance.csv", "r") as f:
+if os.path.exists("attn_2d_performance.csv"):
+    with open("attn_2d_performance.csv", "r") as f:
         reader = csv.reader(f)
         next(reader, None)  # skip header
         for row in reader:
