@@ -104,7 +104,7 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
 
 
 @pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
-@pytest.mark.parametrize("m", [32])
+@pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("fused_activation", [None])
 def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """Test simplified DRAM streaming matmul with optional fused activation.
@@ -205,9 +205,9 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     )
 
     if k == 7168:
-        subblock_k = k // tile_w // 4
+        subblock_k = k // tile_w // 1
     else:
-        subblock_k = k // tile_w // 2
+        subblock_k = k // tile_w // 1
 
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""

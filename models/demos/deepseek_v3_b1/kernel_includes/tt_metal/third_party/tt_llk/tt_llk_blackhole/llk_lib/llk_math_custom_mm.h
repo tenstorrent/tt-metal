@@ -152,14 +152,33 @@ inline void custom_mm_configure_mop(
             TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);  // final, clear all
         });
     } else {
-        // 1x32 tile: 4 MVMULs (original optimized version)
-        // With negative dest incr in ADDR_MOD_1, dest cycles: 0->16->0->16
-        // This allows MVMULs 3&4 to accumulate directly into same locations as MVMULs 1&2
-        load_replay_buf(ckernel::math::replay_buf_offset, 4, [] {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
+        // 1x32 tile: 8 MVMULs + MOVD2A/MOVD2B + ELWADD for K-reduction
+        // First 4 MVMULs: partial K accumulation, then clear AB
+        // Next 4 MVMULs: more partial K accumulation
+        // MOVD2A/MOVD2B: move results to srcA/srcB
+        // ELWADD: final reduction
+        load_replay_buf(ckernel::math::replay_buf_offset, 14, [] {
+            // First K-half: srcA 0,16,32,48 with srcB 0,16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // dest=0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // dest=16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // dest=0 (accumulate)
+            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // dest=16 (accumulate), clear AB
+
+            // Second K-half: new srcA/srcB data
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // dest=0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // dest=16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // dest=0 (accumulate)
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // dest=16 (accumulate)
+
+            // Move partial results from dest to srcA/srcB for reduction
+            TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
+            TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
+            TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 32);
+            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 48);
+
+            // Element-wise add for final reduction
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+            TTI_ELWADD(p_setrwc::CLR_AB, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
         });
     }
 }
@@ -184,7 +203,7 @@ inline void _llk_math_custom_mm_init_(
 }
 
 // Optimized implementation with direct face accumulation via negative indexing.
-// Supports 1x32 (4 MVMULs), 16x32 (8 MVMULs), and 32x32 (16 MVMULs) tile shapes.
+// Supports 1x32 (14 instr), 16x32 (8 MVMULs), and 32x32 (16 MVMULs) tile shapes.
 template <bool partial_acc = false>
 inline void _llk_math_custom_mm_(
     uint dst_index,
@@ -195,11 +214,24 @@ inline void _llk_math_custom_mm_(
 
     const bool is_in0_32x32 = (in0_tile_r_dim == TILE_R_DIM);
     const bool is_in0_16x32 = (in0_tile_r_dim == 16);
-    const uint32_t replay_len = is_in0_32x32 ? 16 : (is_in0_16x32 ? 8 : 4);
 
-    // All iterations use the same MVMULs - face accumulation happens automatically
-    // via dest address cycling (negative incr for K accumulation)
-    for (uint32_t i = 0; i < kt_dim; i++) {
-        lltt::replay(ckernel::math::replay_buf_offset, replay_len);
+    if (is_in0_32x32) {
+        // 32x32: 16 MVMULs per iteration
+        for (uint32_t i = 0; i < kt_dim; i++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 16);
+        }
+    } else if (is_in0_16x32) {
+        // 16x32: 8 MVMULs per iteration
+        for (uint32_t i = 0; i < kt_dim; i++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 8);
+        }
+    } else {
+        // 1x32: First (kt_dim-1) iterations use 4 MVMULs, last iteration uses remaining 10
+        // Non-last iterations: 4 MVMULs with CLR_AB (allows new srcA/srcB to be loaded)
+        for (uint32_t i = 0; i < kt_dim - 1; i++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        }
+        // Last iteration: skip first 4, replay remaining 10 (4 MVMULs + MOVD2A/MOVD2B + ELWADD)
+        lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
     }
 }
