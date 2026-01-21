@@ -102,27 +102,44 @@ void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
     generate_tile_with_packed_bfloat16_value(cb_id, packed_value);
 }
 
-// Generates a tile intended for performing row reduction through matrix multiplication.
-// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
-void generate_matmul_row_reduce_tile(uint32_t cb_id) {
-    constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
-    constexpr uint16_t zero = 0x0;
-
-    cb_reserve_back(cb_id, onetile);
-    uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+// Helper template for generating matmul row reduce tile with specific type and one value.
+// The tile pattern has 1.0 in the first column of even faces (left faces) and 0 elsewhere.
+template <typename T, T one_value>
+inline void fill_matmul_row_reduce_tile(uint32_t cb_id) {
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
-                if (!(face & 1U) && (w == 0)) {  // check whether face is even and width is zero
-                    *tile_ptr++ = one;
-                } else {
-                    *tile_ptr++ = zero;
-                }
+                // Set to 'one' only in first column (w==0) of even faces (left faces)
+                *tile_ptr++ = (!(face & 1U) && (w == 0)) ? one_value : static_cast<T>(0);
             }
         }
     }
+}
+
+// Generates a tile intended for performing row reduction through matrix multiplication.
+// This approach is used to avoid the precision loss observed when using the reduce_tile operation.
+// Automatically determines the data type from the circular buffer's data format.
+// Supports: Float32, Float16_b (BF16), Int32, UInt32, UInt16, UInt8 formats.
+inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32:
+            fill_matmul_row_reduce_tile<uint32_t, 0x3F800000>(cb_id);  // fp32 1.0
+            break;
+        case DataFormat::Int32:
+        case DataFormat::UInt32: fill_matmul_row_reduce_tile<uint32_t, 1>(cb_id); break;
+        case DataFormat::UInt16: fill_matmul_row_reduce_tile<uint16_t, 1>(cb_id); break;
+        case DataFormat::UInt8: fill_matmul_row_reduce_tile<uint8_t, 1>(cb_id); break;
+        default:                                                   // Float16_b and other bf16 variants
+            fill_matmul_row_reduce_tile<uint16_t, 0x3F80>(cb_id);  // bf16 1.0
+            break;
+    }
+
     cb_push_back(cb_id, onetile);
 }
 
@@ -157,6 +174,22 @@ inline float uint32_to_float(uint32_t bits) {
 }
 
 // ----- Dataflow tile transfer utilities -----
+
+/**
+ * Utility: read a single tile from DRAM to CB.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param tile_idx Tile index in DRAM
+ */
+template <typename AddrGen>
+inline void read_one_tile(const uint32_t cb_idx, const AddrGen& addr_gen, const uint32_t tile_idx) {
+    cb_reserve_back(cb_idx, onetile);
+    const uint32_t l1_addr = get_write_ptr(cb_idx);
+    noc_async_read_page(tile_idx, addr_gen, l1_addr);
+    noc_async_read_barrier();
+    cb_push_back(cb_idx, onetile);
+}
 
 /**
  * Utility: read contiguous tiles in row-major order from DRAM to CB.
