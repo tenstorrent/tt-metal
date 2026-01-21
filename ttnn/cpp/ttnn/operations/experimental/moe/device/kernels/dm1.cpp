@@ -85,7 +85,7 @@ void kernel_main() {
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
 
     // Split into 2 packets
-    constexpr uint32_t first_packet_size = a2a_xfer_bytes_per_step / 2;
+    constexpr uint32_t a2a_packet_size = a2a_xfer_bytes_per_step / 2;
 
     // Source and destination addresses for the all2all
     const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
@@ -97,7 +97,7 @@ void kernel_main() {
     uint32_t semaphore_value = 0;
 
     // Set state for the writes
-    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, first_packet_size, /*noc=*/1, vchannel);
+    noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -123,11 +123,11 @@ void kernel_main() {
                 // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                 // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                 const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                const uint64_t neighbor_src_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
 
-                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_src_addr);
+                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
                 noc_async_write_one_packet_with_state</*posted=*/true>(
-                    local_src_addr + first_packet_size, neighbor_src_addr + first_packet_size);
+                    local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
                 // Signal neighbor that data is ready (increment their semaphore)
                 noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, 1);
