@@ -94,7 +94,7 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
     // Create reader kernel
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/"
         "reader_unary_pad_height_sharded.cpp",
         core_range,
         ReaderDataMovementConfig(reader_ct_args, reader_defines));

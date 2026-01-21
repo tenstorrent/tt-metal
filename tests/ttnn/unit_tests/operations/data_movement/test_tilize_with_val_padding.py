@@ -102,27 +102,27 @@ params += [
 # HEIGHT_SHARDED: Pad height (main use case) - 4 cores
 params += [
     pytest.param(
-        [[1, 1, 48, 64]],
+        [[1, 1, 96, 64]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [
                 ttnn.create_sharded_memory_config(
-                    shape=(12, 64),  # Each of 4 cores: 12 rows
+                    shape=(96, 64),  # Global shape
                     core_grid=ttnn.CoreGrid(y=4, x=1),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
+                    use_height_and_width_as_shard_shape=False,
                 )
             ],
             "output_mem_config": ttnn.create_sharded_memory_config(
-                shape=(16, 64),  # Padded to 16 rows per core (48→64 total)
+                shape=(128, 64),  # Global shape - padded height 96→128, shard=32×64
                 core_grid=ttnn.CoreGrid(y=4, x=1),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+                use_height_and_width_as_shard_shape=False,
             ),
-            "output_tensor_shape": [1, 1, 64, 64],
+            "output_tensor_shape": [1, 1, 128, 64],
             "pad_value": 10.0,  # Non-zero to verify padding correctness
         },
         id="height_sharded_pad_height_4cores",
@@ -138,19 +138,19 @@ params += [
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [
                 ttnn.create_sharded_memory_config(
-                    shape=(32, 30),  # Each of 2 cores: 32 rows × 30 cols
+                    shape=(64, 30),  # Global shape
                     core_grid=ttnn.CoreGrid(y=2, x=1),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
+                    use_height_and_width_as_shard_shape=False,
                 )
             ],
             "output_mem_config": ttnn.create_sharded_memory_config(
-                shape=(32, 32),  # Padded width from 30 to 32
+                shape=(64, 32),  # Global shape - padded width 30→32
                 core_grid=ttnn.CoreGrid(y=2, x=1),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+                use_height_and_width_as_shard_shape=False,
             ),
             "output_tensor_shape": [1, 1, 64, 32],
             "pad_value": -3.0,
@@ -159,28 +159,28 @@ params += [
     )
 ]
 
-# HEIGHT_SHARDED: Pad both height and width - 2 cores
+# HEIGHT_SHARDED: Pad both height and width - 2 cores, tile-aligned
 params += [
     pytest.param(
-        [[1, 1, 50, 50]],
+        [[1, 1, 64, 50]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [
                 ttnn.create_sharded_memory_config(
-                    shape=(25, 50),  # Each of 2 cores: 25 rows × 50 cols
+                    shape=(64, 50),  # Global shape - tile-aligned height
                     core_grid=ttnn.CoreGrid(y=2, x=1),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
+                    use_height_and_width_as_shard_shape=False,
                 )
             ],
             "output_mem_config": ttnn.create_sharded_memory_config(
-                shape=(32, 64),  # Padded to 32×64 per core (50→64 total height, 50→64 width)
+                shape=(64, 64),  # Global shape - padded width 50→64
                 core_grid=ttnn.CoreGrid(y=2, x=1),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+                use_height_and_width_as_shard_shape=False,
             ),
             "output_tensor_shape": [1, 1, 64, 64],
             "pad_value": 5.5,
@@ -189,16 +189,16 @@ params += [
     )
 ]
 
-# HEIGHT_SHARDED: Non-contiguous core grid
+# HEIGHT_SHARDED: Non-contiguous core grid with tile-aligned shards
 params += [
     pytest.param(
-        [[1, 1, 48, 30]],
+        [[1, 1, 96, 30]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [
                 ttnn.create_sharded_memory_config(
-                    shape=(16, 30),  # Each of 3 cores: 16 rows × 30 cols
+                    shape=(32, 30),  # Shard shape - 32 rows per core (tile-aligned)
                     core_grid=ttnn.CoreRangeSet(
                         {
                             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
@@ -211,7 +211,7 @@ params += [
                 )
             ],
             "output_mem_config": ttnn.create_sharded_memory_config(
-                shape=(16, 32),  # Padded width to 32
+                shape=(32, 32),  # Shard shape - padded width 30→32
                 core_grid=ttnn.CoreRangeSet(
                     {
                         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
@@ -222,7 +222,7 @@ params += [
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             ),
-            "output_tensor_shape": [1, 1, 48, 32],
+            "output_tensor_shape": [1, 1, 96, 32],
             "pad_value": -7.5,
         },
         id="height_sharded_noncontiguous_grid",
@@ -232,30 +232,90 @@ params += [
 # HEIGHT_SHARDED: 8 cores
 params += [
     pytest.param(
-        [[1, 1, 96, 32]],
+        [[1, 1, 224, 32]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [
                 ttnn.create_sharded_memory_config(
-                    shape=(12, 32),  # Each of 8 cores: 12 rows × 32 cols
+                    shape=(224, 32),  # Global shape
                     core_grid=ttnn.CoreGrid(y=8, x=1),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
+                    use_height_and_width_as_shard_shape=False,
                 )
             ],
             "output_mem_config": ttnn.create_sharded_memory_config(
-                shape=(16, 32),  # Padded height: 12→16 per core (96→128 total)
+                shape=(256, 32),  # Global shape - padded height 224→256, shard=32×32
                 core_grid=ttnn.CoreGrid(y=8, x=1),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+                use_height_and_width_as_shard_shape=False,
             ),
-            "output_tensor_shape": [1, 1, 128, 32],
+            "output_tensor_shape": [1, 1, 256, 32],
             "pad_value": 0.0,
         },
         id="height_sharded_pad_height_8cores",
+    )
+]
+
+# HEIGHT_SHARDED: COL_MAJOR orientation - tests mapping table traversal
+params += [
+    pytest.param(
+        [[1, 1, 96, 30]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [
+                ttnn.create_sharded_memory_config(
+                    shape=(96, 30),  # Global shape
+                    core_grid=ttnn.CoreGrid(y=4, x=1),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.COL_MAJOR,
+                    use_height_and_width_as_shard_shape=False,
+                )
+            ],
+            "output_mem_config": ttnn.create_sharded_memory_config(
+                shape=(128, 32),  # Global shape - pad both: 96→128, 30→32, shard=32×32
+                core_grid=ttnn.CoreGrid(y=4, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+            "output_tensor_shape": [1, 1, 128, 32],
+            "pad_value": 12.0,
+        },
+        id="height_sharded_col_major_orientation",
+    )
+]
+
+# HEIGHT_SHARDED: 2D grid (2×2) - tests physical mapping across 2D grid
+params += [
+    pytest.param(
+        [[1, 1, 128, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [
+                ttnn.create_sharded_memory_config(
+                    shape=(128, 50),  # Global shape
+                    core_grid=ttnn.CoreGrid(y=2, x=2),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=False,
+                )
+            ],
+            "output_mem_config": ttnn.create_sharded_memory_config(
+                shape=(128, 64),  # Global shape - padded width 50→64
+                core_grid=ttnn.CoreGrid(y=2, x=2),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+            "output_tensor_shape": [1, 1, 128, 64],
+            "pad_value": -1.0,
+        },
+        id="height_sharded_2d_grid",
     )
 ]
 
