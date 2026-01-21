@@ -141,9 +141,6 @@ class LMHead(LightweightModule):
             )
             for split_size in split_sizes_prefill
         ]
-        self.program_configs_decode = [
-            self.model_config["LM_HEAD_RING_PROGCFG"] for _ in range(len(split_sizes_decode))
-        ]
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []

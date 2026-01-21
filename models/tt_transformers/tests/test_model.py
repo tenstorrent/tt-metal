@@ -141,7 +141,10 @@ def test_model_inference(
         pcc = 0.94 if mode_accuracy else 0.86
 
     model_name = model_args.base_model_name
-    prefetcher.num_layers = model_args.n_layers
+
+    # Set num_layers for prefetcher if it is not None
+    if prefetcher is not None:
+        prefetcher.num_layers = model_args.n_layers
 
     if layers == 1:  # quick mode has tight PCC checks for known models
         model_name = model_args.base_model_name

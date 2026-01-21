@@ -219,27 +219,6 @@ def test_decoder_inference(
         rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
 
-        # Save inputs for debugging - can be loaded in test_model.py
-        # rot_mats are replicated across devices, so just get first device's tensor
-        rot_mats_torch = [ttnn.to_torch(ttnn.get_device_tensors(rm)[0]) for rm in rot_mats]
-        rot_mats_local_torch = (
-            [ttnn.to_torch(ttnn.get_device_tensors(rm)[0]) for rm in rot_mats_local]
-            if rot_mats_local is not None
-            else None
-        )
-        torch.save(
-            {
-                "pt_decode_input": pt_decode_input,
-                "current_pos": current_pos,
-                "rot_mats": rot_mats_torch,
-                "rot_mats_local": rot_mats_local_torch,
-                "iteration": i,
-            },
-            "/tmp/decoder_input.pt",
-        )
-        logger.info(f"Saved decoder input and rot_mats to /tmp/decoder_input.pt")
-
-        breakpoint()
         # Run TT model
         tt_out = tt_model(
             decode_input,
@@ -256,16 +235,6 @@ def test_decoder_inference(
         )
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
-
-        # Save decoder output for debugging - can be loaded in model.py to compare
-        torch.save(
-            {
-                "decoder_output": tt_output_torch,
-                "iteration": i,
-            },
-            "/tmp/decoder_output.pt",
-        )
-        logger.info(f"Saved decoder output to /tmp/decoder_output.pt")
 
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None

@@ -924,17 +924,27 @@ class ModelArgs:
             # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
             # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
             # FIXME: Update blackhole figure to be per-core as well.
-            self.max_columns_per_device_lm_head = (
-                128256 // 8 if is_blackhole() else 668 * self.lm_head_core_grid.num_cores
-            )
-            if self.num_devices == 4:
-                self.max_columns_per_device_lm_head = self.max_columns_per_device_lm_head // 4
-            elif self.num_devices == 8:
-                self.max_columns_per_device_lm_head = self.max_columns_per_device_lm_head // 2
+            LLAMA_VOCAB_SIZE = 128256
+            NUM_LM_HEAD_CORES = 48
+            NUM_LM_HEAD_COLUMNS = 8
+
+            def get_max_columns_per_device_lm_head():
+                if is_blackhole():
+                    if self.num_devices == 4:
+                        return LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
+                    if self.num_devices == 8:
+                        return LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
+                    return LLAMA_VOCAB_SIZE // 8
+                else:
+                    return 668 * self.lm_head_core_grid.num_cores
+
+            self.max_columns_per_device_lm_head = get_max_columns_per_device_lm_head()
             # Round to nearest tile
-            self.max_columns_per_device_lm_head = math.ceil(
-                self.max_columns_per_device_lm_head / (self.tile_size * 16)
-            ) * (self.tile_size * 16)
+
+            if self.prefetcher is not None:
+                self.max_columns_per_device_lm_head = math.ceil(
+                    self.max_columns_per_device_lm_head / (self.tile_size * self.prefetcher.ring_size)
+                ) * (self.tile_size * self.prefetcher.ring_size)
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -1340,20 +1350,10 @@ class ModelArgs:
             if self.is_multimodal:
                 self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
 
-            # wo sharding order depends on USE_FUSED_ALL_GATHER_MATMUL:
-            # - If True or TG: shard_wo_dims = (2, 3) -> K sharded by cluster[0], N by cluster[1]
-            # - If False: shard_wo_dims = (3, 2) -> N sharded by cluster[0], K by cluster[1]
-            use_fused_wo = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy
-            if use_fused_wo:
-                wo_shape_ring = (
-                    self.dim // self.cluster_shape[0],  # K
-                    self.dim // self.cluster_shape[1],  # N
-                )
-            else:
-                wo_shape_ring = (
-                    self.dim // self.cluster_shape[1],  # K (sharded across cols)
-                    self.dim // self.cluster_shape[0],  # N (sharded across rows)
-                )
+            wo_shape_ring = (
+                self.dim // self.cluster_shape[0],  # K
+                self.dim // self.cluster_shape[1],  # N
+            )
             self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
                 n=wo_shape_ring[1],
@@ -1393,22 +1393,6 @@ class ModelArgs:
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-            )
-            lm_head_core_range_set = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(9, 7)),
-                ]
-            )
-            self.model_config["LM_HEAD_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                self.dim,
-                self.max_columns_per_device_lm_head,
-                16,
-                prefetch=False,
-                num_global_cb_receivers=1,
-                untilize_out=True,
             )
 
             self.set_tg_attention_config()
@@ -1540,8 +1524,8 @@ class ModelArgs:
                 start_core, num_sdpa_cores, self.prefetcher.all_worker_cores_range_set, row_wise=True
             ),
             exp_approx_mode=False,
-            q_chunk_size=128,
-            k_chunk_size=128,
+            q_chunk_size=0,
+            k_chunk_size=0,
         )
 
         # wo sharding order depends on USE_FUSED_ALL_GATHER_MATMUL:
@@ -1661,17 +1645,9 @@ class ModelArgs:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # WO matmul K and N dimensions depend on sharding order
-        # When USE_FUSED_ALL_GATHER_MATMUL is True: shard_wo_dims = (2, 3) -> K by cluster[0], N by cluster[1]
-        # When USE_FUSED_ALL_GATHER_MATMUL is False: shard_wo_dims = (3, 2) -> K by cluster[1], N by cluster[0]
-        use_fused_wo = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy
-        if use_fused_wo:
-            k_wo = self.dim
-            n_wo = self.dim // self.cluster_shape[1]
-        else:
-            k_wo = self.dim // self.cluster_shape[1]  # K sharded across cols
-            n_wo = self.dim // self.cluster_shape[0]  # N sharded across rows
-
+        # WO matmul K and N dimensions
+        k_wo = self.dim
+        n_wo = self.dim // self.cluster_shape[1]
         self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_PROGCFG"] = self.matmul_1d_ring_config(
             1,
             32,
@@ -1787,9 +1763,8 @@ class ModelArgs:
         )
 
         # Prefetcher Memory config for LM Head
-        # Hardcoded: 32768 = 8 splits * 4096 columns per split
-        lm_head_size_per_device = 32768
-
+        vocab_size_per_device = self.vocab_size // self.num_devices
+        lm_head_size_per_device = 1 << (vocab_size_per_device - 1).bit_length()
         self.model_config["LM_HEAD_RING_PROGCFG"] = self.matmul_1d_ring_config(
             1,
             32,
@@ -1801,15 +1776,8 @@ class ModelArgs:
             untilize_out=True,
         )
 
-        lm_head_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(9, 7)),
-            ]
-        )
         self.model_config["PREFETCHER_SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, self.dim // self.prefetcher.ring_size),
-            # core_grid=lm_head_core_range_set,
             core_grid=self.prefetcher.to_core_range_set(
                 self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
             ),
@@ -1817,10 +1785,8 @@ class ModelArgs:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        # HARD CODED HERE
         self.model_config["PREFETCHER_SHARDED_LM_HEAD_OUTPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, self.max_columns_per_device_lm_head // self.prefetcher.ring_size),
-            # core_grid=lm_head_core_range_set,
             core_grid=self.prefetcher.to_core_range_set(
                 self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
             ),
@@ -1836,13 +1802,10 @@ class ModelArgs:
             ]
         )
 
-        # Hardcoded: 32768 for final size per device
         lm_head_num_cores = lm_head_output_core_range_set.num_cores()
-        lm_head_final_size_per_device = 32768
 
         self.model_config["PREFETCHER_LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, lm_head_final_size_per_device // self.prefetcher.ring_size),
-            # core_grid=lm_head_output_core_range_set,
+            shape=(32, lm_head_size_per_device // self.prefetcher.ring_size),
             core_grid=self.prefetcher.to_core_range_set(
                 self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
             ),
@@ -1852,7 +1815,7 @@ class ModelArgs:
         )
 
         self.model_config["PREFETCHER_TYPECAST_OUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, lm_head_final_size_per_device // lm_head_num_cores),
+            shape=(32, lm_head_size_per_device // lm_head_num_cores),
             core_grid=lm_head_output_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -2824,14 +2787,13 @@ class ModelArgs:
     ):
         M *= B  # Fuse batch always enabled
 
-        in0_block_h = M // ttnn.TILE_SIZE  # 1
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 2
-        out_block_h = M // ttnn.TILE_SIZE  # 1
-        out_block_w = N // num_cores // ttnn.TILE_SIZE  # (16384/32/32) = 16
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // num_cores // ttnn.TILE_SIZE
 
-        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # (4096/8/32 - 1)/2 + 1 = 8
-        num_blocks_total = num_blocks_y * num_blocks_x  # 1 * 8 = 8
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+        num_blocks_total = num_blocks_y * num_blocks_x
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
@@ -2862,8 +2824,8 @@ class ModelArgs:
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
-            per_core_M=out_block_h,  # 1
-            per_core_N=out_block_w,  # 14
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
             fuse_batch=True,
             fused_activation=None,
             mcast_in0=False,

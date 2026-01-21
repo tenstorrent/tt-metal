@@ -668,7 +668,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
-        if True:
+        if self.use_fused_all_gather_matmul or self.prefetcher is not None:
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat,
                 self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
