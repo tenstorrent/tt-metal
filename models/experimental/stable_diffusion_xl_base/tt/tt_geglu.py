@@ -30,6 +30,7 @@ class TtGEGLU(LightweightModule):
 
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
+        assert self.program_config_gelu is not None, "Program config for GELU linear is None"
         assert (
             self.program_config_gelu.fused_activation.op_type == ttnn.UnaryOpType.GELU
         ), "GELU isn't fused in program config for GELU linear"
@@ -53,6 +54,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
+
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
@@ -61,6 +63,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )
+
         ttnn.deallocate(input_tensor)
         hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states
