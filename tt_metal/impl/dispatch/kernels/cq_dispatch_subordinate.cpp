@@ -161,54 +161,11 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     return (diff << shift) > 0;
 }
 
-FORCE_INLINE
-void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
-    WAYPOINT("WCW");
-    last_wait_count = wait_count;
-    last_wait_stream = wait_stream;
-    volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-    // DPRINT << wait_count << "," << wait_stream << ENDL();
-    while (stream_wrap_gt(wait_count, *worker_sem)) {
-    }
-    WAYPOINT("WCD");
-}
-
-template <bool flush_write = false>
-FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
-    if constexpr (distributed_dispatcher) {
-        bool write = false;
-        for (uint32_t i = 0; i < num_worker_sems; i++) {
-            uint32_t num_workers_signalling_completion =
-                NOC_STREAM_READ_REG(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-            if (num_workers_signalling_completion != worker_count_update_for_dispatch_d[i]) {
-                worker_count_update_for_dispatch_d[i] = num_workers_signalling_completion;
-                // Writing to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX sets
-                // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX (rather than incrementing it).
-                uint64_t dispatch_d_dst = get_noc_addr_helper(
-                    dispatch_d_noc_xy, STREAM_REG_ADDR(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
-                dispatch_s_noc_inline_dw_write(dispatch_d_dst, num_workers_signalling_completion, my_noc_index);
-                write = true;
-            }
-        }
-        if constexpr (flush_write) {
-            if (write) {
-                noc_async_writes_flushed();
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Perf Telemetry Socket Functions
-// ============================================================================
-
 // Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
 volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
     reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 
 // Initialize the perf telemetry socket interface
-// Called lazily from perf_telemetry_push() - only inits once if config_buffer_addr is set
 // Returns: true if initialized successfully, false if config not available
 FORCE_INLINE
 bool perf_telemetry_init() {
@@ -248,20 +205,14 @@ bool perf_telemetry_init() {
     perf_telemetry_host_write_ptr = data_addr_lo;
     perf_telemetry_host_fifo_start = data_addr_lo;
 
-    // Initialize NOC for PCIe writes
-    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
-
     perf_telemetry_initialized = true;
     return true;
 }
 
 // Push the L1 data buffer contents to the host as a telemetry page
-// Blocking: waits for space in receiver's FIFO
-// Returns: true if data was sent, false if not initialized or no L1 buffer
-FORCE_INLINE
-bool perf_telemetry_push() {
-    DeviceZoneScopedN("push_perf");
-
+// Mimics profiler quick_push pattern exactly but targets PCIe instead of DRAM
+// Returns: true if data was sent, false otherwise
+__attribute__((noinline)) bool perf_telemetry_push() {
     // Try to init if not already initialized
     if (!perf_telemetry_init()) {
         return false;
@@ -272,16 +223,62 @@ bool perf_telemetry_push() {
         return false;
     }
 
-    // Wait for space in the receiver's FIFO (blocking)
-    socket_reserve_pages(perf_telemetry_socket, 1);
+    // ===== EXACTLY LIKE quick_push: Check linked bit on NOC_0 =====
+    auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
+    uint32_t write_buf_reg = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_CTRL);
+    if (linked_bit_is_set(write_buf_reg)) {
+        return false;
+    }
 
-    // Build 64-bit PCIe destination address
+    // Non-blocking check: skip if no space available in receiver's FIFO
+    volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(perf_telemetry_socket.bytes_acked_base_addr);
+    invalidate_l1_cache();
+    uint32_t bytes_free =
+        perf_telemetry_socket.downstream_fifo_total_size - (perf_telemetry_socket.bytes_sent - *bytes_acked_ptr);
+    if (bytes_free < perf_telemetry_page_size) {
+        return false;
+    }
+
+    // Build PCIe NOC address
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
                               static_cast<uint64_t>(perf_telemetry_host_write_ptr);
+    uint64_t pcie_noc_addr =
+        (static_cast<uint64_t>(perf_telemetry_pcie_xy_enc) << NOC_ADDR_COORD_SHIFT) | pcie_dest_addr;
 
-    // Write L1 data buffer to PCIe-mapped host memory
-    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_0, perf_telemetry_l1_data_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
+    // ===== EXACTLY LIKE quick_push: Save NOC state, write, flush, restore =====
+    // Save NOC_0 write_cmd_buf state (matching NocRegisterStateSave pattern)
+    uint32_t saved_noc_ctrl = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_CTRL);
+    uint32_t saved_noc_ret_addr_coord = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+    uint32_t saved_noc_targ_addr_lo = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_LO);
+    uint32_t saved_noc_ret_addr_lo = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_LO);
+    uint32_t saved_noc_at_len_be = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_AT_LEN_BE);
+    uint32_t saved_noc_targ_addr_coord = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_COORDINATE);
+    uint32_t saved_noc_targ_addr_mid = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_MID);
+    uint32_t saved_noc_packet_tag = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG);
+    uint32_t saved_noc_at_data = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_AT_DATA);
+    uint32_t saved_noc_ret_addr_mid = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_MID);
+
+    // Reset packet tag before push (like NocRegisterStateSave does)
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG, 0);
+
+    // ===== EXACTLY LIKE quick_push: Use profiler_noc_async_write_posted pattern =====
+    // This is ncrisc_noc_fast_write_any_len with posted=true
+    ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
+        NOC_0,
+        write_cmd_buf,
+        perf_telemetry_l1_data_addr,
+        pcie_noc_addr,
+        perf_telemetry_page_size,
+        NOC_UNICAST_WRITE_VC,
+        false,
+        false,
+        1,
+        true,
+        true);
+
+    // ===== EXACTLY LIKE quick_push: Flush posted writes =====
+    while (!ncrisc_noc_posted_writes_sent(NOC_0));
 
     // Update host write pointer with wrap-around
     perf_telemetry_host_write_ptr += perf_telemetry_page_size;
@@ -292,13 +289,90 @@ bool perf_telemetry_push() {
     // Update socket state
     socket_push_pages(perf_telemetry_socket, 1);
 
-    // Notify host via PCIe
-    pcie_socket_notify_receiver(perf_telemetry_socket);
+    // Notify host: write bytes_sent to host's bytes_sent address
+    {
+        tt_l1_ptr uint32_t* socket_config_words =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(perf_telemetry_socket.config_addr);
+        uint32_t pcie_xy_enc = socket_config_words[12];
+        uint32_t bytes_sent_addr_hi = socket_config_words[14];
+        uint32_t bytes_sent_addr_lo = socket_config_words[3];
 
-    // Barrier to ensure PCIe write is visible to host
-    noc_async_write_barrier();
+        uint64_t bytes_sent_pcie_addr =
+            (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | static_cast<uint64_t>(bytes_sent_addr_lo);
+        uint64_t notify_noc_addr = (static_cast<uint64_t>(pcie_xy_enc) << NOC_ADDR_COORD_SHIFT) | bytes_sent_pcie_addr;
+
+        // Notify with same pattern
+        ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
+            NOC_0,
+            write_cmd_buf,
+            perf_telemetry_socket.config_addr,
+            notify_noc_addr,
+            4,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true,
+            true);
+
+        // Flush notify
+        while (!ncrisc_noc_posted_writes_sent(NOC_0));
+    }
+
+    // ===== EXACTLY LIKE quick_push: Restore NOC state =====
+    while (!noc_cmd_buf_ready(NOC_0, write_cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_CTRL, saved_noc_ctrl);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_COORDINATE, saved_noc_ret_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_LO, saved_noc_targ_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_LO, saved_noc_ret_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_AT_LEN_BE, saved_noc_at_len_be);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_COORDINATE, saved_noc_targ_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_MID, saved_noc_targ_addr_mid);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG, saved_noc_packet_tag);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_AT_DATA, saved_noc_at_data);
+    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_MID, saved_noc_ret_addr_mid);
 
     return true;
+}
+
+FORCE_INLINE
+void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+    WAYPOINT("WCW");
+    last_wait_count = wait_count;
+    last_wait_stream = wait_stream;
+    volatile uint32_t* worker_sem =
+        (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    // DPRINT << wait_count << "," << wait_stream << ENDL();
+    while (stream_wrap_gt(wait_count, *worker_sem)) {
+    }
+    WAYPOINT("WCD");
+    // Push perf telemetry to host (mimics quick_push pattern but to PCIe)
+    perf_telemetry_push();
+}
+
+template <bool flush_write = false>
+FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
+    if constexpr (distributed_dispatcher) {
+        bool write = false;
+        for (uint32_t i = 0; i < num_worker_sems; i++) {
+            uint32_t num_workers_signalling_completion =
+                NOC_STREAM_READ_REG(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+            if (num_workers_signalling_completion != worker_count_update_for_dispatch_d[i]) {
+                worker_count_update_for_dispatch_d[i] = num_workers_signalling_completion;
+                // Writing to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX sets
+                // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX (rather than incrementing it).
+                uint64_t dispatch_d_dst = get_noc_addr_helper(
+                    dispatch_d_noc_xy, STREAM_REG_ADDR(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+                dispatch_s_noc_inline_dw_write(dispatch_d_dst, num_workers_signalling_completion, my_noc_index);
+                write = true;
+            }
+        }
+        if constexpr (flush_write) {
+            if (write) {
+                noc_async_writes_flushed();
+            }
+        }
+    }
 }
 
 template <uint32_t noc_xy, uint32_t sem_id>
@@ -307,9 +381,6 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
 
     WAYPOINT("DAPW");
-
-    // Push perf telemetry data (blocking - waits for space)
-    perf_telemetry_push();
 
     uint32_t heartbeat = 0;
     // Stall until the number of pages already acquired + the number that need to be acquired is greater
@@ -330,7 +401,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    DeviceZoneScopedN("GO");
+    // DeviceZoneScopedN("GO");
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -480,9 +551,9 @@ void kernel_main() {
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
-        DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        // DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         {
-            DeviceZoneScopedN("GET_CMD");
+            // DeviceZoneScopedN("GET_CMD");
             cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
         }
 
