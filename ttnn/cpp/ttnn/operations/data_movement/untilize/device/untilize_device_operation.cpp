@@ -25,7 +25,8 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 namespace {
-// TODO: get rid of the code duplication with BufferDistributionSpec::squeeze_shape_ranks for the helpfer fcn below
+// TODO: get rid of the code duplication with tt_metal/impl/buffers/buffer_distribution_spec.cpp
+// BufferDistributionSpec::squeeze_shape_ranks for the helpfer fcn below
 std::pair<tt::tt_metal::Shape, tt::tt_metal::Shape> squeeze_shapes_for_sharding(
     const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
     TT_FATAL(
