@@ -96,6 +96,7 @@ jobs:
                   tagger: {
                     name: "Tenstorrent Inc.",
                     email: "info@tenstorrent.com",
+                    date: new Date().toISOString(),
                   }
                 });
                 console.log("Created tag:", tag.data);

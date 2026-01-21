@@ -322,7 +322,9 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos/t3000/sentence_bert @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
-models/demos/audio/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
+models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/codeowner-bypass
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 models/experimental/ @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/codeowner-bypass
@@ -337,9 +339,13 @@ models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
 models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/codeowner-bypass
-models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
-models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
-models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
+models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/demos/blackhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
+models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/perf/ @yieldthought @esmalTT @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
@@ -351,12 +357,23 @@ models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic 
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov10x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov9c @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov8x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov8s @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/vision/classification/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/vision/segmentation/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/speecht5_tts @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/SSD512 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
