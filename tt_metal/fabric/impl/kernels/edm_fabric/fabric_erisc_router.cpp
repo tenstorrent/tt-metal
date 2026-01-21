@@ -1738,46 +1738,38 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
         // Track newly received packets that need first-level acks
-        if (pkts_received_since_last_check > 0) {
-            receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
-            receiver_channel_pointers.m.unsent_messages += pkts_received_since_last_check;
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        }
-
-        // Try to send first-level acks independently
-        bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
-        bool can_send_ack = has_unsent_acks;
-        // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-        //     can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+        // if (pkts_received_since_last_check > 0) {
+        // receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
+        receiver_channel_pointers.m.unsent_messages += pkts_received_since_last_check;
+        // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         // }
-        if (can_send_ack) {
-            // currently only support processing one packet at a time, so we only decrement by 1
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-            // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+        // if (can_send_ack) {
+        //     // currently only support processing one packet at a time, so we only decrement by 1
+        //     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        //     // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
-            uint8_t src_ch_id;
-            auto& ack_counter = receiver_channel_pointers.ack_counter();
-            if constexpr (skip_src_ch_id_update) {
-                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
-                // sender channel so we don't dynamically fetch it off the packet header
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-            }
+        //     uint8_t src_ch_id;
+        //     auto& ack_counter = receiver_channel_pointers.ack_counter();
+        //     if constexpr (skip_src_ch_id_update) {
+        //         // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+        //         // sender channel so we don't dynamically fetch it off the packet header
+        //         src_ch_id = receiver_channel_pointers.get_src_chan_id();
+        //     } else {
+        //         auto receiver_buffer_index = ack_counter.get_buffer_index();
+        //         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+        //             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+        //         receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        //         src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+        //     }
 
-            receiver_send_received_ack<true>(  // ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                src_ch_id);
-            ack_counter.increment();
-            receiver_channel_pointers.m.unsent_first_level_acks--;
-        }
-        // unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+        //     receiver_send_received_ack<true>(  // ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+        //         receiver_channel_response_credit_sender,
+        //         src_ch_id);
+        //     ack_counter.increment();
+        //     receiver_channel_pointers.m.unsent_first_level_acks--;
+        // }
+        // // unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
-
     } else {
         unwritten_packets = pkts_received_since_last_check != 0;
     }
@@ -1872,6 +1864,47 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        // Track newly received packets that need first-level acks
+        // if (pkts_received_since_last_check > 0) {
+        receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
+        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
+        // }
+
+        // Try to send first-level acks independently
+        bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
+        bool can_send_ack = has_unsent_acks;
+        // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        //     can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+        // }
+        if (can_send_ack) {
+            // currently only support processing one packet at a time, so we only decrement by 1
+            invalidate_l1_cache();
+            // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+
+            uint8_t src_ch_id;
+            auto& ack_counter = receiver_channel_pointers.ack_counter();
+            if constexpr (skip_src_ch_id_update) {
+                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+                // sender channel so we don't dynamically fetch it off the packet header
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+            } else {
+                auto receiver_buffer_index = ack_counter.get_buffer_index();
+                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+            }
+
+            receiver_send_received_ack<true>(  // ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                receiver_channel_response_credit_sender,
+                src_ch_id);
+            ack_counter.increment();
+            receiver_channel_pointers.m.unsent_first_level_acks--;
+        }
+        // unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+    }
+
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
         auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter();
         bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
@@ -1903,10 +1936,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter();
         // Currently unclear if it's better to loop here or not...
         bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-        if constexpr (ENABLE_FIRST_LEVEL_ACK) {
-            unflushed_writes =
-                unflushed_writes && !completion_counter.is_caught_up_to(receiver_channel_pointers.ack_counter());
-        }
         auto receiver_buffer_index = completion_counter.get_buffer_index();
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
