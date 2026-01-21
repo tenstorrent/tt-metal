@@ -261,15 +261,13 @@ void kernel_main() {
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(is_injector_core_forward)) {
-        static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
-        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
-        uint16_t chunk_sizes[3] = {out_tile_size, out_tile_size, out_tile_size};
+        auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            in3_tile_size * num_tiles_to_write_per_packet);
+            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
+            page_size * 2);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, in3_tile_size);
@@ -281,6 +279,7 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0,  // ignore
                 static_cast<uint32_t>(1)});
+
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
