@@ -880,6 +880,10 @@ jobs:
                 --base "$BASE_BRANCH" \
                 --head "$CURRENT_BRANCH")
               echo "Created PR: $PR_URL"
+
+              # Add codeowners ping comment
+              gh pr comment "$PR_URL" --body "/codeowners ping"
+
               echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
               echo "pr-created=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -914,6 +918,10 @@ jobs:
                 --base "$BASE_BRANCH" \
                 --head "$COPILOT_BRANCH")
               echo "Created PR: $PR_URL"
+
+              # Add codeowners ping comment
+              gh pr comment "$PR_URL" --body "/codeowners ping"
+
               echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
               echo "pr-created=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -1015,6 +1023,10 @@ jobs:
             --head "$BRANCH_NAME")
 
           echo "Created PR: $PR_URL"
+
+          # Add codeowners ping comment
+          gh pr comment "$PR_URL" --body "/codeowners ping"
+
           echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "pr-created=true" >> "$GITHUB_OUTPUT"
 
