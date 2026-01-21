@@ -53,27 +53,9 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // // Pre-subtract tie-breaker to compensate for float_to_fp16b using 0x8000 instead of 0x7fff
-            // // Skip for zero to avoid underflow (0x00000000 - 1 = garbage)
-            // sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
-            // sfpi::vUInt lsb = ((~bits) >> 16) & 1;
-            // bits = bits - lsb;
-
-            // result = sfpi::reinterpret<sfpi::vFloat>(bits);
-            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-
-            // sfpi::vUInt in0_bits = sfpi::reinterpret<sfpi::vUInt>(in0);
-            // sfpi::vUInt in1_bits = sfpi::reinterpret<sfpi::vUInt>(in1);
-            // sfpi::vInt in0_is_zero = (in0_bits & 0x7FFFFFFFU);  // catches +0.0 AND -0.0
-            // sfpi::vInt in1_is_zero = (in1_bits & 0x7FFFFFFFU);
-            // v_if( (in0_is_zero   == 0) || (in1_is_zero == 0) ) { result = 0.0f; }
-            // v_endif;
-
             // Software RNE approach (kept for reference):
             result = float32_to_bf16_rne(result);
-
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            // This also protects against underflow ( 0 becomes -inf) when result = 0.0f
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;
         }
@@ -90,7 +72,7 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = 0.0f;
+        sfpi::vFloat result = in0 * _sfpu_reciprocal_<2>(in1);
 
         v_if(in1 == 0) {
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
@@ -101,29 +83,11 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
             v_endif;
         }
         v_elseif(in0 == in1) { result = sfpi::vConst1; }
-        v_else { result = in0 * _sfpu_reciprocal_<2>(in1); }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // // Pre-subtract tie-breaker to compensate for float_to_fp16b using 0x8000 instead of 0x7fff
-            // // Skip for zero to avoid underflow (0x00000000 - 1 = garbage)
-            // sfpi::vFloat original_result = result;
-            // sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(result);
-            // sfpi::vUInt lsb = ((~bits) >> 16) & 1;
-            // bits = bits - lsb;
-
-            // result = sfpi::reinterpret<sfpi::vFloat>(bits);
-            // result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-
-            // // Restore zero if original was zero (avoid underflow corruption)
-            // v_if(original_result == 0.0f) { result = 0.0f; }
-            // v_endif;
-
-            // // software RNE approach (kept for reference):
+            // software RNE approach:
             result = float32_to_bf16_rne(result);
-
-            // v_if(in0 == 0) { result = 0.0f; }
-            // v_endif;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
