@@ -64,6 +64,60 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 #if defined(TRACY_ENABLE)
+uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
+    kernel_profiler::ControlBuffer offset;
+    switch (risc_type) {
+        case tracy::RiscType::BRISC: [[fallthrough]];
+        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_BR_ER_0; break;
+        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_NC_0; break;
+        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T0_0; break;
+        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T1_0; break;
+        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T2_0; break;
+        default: TT_THROW("Invalid RISC type {}", risc_type);
+    }
+    return static_cast<uint32_t>(offset);
+}
+
+uint32_t risc_type_to_control_buffer_host_index_offset(tracy::RiscType risc_type) {
+    kernel_profiler::ControlBuffer offset;
+    switch (risc_type) {
+        case tracy::RiscType::BRISC: [[fallthrough]];
+        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_BR_ER; break;
+        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_NC; break;
+        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T0; break;
+        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T1; break;
+        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T2; break;
+        default: TT_THROW("Invalid RISC type {}", risc_type);
+    }
+    return static_cast<uint32_t>(offset);
+}
+
+uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_type) {
+    kernel_profiler::ControlBuffer offset;
+    switch (risc_type) {
+        case tracy::RiscType::BRISC: [[fallthrough]];
+        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_BR_ER; break;
+        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_NC; break;
+        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T0; break;
+        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T1; break;
+        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T2; break;
+        default: TT_THROW("Invalid RISC type {}", risc_type);
+    }
+    return static_cast<uint32_t>(offset);
+}
+
+DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
+    const auto& hal = MetalContext::instance().hal();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::control_vector);
+    return control_vector_addr;
+}
+
+#endif
+
 NOCDebugEvent make_noc_debug_event(
     const CoreCoord& src_core,
     const KernelProfilerNocEventMetadata& event,
@@ -144,60 +198,6 @@ NOCDebugEvent make_noc_debug_event(
         },
         event.getContents());
 }
-
-uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
-    kernel_profiler::ControlBuffer offset;
-    switch (risc_type) {
-        case tracy::RiscType::BRISC: [[fallthrough]];
-        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_BR_ER_0; break;
-        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_NC_0; break;
-        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T0_0; break;
-        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T1_0; break;
-        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::DRAM_PROFILER_ADDRESS_T2_0; break;
-        default: TT_THROW("Invalid RISC type {}", risc_type);
-    }
-    return static_cast<uint32_t>(offset);
-}
-
-uint32_t risc_type_to_control_buffer_host_index_offset(tracy::RiscType risc_type) {
-    kernel_profiler::ControlBuffer offset;
-    switch (risc_type) {
-        case tracy::RiscType::BRISC: [[fallthrough]];
-        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_BR_ER; break;
-        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_NC; break;
-        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T0; break;
-        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T1; break;
-        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::HOST_BUFFER_END_INDEX_T2; break;
-        default: TT_THROW("Invalid RISC type {}", risc_type);
-    }
-    return static_cast<uint32_t>(offset);
-}
-
-uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_type) {
-    kernel_profiler::ControlBuffer offset;
-    switch (risc_type) {
-        case tracy::RiscType::BRISC: [[fallthrough]];
-        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_BR_ER; break;
-        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_NC; break;
-        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T0; break;
-        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T1; break;
-        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T2; break;
-        default: TT_THROW("Invalid RISC type {}", risc_type);
-    }
-    return static_cast<uint32_t>(offset);
-}
-
-DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
-    const auto& hal = MetalContext::instance().hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
-    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
-    DeviceAddr control_vector_addr =
-        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
-                                dev_msgs::profiler_msg_t::Field::control_vector);
-    return control_vector_addr;
-}
-
-#endif
 
 int get_processor_id(tracy::RiscType risc_type) {
     switch (risc_type) {

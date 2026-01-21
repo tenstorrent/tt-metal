@@ -44,9 +44,10 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
 
     // Multiple writes from the same source address without a barrier in between
     // Source data potentially overwritten before being flushed
-    if (posted && state.posted_writes_not_flushed[noc_id].contains(src_addr)) {
+    uint32_t end_addr = src_addr + event.num_bytes;
+    if (posted && state.overlaps_posted_writes(noc_id, src_addr, end_addr)) {
         problem_type = "multiple posted writes from the same source address without a barrier in between";
-    } else if (!posted && state.nonposted_writes_not_flushed[noc_id].contains(src_addr)) {
+    } else if (!posted && state.overlaps_nonposted_writes(noc_id, src_addr, end_addr)) {
         problem_type = "multiple non-posted writes from the same source address without a barrier in between";
     }
 
@@ -79,11 +80,11 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     }
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].insert(src_addr);
+        state.insert_posted_write_not_flushed(noc_id, src_addr, end_addr);
         state.posted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_posted_writes[noc_id] = true;
     } else {
-        state.nonposted_writes_not_flushed[noc_id].insert(src_addr);
+        state.insert_nonposted_write_not_flushed(noc_id, src_addr, end_addr);
         state.nonposted_write_counter_snapshot[noc_id] = event.counter_snapshot;
         state.any_nonposted_writes[noc_id] = true;
     }
@@ -94,11 +95,12 @@ void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64
     CoreDebugState& state = get_state(core);
     uint8_t noc_id = event.noc;
     uint32_t dst_addr = event.dst_addr;
+    uint32_t end_addr = dst_addr + event.num_bytes;
     std::string problem_type;
 
     // Multiple reads to the same destination address without a barrier in between
     // Destination data potentially being read before a read barrier has ensured that data has fully arrived
-    if (state.reads_not_flushed[noc_id].contains(dst_addr)) {
+    if (state.overlaps_reads(noc_id, dst_addr, end_addr)) {
         problem_type = "multiple reads to the same address without read barrier";
     }
 
@@ -126,7 +128,7 @@ void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
-    state.reads_not_flushed[noc_id].insert(event.dst_addr);
+    state.insert_read_not_flushed(noc_id, dst_addr, end_addr);
     state.read_counter_snapshot[noc_id] = event.counter_snapshot;
     state.any_reads[noc_id] = true;
 }
@@ -137,7 +139,7 @@ void NOCDebugState::handle_read_barrier_event(
     uint8_t noc_id = event.noc;
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
-    state.reads_not_flushed[noc_id].clear();
+    state.flush_reads(noc_id);
 }
 
 void NOCDebugState::handle_write_barrier_event(
@@ -147,9 +149,9 @@ void NOCDebugState::handle_write_barrier_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     if (event.posted) {
-        state.posted_writes_not_flushed[noc_id].clear();
+        state.flush_posted_writes(noc_id);
     } else {
-        state.nonposted_writes_not_flushed[noc_id].clear();
+        state.flush_nonposted_writes(noc_id);
     }
 }
 
@@ -164,6 +166,16 @@ void NOCDebugState::handle_write_flush_event(
     } else {
         state.nonposted_writes_not_flushed[noc_id].clear();
     }
+}
+
+void NOCDebugState::handle_local_mem_read_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, LocalMemReadEvent /*event*/) {
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+}
+
+void NOCDebugState::handle_local_mem_write_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, LocalMemWriteEvent /*event*/) {
+    update_latest_risc_timestamp(core, processor_id, timestamp);
 }
 
 void NOCDebugState::update_latest_risc_timestamp(tt_cxy_pair core, int processor_id, uint64_t timestamp) {
@@ -202,9 +214,11 @@ void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor
                 tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                 handle_write_flush_event(key, processor_id, timestamp, e);
             } else if constexpr (std::is_same_v<T, LocalMemWriteEvent>) {
-                // TODO: handle this case
+                tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                handle_local_mem_write_event(key, processor_id, timestamp, e);
             } else if constexpr (std::is_same_v<T, LocalMemReadEvent>) {
-                // TODO: handle this case
+                tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                handle_local_mem_read_event(key, processor_id, timestamp, e);
             }
         },
         event);
