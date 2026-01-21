@@ -27,31 +27,9 @@
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
-    std::uint32_t base_addr_A = get_local_cb_interface(unpA_operand_id).fifo_limit - get_local_cb_interface(unpA_operand_id).fifo_size;
-    std::uint32_t base_addr_B = get_local_cb_interface(unpB_operand_id).fifo_limit - get_local_cb_interface(unpB_operand_id).fifo_size;
-
-    buffer_descriptor_u bd_val_A = {0};
-    bd_val_A.f.l1_addr_16B = base_addr_A - 1;
-    bd_val_A.f.format = static_cast<std::uint8_t>(unpack_src_format[unpA_operand_id]);
-    bd_val_A.f.x_dim       = get_operand_face_r_dim(unpA_operand_id);
-    bd_val_A.f.y_dim = FACE_C_DIM;
-    bd_val_A.f.z_dim       = get_operand_num_faces(unpA_operand_id);
-
-    buffer_descriptor_u bd_val_B = {0};
-    bd_val_B.f.l1_addr_16B = base_addr_B - 1;
-    bd_val_B.f.format = static_cast<std::uint8_t>(unpack_src_format[unpB_operand_id]);
-    bd_val_B.f.x_dim       = get_operand_face_r_dim(unpB_operand_id);
-    bd_val_B.f.y_dim = FACE_C_DIM;
-    bd_val_B.f.z_dim       = get_operand_num_faces(unpB_operand_id);
 
     tdma_descriptor_t td_val_A, td_val_B;
-
-    td_val_A.buf_desc        = bd_val_A;
-    td_val_A.buf_desc_id     = get_operand_id(unpA_operand);
     td_val_A.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpA_operand_id]);
-
-    td_val_B.buf_desc        = bd_val_B;
-    td_val_B.buf_desc_id     = get_operand_id(unpB_operand);
     td_val_B.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpB_operand_id]);
 
     // TODO: Expand programmability in order to support the dest dvalid scheme with different clients

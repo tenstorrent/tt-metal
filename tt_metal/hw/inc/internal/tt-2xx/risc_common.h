@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,23 @@
 #include "noc_parameters.h"
 #include "stream_io_map.h"
 #include "tensix.h"
+
+#if defined(COMPILE_FOR_TRISC) && defined(ARCH_QUASAR)
+#include "tensix_types.h"
+#include "internal/circular_buffer_interface.h"
+#include "ckernel_trisc_common.h"
+#include "llk_defs.h"
+
+#if defined(UCK_CHLKC_UNPACK)
+#include "chlkc_unpack_data_format.h"
+#include "chlkc_unpack_tile_dims.h"
+#endif
+#if defined(UCK_CHLKC_PACK)
+#include "chlkc_pack_data_format.h"
+#include "chlkc_pack_tile_dims.h"
+#endif
+
+#endif
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -250,6 +267,35 @@ inline uint64_t get_timestamp() {
 // Get only the lower 32 bits of the wall clock timestamp
 inline uint32_t get_timestamp_32b() {
     return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+
+/**
+ * @brief Configures buffer descriptors for all 32 circular buffers
+ *
+ * @tparam TDMA_ENGINE: Selects which tdma engine to use, based on whether the circular buffer is input or output
+ * values = TdmaEngine::UNPACK/TdmaEngine::PACK
+ */
+template <ckernel::TdmaEngine TDMA_SEL>
+inline void configure_all_buf_descs() {
+    for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
+        const DataFormat l1_data_format =
+            (TDMA_SEL == ckernel::TdmaEngine::UNPACK) ? unpack_src_format[i] : pack_dst_format[i];
+
+        if (l1_data_format == DataFormat::Invalid) {
+            continue;
+        }
+
+        buffer_descriptor_u bd_val = {0};
+        bd_val.f.l1_addr_16B = (TDMA_SEL == ckernel::TdmaEngine::UNPACK) ? get_local_cb_interface(i).fifo_rd_ptr
+                                                                         : get_local_cb_interface(i).fifo_wr_ptr;
+        bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
+        bd_val.f.x_dim =
+            (TDMA_SEL == ckernel::TdmaEngine::UNPACK) ? unpack_tile_face_r_dim[i] : pack_tile_face_r_dim[i];
+        bd_val.f.y_dim = ckernel::trisc::FACE_C_DIM;
+        bd_val.f.z_dim = (TDMA_SEL == ckernel::TdmaEngine::UNPACK) ? unpack_tile_num_faces[i] : pack_tile_num_faces[i];
+
+        ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
+    }
 }
 
 #endif

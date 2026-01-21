@@ -155,20 +155,8 @@ inline void llk_pack_untilize(std::uint32_t pack_output, std::uint32_t tile_inde
 template <std::uint32_t PACK_SEL>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t base_addr =
-        get_local_cb_interface(output_id).fifo_limit - get_local_cb_interface(output_id).fifo_size;
-
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = base_addr - 1;
-    bd_val.f.format = static_cast<std::uint8_t>(pack_dst_format[output_id]);
-    bd_val.f.x_dim       = get_output_face_r_dim(output_id);
-    bd_val.f.y_dim = FACE_C_DIM;
-    bd_val.f.z_dim       = get_output_num_faces(output_id);
 
     tdma_descriptor_t td_val;
-
-    td_val.buf_desc        = bd_val;
-    td_val.buf_desc_id     = output_id;
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
 
     // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
