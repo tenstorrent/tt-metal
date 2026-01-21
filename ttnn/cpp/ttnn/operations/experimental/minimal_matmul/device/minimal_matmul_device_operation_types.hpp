@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -29,6 +28,8 @@ struct MinimalMatmulParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+    int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
+    int32_t dim = -1;    // Dimension to split along (default -1)
 };
 
 struct MinimalMatmulInputs {
