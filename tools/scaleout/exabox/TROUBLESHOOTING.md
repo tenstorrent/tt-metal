@@ -4,6 +4,7 @@ Real issues encountered and their solutions.
 
 ## Contents
 
+- [Contacts & Escalation](#contacts--escalation)
 - [General Debugging Tips](#general-debugging-tips)
 - [Setup & Access](#setup--access)
   - [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi)
@@ -37,6 +38,48 @@ Real issues encountered and their solutions.
 
 ---
 
+# Contacts & Escalation
+
+When you encounter issues that require escalation, use the following contacts and channels:
+
+## Slack Channels
+
+- **`#exabox-infra`** - Primary channel for Exabox cluster issues
+  - Report hardware problems (bad cables, missing connections, DRAM failures)
+  - Request power cycles or BMC access
+  - Coordinate cluster access and reservations
+  - General cluster health issues
+
+## Teams
+
+- **Systems Engineering (syseng)** - Hardware and firmware issues
+  - GDDR failures and ASIC issues
+  - Hardware debugging and diagnostics
+  - Firmware coordination
+  - Tag in `#exabox-infra` when hardware issues are suspected
+
+- **Scaleout Team** - Cluster validation and connectivity
+  - Physical validation failures
+  - Ethernet connectivity issues
+  - FSD and topology questions
+  - Tag in `#exabox-infra` for validation-related issues
+
+- **Infra & Cloud Teams (cluster managers)** - Cluster operations
+  - Power cycling coordination (never power cycle on your own)
+  - BMC access and remote management
+  - Cluster configuration and deployment
+
+## Specific Contacts
+
+- **@tt-asaigal or @jpanasiukTT** - MPI and Docker setup issues
+  - `mpi-docker` configuration problems
+  - Permission issues with tt-metal-cache
+  - MPI environment debugging
+
+**Important:** Always provide context when escalating: cluster topology (8x16/4x32), host list, error logs, and validation results.
+
+---
+
 # General Debugging Tips
 
 **Before diving into specific issues:**
@@ -46,13 +89,15 @@ Real issues encountered and their solutions.
 3. **Check link status**: Use the eth status script to see which ports are up/down
 4. **Run validation first**: Most issues surface during physical validation
 
+**Note on tt-smi commands**: As of tt-smi 3.1.1, `tt-smi -glx_reset` is deprecated in favor of `tt-smi -r`. The new command is faster, doesn't require sudo, and works in Docker/VMs. The validation scripts in this repo still use `-glx_reset` during the transition period as tt-smi 3.1.1+ is rolled out to Metal CI and Exabox clusters.
+
 **Useful commands:**
 
 | Command | Purpose |
 |---------|---------|
 | `tt-smi -l` | List visible devices |
-| `tt-smi -r` | Reset devices (3.1.1+) |
-| `tt-smi -glx_reset` | Galaxy reset (older) |
+| `tt-smi -r` | Reset devices (3.1.1+, preferred) |
+| `tt-smi -glx_reset` | Galaxy reset (deprecated as of 3.1.1, use `-r`) |
 | `who` | See who's logged in |
 | `uptime` | Check if machine recently rebooted |
 | `dmesg \| tail -100` | Check kernel logs for errors |
@@ -88,9 +133,14 @@ The script categorizes each log file and gives you a summary with success rate. 
 | **Indeterminate** | Log incomplete (test crashed/hung) | Check if machine rebooted (`uptime`). May need power cycle |
 
 **Interpreting success rate:**
-- 100% (50/50): Cluster is solid, we are yet to achieve this.
-- 80%+ (40+/50): Counts as physical validation pass, cluster is in usable state.
-- <80%: Doesn't pass physical validation, indicates a potential serious issue, check for consistent failure patterns, may need cable swap or hardware investigation
+
+These are baseline expectations for the current BH Exabox clusters. Success rates may vary as new pods and mesh configurations are brought up.
+
+- 100% (50/50): Ideal state - cluster is solid. We are yet to achieve this consistently.
+- 80%+ (40+/50): Expected for current setup - counts as physical validation pass, cluster is in usable state.
+- <80%: Below expected threshold - indicates potential serious issue. Check for consistent failure patterns, may need cable swap or hardware investigation.
+
+**Note:** These thresholds are as of January 2026 and may become stricter as cluster stability improves and more hardware is qualified.
 
 **Manual log inspection - error strings to grep for:**
 
@@ -124,29 +174,11 @@ When you see missing ports between the same host pair, start with physical inspe
 
 ## SSH Agent Forwarding for MPI
 
-MPI tasks require passwordless SSH between hosts.
+MPI tasks require passwordless SSH between hosts using ssh-agent forwarding.
 
-**Setup**:
-```bash
-eval $(ssh-agent)
-ssh-add
-ssh-add -L  # verify your key is listed
-```
+For detailed SSH setup instructions, see the [SSH Setup section in the README](./README.md#ssh-setup).
 
-**Login with agent forwarding**:
-```bash
-ssh -A [username]@[hostname]
-```
 
-If you get a `known_hosts` warning, delete the offending line from `~/.ssh/known_hosts`.
-
-**Verify MPI can reach all hosts** (`<hosts>` = comma-separated list):
-```bash
-mpirun --host <hosts> hostname
-```
-This should print the hostname of each machine. If it hangs or prompts for a password, SSH agent forwarding isn't working properly.
-
-**Important**: Do NOT copy SSH keys between machines for MPI. Always use agent forwarding (`ssh -A`).
 
 ---
 
@@ -158,9 +190,13 @@ cannot map elf file into memory: Permission denied
 ```
 Error points to `/tmp/tt-metal-cache/...`
 
-**Cause**: The most likely issue is in `mpi-docker` configuration.
+**Cause**: The `/tmp/tt-metal-cache` directory was created by a different user (e.g., local-syseng) from a previous test run, or there's an issue in `mpi-docker` configuration.
 
-**Solution**: Contact @tt-asaigal or @jpanasiukTT about this issue. They can help debug the `mpi-docker` setup and permissions.
+**Solutions**:
+
+1. **Set a custom kernel directory**: Configure TT-Metal to use a user-specific cache directory to avoid permission conflicts
+2. **Clear the cache**: Reboot the machine to clear `/tmp` and remove the stale cache directory
+3. **Debug mpi-docker**: Contact @tt-asaigal or @jpanasiukTT if the issue persists. They can help debug the `mpi-docker` setup and permissions.
 
 ---
 
@@ -180,6 +216,8 @@ Error points to `/tmp/tt-metal-cache/...`
 
 ## tt-smi Reset Requires Sudo Password in SLURM Session
 
+**Note**: This issue only affects the deprecated `tt-smi -glx_reset` command. Use `tt-smi -r` (available in tt-smi 3.1.1+) instead, which doesn't require sudo.
+
 **Symptom**: Running `tt-smi -glx_reset` via mpirun in a SLURM session fails with:
 ```
 IPMI command failed: sudo: a terminal is required to read the password
@@ -189,7 +227,9 @@ Running `groups` in the SLURM session shows wrong groups (e.g., another user's g
 
 **Cause**: UID/group mismatch between slurm-login node and galaxy nodes. The SLURM session inherits incorrect group IDs.
 
-**Workaround**: SSH directly to the galaxy node (not via srun) and run the reset:
+**Solution**: Use `tt-smi -r` instead (available in tt-smi 3.1.1+), which doesn't require sudo and works in SLURM sessions.
+
+**Legacy workaround** (if stuck on older tt-smi): SSH directly to the galaxy node (not via srun) and run the reset:
 ```bash
 ssh <your-username>@<galaxy-host>.exabox.tenstorrent.com
 tt-smi -glx_reset
@@ -215,9 +255,9 @@ If this issue persists, report to infra team to fix group synchronization.
 
 ## tt-smi Reset Fails with ARC Timeout
 
-**Note**: As of tt-smi 3.1.1, use `tt-smi -r` instead of `tt-smi --glx-reset` for faster resets. The new reset goes through the driver instead of BMC, doesn't need sudo, and works in docker/VMs.
+**Note**: As of tt-smi 3.1.1, use `tt-smi -r` for resets. The `-glx_reset` option is deprecated. The new reset goes through the driver instead of BMC, doesn't need sudo, and works in docker/VMs.
 
-**Symptom**: `tt-smi -glx_reset` (or `tt-smi -r`) fails with ARC timing out.
+**Symptom**: `tt-smi -r` fails with ARC timing out.
 
 **Cause**: Can be transient or caused by underlying GDDR issues on a specific chip.
 
@@ -335,11 +375,11 @@ tt-smi -l  # should show 32 devices
 
 ## Do NOT Update Firmware on Cluster Machines
 
-**Warning**: Exabox cluster machines are running debug firmware (built off 19.3.1 with debug eth fw not merged to main).
+**Warning**: Exabox cluster machines are currently running debug firmware (built off 19.3.1 with debug eth fw not merged to main).
 
 **Do not run firmware updates** - updating to released firmware will make the machine unusable in a cluster configuration.
 
-If firmware updates are needed, coordinate with syseng and scaleout teams first.
+**Note**: This debug firmware will remain in use until the debug eth fw changes are merged to main. Once merged, this restriction may be lifted. This advice is subject to change - coordinate with syseng and scaleout teams before performing any firmware updates.
 
 ---
 
