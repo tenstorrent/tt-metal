@@ -1749,10 +1749,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             num_packets_to_process[i] = get_ptr_val(to_sender_packets_completed_streams[i]);
             pkts_received_since_last_check += num_packets_to_process[i];
-            if (num_packets_to_process[i] > 0) {
-                WATCHER_RING_BUFFER_PUSH(
-                    i | (num_packets_to_process[i]) | (to_sender_packets_completed_streams[i] << 16));
-            }
         }
     } else {
         pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -1888,7 +1884,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         // Track newly received packets that need first-level acks
         // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        auto& ack_counter = receiver_channel_pointers.ack_counter();
 #pragma unroll
         uint32_t acks_to_send = 0;
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -1896,98 +1891,39 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             acks_to_send += num_packets_to_process_i;
             increment_local_update_ptr_val(to_sender_packets_completed_streams[i], -num_packets_to_process_i);
             if (num_packets_to_process_i > 0) {
-                WATCHER_RING_BUFFER_PUSH(
-                    0xFA000000 | (num_packets_to_process_i << 16) | (to_sender_packets_completed_streams[i] << 8) | i);
                 receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                     receiver_channel_response_credit_sender, i, num_packets_to_process_i);
             }
-            ack_counter.increment_n(num_packets_to_process_i);
         }
-        // receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
-
-        // // Try to send first-level acks independently
-        // bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
-        // bool can_send_ack = has_unsent_acks;
-        // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-        //     can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
-        // }
-        // if (can_send_ack) {
-        //     // currently only support processing one packet at a time, so we only decrement by 1
-        //     invalidate_l1_cache();
-
-        //     // uint8_t src_ch_id;
-        //     // auto& ack_counter = receiver_channel_pointers.ack_counter();
-        //     // if constexpr (skip_src_ch_id_update) {
-        //     //     // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
-        //     //     // sender channel so we don't dynamically fetch it off the packet header
-        //     //     src_ch_id = receiver_channel_pointers.get_src_chan_id();
-        //     // } else {
-        //     //     auto receiver_buffer_index = ack_counter.get_buffer_index();
-        //     //     tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-        //     //         local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-        //     //     receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-        //     //     src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-        //     // }
-        //     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        //         receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-        //             receiver_channel_response_credit_sender, i);
-        //     }
-        //     ack_counter.increment();
-        //     // receiver_channel_pointers.m.unsent_first_level_acks--;
-        // }
-        // unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     }
 
-    if constexpr (!fuse_receiver_flush_and_completion_ptr) {
-        auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter();
-        bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
-        if (unflushed_writes) {
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
-                wr_flush_counter.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            }
-        }
-
-        auto& completion_counter = receiver_channel_pointers.completion_counter();
-        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (unsent_completions) {
-            // completion ptr incremented in callee
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
-            completion_counter.increment();
-        }
-    } else {
-        // flush and completion are fused, so we only need to update one of the counters
-        // update completion since other parts of the code check against completion
-        auto& completion_counter = receiver_channel_pointers.completion_counter();
-        // Currently unclear if it's better to loop here or not...
-        bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-        auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        bool can_send_completion = unflushed_writes && next_trid_flushed;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
-        }
-        if (can_send_completion) {
-            uint8_t src_ch_id;
+    // flush and completion are fused, so we only need to update one of the counters
+    // update completion since other parts of the code check against completion
+    auto& completion_counter = receiver_channel_pointers.completion_counter();
+    // Currently unclear if it's better to loop here or not...
+    bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
+    auto receiver_buffer_index = completion_counter.get_buffer_index();
+    bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+    bool can_send_completion = unflushed_writes && next_trid_flushed;
+    if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+        can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+    }
+    if (can_send_completion) {
+        uint8_t src_ch_id;
+        if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+            src_ch_id = 0;
+        } else {
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, src_ch_id);
-            WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
-            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            completion_counter.increment();
         }
+        receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_channel_response_credit_sender, src_ch_id);
+        WATCHER_RING_BUFFER_PUSH(0xFC000000 | src_ch_id);
+        receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+        completion_counter.increment();
     }
     return progress;
 };

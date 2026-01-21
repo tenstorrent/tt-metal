@@ -233,36 +233,27 @@ struct OutboundReceiverChannelPointers {
 template <uint8_t RECEIVER_NUM_BUFFERS, bool ENABLE_FIRST_LEVEL_ACK>
 struct ReceiverChannelPointersMembers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
-    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
     uint8_t unsent_messages;
     uint8_t unsent_first_level_acks;
     uint8_t unsent_completions;
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
-        wr_flush_counter.reset();
         completion_counter.reset();
-        ack_counter.reset();
         unsent_messages = 0;
-        unsent_first_level_acks = 0;
-        unsent_completions = 0;
     }
 };
 
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, false> {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
     // no ack_counter
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
-        wr_flush_counter.reset();
         completion_counter.reset();
     }
 };
