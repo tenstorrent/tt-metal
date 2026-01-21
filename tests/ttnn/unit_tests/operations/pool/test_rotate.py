@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-
+from models.common.utility_functions import skip_for_blackhole
 
 # ============================================================================
 # Basic Functionality Tests
@@ -230,6 +230,75 @@ def test_memory_configs(device, memory_config):
     atol, rtol = 5.0, 0.05
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Memory config test failed for {memory_config}"
+
+
+@skip_for_blackhole("Incorrect result on BH")
+@pytest.mark.parametrize("shard_strategy", ["height", "width", "block"])
+def test_sharded_memory(device, shard_strategy):
+    """Test rotation with height, width and block sharded memory configurations using full grid.
+
+    Each sharding strategy uses a tensor shape optimized for that strategy:
+    - Height: Sticks split across all cores, full channels per stick
+    - Width: All sticks on each core, channels split across cores
+    - Block: Sticks split across Y cores, full channels per stick
+    """
+    torch.manual_seed(0)
+
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores_x = grid_size.x
+    num_cores_y = grid_size.y
+    num_cores = num_cores_x * num_cores_y
+    angle = 45.0
+
+    if shard_strategy == "height":
+        total_sticks = num_cores * 4
+        input_shape = (1, total_sticks, 1, 64)
+        shard_height = (total_sticks + num_cores - 1) // num_cores
+        shard_width = input_shape[3]
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+            (shard_height, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
+    elif shard_strategy == "width":
+        total_sticks = 16
+        channels = num_cores * 32
+        input_shape = (1, 4, 4, channels)
+        shard_height = total_sticks
+        shard_width = channels // num_cores
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+            (shard_height, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    else:
+        total_sticks = num_cores_y * 4
+        input_shape = (1, total_sticks, 1, num_cores_x * 32)
+        shard_height = (total_sticks + num_cores_y - 1) // num_cores_y
+        shard_width = input_shape[3] // num_cores_x
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+            (shard_height, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = 5.0, 0.05
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    assert comparison_passed, f"{shard_strategy} sharded memory test failed"
 
 
 # ============================================================================
