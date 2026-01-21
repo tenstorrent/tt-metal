@@ -84,7 +84,7 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-metal-ci-vm-t3k-11
+      - mem256
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
