@@ -11,11 +11,12 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
+@pytest.mark.parametrize("pre_rs_reduction_dim", [(0)])
 @pytest.mark.parametrize(
-    "rs_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
+    "pre_rs_reduction_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
     [
         (
-            [1, 1, 32, 2048],
+            [8, 1, 32, 2048],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -31,7 +32,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
             1,
         ),  # one_link
         (
-            [1, 1, 32, 4096],
+            [8, 1, 32, 4096],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -47,7 +48,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
             2,
         ),  # two_links
         (
-            [1, 1, 32, 6144],
+            [8, 1, 32, 6144],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -63,7 +64,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
             3,
         ),  # three_links
         (
-            [1, 1, 32, 5120],
+            [8, 1, 32, 5120],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -79,7 +80,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
             3,
         ),  # three_links_partial (forward core on last link not used)
         (
-            [1, 1, 32, 8192],
+            [8, 1, 32, 8192],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -95,7 +96,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
             4,
         ),  # four_links
         (
-            [1, 1, 32, 7168],
+            [8, 1, 32, 7168],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -133,7 +134,8 @@ def test_deepseek_moe_reduce_scatter_async(
     mesh_device,
     dtype,
     layout,
-    rs_input_shape,
+    pre_rs_reduction_dim,
+    pre_rs_reduction_input_shape,
     sum_input_memory_config,
     rs_input_memory_config,
     rs_output_memory_config,
@@ -151,7 +153,8 @@ def test_deepseek_moe_reduce_scatter_async(
         num_devices=submesh_device.get_num_devices(),
         dtype=dtype,
         layout=layout,
-        rs_input_shape=rs_input_shape,
+        pre_rs_reduction_dim=pre_rs_reduction_dim,
+        pre_rs_reduction_input_shape=pre_rs_reduction_input_shape,
         sum_input_memory_config=sum_input_memory_config,
         rs_input_memory_config=rs_input_memory_config,
         rs_output_memory_config=rs_output_memory_config,

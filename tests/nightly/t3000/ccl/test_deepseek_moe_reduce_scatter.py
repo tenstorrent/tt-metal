@@ -15,7 +15,8 @@ def run_deepseek_moe_reduce_scatter_impl(
     num_devices,
     dtype,
     layout,
-    rs_input_shape,
+    pre_rs_reduction_dim,
+    pre_rs_reduction_input_shape,
     sum_input_memory_config,
     rs_input_memory_config,
     rs_output_memory_config,
@@ -32,21 +33,18 @@ def run_deepseek_moe_reduce_scatter_impl(
     sub_device_stall_group = [worker_sub_device_id]
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    rs_output_shape = rs_input_shape[:]
-    rs_output_shape[rs_dim] //= num_devices
-
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
 
     for i in range(num_iters):
-        rs_global_input_shape = rs_input_shape[:]
-        rs_global_input_shape[rs_dim] *= num_devices
-        rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
-        input_tensors = torch.chunk(rs_input_tensor, num_devices, rs_dim)
+        pre_rs_reduction_global_input_shape = pre_rs_reduction_input_shape[:]
+        pre_rs_reduction_global_input_shape[rs_dim] *= num_devices
+        pre_rs_reduction_input_tensor = torch.rand(pre_rs_reduction_global_input_shape).bfloat16()
+        input_tensors = torch.chunk(pre_rs_reduction_input_tensor, num_devices, rs_dim)
         torch_input_tensor_list.append(input_tensors)
 
         input_tensor_mesh = ttnn.from_torch(
-            rs_input_tensor,
+            pre_rs_reduction_input_tensor,
             device=mesh_device,
             layout=layout,
             dtype=dtype,
@@ -59,16 +57,13 @@ def run_deepseek_moe_reduce_scatter_impl(
             ),
         )
 
-        split_tensors = ttnn.split(input_tensor_mesh, split_size=int(rs_input_shape[-1] / num_devices), dim=rs_dim)
-        for i in range(num_devices):
-            split_tensors[i] = ttnn.interleaved_to_sharded(split_tensors[i], rs_input_memory_config)
-
-        tt_input_tensor_mesh_list.append(split_tensors)
+        tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
     ##### Perform torch ops #####
     torch_reduce_scatter_output_list = []
     for i in range(num_iters):
-        reduce_output = torch.sum(torch.stack(torch_input_tensor_list[i]), dim=0)
+        pre_rs_reduction_output = [torch.sum(t, dim=0, keepdim=True) for t in torch_input_tensor_list[i]]
+        reduce_output = torch.sum(torch.stack(pre_rs_reduction_output), dim=0)
         scatter_output = torch.chunk(reduce_output, num_devices, rs_dim)
         torch_reduce_scatter_output_list.append(scatter_output)
 
@@ -76,8 +71,12 @@ def run_deepseek_moe_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
+        tt_pre_rs_reduction_output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+            tt_input_tensor_mesh_list[i], dim=pre_rs_reduction_dim, output_memory_config=rs_input_memory_config
+        )
+
         tt_reduce_scatter_output_tensor = ttnn.experimental.deepseek_moe_reduce_scatter(
-            tt_input_tensor_mesh_list[i],
+            tt_pre_rs_reduction_output,
             output_memory_config=rs_output_memory_config,
             dim=rs_dim,
             num_links=rs_num_links,
@@ -143,11 +142,12 @@ def run_deepseek_moe_reduce_scatter_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
+@pytest.mark.parametrize("pre_rs_reduction_dim", [(0)])
 @pytest.mark.parametrize(
-    "rs_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
+    "pre_rs_reduction_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
     [
         (
-            [1, 1, 32, 2048],
+            [8, 1, 32, 2048],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -163,7 +163,7 @@ def run_deepseek_moe_reduce_scatter_impl(
             1,
         ),  # one_link
         (
-            [1, 1, 32, 1024],
+            [8, 1, 32, 1024],
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
@@ -197,7 +197,8 @@ def test_deepseek_moe_reduce_scatter(
     mesh_device,
     dtype,
     layout,
-    rs_input_shape,
+    pre_rs_reduction_dim,
+    pre_rs_reduction_input_shape,
     sum_input_memory_config,
     rs_input_memory_config,
     rs_output_memory_config,
@@ -212,7 +213,8 @@ def test_deepseek_moe_reduce_scatter(
         num_devices=mesh_device.get_num_devices(),
         dtype=dtype,
         layout=layout,
-        rs_input_shape=rs_input_shape,
+        pre_rs_reduction_dim=pre_rs_reduction_dim,
+        pre_rs_reduction_input_shape=pre_rs_reduction_input_shape,
         sum_input_memory_config=sum_input_memory_config,
         rs_input_memory_config=rs_input_memory_config,
         rs_output_memory_config=rs_output_memory_config,

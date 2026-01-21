@@ -92,21 +92,18 @@ void kernel_main() {
         uint32_t slice_offset = pages_read_in_row - (slice_id * slice_Wt);
         uint32_t normalized_page_id = slice_row_offset + slice_offset;
 
-        uint64_t noc_addr;
-        switch (slice_id) {
-            case 0: noc_addr = get_noc_addr(normalized_page_id, output_slice_0_tensor_accesor); break;
-            case 1: noc_addr = get_noc_addr(normalized_page_id, output_slice_1_tensor_accesor); break;
-            case 2: noc_addr = get_noc_addr(normalized_page_id, output_slice_2_tensor_accesor); break;
-            case 3: noc_addr = get_noc_addr(normalized_page_id, output_slice_3_tensor_accesor); break;
-            case 4: noc_addr = get_noc_addr(normalized_page_id, output_slice_4_tensor_accesor); break;
-            case 5: noc_addr = get_noc_addr(normalized_page_id, output_slice_5_tensor_accesor); break;
-            case 6: noc_addr = get_noc_addr(normalized_page_id, output_slice_6_tensor_accesor); break;
-            case 7: noc_addr = get_noc_addr(normalized_page_id, output_slice_7_tensor_accesor); break;
-        }
-
         cb_wait_front(compute_output_cb_id, one_tile);
         uint32_t l1_read_addr = get_read_ptr(compute_output_cb_id);
-        noc_async_write(l1_read_addr, noc_addr, page_size);
+        switch (slice_id) {
+            case 0: noc_async_write_page(normalized_page_id, output_slice_0_tensor_accesor, l1_read_addr); break;
+            case 1: noc_async_write_page(normalized_page_id, output_slice_1_tensor_accesor, l1_read_addr); break;
+            case 2: noc_async_write_page(normalized_page_id, output_slice_2_tensor_accesor, l1_read_addr); break;
+            case 3: noc_async_write_page(normalized_page_id, output_slice_3_tensor_accesor, l1_read_addr); break;
+            case 4: noc_async_write_page(normalized_page_id, output_slice_4_tensor_accesor, l1_read_addr); break;
+            case 5: noc_async_write_page(normalized_page_id, output_slice_5_tensor_accesor, l1_read_addr); break;
+            case 6: noc_async_write_page(normalized_page_id, output_slice_6_tensor_accesor, l1_read_addr); break;
+            case 7: noc_async_write_page(normalized_page_id, output_slice_7_tensor_accesor, l1_read_addr); break;
+        }
         noc_async_writes_flushed();
         cb_pop_front(compute_output_cb_id, one_tile);
 

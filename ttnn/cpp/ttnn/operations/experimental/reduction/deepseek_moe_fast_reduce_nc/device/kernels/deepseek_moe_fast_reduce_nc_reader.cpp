@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t scaler = 0;
     generate_reduce_scaler(compute_input_cb_id_1, scaler);
 
-    uint32_t l1_write_addr_in0;
+    uint32_t l1_write_addr;
     uint32_t input_granularity_index = 0;
 
     for (uint32_t tiles_read = start_tiles_read; tiles_read < start_tiles_to_read; tiles_read += num_cores_to_be_used) {
@@ -52,13 +52,11 @@ void kernel_main() {
         for (uint32_t j = 0; j < reduction_dim_size; ++j) {
             if (input_granularity_index == 0) {
                 cb_reserve_back(compute_input_cb_id_0, input_granularity);
-                l1_write_addr_in0 = get_write_ptr(compute_input_cb_id_0);
+                l1_write_addr = get_write_ptr(compute_input_cb_id_0);
             }
+            noc_async_read_page(read_tile_id, tensor_accessor, l1_write_addr);
 
-            uint64_t noc_read_addr = get_noc_addr(read_tile_id, tensor_accessor);
-            noc_async_read(noc_read_addr, l1_write_addr_in0, page_size);
-
-            l1_write_addr_in0 += page_size;
+            l1_write_addr += page_size;
             read_tile_id += inner_num_tiles;
             input_granularity_index++;
 
