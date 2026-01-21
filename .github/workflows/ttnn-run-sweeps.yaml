@@ -1,5 +1,7 @@
 name: "ttnn - Run sweeps"
 
+run-name: "ttnn - Run sweeps (${{ github.event.inputs.sweep_name || 'Scheduled' }})"
+
 on:
   workflow_dispatch:
     inputs:
@@ -618,6 +620,7 @@ on:
     - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (lead model runs)
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
+  cancel-in-progress: false
 
 jobs:
   display-workflow-options:
