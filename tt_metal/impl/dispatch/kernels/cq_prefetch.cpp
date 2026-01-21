@@ -1659,14 +1659,19 @@ bool process_cmd(
     return done;
 }
 
-/* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d */
+/* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d. test_for_nonzero is an optimization that can be false
+ * if amt_to_write >= downstream_cb_page_size. For simplicity this code will always acquire the exact number of pages
+ * needed, unlike write_pages_to_dispatcher may acquire an extra page if we hit an exact page boundary. */
+template<bool test_for_nonzero>
 static void relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
-    uint32_t page_residual_space = (downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1))) &
-                                   (downstream_cb_page_size - 1);
+    // Unlike in write_pages_to_dispatcher we always round npages down, so if downstream_data_ptr is at the start of a
+    // page, that means page_residual_space is 0. This is why the logic is different from write_pages_to_dispatcher.
+    uint32_t page_residual_space = -downstream_data_ptr & (downstream_cb_page_size - 1);
+
     // Following is fine if downstream cb block is bigger than scratch and there are at least a couple of them
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - 1) / downstream_cb_page_size;
-    if (npages != 0) {
+    if (!test_for_nonzero || (npages != 0)) {
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
     uint64_t noc_addr;
@@ -1743,8 +1748,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
-            // Third step - write from DB
-            relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
+            // Third step - write from DB. amt_to_write is greater than a page, so we don't need to test for nonzero.
+            relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             read_length -= amt_to_read;
 
             // TODO(pgk); we can do better on WH w/ tagging
@@ -1755,7 +1760,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
