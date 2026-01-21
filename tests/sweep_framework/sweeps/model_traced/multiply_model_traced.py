@@ -83,12 +83,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
     scalar=None,  # For tensor-scalar operations
     storage_type="StorageType::DEVICE",
     *,
@@ -98,10 +98,10 @@ def run(
     torch.manual_seed(0)
 
     # Handle both sample suite (tuple) and model_traced suite (dict)
-    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+    if isinstance(input_shape, dict) and "self" in input_shape:
         # This is model_traced suite - dict with 'self' and 'other' keys
         shape_a = input_shape["self"]
-        shape_b = input_shape["other"]
+        shape_b = input_shape.get("other")  # May be None for scalar operations
     else:
         # This is sample suite - use same shape for both inputs
         if isinstance(input_shape, (tuple, list)):
@@ -122,7 +122,7 @@ def run(
     else:
         # Tensor-tensor operation: create second tensor
         torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
         )(shape_b)
         torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
 
@@ -146,7 +146,9 @@ def run(
     if shape_b is None and scalar is not None:
         # Tensor-scalar operation: pass scalar directly to ttnn.multiply
         start_time = start_measuring_time()
-        output_tensor = ttnn.multiply(input_tensor_a, scalar, memory_config=output_memory_config)
+        output_tensor = ttnn.multiply(
+            input_tensor_a, scalar, memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        )
         output_tensor = ttnn.to_torch(output_tensor)
         e2e_perf = stop_measuring_time(start_time)
     else:
@@ -156,19 +158,21 @@ def run(
 
         # Build from_torch arguments based on storage_type
         from_torch_kwargs = {
-            "dtype": input_b_dtype,
-            "layout": input_b_layout,
+            "dtype": input_b_dtype or input_a_dtype,
+            "layout": input_b_layout or input_a_layout,
         }
 
         # Only add device and memory_config if not HOST storage
         if not is_host:
             from_torch_kwargs["device"] = device
-            from_torch_kwargs["memory_config"] = input_b_memory_config
+            from_torch_kwargs["memory_config"] = input_b_memory_config or input_a_memory_config
 
         input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
 
         start_time = start_measuring_time()
-        output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+        output_tensor = ttnn.multiply(
+            input_tensor_a, input_tensor_b, memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        )
         output_tensor = ttnn.to_torch(output_tensor)
         e2e_perf = stop_measuring_time(start_time)
 

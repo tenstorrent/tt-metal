@@ -58,10 +58,11 @@ def run(
     torch.manual_seed(0)
 
     # Handle both sample suite (tuple) and model_traced suite (dict)
-    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+    if isinstance(input_shape, dict) and "self" in input_shape:
         # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = input_shape["self"]
-        shape_b = input_shape["other"]
+        shape_a = tuple(input_shape["self"]) if isinstance(input_shape["self"], (list, tuple)) else input_shape["self"]
+        shape_b_raw = input_shape.get("other")
+        shape_b = tuple(shape_b_raw) if isinstance(shape_b_raw, (list, tuple)) else shape_b_raw
     else:
         # This is sample suite - use same shape for both inputs
         if isinstance(input_shape, (tuple, list)):
