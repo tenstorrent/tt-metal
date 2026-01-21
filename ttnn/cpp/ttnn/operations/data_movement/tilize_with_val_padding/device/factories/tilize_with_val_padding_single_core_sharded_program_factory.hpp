@@ -18,6 +18,7 @@ struct TilizeWithValPaddingSingleCoreShardedFactory {
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::CBHandle cb_src0{};
         tt::tt_metal::CBHandle cb_output{};
+        tt::tt_metal::CoreRange core{{0, 0}, {0, 0}};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

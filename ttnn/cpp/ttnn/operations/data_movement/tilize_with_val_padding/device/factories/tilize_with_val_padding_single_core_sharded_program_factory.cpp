@@ -50,21 +50,24 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
     uint32_t tile_rows = output_height / TILE_HEIGHT;
     uint32_t total_tiles = tiles_per_row * tile_rows * num_batches;
 
-    // Use a single core (can be any core, typically {0,0})
-    CoreCoord core = {0, 0};
+    // Pick first core from output shard grid for single-core execution
+    auto shard_grid = output.shard_spec().value().grid;
+    // CoreCoord core = shard_grid.bounding_box().start_coord;
+    CoreCoord core = corerange_to_cores(shard_grid).at(0);
     CoreRange core_range(core, core);
 
     // Create circular buffers bound to sharded buffers
     // uint32_t input_row_bytes = input_width * input.element_size();
 
+    // Use regular L1 CBs (not bound to sharded buffers)
+    // Single-core execution cannot use CB-bound sharded buffers across multiple cores
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
         core_range,
         input_single_tile_size,
         tiles_per_row * 2,  // Double buffer
-        input_cb_data_format,
-        input.buffer());  // Bind to input buffer
+        input_cb_data_format);
 
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
@@ -72,8 +75,7 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
         core_range,
         output_single_tile_size,
         tiles_per_row * 2,  // Double buffer
-        output_cb_data_format,
-        output.buffer());  // Bind to output buffer
+        output_cb_data_format);
 
     // Prepare compile-time arguments for reader with ShardedAddrGen
     std::vector<uint32_t> reader_ct_args = {
@@ -97,19 +99,33 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
         core_range,
         ReaderDataMovementConfig(reader_ct_args, reader_defines));
 
-    // Create writer kernel (simple sharded write)
+    // Create writer kernel with ShardedAddrGen support
     std::vector<uint32_t> writer_ct_args = {output_cb_index};
+
+    // Add ShardedAddrGen compile-time args for writer
+    shard_builder::extend_sharding_compile_time_args(output, writer_ct_args);
+
+    std::map<std::string, std::string> writer_defines;
+    writer_defines["SHARDED"] = "1";
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/"
+        "writer_tilize_sharded.cpp",
         core_range,
-        WriterDataMovementConfig(writer_ct_args));
+        WriterDataMovementConfig(writer_ct_args, writer_defines));
 
     // Create compute kernel (tilize)
+    // Compute args must match tilize.cpp expectations:
+    // Arg 0: per_core_block_cnt = number of blocks (outer loop iterations)
+    // Arg 1: per_core_block_tile_cnt = tiles per block
+    // We process tiles_per_row at a time, so num_tiles_per_block = tiles_per_row
+    uint32_t num_tiles_per_block = tiles_per_row;
+    uint32_t num_blocks = total_tiles / num_tiles_per_block;
+
     std::vector<uint32_t> compute_args = {
-        tile_rows,     // per_core_block_cnt
-        tiles_per_row  // per_block_ntiles
+        num_blocks,          // per_core_block_cnt
+        num_tiles_per_block  // per_core_block_tile_cnt
     };
 
     CreateKernel(
@@ -120,12 +136,15 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
 
     // Set runtime arguments for reader
     uint32_t packed_pad_value = detail::get_packed_value(input, pad_value);
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_rt_args = {
-        input_width,    // logical_width
-        output_width,   // padded_width
-        input_height,   // logical_height
-        output_height,  // padded_height
+        src_buffer->address(),  // Base address for ShardedAddrGen
+        input_width,            // logical_width
+        output_width,           // padded_width
+        input_height,           // logical_height
+        output_height,          // padded_height
         tiles_per_row,
         tile_rows,
         num_batches,
@@ -137,7 +156,14 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
     SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
     // Set runtime arguments for writer
-    SetRuntimeArgs(program, writer_kernel_id, core, {total_tiles});
+    std::vector<uint32_t> writer_rt_args = {
+        dst_buffer->address(),  // Base address for ShardedAddrGen
+        total_tiles};
+
+    // Add ShardedAddrGen runtime args (mapping table) for writer
+    shard_builder::extend_sharding_run_time_args(output, writer_rt_args);
+
+    SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
     return cached_program_t(
         std::move(program),
@@ -145,7 +171,8 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
             .reader_kernel_id = reader_kernel_id,
             .writer_kernel_id = writer_kernel_id,
             .cb_src0 = cb_src0,
-            .cb_output = cb_output});
+            .cb_output = cb_output,
+            .core = core});
 }
 
 void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
@@ -159,9 +186,18 @@ void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = output.buffer();
 
-    // Update CB-bound buffer addresses following WIDTH_SHARDED pattern
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
+    // Reuse core used in create()
+    // auto shard_grid = output.shard_spec().value().grid;
+    // CoreCoord core = corerange_to_cores(shard_grid).at(0);
+    // CoreCoord core = shard_grid.bounding_box().start_coord;
+    const CoreCoord core = shared_variables.core.start_coord;  // Extract CoreCoord from CoreRange
+
+    // Override buffer addresses in runtime args (index 0 for both kernels)
+    auto& reader_rt_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+    reader_rt_args[0] = src_buffer->address();
+
+    auto& writer_rt_args = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
+    writer_rt_args[0] = dst_buffer->address();
 }
 
 }  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program

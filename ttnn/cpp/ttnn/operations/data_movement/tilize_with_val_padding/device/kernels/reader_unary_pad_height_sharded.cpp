@@ -15,6 +15,7 @@ void kernel_main() {
 
     // Runtime args
     uint32_t rt_arg_ind = 0;
+    uint32_t src_addr = get_arg_val<uint32_t>(rt_arg_ind++);  // Buffer base address for ShardedAddrGen
     uint32_t logical_width = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t padded_width = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t logical_height = get_arg_val<uint32_t>(rt_arg_ind++);
@@ -25,7 +26,7 @@ void kernel_main() {
     uint32_t packed_pad_value = get_arg_val<uint32_t>(rt_arg_ind++);
 
 #ifdef SHARDED
-    // ShardedAddrGen setup - buffer address comes from bound CB
+    // ShardedAddrGen setup
     using tensor_shard_info = ShardedInfo<
         get_compile_time_arg_val(4),    // Memory layout
         get_compile_time_arg_val(5),    // Number of sharding cores
@@ -37,7 +38,6 @@ void kernel_main() {
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
-    uint32_t src_addr = get_noc_addr_helper(cb_id_0, 0);  // Get address from bound CB
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #endif
 
@@ -62,6 +62,7 @@ void kernel_main() {
                     // Read actual data row
                     uint64_t src_row_addr = get_noc_addr(global_row, s0);
                     noc_async_read(src_row_addr, l1_write_addr, row_bytes);
+                    noc_async_read_barrier();  // Barrier per row to ensure data arrives before padding
                     l1_write_addr += row_bytes;
 
                     // Add width padding
@@ -84,7 +85,6 @@ void kernel_main() {
                 }
             }
 
-            noc_async_read_barrier();
             cb_push_back(cb_id_0, tiles_per_row);
         }
     }
