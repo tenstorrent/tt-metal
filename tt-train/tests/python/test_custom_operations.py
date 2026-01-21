@@ -544,7 +544,6 @@ class TestCustomOperationsWithDevice:
 
     def test_multiple_inputs(self):
         """Test custom operation with multiple inputs."""
-        import ttnn
 
         class AddOp(Function):
             @staticmethod
