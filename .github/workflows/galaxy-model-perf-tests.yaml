@@ -34,7 +34,7 @@ jobs:
       tracy: true
       build-wheel: true
       version: 22.04
-      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
+      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit

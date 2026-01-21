@@ -38,6 +38,7 @@ class DispatchQueryManager;
 class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
+class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
@@ -69,6 +70,8 @@ public:
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+
+    std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -103,11 +106,13 @@ public:
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
-        tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT);
+        tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
+        tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
+    const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
     const distributed::multihost::DistributedContext& global_distributed_context();
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
@@ -222,12 +227,14 @@ private:
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
     std::unique_ptr<DeviceManager> device_manager_;
+    std::unique_ptr<NOCDebugState> noc_debug_state_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
+    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 

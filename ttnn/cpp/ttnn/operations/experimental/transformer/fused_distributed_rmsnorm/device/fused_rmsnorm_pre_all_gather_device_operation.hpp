@@ -13,14 +13,14 @@
 #include "fused_rmsnorm_pre_all_gather_device_operation_types.hpp"
 #include "fused_rmsnorm_pre_all_gather_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather {
+namespace ttnn::experimental::prim {
 
 struct FusedRMSNormPreAllGatherDeviceOperation {
     using operation_attributes_t = FusedRmsnormPreAllGatherParams;
     using tensor_args_t = FusedRmsnormPreAllGatherInputs;
-    using spec_return_value_t = fused_rmsnorm_pre_all_gather::spec_return_value_t;
-    using tensor_return_value_t = fused_rmsnorm_pre_all_gather::tensor_return_value_t;
-    using program_factory_t = std::variant<program::FusedRMSNormPreAllGatherProgramFactory>;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<FusedRMSNormPreAllGatherProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,10 +32,9 @@ struct FusedRMSNormPreAllGatherDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::tensor_return_value_t
-fused_rmsnorm_pre_all_gather(
+Tensor fused_rmsnorm_pre_all_gather(
     const Tensor& input_tensor, tt::tt_metal::DataType dtype, const DeviceComputeKernelConfig& compute_kernel_config);
 }  // namespace ttnn::prim

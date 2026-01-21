@@ -136,25 +136,27 @@ struct StreamRegAssignments {
         19;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
     static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 =
         20;  // for downstream E/W/N/S edge on: 2D X/Y Router->VC1
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_4 =
+        21;  // for downstream Z edge on: 2D+Z X/Y Router->VC1, S edge on: 2D Z Router->VC1
     // Sender channel free slots stream IDs.
     // Decremented by respective upstream senders.
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 21;  // for upstream tensix worker
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 22;  // for upstream tensix worker
     static constexpr uint32_t sender_channel_1_free_slots_stream_id =
-        22;  // for upstream edge on: 1D->VC0, E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
+        23;  // for upstream edge on: 1D->VC0, E/W/N/S edge on: 2D X/Y Router->VC0, E edge on: 2D Z Router->VC0
     static constexpr uint32_t sender_channel_2_free_slots_stream_id =
-        23;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
+        24;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, W edge on: 2D Z Router->VC0
     static constexpr uint32_t sender_channel_3_free_slots_stream_id =
-        24;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
+        25;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC0, N edge on: 2D Z Router->VC0
     static constexpr uint32_t sender_channel_4_free_slots_stream_id =
-        25;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1, S edge on: 2D Z Router->VC0
+        26;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1, S edge on: 2D Z Router->VC0
     static constexpr uint32_t sender_channel_5_free_slots_stream_id =
-        26;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t sender_channel_6_free_slots_stream_id =
         27;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
-    static constexpr uint32_t sender_channel_7_free_slots_stream_id = 28;  // for upstream Z edge on: 2D+Z->VC1
+    static constexpr uint32_t sender_channel_6_free_slots_stream_id =
+        28;  // for upstream E/W/N/S edge on: 2D X/Y Router->VC1
+    static constexpr uint32_t sender_channel_7_free_slots_stream_id = 29;  // for upstream Z edge on: 2D+Z->VC1
 
     // Local tensix relay free slots stream ID (UDM mode only)
-    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
+    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 30;
     // Multi-RISC teardown synchronization stream ID
     // overlay scratch register
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
@@ -185,6 +187,7 @@ struct StreamRegAssignments {
             vc_1_free_slots_from_downstream_edge_1,
             vc_1_free_slots_from_downstream_edge_2,
             vc_1_free_slots_from_downstream_edge_3,
+            vc_1_free_slots_from_downstream_edge_4,
             sender_channel_0_free_slots_stream_id,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
@@ -411,12 +414,38 @@ class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
+
+    // Default packet payload sizes (optimized for 4 tiles of Bfp8_b)
+    // Users can configure larger sizes up to architecture-specific maximums
+    // via FabricRouterConfig in SetFabricConfig()
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
+    // Architecture-specific maximum packet payload size limits
+    //
+    // Calculated from NoC constraints:
+    //   max_payload = floor((max_noc_packet_size - max_packet_header_size) / tile_size) * tile_size
+    //
+    // Where:
+    //   - Max NoC packet size: Wormhole = 8192 bytes, Blackhole = 16384 bytes
+    //   - Max packet header size: 96 bytes (HybridMeshPacketHeaderT<35> for 2D mesh routing)
+    //   - Tile size (Bfp8_b): 1088 bytes
+    //
+    // Payload is rounded down to tile boundaries for efficient tile-aligned transfers.
+    //
+    // Wormhole:  (8192 - 96) / 1088 = 7.44 tiles → 7 tiles = 7616 bytes
+    // Blackhole: (16384 - 96) / 1088 = 14.97 tiles → 14 tiles = 15232 bytes
+    static constexpr size_t max_packet_payload_size_bytes_wormhole =
+        tt::tile_size(tt::DataFormat::Bfp8_b) * 7;  // 7616 bytes
+    static constexpr size_t max_packet_payload_size_bytes_blackhole =
+        tt::tile_size(tt::DataFormat::Bfp8_b) * 14;  // 15232 bytes
+
     static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
     static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
+
+    // Get architecture-specific maximum packet payload size
+    static size_t get_max_packet_payload_size_for_arch(tt::ARCH arch);
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,
@@ -470,6 +499,10 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
+    // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(
+        uint32_t vc, uint32_t absolute_channel_id, uint32_t vc_relative_channel_id) const;
+    // Base class override (for backward compatibility, treats channel_id as VC0-relative)
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
 
@@ -546,6 +579,10 @@ public:
 
     mutable std::vector<bool> sender_channel_is_traffic_injection_channel_array;
 
+    // Actual channel counts per VC for this specific router (may differ from config max)
+    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc_ = std::nullopt;
+    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc_ = std::nullopt;
+
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
@@ -571,13 +608,16 @@ private:
     // Shared helper for setting up VC connections
     // upstream_vc_idx: VC of this router's receiver channel
     // downstream_vc_idx: VC of downstream router's sender channel
+    // absolute_channel_id: flattened channel index across all VCs (for flat arrays)
+    // vc_relative_channel_id: 0-based index within the VC (for allocator calls)
     // For normal connections: upstream_vc_idx == downstream_vc_idx
     // For crossover (inter-mesh to intra-mesh): upstream_vc_idx=0, downstream_vc_idx=1
     void setup_downstream_vc_connection(
         FabricDatamoverBuilderBase* downstream_builder,
         uint32_t upstream_vc_idx,
         uint32_t downstream_vc_idx,
-        uint32_t channel_id);
+        uint32_t absolute_channel_id,
+        uint32_t vc_relative_channel_id);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);

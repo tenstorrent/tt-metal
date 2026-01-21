@@ -10,15 +10,14 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 
-namespace ttnn::operations::data_movement::repeat {
+namespace ttnn::prim {
 
 struct RepeatDeviceOperation {
     using operation_attributes_t = RepeatParams;
     using tensor_args_t = RepeatInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<program::RepeatProgramFactoryLastDim, program::RepeatProgramFactoryHigherDim>;
+    using program_factory_t = std::variant<RepeatProgramFactoryLastDim, RepeatProgramFactoryHigherDim>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -38,10 +37,8 @@ struct RepeatDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor);
 };
-}  // namespace ttnn::operations::data_movement::repeat
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::repeat::RepeatDeviceOperation::tensor_return_value_t repeat(
+RepeatDeviceOperation::tensor_return_value_t repeat(
     const Tensor& input,
     uint32_t m_num_repeats,
     bool m_is_last_dim,
