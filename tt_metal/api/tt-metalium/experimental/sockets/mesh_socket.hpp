@@ -88,7 +88,8 @@ public:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
         BufferType buffer_type,
-        uint32_t fifo_size);
+        uint32_t fifo_size,
+        uint32_t l1_data_buffer_size = 0);
 
     void wait_for_pages(uint32_t num_pages);
     void pop_pages(uint32_t num_pages);
@@ -99,8 +100,13 @@ public:
     void set_page_size(uint32_t page_size);
     void barrier();
 
+    // L1 data buffer accessors (returns 0 if no L1 buffer was allocated)
+    uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
+    uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
+
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
+    std::shared_ptr<MeshBuffer> l1_data_buffer_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> data_pinned_memory_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> bytes_sent_pinned_memory_ = nullptr;
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> data_buffer_ = nullptr;
@@ -113,6 +119,8 @@ private:
     uint32_t bytes_sent_ = 0;
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
+    uint32_t l1_data_buffer_address_ = 0;
+    uint32_t l1_data_buffer_size_ = 0;
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.

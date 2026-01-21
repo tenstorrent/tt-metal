@@ -497,12 +497,15 @@ D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& sender_core,
     BufferType buffer_type,
-    uint32_t fifo_size) :
+    uint32_t fifo_size,
+    uint32_t l1_data_buffer_size) :
     data_pinned_memory_(nullptr),
     bytes_sent_pinned_memory_(nullptr),
     sender_core_(sender_core),
     fifo_size_(fifo_size),
-    page_size_(0) {
+    page_size_(0),
+    l1_data_buffer_address_(0),
+    l1_data_buffer_size_(0) {
     (void)buffer_type;  // Unused for now
 
     const SocketSenderSize_ sender_size;
@@ -565,6 +568,31 @@ D2HSocket::D2HSocket(
     };
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
 
+    // Allocate L1 data buffer on sender core if requested
+    if (l1_data_buffer_size > 0) {
+        // Get default page size (use 64 bytes as minimum, matching PCIe alignment)
+        const uint32_t default_page_size = 64;
+        // Round up to smallest multiple of page size
+        l1_data_buffer_size_ = ((l1_data_buffer_size + default_page_size - 1) / default_page_size) * default_page_size;
+
+        auto l1_data_shard_params = ShardSpecBuffer(
+            sender_core_range_set, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {static_cast<uint32_t>(num_cores), 1});
+
+        DeviceLocalBufferConfig l1_data_buffer_specs = {
+            .page_size = l1_data_buffer_size_,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(l1_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+
+        MeshBufferConfig l1_data_mesh_buffer_specs = ReplicatedBufferConfig{
+            .size = num_cores * l1_data_buffer_size_,
+        };
+        l1_data_buffer_ = MeshBuffer::create(l1_data_mesh_buffer_specs, l1_data_buffer_specs, mesh_device.get());
+        l1_data_buffer_address_ = l1_data_buffer_->address();
+    }
+
     std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
     config_data[0] = 0;
     config_data[1] = 1;
@@ -578,6 +606,9 @@ D2HSocket::D2HSocket(
     config_data[host_addr_offset] = data_pcie_xy_enc;
     config_data[host_addr_offset + 1] = data_addr_hi;
     config_data[host_addr_offset + 2] = bytes_sent_addr_hi;
+    // Store L1 data buffer info at offset [15] and [16]
+    config_data[host_addr_offset + 3] = l1_data_buffer_address_;
+    config_data[host_addr_offset + 4] = l1_data_buffer_size_;
 
     distributed::WriteShard(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
