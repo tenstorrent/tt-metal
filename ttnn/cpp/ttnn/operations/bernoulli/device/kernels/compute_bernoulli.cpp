@@ -22,15 +22,18 @@ void MAIN {
         float f;
         uint32_t u;
     } rand_scale;
-    rand_scale.f = 1;
-    uint32_t rand_from = 0;
+    rand_scale.f = 0.5f;
+
+    f2u rand_from;
+    rand_from.f = 0.1f; /* For larger theta (say 0.7), the generated random numbers will be 1 with probability much less
+                           than theta. */
 
     rand_tile_init(seed);
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_reserve_back(intermed_cb_id, 1);
 
         tile_regs_acquire();
-        rand_tile(0, rand_from, rand_scale.u);
+        rand_tile(0, rand_from.u, rand_scale.u);
         tile_regs_commit();
 
         tile_regs_wait();
