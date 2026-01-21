@@ -583,6 +583,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
     if (dispatch_params.write_large_pages()) {
         const auto cur_host_page = *dispatch_params.core_page_mapping_it;
         if (!cur_host_page) {
+            command_sequence.align_write_offset();
             return;
         }
         for (uint32_t i = 0; i < dispatch_params.pages_per_txn; ++i) {
@@ -600,6 +601,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         while (true) {
             auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page_offset);
             if (range.num_pages == 0) {
+                command_sequence.align_write_offset();
                 return;
             }
             uint64_t src_offset = (uint64_t)(range.host_page_start) * dispatch_params.page_size_to_write;
@@ -641,21 +643,23 @@ void issue_buffer_dispatch_command_sequence(
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
     tt::tt_metal::DeviceCommandCalculator calculator;
-    if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
-        calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
-    } else {
-        calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
-        calculator.add_alignment();
-    }
-    if (not use_pinned_memory) {
-        calculator.add_data<false>(data_size_bytes);
-    }
-
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
         }
     }
+    if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
+        calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
+    } else {
+        calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+    }
+    if (use_pinned_memory) {
+        // What follows is a command (which must be aligned), not data.
+        calculator.add_alignment();
+    } else {
+        calculator.add_data<false>(data_size_bytes);
+    }
+
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
