@@ -42,7 +42,7 @@ struct MaxPool2DOp {
         bool reallocate_halo_output = true,
         bool return_indices = false,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR,
+        std::optional<Layout> output_layout = std::nullopt,
         bool config_tensor_in_dram = false);
 };
 struct AvgPool2DOp {
@@ -65,7 +65,7 @@ struct AvgPool2DOp {
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR,
+        std::optional<Layout> output_layout = std::nullopt,
         bool config_tensor_in_dram = false);
 };
 

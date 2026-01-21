@@ -324,7 +324,7 @@ class MaxPool2dConfiguration:
     reallocate_halo_output: bool = True
 
     dtype: ttnn.DataType = ttnn.bfloat16
-    output_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT
+    output_layout: Optional[ttnn.Layout] = None  # None means match input layout
 
     slice_strategy: Optional[SliceStrategy] = None
 

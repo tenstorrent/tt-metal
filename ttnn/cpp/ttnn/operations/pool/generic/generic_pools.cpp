@@ -841,8 +841,11 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     bool reallocate_halo_output,
     bool return_indices,
     const DataType dtype,
-    const Layout output_layout,
+    const std::optional<Layout> output_layout,
     bool config_tensor_in_dram) {
+    // Default output_layout to match input layout if not specified except MPWI which does not support tiled output
+    Layout resolved_output_layout = return_indices ? Layout::ROW_MAJOR : output_layout.value_or(input_tensor.layout());
+
     return pool2d(
         input_tensor,
         Pool2DType::MAX_POOL2D,
@@ -865,7 +868,7 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         reallocate_halo_output,
         return_indices,
         dtype,
-        output_layout,
+        resolved_output_layout,
         config_tensor_in_dram);
 }
 
@@ -888,8 +891,11 @@ Tensor AvgPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output,
     const DataType dtype,
-    const Layout output_layout,
+    const std::optional<Layout> output_layout,
     bool config_tensor_in_dram) {
+    // Default output_layout to match input layout if not specified
+    Layout resolved_output_layout = output_layout.value_or(input_tensor.layout());
+
     auto result = pool2d(
         input_tensor,
         Pool2DType::AVG_POOL2D,
@@ -912,7 +918,7 @@ Tensor AvgPool2DOp::invoke(
         reallocate_halo_output,
         false,  // return_indices
         dtype,
-        output_layout,
+        resolved_output_layout,
         config_tensor_in_dram);
 
     // Average pool always returns just the tensor, never indices
