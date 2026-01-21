@@ -1,0 +1,62 @@
+{
+  "operation_name": "variance_w_rm",
+  "operation_name_pascal": "VarianceWRm",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::variance_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/variance_w_rm",
+  "parameters": [],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 2,
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input must be at least 2D, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be interleaved",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.padded_shape()[-1] % 32 == 0",
+      "error_message": "Width must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-1]"]
+    },
+    {
+      "condition": "input.padded_shape()[-2] % 32 == 0",
+      "error_message": "Height must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-2]"]
+    }
+  ],
+  "output_shape": {
+    "formula": "input_shape[:-1] + [1]",
+    "cpp_code": "ttnn::SmallVector<uint32_t> dims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    dims.back() = 1;\n    ttnn::Shape output_shape(dims);",
+    "cpp_code_padded": "ttnn::SmallVector<uint32_t> pdims(input.padded_shape().cbegin(), input.padded_shape().cend());\n    pdims.back() = 32;\n    ttnn::Shape output_padded(pdims);"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Computes the variance along the width dimension for row-major tensors.\n\nFor each row (along the last dimension), computes the variance as the mean of squared deviations from the mean.\nUses population variance formula (divide by N, not N-1).\n\nArgs:\n    input_tensor (ttnn.Tensor): Input tensor in row-major layout (must be at least 2D)\n    memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration\n    dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)\n\nReturns:\n    ttnn.Tensor: Variance tensor with shape [..., 1] (logical), padded to [..., 32]\n\nExample:\n    >>> input = ttnn.from_torch(torch.randn(32, 64), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)\n    >>> output = ttnn.variance_w_rm(input)\n    >>> # output shape: [32, 1] logical, [32, 32] padded"
+}

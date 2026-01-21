@@ -81,6 +81,9 @@ target_sources(
         centralize_w_rm/device/centralize_w_rm_device_operation.cpp
         centralize_w_rm/device/centralize_w_rm_program_factory.cpp
         centralize_w_rm/centralize_w_rm.cpp
+        variance_w_rm/device/variance_w_rm_device_operation.cpp
+        variance_w_rm/device/variance_w_rm_program_factory.cpp
+        variance_w_rm/variance_w_rm.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
