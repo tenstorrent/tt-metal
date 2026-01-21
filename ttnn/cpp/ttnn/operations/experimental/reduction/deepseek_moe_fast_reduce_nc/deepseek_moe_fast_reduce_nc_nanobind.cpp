@@ -22,7 +22,18 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
         mod,
         ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc,
         R"doc(
-              Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.
+        Performs optimized reduction operation on dim 0 or 1 on a tensor of rank at least 3
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor
+            dim (int): dimension along which to reduce
+
+        Keyword Args:
+            output_memory_config (ttnn.MemoryConfig): output memory configuration
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): configuration for the reduction
+
+        Returns:
+            list of ttnn.Tensor: returns 8 tensors, representative of the single logical output tensor split on the last dim
         )doc",
         ttnn::nanobind_overload_t{
             [](const OperationType& self,

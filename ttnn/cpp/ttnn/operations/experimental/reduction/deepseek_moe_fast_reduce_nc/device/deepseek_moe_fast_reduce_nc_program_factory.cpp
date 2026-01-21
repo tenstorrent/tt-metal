@@ -42,10 +42,8 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
 
     const uint32_t reduction_dim = operation_attributes.dim;
-    // const uint32_t split_dim = operation_attributes.split_dim;
 
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
-    // const uint32_t input_tensor_Ht = input_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_shape[-1] / tt::constants::TILE_WIDTH;
     const uint32_t slice_Wt = input_tensor_Wt / num_split_tensors;
 
@@ -74,7 +72,6 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
 
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_x = grid.x;
-    // const auto num_cores_y = grid.y;
     const auto
         [num_cores_to_be_used,
          all_cores,
