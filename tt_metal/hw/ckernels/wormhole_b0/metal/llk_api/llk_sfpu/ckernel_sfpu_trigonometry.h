@@ -78,14 +78,21 @@ sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
     return x;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
         v -= int32_to_float(float_to_int16(v, 0), 0);
-        dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
-        dst_reg++;
+
+        v = sfpu_tan<APPROXIMATION_MODE>(PI * v);
+
+        if constexpr (!fp32_dest_acc_en) {
+            v = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(v, 0));
+        }
+
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -107,7 +114,7 @@ sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
            ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -116,14 +123,18 @@ inline void calculate_sine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if(whole_v & 1) { v = -v; }
-        v_endif;
+        v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
+
+        if constexpr (!fp32_dest_acc_en) {
+            v = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(v, 0));
+        }
+
         dst_reg[0] = v;
         dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_cosine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -132,21 +143,25 @@ inline void calculate_cosine() {
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
-        v_if(whole_v & 1) { v = -v; }
-        v_endif;
+        v = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(v) ^ (whole_v << 31));
+
+        if constexpr (!fp32_dest_acc_en) {
+            v = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(v, 0));
+        }
+
         dst_reg[0] = v;
         dst_reg++;
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <SfpuType operation, bool APPROXIMATION_MODE, bool fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_trig() {
     if constexpr (operation == SfpuType::sine) {
-        calculate_sine<APPROXIMATION_MODE, ITERATIONS>();
+        calculate_sine<APPROXIMATION_MODE, fp32_dest_acc_en, ITERATIONS>();
     } else if constexpr (operation == SfpuType::cosine) {
-        calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
+        calculate_cosine<APPROXIMATION_MODE, fp32_dest_acc_en, ITERATIONS>();
     } else if constexpr (operation == SfpuType::tan) {
-        calculate_tangent<APPROXIMATION_MODE, ITERATIONS>();
+        calculate_tangent<APPROXIMATION_MODE, fp32_dest_acc_en, ITERATIONS>();
     }
 }
 
