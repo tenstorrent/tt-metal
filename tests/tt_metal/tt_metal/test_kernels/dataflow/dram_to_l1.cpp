@@ -26,7 +26,7 @@ void kernel_main() {
            << dram_src_bank_id << " and writing it to L1 address " << l1_dst_address << ENDL();
 
     noc.async_read(src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
-    noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>();
+    noc.async_read_barrier();
 
     *signal_addr = signal_value + 1;
 }
