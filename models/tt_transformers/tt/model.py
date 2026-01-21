@@ -195,14 +195,13 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        # For batched prefill (batch_size > 1), tokens come in as [1, B*S] (concatenated along sequence)
-        # Following 70B Galaxy approach: reshape to [1, 1, 1, B*S], not [B, 1, 1, S]
-        # The internal batch handling happens inside attention module after QKV
+        # Galaxy 70B approach: tokens come in as [padded_batch, S] for batched prefill
+        # Each user's tokens are at their slot index in dimension 0
+        # Reshape to [1, 1, 1, padded_batch * S] for embedding
         if batch_size > 1:
-            # Tokens are already concatenated as [1, B*S_per_user]
-            total_seq = tokens.shape[-1]
-            S = total_seq // batch_size  # Per-user sequence length
-            tokens = tokens.reshape(1, 1, 1, -1)
+            # Tokens are in slot-based format [padded_batch, S_per_user]
+            S = tokens.shape[-1]  # Per-user sequence length
+            tokens = tokens.reshape(1, 1, 1, -1)  # Flatten to [1, 1, 1, padded_batch * S]
         else:
             tokens = tokens.reshape(1, 1, 1, -1)
             S = tokens.shape[-1]

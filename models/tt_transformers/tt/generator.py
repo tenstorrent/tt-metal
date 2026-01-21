@@ -334,6 +334,9 @@ class Generator:
 
         all_users = [0] if use_batched_prefill else empty_slots
 
+        # Padded batch size for batched prefill (following Galaxy 70B)
+        padded_batch = 32
+
         out_list = []
         for idx, user_id in enumerate(all_users):
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
@@ -355,24 +358,22 @@ class Generator:
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             if use_batched_prefill:
-                # reordering the tokens when empty_slots are not sequential (from vllm)
-                inverse_empty_slots = [empty_slots.index(i) for i in range(batch_size)]
-                # Following 70B Galaxy approach: concatenate all users' tokens along sequence dimension
-                # This creates shape [1, batch_size * prefill_seq_len] instead of [batch_size, prefill_seq_len]
-                prefill_ids = torch.cat(
-                    [
-                        torch.cat(
-                            [
-                                tokens[idx : idx + 1, : seq_len[idx]],
-                                torch.zeros(1, prefill_seq_len - seq_len[idx]).long(),
-                            ],
-                            dim=-1,
-                        )
-                        for idx in inverse_empty_slots
-                    ],
-                    dim=-1,
-                )
-                last_token_idx = [last_token_idx[idx] for idx in inverse_empty_slots]
+                # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
+                # Each request is placed at its corresponding slot index
+                prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
+                padded_last_token_idx = [0] * padded_batch  # dummy idx for padded slots
+                for local_idx, slot in enumerate(empty_slots):
+                    seq_len_local = int(seq_len[local_idx])
+                    padded_tokens = torch.cat(
+                        [
+                            tokens[local_idx : local_idx + 1, :seq_len_local],
+                            torch.zeros(1, prefill_seq_len - seq_len_local, dtype=torch.long, device=tokens.device),
+                        ],
+                        dim=-1,
+                    )
+                    prefill_ids[slot : slot + 1] = padded_tokens
+                    padded_last_token_idx[slot] = last_token_idx[local_idx]
+                last_token_idx = padded_last_token_idx
             else:
                 num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
                 prefill_ids = torch.cat(
@@ -404,14 +405,7 @@ class Generator:
                 if page_table is not None
                 else None
             )
-            if use_batched_prefill and page_table_user is not None:
-                # Reorder the page table to match the token reordering
-                # Position i in the concatenated input has tokens from user inverse_empty_slots[i]
-                # So we need page_table_reordered[i, :] = page_table_user[inverse_empty_slots[i], :]
-                page_table_reordered = torch.ones_like(page_table_user) * -1
-                for i, original_user_idx in enumerate(inverse_empty_slots):
-                    page_table_reordered[i, :] = page_table_user[empty_slots[original_user_idx], :]
-                page_table_user = page_table_reordered
+            # Galaxy 70B approach: no page_table reordering needed since tokens are at slot positions
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
@@ -423,39 +417,39 @@ class Generator:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=user_id if use_batched_prefill else group_user_id,
+                    user_id=0 if use_batched_prefill else group_user_id,  # Galaxy 70B uses user_id=0
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
-                    batch_size=batch_size if use_batched_prefill else 1,
+                    batch_size=padded_batch if use_batched_prefill else 1,  # Galaxy 70B uses padded_batch
                     **local_kwargs,
                 )
             else:
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=user_id if use_batched_prefill else group_user_id,
+                    user_id=0 if use_batched_prefill else group_user_id,  # Galaxy 70B uses user_id=0
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
-                    batch_size=batch_size if use_batched_prefill else 1,
+                    batch_size=padded_batch if use_batched_prefill else 1,  # Galaxy 70B uses padded_batch
                     **local_kwargs,
                 )
             if use_batched_prefill:
-                # Process each user's logits from the batched output
-                # The logits are shaped (1, 1, batch_size * prefill_seq_len, vocab_size)
-                # We need to slice along the sequence dimension to extract each user's chunk
-                for i in range(batch_size):
-                    # Extract this user's logits from the concatenated sequence
-                    # User i's tokens are at positions [i * prefill_seq_len : (i + 1) * prefill_seq_len]
-                    user_logits = logits[:, :, i * prefill_seq_len : (i + 1) * prefill_seq_len, :]
+                # Model outputs logits as [1, 1, padded_batch * prefill_seq_len, vocab_size]
+                # Reshape to [padded_batch, 1, prefill_seq_len, vocab_size] for per-user extraction
+                vocab_size = logits.shape[-1]
+                logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, vocab_size])
+
+                # Galaxy 70B approach: each user's logits are at their slot index in the batch dimension
+                for slot in empty_slots:
+                    # Extract this user's logits from the batch dimension
+                    user_logits = logits[slot : slot + 1, :, :, :]
                     # Process the logits
-                    _logits = self.model[model_id].process_logits_after_prefill_trace(user_logits, last_token_idx[i])
-                    # Position i in the batch corresponds to user empty_slots[inverse_empty_slots[i]]
-                    user_idx = empty_slots[inverse_empty_slots[i]]
-                    output_logits[user_idx] = self.model[model_id].process_output_prefill(
-                        _logits.cpu(), last_token_idx=(last_token_idx[i] % 32)
+                    _logits = self.model[model_id].process_logits_after_prefill_trace(user_logits, last_token_idx[slot])
+                    output_logits[slot] = self.model[model_id].process_output_prefill(
+                        _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                     )
             else:
                 if enable_trace_current_prompt:
