@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::sort {
+namespace ttnn::prim {
 
 struct SortParams {
     const int8_t dim;
@@ -21,7 +21,4 @@ struct SortInputs {
     std::vector<std::optional<Tensor>> output_tensors;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
-
-}  // namespace ttnn::operations::data_movement::sort
+}  // namespace ttnn::prim

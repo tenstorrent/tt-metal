@@ -12,6 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -209,15 +210,15 @@ TEST_F(MeshDeviceView2x4Test, ViewContains) {
 TEST_F(MeshDeviceView2x4Test, ViewGetDevice) {
     const auto& view = mesh_device_->get_view();
 
-    auto* device_00 = view.get_device(MeshCoordinate{0, 0});
-    auto* device_13 = view.get_device(MeshCoordinate{1, 3});
+    auto* device_00 = view.impl().get_device(MeshCoordinate{0, 0});
+    auto* device_13 = view.impl().get_device(MeshCoordinate{1, 3});
 
     EXPECT_NE(device_00, nullptr);
     EXPECT_NE(device_13, nullptr);
     EXPECT_NE(device_00->id(), device_13->id());
 
     // Out of bounds returns nullptr
-    EXPECT_EQ(view.get_device(MeshCoordinate{2, 0}), nullptr);
+    EXPECT_EQ(view.impl().get_device(MeshCoordinate{2, 0}), nullptr);
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeId) {
@@ -337,7 +338,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsOnColumn) {
 TEST_F(MeshDeviceView2x4Test, ViewFindDevice) {
     const auto& view = mesh_device_->get_view();
 
-    auto* device = view.get_device(MeshCoordinate{1, 2});
+    auto* device = view.impl().get_device(MeshCoordinate{1, 2});
     ASSERT_NE(device, nullptr);
 
     auto coord = view.find_device(device->id());
@@ -385,11 +386,11 @@ TEST_F(MeshDeviceView2x4Test, ViewIsLocal) {
     const auto& view = mesh_device_->get_view();
 
     // All devices should be local in single-host tests
-    EXPECT_TRUE(view.is_local(MeshCoordinate{0, 0}));
-    EXPECT_TRUE(view.is_local(MeshCoordinate{1, 3}));
+    EXPECT_TRUE(view.impl().is_local(MeshCoordinate{0, 0}));
+    EXPECT_TRUE(view.impl().is_local(MeshCoordinate{1, 3}));
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.is_local(MeshCoordinate{2, 0}));
+    EXPECT_ANY_THROW((void)view.impl().is_local(MeshCoordinate{2, 0}));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewIterator) {
@@ -422,7 +423,7 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
     std::vector<IDevice*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        devices.push_back(mesh_device_->get_view().get_device(coord));
+        devices.push_back(mesh_device_->get_view().impl().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 

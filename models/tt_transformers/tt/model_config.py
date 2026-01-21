@@ -570,6 +570,7 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -777,6 +778,7 @@ class ModelArgs:
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
+                and self.ccl_topology() == ttnn.Topology.Ring
             )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
@@ -868,7 +870,8 @@ class ModelArgs:
                     1024
                     if self.num_devices == 8
                     and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and 1024 % (self.dim / self.num_devices) == 0
+                    and not is_blackhole()
+                    and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -1417,6 +1420,13 @@ class ModelArgs:
             "Llama-3.3-70B": {
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-8B": {
+                "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 1024, 2048, 4096, 8192],
             },
         }
 

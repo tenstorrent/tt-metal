@@ -9,7 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
@@ -17,7 +17,7 @@ using namespace tt;
 NlpCreateQkvHeadsVitProgramFactory::cached_program_t NlpCreateQkvHeadsVitProgramFactory::create(
     const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
     const NlpCreateQkvHeadsVitInputs& tensor_args,
-    tensor_return_value_t& output) {
+    NlpCreateQkvHeadsVitResult& output) {
     const auto& a = tensor_args.input_tensor;
     const auto& ashape = a.padded_shape();
 
@@ -215,7 +215,7 @@ void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const NlpCreateQkvHeadsVitParams& /*operation_attributes*/,
     const NlpCreateQkvHeadsVitInputs& tensor_args,
-    tensor_return_value_t& output) {
+    NlpCreateQkvHeadsVitResult& output) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
@@ -241,4 +241,4 @@ void NlpCreateQkvHeadsVitProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_vit::program
+}  // namespace ttnn::experimental::prim
