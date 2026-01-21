@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "../offline/csv_reader.hpp"
 #include "../offline/data_processor.hpp"
 #include "../offline/data_extractor.hpp"
