@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
@@ -62,6 +63,7 @@ class PrecisionSetting(Enum):
     BFP4 = "bfp4"
     BFP8 = "bfp8"
     BF16 = "bf16"
+    MIXED = "mixed"
 
 
 class OpGroup(Enum):
@@ -112,9 +114,9 @@ class ModelOptimizations:
                 base_model_name.startswith("Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
-                or base_model_name.startswith("phi-4")
+                or base_model_name == "Phi-4"
             ):
-                if model_name.startswith("phi-4"):
+                if base_model_name == "Phi-4" or base_model_name == "Phi-3-mini-128k-instruct":
                     logger.info(
                         f"Model {model_name} is running out of DRAM memory for weight fetching under standard accuracy settings, using BFP8 for WQKV"
                     )
@@ -209,8 +211,9 @@ class ModelOptimizations:
         for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
             self._opt_settings[key].update((settings or {}).get(key, {}))
             curr = self._opt_settings[key]
+            # No longer need 'if curr[k] else mixed' check since we use PrecisionSetting.MIXED explicitly now
             self._names[key] = ", ".join(
-                [f"{k.value}: {curr[k].value if curr[k] else 'mixed'}" for k in list(enum_type)]
+                [f"{k.value}: {curr[k].value}" for k in list(enum_type)]
             )
 
         self._full_name = (
@@ -263,7 +266,7 @@ class ModelOptimizations:
                 TensorGroup.WO: PrecisionSetting.BFP8,
                 TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
-                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+                TensorGroup.ACTIVATION: PrecisionSetting.MIXED,  # Signals original dtype usage
             },
             "OpFidelity": {
                 # MLP linear operators - BFP8 with FP16 accumulation to save L1
@@ -289,56 +292,57 @@ class ModelOptimizations:
         return self._opt_settings["OpFidelity"]
 
 
-def parse_optimizations(string):
-    """
-    Parse the optimizations full name and return a ModelOptimizations instance.
-    """
-    # Find the precision and fidelity config sections
-    precision_start = string.find("precision_cfg")
-    fidelity_start = string.find("fidelity_cfg")
+    # Use regex to extract config sections safely
+    # Matches 'precision_cfg = { content }' or 'fidelity_cfg = { content }'
+    precision_match = re.search(r"precision_cfg\s*=\s*\{(.*?)\}", string)
+    fidelity_match = re.search(r"fidelity_cfg\s*=\s*\{(.*?)\}", string)
 
-    if precision_start == -1 and fidelity_start == -1:
-        raise ValueError("String must contain either precision_cfg or fidelity_cfg")
+    if not precision_match and not fidelity_match:
+        raise ValueError(
+            'String must contain either precision_cfg or fidelity_cfg '
+            '(e.g., "precision_cfg={wqkv: bfp8, ff1_3: bfp4}")'
+        )
 
-    # Extract the config dictionaries between { }
-    def extract_config(start_idx, cfg_name):
-        open_brace = string.find("{", start_idx)
-        if open_brace == -1:
-            raise ValueError(f"Missing opening brace for {cfg_name}")
-
-        close_brace = string.find("}", open_brace)
-        if close_brace == -1:
-            raise ValueError(f"Missing closing brace for {cfg_name}")
-
-        return string[open_brace + 1 : close_brace].strip()
-
-    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
-    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+    precision_str = precision_match.group(1).strip() if precision_match else ""
+    fidelity_str = fidelity_match.group(1).strip() if fidelity_match else ""
 
     # Create ModelOptimizations instance with the parsed configs
     settings = {"TensorPrecision": {}, "OpFidelity": {}}
 
-    # Parse precision config
-    for pair in precision_dict.split(","):
-        if ":" not in pair:
-            raise ValueError("Invalid format - missing ':' separator")
-        key, value = pair.split(":")
-        key = TensorGroup(key.strip())
-        value = value.strip()
-        if key == TensorGroup.ACTIVATION and value == "mixed":
-            # special case for activation's mixed precision, which is the default configuration
-            continue
+    # Helper for safe enum conversion
+    def safe_enum(cls, val, context):
+        try:
+            return cls(val)
+        except ValueError:
+            valid = [e.value for e in cls]
+            raise ValueError(f"Invalid {context}: '{val}'. Must be one of: {valid}")
 
-        settings["TensorPrecision"][key] = PrecisionSetting(value)
+    # Parse precision config
+    if precision_str:
+        for pair in precision_str.split(","):
+            pair = pair.strip()
+            if not pair: continue
+            if ":" not in pair:
+                raise ValueError(f"Invalid precision format: '{pair}'. Missing ':' separator")
+            
+            key_str, val_str = [s.strip() for s in pair.split(":", 1)]
+            
+            key = safe_enum(TensorGroup, key_str, "TensorGroup")
+            
+            settings["TensorPrecision"][key] = safe_enum(PrecisionSetting, val_str, "PrecisionSetting")
 
     # Parse fidelity config
-    for pair in fidelity_dict.split(","):
-        if ":" not in pair:
-            raise ValueError("Invalid format - missing ':' separator")
-        key, value = pair.split(":")
-        key = OpGroup(key.strip())
-        value = MathFidelitySetting(value.strip())
-        settings["OpFidelity"][key] = value
+    if fidelity_str:
+        for pair in fidelity_str.split(","):
+            pair = pair.strip()
+            if not pair: continue
+            if ":" not in pair:
+                raise ValueError(f"Invalid fidelity format: '{pair}'. Missing ':' separator")
+            
+            key_str, val_str = [s.strip() for s in pair.split(":", 1)]
+            
+            key = safe_enum(OpGroup, key_str, "OpGroup")
+            settings["OpFidelity"][key] = safe_enum(MathFidelitySetting, val_str, "MathFidelitySetting")
 
     model_opt = ModelOptimizations(settings)
 
@@ -449,7 +453,7 @@ class ModelArgs:
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
-        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "Phi-4": "models/tt_transformers/model_params/Phi-4",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -513,8 +517,12 @@ class ModelArgs:
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
+            if "phi-4" in self.model_name.lower():
+                self.model_name = "Phi-4"
         else:
-            assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+            raise ValueError(
+                "Please set environment variable HF_MODEL to a HuggingFace model name (e.g., meta-llama/Llama-3.1-8B-Instruct)."
+            )
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -568,6 +576,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
@@ -596,7 +605,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
+            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
         ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
@@ -633,10 +642,6 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
         self.processor = None if dummy_weights else self.create_processor()
-
-        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable or multimodal models
-        self.use_qk_fused = not self.is_multimodal
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -725,30 +730,11 @@ class ModelArgs:
             )
 
             # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=None: ttnn.SDPAProgramConfig(
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                # We want 256 if seqlen >= 2048 else 64. BUT:
-                # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
-                # Here (x & -x) is the highest power of 2 that divides x.
-                # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
-                q_chunk_size=256
-                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else 64
-                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else min(256, chunk_start_idx & -chunk_start_idx)
-                if seqlen >= 2048
-                else min(64, chunk_start_idx & -chunk_start_idx),
-                # Original:
-                # k_chunk_size=256 if seqlen >= 2048 else 64,
-                # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
-                k_chunk_size=256
-                if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else 64
-                if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-                else min(256, chunk_start_idx & -chunk_start_idx)
-                if seqlen >= 2048
-                else min(64, chunk_start_idx & -chunk_start_idx),
+                q_chunk_size=256 if seqlen >= 2048 else 64,
+                k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
@@ -777,7 +763,6 @@ class ModelArgs:
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
-                and self.ccl_topology() == ttnn.Topology.Ring
             )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
@@ -869,8 +854,7 @@ class ModelArgs:
                     1024
                     if self.num_devices == 8
                     and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and not is_blackhole()
-                    and 1024 % (self.dim // self.num_devices) == 0
+                    and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -924,17 +908,13 @@ class ModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
-                    )
+                per_core_M=max(
+                    1,
+                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -962,8 +942,8 @@ class ModelArgs:
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=128 if is_blackhole() else 256,
+                k_chunk_size=128 if is_blackhole() else 256,
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
@@ -1355,10 +1335,6 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        assert (
-            self.capped_warmup_seq_len > 0 and (self.capped_warmup_seq_len & (self.capped_warmup_seq_len - 1)) == 0
-        ), f"capped_warmup_seq_len must be a power of 2, but got {self.capped_warmup_seq_len}"
-
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
@@ -1367,10 +1343,6 @@ class ModelArgs:
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
-
-        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
-            max_seq_len_to_warmup = self.capped_warmup_seq_len
-
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
@@ -1866,12 +1838,11 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
+    def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        # TODO: Support prefix caching with tracing
         """
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
@@ -1880,7 +1851,6 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
-            and num_cached_tokens == 0
         )
 
     def is_llama_vision(self):
@@ -2435,6 +2405,7 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "Phi-4": "microsoft/phi-4",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2878,7 +2849,7 @@ class ModelArgs:
     def reference_decoder(self):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0]
-        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("Phi-4",)
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:
@@ -3213,7 +3184,8 @@ class DecodersPrecision:
             PrecisionSetting.BFP4: ttnn.bfloat4_b,
             PrecisionSetting.BFP8: ttnn.bfloat8_b,
             PrecisionSetting.BF16: ttnn.bfloat16,
-            None: None,  # this signals that original dtype should be used
+            PrecisionSetting.MIXED: None,  # Signals that original dtype should be used
+            None: None,  # backward compatibility
         }
         if (
             decoder_id not in self.decoder_optimizations
@@ -3248,13 +3220,12 @@ class DecodersPrecision:
     def _precision_factory(cls, num_decoders, model_name, optimization_level):
         # use respective configuration for each optimization level
         decoder_config_filename = None
-        match optimization_level:
-            case ModelOptimizations.accuracy:
-                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
-            case ModelOptimizations.performance:
-                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
-            case _:
-                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
+        if optimization_level == ModelOptimizations.accuracy:
+            decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
+        elif optimization_level == ModelOptimizations.performance:
+            decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+        else:
+            raise ValueError(f"optimization_level ({optimization_level}) not implemented")
 
         # check if decoder config exists, if it exists load it else use optimization_level
         model_params_dir = Path(__file__).parent.parent
@@ -3271,59 +3242,14 @@ class DecodersPrecision:
         return inst
 
 
-def num_to_corerange(
-    x: int,
-    start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0),
-    grid_x: int = 8,
-    grid_y: int = 8,
-) -> ttnn.CoreRange:
-    """
-    Construct a rectangular CoreRange of exactly ``x`` cores starting at
-    ``start_core`` on a ``grid_x × grid_y`` core grid.
-
-    The CoreRange is allocated in row-major order semantics but must form
-    a single contiguous rectangle representable by ``ttnn.CoreRange``.
-
-    Defaults to an 8×8 grid for backward compatibility.
-    """
-
-    # --- basic sanity ---
-    assert x > 0, "x must be positive"
-    assert grid_x > 0 and grid_y > 0
-    assert 0 <= start_core.x < grid_x
-    assert 0 <= start_core.y < grid_y
-
-    sx, sy = start_core.x, start_core.y
-
-    # --- linear availability (row-major correctness) ---
-    remaining_linear_cores = (grid_x - sx) + (grid_y - sy - 1) * grid_x  # remainder of start row  # full rows below
-    assert remaining_linear_cores >= x, (
-        f"Not enough cores from start_core {start_core} "
-        f"to allocate {x} cores (only {remaining_linear_cores} available)"
-    )
-
-    # --- rectangular availability ---
-    remaining_x = grid_x - sx
-    remaining_y = grid_y - sy
-
-    # --- shape rule ---
-    assert x < grid_x or x % grid_x == 0, f"x must be < grid_x ({grid_x}) or a multiple of grid_x"
-
-    # --- choose rectangle dimensions ---
-    num_x = min(x, remaining_x)
+def num_to_corerange(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
     num_y = x // num_x
-
-    assert num_x * num_y == x, f"x={x} cannot form a rectangular CoreRange starting at {start_core}"
-
-    # --- bounds check ---
-    assert num_y <= remaining_y, f"CoreRange height {num_y} exceeds available rows {remaining_y}"
-
-    end_x = sx + num_x - 1
-    end_y = sy + num_y - 1
-
+    assert num_x * num_y == x
     return ttnn.CoreRange(
-        start_core,
-        ttnn.CoreCoord(end_x, end_y),
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
 
 
