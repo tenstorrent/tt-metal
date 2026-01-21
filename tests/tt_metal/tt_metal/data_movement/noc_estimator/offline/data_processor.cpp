@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "data_processor.hpp"
 
 namespace tt::noc_estimator::offline {
@@ -11,7 +15,7 @@ std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std
             .memory = point.memory,
             .arch = point.arch,
             .num_transactions = point.num_transactions,
-            .num_peers = point.num_peers,
+            .num_subordinates = point.num_subordinates,
             .same_axis = point.same_axis,
             .linked = point.linked,
         };

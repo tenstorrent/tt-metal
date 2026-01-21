@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "csv_reader.hpp"
 #include <fstream>
 #include <sstream>
@@ -6,9 +10,10 @@
 
 namespace tt::noc_estimator::offline {
 
-static std::string to_lower(std::string str) {
-    transform(str.begin(), str.end(), str.begin(), ::tolower);
-    return str;
+static std::string to_lower(const std::string& str) {
+    std::string result = str;
+    transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
 }
 
 bool CsvReader::load_csv(const std::string& filepath) {
@@ -99,9 +104,9 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         point.transaction_size_bytes = stoul(tokens[column_map_[COL_TRANSACTION_SIZE]]);
         point.num_transactions = stoul(tokens[column_map_[COL_NUM_TRANSACTIONS]]);
         point.latency_cycles = stod(tokens[column_map_[COL_LATENCY]]);
-        auto it = column_map_.find(COL_NUM_PEERS);
+        auto it = column_map_.find(COL_NUM_SUBORDINATES);
         if (it != column_map_.end() && it->second < tokens.size()) {
-            point.num_peers = stoul(tokens[it->second]);
+            point.num_subordinates = stoul(tokens[it->second]);
         }
 
         it = column_map_.find(COL_SAME_AXIS);
@@ -159,7 +164,7 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
 
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "Failed to parse data line: " << line << std::endl;
+        std::cerr << "Failed to parse data line: " << line << " | error: " << e.what() << std::endl;
         return false;
     }
 }
