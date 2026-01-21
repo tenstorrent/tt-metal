@@ -113,10 +113,12 @@ FROM ci-build AS ci-test-minimal
 # - networkx: Used in tracer tests
 # - torchvision: Used in integration tests (mnist, vgg) and unit tests
 # - nbformat, nbconvert: Used in notebook_tests/test_tutorials.py
+# - multiprocess: Used in conftest.py for watchdog process management
+# - psutil: Used in conftest.py for process management
 # - numpy: Already installed in ci-build stage
 RUN umask 000 && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch==2.7.1 torchvision==0.22.1 && \
-    uv pip install --no-cache pytest==8.4.2 loguru==0.6.0 transformers==4.53.0 networkx==3.1 nbformat nbconvert==7.16.6 multiprocess
+    uv pip install --no-cache pytest==8.4.2 loguru==0.6.0 transformers==4.53.0 networkx==3.1 nbformat nbconvert==7.16.6 multiprocess==0.70.14 psutil==7.0.0
 
 #############################################################
 
