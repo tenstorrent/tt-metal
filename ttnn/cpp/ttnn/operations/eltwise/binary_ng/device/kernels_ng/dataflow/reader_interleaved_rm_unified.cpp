@@ -8,25 +8,25 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
+    uint32_t index = 0;
+    const uint32_t src_addr = get_arg_val<uint32_t>(index++);
+    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(index++);
+    const uint32_t aD = get_arg_val<uint32_t>(index++);
+    const uint32_t aN = get_arg_val<uint32_t>(index++);
+    const uint32_t aC = get_arg_val<uint32_t>(index++);
+    const uint32_t aHt = get_arg_val<uint32_t>(index++);  // A Height (Elements)
+    const uint32_t aWt = get_arg_val<uint32_t>(index++);  // A Width (Elements)
 
-    const uint32_t aD = get_arg_val<uint32_t>(7);
-    const uint32_t aN = get_arg_val<uint32_t>(8);
-    const uint32_t aC = get_arg_val<uint32_t>(9);
-    const uint32_t aHt = get_arg_val<uint32_t>(10);  // A Height (Elements)
-    const uint32_t aWt = get_arg_val<uint32_t>(11);  // A Width (Elements)
+    const uint32_t src_addr_b = get_arg_val<uint32_t>(index++);
+    const uint32_t bD = get_arg_val<uint32_t>(index++);
+    const uint32_t bN = get_arg_val<uint32_t>(index++);
+    const uint32_t bC = get_arg_val<uint32_t>(index++);
+    const uint32_t bHt = get_arg_val<uint32_t>(index++);  // B Height (Elements)
+    const uint32_t bWt = get_arg_val<uint32_t>(index++);  // B Width (Elements)
 
-    const uint32_t src_addr_b = get_arg_val<uint32_t>(13);
-    const uint32_t bD = get_arg_val<uint32_t>(14);
-    const uint32_t bN = get_arg_val<uint32_t>(15);
-    const uint32_t bC = get_arg_val<uint32_t>(16);
-    const uint32_t bHt = get_arg_val<uint32_t>(17);  // B Height (Elements)
-    const uint32_t bWt = get_arg_val<uint32_t>(18);  // B Width (Elements)
-
-    const uint32_t current_row_start = get_arg_val<uint32_t>(21);
-    const uint32_t num_rows = get_arg_val<uint32_t>(22);       // Rows to process in this tile (e.g. 32)
-    const uint32_t page_size_arg = get_arg_val<uint32_t>(23);  // Output Row Width (Bytes)
+    const uint32_t current_row_start = get_arg_val<uint32_t>(index++);
+    const uint32_t num_rows = get_arg_val<uint32_t>(index++);       // Rows to process in this tile (e.g. 32)
+    const uint32_t page_size_arg = get_arg_val<uint32_t>(index++);  // Output Row Width (Bytes)
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -121,7 +121,7 @@ void kernel_main() {
                     noc_async_read(addr, l1_write_addr_src, a_read_bytes);
                     noc_async_read_barrier();
 
-                    if (is_a_col_bcast) {
+                    if (is_a_col_bcast) {  // Scalar Case
                         FILL_TILE_WITH_FIRST_COLUMN_RM(l1_write_addr_src, row_width_elements);
                     }
 
@@ -156,7 +156,7 @@ void kernel_main() {
                     noc_async_read(addr, l1_write_addr_src_b, b_read_bytes);
                     noc_async_read_barrier();
 
-                    if (is_b_col_bcast) {
+                    if (is_b_col_bcast) {  // Scalar case
                         FILL_TILE_WITH_FIRST_COLUMN_RM(l1_write_addr_src_b, row_width_elements);
                     }
 

@@ -347,7 +347,7 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
-        uint32_t num_rows = 0;  // Initialize all row major things
+        uint32_t num_rows = 0;  // Initialize all row major
 
         uint32_t c_start_id = 0;
         uint32_t c_current_shard_width = 0;
@@ -365,12 +365,8 @@ void set_or_update_runtime_arguments(
             if (row_major_inputs) {
                 auto row_width = c.buffer()->aligned_page_size() / a.element_size();
                 // Using c is a good option as it deals with bcast here
-
                 c_num_tiles = c_num_tiles * tt::div_up(row_width, tile_hw);
-                // this is a hack but works
-                // we need to fill the tile to aim for max utilization
                 num_rows = std::max<uint32_t>(1u, tile_hw / row_width);
-                // num_rows can be greater than the logical height; row-major buffers are padded for full tiles
             }
         }
 
@@ -484,26 +480,18 @@ void set_or_update_runtime_arguments(
         if (row_major_inputs) {
             reader_runtime_args = {
                 a.buffer()->address(),
-                c_start_id,
-                a_num_tiles,  // we dont use this in row major
                 c_num_tiles,
-                c_current_shard_width,
-                aHt * aWt * aC * aN * aD * (aND > 1),
-                aHt * aWt * aC * aN * (aD > 1),
                 aD,
                 aN,
                 aC,
                 aHt_r,
                 aWt_r,
-                aND,
                 b.has_value() ? b->buffer()->address() : 0u,
                 bD,
                 bN,
                 bC,
                 bHt_r,
                 bWt_r,
-                bND,
-                b_num_tiles,
                 current_row,
                 num_rows,
                 static_cast<uint32_t>(c_buffer->page_size())};
