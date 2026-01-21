@@ -22,12 +22,18 @@ namespace sfpu
  * @tparam is_fp32_dest_acc_en Whether Dest is in 32bit mode (true) or 16bit mode (false).
  * @tparam ITERATIONS The number of iterations to perform (unused).
  * @tparam layout Data layout format, either TILE (default) or ROW_MAJOR.
+ * @tparam accumulate Whether to accumulate results for large kernels (default is false).
  * @param values_tile_idx The index of the tile in the Dest register containing the data to be reduced.
  * @param indices_tile_idx The index of the tile in the Dest register containing the indices of the data.
- * @param tile_idx Unused param, needed to conform with format in _llk_math_eltwise_binary_sfpu_params_.
+ * @param chunk The chunk index for large kernel accumulation.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, ckernel::DataLayout layout = ckernel::DataLayout::TILE>
-inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const uint indices_tile_idx, const uint tile_idx /* unused */)
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS             = 8,
+    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    bool accumulate            = false>
+inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const uint indices_tile_idx, const uint chunk)
 {
     // size of each tile in Dest is 64 rows
     constexpr uint dst_tile_size   = 64;
@@ -95,6 +101,7 @@ inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const 
     }
     else
     {
+        static_assert(!accumulate, "accumulate mode is not supported for TILE layout");
         // TILE (ORIGINAL) VERSION OF MPWI
         // F0
         // data
@@ -166,20 +173,23 @@ inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const 
  * @tparam APPROXIMATION_MODE Whether to use the approximation mode (unused).
  * @tparam is_fp32_dest_acc_en Whether Dest is in 32bit mode (true) or 16bit mode (false).
  * @tparam ITERATIONS The number of iterations to use for the MaxPool operation (unused).
+ * @tparam accumulate Whether to accumulate results for large kernels (default is false).
  * @param values_tile_idx The index of the tile in the Dest register containing the data to be reduced.
  * @param indices_tile_idx The index of the tile in the Dest register containing the indices of the data.
- * @param tile_idx Unused param, needed to conform with format in _llk_math_eltwise_binary_sfpu_params_.
+ * @param chunk The chunk index for large kernel accumulation.
  *
  * Note this function is only implemented for ROW_MAJOR data layout, so when _init_max_pool_with_indices_ is called
  * it must be called with layout=DataLayout::ROW_MAJOR.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx, const uint indices_tile_idx, const uint tile_idx /* unused */)
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool accumulate = false>
+inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx, const uint indices_tile_idx, const uint chunk)
 {
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size   = 64;
-    const uint values_tile_offset  = values_tile_idx * dst_tile_size;
-    const uint indices_tile_offset = indices_tile_idx * dst_tile_size;
+    constexpr uint dst_tile_size         = 64;
+    const uint values_tile_offset        = values_tile_idx * dst_tile_size;
+    const uint indices_tile_offset       = indices_tile_idx * dst_tile_size;
+    const uint values_accum_tile_offset  = (values_tile_idx + 1) * dst_tile_size;
+    const uint indices_accum_tile_offset = (indices_tile_idx + 1) * dst_tile_size;
     // each face is 16 rows
     constexpr uint eight_row_offset   = 16;
     constexpr uint sixteen_row_offset = 32;
@@ -197,107 +207,119 @@ inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx
     // Face 0 Row 31
     // Face 1 Row 31
 
-    auto process_16_rows = [values_tile_offset, indices_tile_offset, eight_row_offset, instr_mod_index](const uint base_offset, const uint col_offset)
-                               __attribute__((always_inline))
+    // Reduces 8 rows to max in LREG0/LREG4, optionally stores result.
+    auto reduce_8_rows = [instr_mod_index](const uint val_base, const uint idx_base, const bool store_result) __attribute__((always_inline))
     {
-        // Nested lambda to handle load, sort, and store for a face
-        auto load_sort_store = [values_tile_offset, indices_tile_offset, base_offset, col_offset, instr_mod_index](const uint eight_row_offset_val)
-                                   __attribute__((always_inline))
+        // data - precomputed base address eliminates repeated arithmetic
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 0);  // Row 0 and 1
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 4);  // Row 2 and 3
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 8);  // Row 4 and 5
+        TT_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 12); // Row 6 and 7
+        // index
+        TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, idx_base + 0);
+        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, idx_base + 4);
+        TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, idx_base + 8);
+        TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, idx_base + 12);
+
+        // Reduce 8 rows to max in LREG0/LREG4 via replay buffer
+        lltt::replay(0, 7);
+
+        // Only store when necessary - caller controls this
+        if (store_result)
         {
-            // data
-            TT_SFPLOAD(
-                p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + eight_row_offset_val + base_offset + 0 + col_offset); // Row 0 and 1
-            TT_SFPLOAD(
-                p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + eight_row_offset_val + base_offset + 4 + col_offset); // Row 2 and 3
-            TT_SFPLOAD(
-                p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + eight_row_offset_val + base_offset + 8 + col_offset); // Row 4 and 5
-            TT_SFPLOAD(
-                p_sfpu::LREG3,
-                InstrModLoadStore::DEFAULT,
-                ADDR_MOD_7,
-                values_tile_offset + eight_row_offset_val + base_offset + 12 + col_offset); // Row 6 and 7
-            // index
-            TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset_val + base_offset + 0 + col_offset);
-            TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset_val + base_offset + 4 + col_offset);
-            TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset_val + base_offset + 8 + col_offset);
-            TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset_val + base_offset + 12 + col_offset);
-
-            // data is loaded in this format:
-            // LREG0          LREG1          LREG2          LREG3
-            // Face 0 Row 0   Face 0 Row 2   Face 0 Row 4   Face 0 Row 6
-            // Face 1 Row 0   Face 1 Row 2   Face 1 Row 4   Face 1 Row 6
-            // Face 0 Row 1   Face 0 Row 3   Face 0 Row 5   Face 0 Row 7
-            // Face 1 Row 1   Face 1 Row 3   Face 1 Row 5   Face 1 Row 7
-
-            // then we sort 4 rows, replay does:
-            // max between LREG0 and LREG1
-            // max between LREG2 and LREG3
-            // max between LREG0 and LREG2
-            // -
-            // now we have these maxes:
-            // LREG0
-            // Max(F0, R0,2,4,6)
-            // Max(F1, R0,2,4,6)
-            // Max(F0, R1,3,5,7)
-            // Max(F1, R1,3,5,7)
-            // -
-            // transpose
-            // max between LREG0 and LREG2
-            // max between LREG1 and LREG3
-            // transpose
-            // -
-            // now we have in LREG0:
-            // Max(F0, R0-7)
-            // Max(F1, R0-7)
-            // Max(F0, R1,3,5,7)
-            // Max(F1, R1,3,5,7)
-            lltt::replay(0, 7);
-
-            TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + eight_row_offset_val + base_offset + 0 + col_offset);
-            TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset_val + base_offset + 0 + col_offset);
-        };
-
-        // Process first 8 rows and second 8 rows for F0 and F1
-        load_sort_store(0);
-        load_sort_store(eight_row_offset);
-
-        // swap between the two sets of 8 rows
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + base_offset + 0 + col_offset); // Max(R0-7) for F0,1
-        TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + base_offset + 0 + col_offset);
-        TT_SFPLOAD(
-            p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + eight_row_offset + base_offset + 0 + col_offset); // Max(R8-15) for F0,1
-        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_tile_offset + eight_row_offset + base_offset + 0 + col_offset);
-
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX); // LREG0 contains Max(R0-15) (or Max(R16-31)) for F0,1
-
-        TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + base_offset + col_offset);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + base_offset + col_offset);
+            TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 0);
+            TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, idx_base + 0);
+        }
+        // Result: Max of 8 rows in LREG0 (values) and LREG4 (indices)
     };
 
-    // First 16 rows
+    // OPTIMIZATION: Flattened process_16_rows - eliminates nested lambda overhead
+    // and removes redundant store-load pairs.
+    // Note: After reducing the second 8-row block, the result is already in LREG0/LREG4.
+    // We only need to reload the first block's result into LREG1/LREG5 for the final swap.
+    // store_result: if false, result stays in LREG0/LREG4 for caller to use directly.
+    auto process_16_rows = [&reduce_8_rows, values_tile_offset, indices_tile_offset, eight_row_offset, instr_mod_index](
+                               const uint base_offset, const uint col_offset, const bool store_result) __attribute__((always_inline))
+    {
+        // Precompute base addresses for both 8-row blocks
+        const uint val_base_first  = values_tile_offset + base_offset + col_offset;
+        const uint idx_base_first  = indices_tile_offset + base_offset + col_offset;
+        const uint val_base_second = values_tile_offset + eight_row_offset + base_offset + col_offset;
+        const uint idx_base_second = indices_tile_offset + eight_row_offset + base_offset + col_offset;
+
+        // First 8 rows: reduce and STORE (we need to free registers for second block)
+        reduce_8_rows(val_base_first, idx_base_first, true);
+
+        // Second 8 rows: reduce but DON'T STORE - keep result in LREG0/LREG4
+        reduce_8_rows(val_base_second, idx_base_second, false);
+
+        // Now: LREG0/LREG4 contains Max(R8-15), need to load Max(R0-7) into LREG1/LREG5
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base_first);
+        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, idx_base_first);
+
+        // Swap to get Max(R0-15) in LREG0/LREG4
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+
+        // Only store if needed - caller may use LREG0/LREG4 directly
+        if (store_result)
+        {
+            TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, idx_base_first);
+            TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base_first);
+        }
+    };
+
+    // Final swap: combine first 16 rows with second 16 rows.
+    // OPTIMIZATION: After process_16_rows(sixteen_row_offset, col), Max(R16-31) is already in LREG0/LREG4.
+    // We only need to load Max(R0-15) into LREG1/LREG5, saving 2 loads per column.
+    auto final_swap = [values_tile_offset, indices_tile_offset, values_accum_tile_offset, indices_accum_tile_offset, instr_mod_index, chunk](
+                          const uint col_offset) __attribute__((always_inline))
+    {
+        // Precompute addresses
+        const uint val_first = values_tile_offset + col_offset;
+        const uint idx_first = indices_tile_offset + col_offset;
+
+        // LREG0/LREG4 already contains Max(R16-31) from the previous process_16_rows call
+        // Only need to load Max(R0-15) into LREG1/LREG5
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_first); // Max(R0-15) for F0,1
+        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, idx_first);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX); // LREG0 contains Max(R0-31) for F0,1
+
+        if constexpr (accumulate)
+        {
+            const uint val_accum = values_accum_tile_offset + col_offset;
+            const uint idx_accum = indices_accum_tile_offset + col_offset;
+            if (chunk > 0)
+            { // for all but the first chunk we need to load the previous result from DST 1 and 3 and do a max with the current result in DST 0 and 2
+                TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_accum); // previous accumulated value
+                TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, idx_accum);            // previous accumulated index
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);        // LREG0 contains max of current and previous value
+            }
+            // for each chunk we store the running result to DST 1 and 3
+            TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, idx_accum);
+            TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_accum);
+        }
+
+        // store the final result to DST 0 (data) and DST 2 (indices)
+        TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, idx_first);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_first);
+    };
+
+    // OPTIMIZATION: Process each column completely before moving to the next.
+    // This allows the second process_16_rows to leave Max(R16-31) in LREG0/LREG4,
+    // which final_swap can use directly without reloading.
+    // Saves 2 stores + 2 loads per column = 4 stores + 4 loads total.
     constexpr int even_column_offset = 0;
     constexpr int odd_column_offset  = 2;
-    process_16_rows(0, even_column_offset);
-    process_16_rows(0, odd_column_offset);
 
-    // Second 16 rows
-    process_16_rows(sixteen_row_offset, even_column_offset);
-    process_16_rows(sixteen_row_offset, odd_column_offset);
+    // Even columns: process rows 0-15, then 16-31, then final swap
+    process_16_rows(0, even_column_offset, true);                   // Store Max(R0-15) for final_swap to load
+    process_16_rows(sixteen_row_offset, even_column_offset, false); // Keep Max(R16-31) in LREG0/LREG4
+    final_swap(even_column_offset);                                 // Uses LREG0/LREG4 directly
 
-    // Final swap
-    auto final_swap = [values_tile_offset, indices_tile_offset, sixteen_row_offset, instr_mod_index](const uint col_offset) __attribute__((always_inline))
-    {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + col_offset); // Max(R0-15) for F0,1
-        TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + col_offset);
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + sixteen_row_offset + col_offset); // Max(R16-31) for F0,1
-        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_tile_offset + sixteen_row_offset + col_offset);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX); // LREG0 contains Max(R0-31) for F0,1
-        TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_tile_offset + col_offset);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + col_offset);
-    };
-
-    final_swap(even_column_offset);
-    final_swap(odd_column_offset);
+    // Odd columns: process rows 0-15, then 16-31, then final swap
+    process_16_rows(0, odd_column_offset, true);                   // Store Max(R0-15) for final_swap to load
+    process_16_rows(sixteen_row_offset, odd_column_offset, false); // Keep Max(R16-31) in LREG0/LREG4
+    final_swap(odd_column_offset);                                 // Uses LREG0/LREG4 directly
 }
 
 template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>

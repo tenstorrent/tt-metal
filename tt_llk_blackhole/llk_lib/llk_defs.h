@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "tensix_types.h"
+
 namespace ckernel
 {
 
@@ -145,6 +147,48 @@ enum InstrModLoadStore
     LO16_ONLY     = 14,
     HI16_ONLY     = 15
 };
+
+template <DataFormat format>
+constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
+{
+    switch (format)
+    {
+        case DataFormat::Float32:
+            return InstrModLoadStore::FP32; // spec value 3: fp32 format
+        case DataFormat::Float16:
+            return InstrModLoadStore::FP16A; // spec value 1: fp16_a format
+        case DataFormat::Bfp8:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Bfp4:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Bfp2:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Float16_b:
+            return InstrModLoadStore::FP16B; // spec value 2: bfloat/fp16_b
+        case DataFormat::Bfp8_b:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Bfp4_b:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Bfp2_b:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Lf8:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+        case DataFormat::Int8:
+            return InstrModLoadStore::INT8; // spec value 5: int8 format
+        case DataFormat::UInt8:
+            return InstrModLoadStore::INT8; // spec value 5: int8 format
+        case DataFormat::UInt16:
+            return InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
+        case DataFormat::Int32:
+            return InstrModLoadStore::INT32; // spec value 4: int32 format
+        case DataFormat::UInt32:
+            return InstrModLoadStore::INT32; // spec value 4: int32 format
+        case DataFormat::Tf32:
+            return InstrModLoadStore::FP32; // spec value 3: fp32 format
+        default:
+            return InstrModLoadStore::DEFAULT; // spec value 0: default format
+    }
+}
 
 // This is populated per Blackhole ISA for SFPCAST instruction.
 enum InstrModCast
