@@ -5,7 +5,6 @@
 #pragma once
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/decorators.hpp>

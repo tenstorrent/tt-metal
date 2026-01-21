@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "blackhole/noc/noc_parameters.h"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr std::uint32_t iteration = get_compile_time_arg_val(0);
@@ -166,10 +166,8 @@ void kernel_main() {
     noc_async_read_one_packet_set_state<true>(src_addr_1, page_size, vc, 1 - noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
-        noc_async_read_tile_dram_sharded_with_state_with_trid(
-            src_addr_0, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);
-        noc_async_read_tile_dram_sharded_with_state_with_trid(
-            src_addr_1, DRAM_ALIGNMENT, l1_read_addr, trid, 1 - noc_index);
+        noc_async_read_one_packet_with_state_with_trid(src_addr_0, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);
+        noc_async_read_one_packet_with_state_with_trid(src_addr_1, DRAM_ALIGNMENT, l1_read_addr, trid, 1 - noc_index);
     }
     for (uint32_t i = 0; i <= NOC_MAX_TRANSACTION_ID; i++) {
         noc_async_read_barrier_with_trid(i, noc_index);

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -55,8 +54,6 @@ def test_device_perf_wh_bare_metal(
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-    disable_persistent_kernel_cache()
 
     if llm_mode == "prefill":
         expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[

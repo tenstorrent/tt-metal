@@ -240,7 +240,7 @@ jobs:
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
       - name: Run image
-        timeout-minutes: 90
+        timeout-minutes: 65
         env:
           HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
@@ -261,7 +261,7 @@ jobs:
             extra-tag: pipeline-functional
           - runner-label: BH-LoudBox
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
             extra-tag: pipeline-perf

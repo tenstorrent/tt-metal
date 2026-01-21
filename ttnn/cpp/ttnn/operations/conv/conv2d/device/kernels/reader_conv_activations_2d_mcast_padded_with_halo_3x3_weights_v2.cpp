@@ -3,14 +3,112 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "conv_reader_common.hpp"
+#include "noc/noc_parameters.h"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
+
+// Multicasts activation data from the local circular buffer to multiple destinations depending on the core role.
+template <uint32_t act_mcast_num_cores>
+void multicast_data(
+    bool is_receiver_core,        // Whether this core is also a receiver of its own multicast (for loopback).
+    uint32_t src_l1_addr,         // SRC address in L1
+    uint32_t dst_l1_addr,         // DST address in L1
+    uint64_t multicast_noc_addr,  // Multicast NOC address
+    uint32_t total_bytes)         // Total bytes to send
+{
+    uint64_t multicast_write_addr = multicast_noc_addr | dst_l1_addr;
+    if (is_receiver_core) {
+        if constexpr (act_mcast_num_cores) {
+            // num_dests will source, since we are copying to a different local CB as well
+            noc_async_write_multicast_loopback_src(
+                src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+        } else {
+            // In this case sender core is the only reciever in the grid,
+            // we can't use the multicast_loopback_src (hang)
+            noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
+        }
+    } else {
+        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
+        noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+    }
+}
+
+// Multicast activation data from the local circular buffer to multiple destinations (dst_cb in receiver cores).
+// This function sends a block of data (the activation block) using NOC multicast commands, it avoids waiting for the
+// whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
+// multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
+// NOC_MAX_BURST_SIZE size
+// It calls the multicast_data function for each chunk of maximum size NOC_MAX_BURST_SIZE bytes.
+// Said function does mcast loopback when the sender core is also a receiver core (it is both in ouput and input grids)
+// or mcast when the sender core is not a receiver core (it is only present in the input grid, mcast loopback will hang
+// if the core isn't one of receivers) or just local write when it is in both input and output grids but is the only
+// receiver core (will hang if mcast loopback is used)
+template <
+    uint32_t act_mcast_num_dest_cores,
+    uint32_t mcast_noc_burst_size,
+    uint32_t block_tile_count,
+    uint32_t tile_size>
+void mcast_block_chunked(bool is_receiver_core, uint32_t src_cb, uint32_t dst_cb, uint64_t multicast_noc_addr) {
+    // number of full bursts
+    constexpr uint32_t mcast_full_burst_cnt = block_tile_count * tile_size / mcast_noc_burst_size;
+    // size of the leftover burst, if 0 means we have no leftover burst
+    constexpr uint32_t mcast_leftover_burst_size = block_tile_count * tile_size % mcast_noc_burst_size;
+    // number of tiles that we need to wait for to cover the full burst size
+    constexpr uint32_t wait_tile_full_cnt = (mcast_noc_burst_size + tile_size - 1) / tile_size;
+
+    // In full burst iterations we wait for a bit more than the full burst size in case where the
+    // tile size does not divide the burst size evenly.
+    // we need to insure that we don't wait for more tiles than we have in the block
+    constexpr uint32_t wait_tile_full_done = std::min(mcast_full_burst_cnt * wait_tile_full_cnt, block_tile_count);
+
+    // optimization to avoid unnecessary branching in the loop
+    constexpr bool no_need_partial_wait_tile = mcast_full_burst_cnt * wait_tile_full_cnt <= block_tile_count;
+
+    // number of times we need to increase the wait_tile_curr for the full burst iterations
+    constexpr uint32_t wait_tile_full_iter_cnt = (wait_tile_full_done / wait_tile_full_cnt) - 1;
+
+    uint32_t src_l1_addr = get_read_ptr(src_cb);
+    uint32_t dst_l1_addr = get_write_ptr(dst_cb);
+
+    constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
+    uint32_t wait_tile_curr = wait_tile_start_cnt;
+    for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
+        cb_wait_front(src_cb, wait_tile_curr);
+        multicast_data<act_mcast_num_dest_cores>(
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_noc_burst_size);
+        src_l1_addr += mcast_noc_burst_size;
+        dst_l1_addr += mcast_noc_burst_size;
+
+        if constexpr (no_need_partial_wait_tile) {
+            wait_tile_curr += wait_tile_full_cnt;
+        } else {
+            // we shouldn't wait for more than the number of tiles in the block
+            if (i < wait_tile_full_iter_cnt) {
+                wait_tile_curr += wait_tile_full_cnt;
+            } else {
+                wait_tile_curr = block_tile_count;
+            }
+        }
+    }
+    if constexpr (mcast_leftover_burst_size > 0) {
+        cb_wait_front(src_cb, block_tile_count);
+        multicast_data<act_mcast_num_dest_cores>(
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_leftover_burst_size);
+    }
+
+    // In case we only do local l1 writes, we need to wait for the barrier to complete
+    if constexpr (act_mcast_num_dest_cores == 0) {
+        if (is_receiver_core) {
+            noc_async_write_barrier();
+        }
+    }
+}
 
 constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
@@ -31,7 +129,7 @@ void kernel_main() {
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(15);
     const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_tile_size_bytes = get_compile_time_arg_val(18);
     constexpr bool transpose_mcast = get_compile_time_arg_val(19) == 1;
     constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
@@ -173,40 +271,13 @@ void kernel_main() {
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-                    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
-
-                    uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
-                    if (is_receiver_core) {
-                        if constexpr (act_mcast_num_cores) {
-                            // num_dests will source, since we are copying to a different local CB as well
-                            noc_async_write_multicast_loopback_src(
-                                tilized_act_start_address,
-                                act_multicast_data_addr,
-                                act_mcast_sender_size_bytes,
-                                act_mcast_num_cores + 1,
-                                true);
-                        } else {
-                            // In this case sender core is the only reciever in the grid,
-                            // we can't use the multicast_loopback_src (hang)
-                            noc_async_write(
-                                get_noc_addr(tilized_act_start_address),
-                                get_noc_addr(get_write_ptr(cb_id_act)),
-                                act_mcast_sender_size_bytes);
-                            noc_async_write_barrier();
-                        }
-                    } else {
-                        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
-                        noc_async_write_multicast(
-                            tilized_act_start_address,
-                            act_multicast_data_addr,
-                            act_mcast_sender_size_bytes,
-                            act_mcast_num_cores + 1,
-                            true);
-                    }
+                    mcast_block_chunked<
+                        act_mcast_num_cores,
+                        NOC_MAX_BURST_SIZE,
+                        act_block_num_tiles,
+                        act_mcast_tile_size_bytes>(
+                        is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs

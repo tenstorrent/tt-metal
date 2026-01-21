@@ -127,13 +127,12 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
+
             cb_wait_front(cb_index_id, 1);
-            volatile uint32_t* index_addr_ptr;
-            cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-            uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
-            cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
-            cb_release_tile(cb_index_id);
+            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
+            cb_pop_front(cb_index_id, 1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
@@ -214,7 +213,6 @@ void MAIN {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
-
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -465,29 +463,31 @@ void MAIN {
                 // This indicates that there are computes done by other workers.
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
-
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // OUT_ACC_2 <- WORKER_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
-                    // PREV_SUM_2 <- WORKER_SUM
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
-                    // CUR_MAX = max(PREV_MAX, WORKER_MAX)
-                    max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+                    // Fused Softmax Correction
+                    // * Fused Correction is a fused operation that performs the following steps:
+                    // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
+                    // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // * 3. PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
+                    // * 5. PREV_SUM *= EXP_MAX_DIFF
+                    // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
+                    // */
+                    correction_block<scale_fp32, vector_mode>(
+                        cb_m_in,        // cb worker max
+                        cb_prev_sum_2,  // cb worker sum
+                        cb_cur_max,
+                        cb_prev_max,
+                        cb_cur_sum,
+                        cb_prev_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
+                        Sq_chunk_t);
 
-                    // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
-                    // PREV_SUM_2 *= EXP_MAX_DIFF_2
-                    sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
-
-                    /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
-                    // PREV_SUM *= EXP_MAX_DIFF
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
-                    /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+                    // OUT_ACC_2 <- WORKER_OUT
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2

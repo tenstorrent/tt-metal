@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -15,8 +15,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
 
-    constexpr auto src0_args = TensorAccessorArgs<2>();
-    constexpr auto src1_args = TensorAccessorArgs<3>();
+    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
     const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(cb_id_in0));
     const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(cb_id_in1));
     uint32_t l1_write_addr_in0;

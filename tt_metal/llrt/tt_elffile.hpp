@@ -27,7 +27,7 @@ public:
 
     struct Segment {
         std::vector<offset_t> relocs;      // 32-bit relocs to apply
-        std::span<word_t const> contents;  // Non-owning span
+        std::span<const word_t> contents;  // Non-owning span
         address_t address = 0;             // Byte execution address (0 for
                                            // XIP)
         address_t lma = 0;                 // Byte load address
@@ -74,6 +74,13 @@ public:
     // strong (can be non-data symbols).  Names can be exact or simple
     // globs ending in '*'.
     void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
+    // Convert the executable to a relinkable object file. Relocations
+    // are removed, allocatable sections are placed at zero, their
+    // symbols are adjusted to remain section-relative. The elf type
+    // becomes 'ET_REL'. Remember, objectifying people is bad, but
+    // objectifying an executable is perfectly fine (if a little strange).
+    void ObjectifyExecutable();
 
     // XIPify
     void MakeExecuteInPlace();

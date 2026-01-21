@@ -58,6 +58,11 @@ run_tg_tests() {
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k "4x" --timeout=300; fail+=$?
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
 
+  elif [[ "$1" == "motif" ]]; then
+    echo "LOG_METAL: running Motif run_tg_frequent_tests"
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
+
   elif [[ "$1" == "wan22" ]]; then
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
@@ -65,6 +70,10 @@ run_tg_tests() {
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 4x8 and real_weights and check_output and _1f"; fail+=$?
+
+  elif [[ "$1" == "qwenimage" ]]; then
+    echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
+    pytest -n auto models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k "4x8"; fail+=$?
 
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"

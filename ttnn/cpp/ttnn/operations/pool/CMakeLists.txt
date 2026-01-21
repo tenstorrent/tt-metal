@@ -12,12 +12,7 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    generic/device/kernels/*
-    grid_sample/device/kernels/*
-    upsample/device/kernels/*
-)
+file(GLOB_RECURSE kernels)
 
 target_sources(
     ttnn_op_pool
@@ -35,17 +30,22 @@ target_sources(
         generic/device/pool_op.cpp
         generic/generic_pools.cpp
         global_avg_pool/global_avg_pool.cpp
-        grid_sample/device/grid_sample_op.cpp
+        grid_sample/device/grid_sample_device_operation.cpp
         grid_sample/device/grid_sample_bilinear_program_factory.cpp
         grid_sample/device/grid_sample_nearest_program_factory.cpp
         grid_sample/device/grid_sample_utils.cpp
         grid_sample/grid_sample.cpp
         grid_sample/grid_sample_prepare_grid.cpp
+        rotate/device/rotate_device_operation.cpp
+        rotate/device/rotate_nearest_program_factory.cpp
+        rotate/rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp
-        upsample/device/upsample_op.cpp
+        upsample/device/upsample_common.cpp
+        upsample/device/upsample_device_operation.cpp
         upsample/device/upsample_program_factory_multicore_sharded.cpp
         upsample/device/upsample_program_factory_multicore_interleaved.cpp
+        upsample/device/upsample_nearest_float_program_factory.cpp
         upsample/upsample.cpp
 )
 

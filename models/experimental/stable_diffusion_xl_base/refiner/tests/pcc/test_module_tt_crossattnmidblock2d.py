@@ -83,6 +83,7 @@ def test_crossattnmid(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_encoder_tensor = ttnn.from_torch(
         torch_encoder_tensor,
         dtype=ttnn.bfloat16,
@@ -101,5 +102,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.991)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.985)
     logger.info(f"PCC is: {pcc_message}")

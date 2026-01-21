@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.wormhole.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 
@@ -36,8 +36,6 @@ def run_distilbert_question_and_answering_inference(
     input_path,
     mesh_device,
 ):
-    disable_persistent_kernel_cache()
-
     HF_model = DistilBertForQuestionAnswering.from_pretrained(model_name)
     HF_model.eval()
     tt_model_name = f"ttnn_{model_name}_optimized"
@@ -176,7 +174,6 @@ def run_distilbert_question_and_answering_inference_squad_v2(
     n_iterations,
     mesh_device,
 ):
-    disable_persistent_kernel_cache()
     HF_model = DistilBertForQuestionAnswering.from_pretrained(model_name)
     HF_model.eval()
 
@@ -296,8 +293,6 @@ def run_distilbert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("distilbert", [ttnn_optimized_distilbert])
 def test_demo(input_loc, model_name, distilbert, batch_size, model_location_generator, mesh_device):
-    disable_persistent_kernel_cache()
-
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
 
@@ -320,8 +315,6 @@ def test_demo(input_loc, model_name, distilbert, batch_size, model_location_gene
     ((3),),
 )
 def test_demo_squadv2(model_name, distilbert, batch_size, n_iterations, model_location_generator, mesh_device):
-    disable_persistent_kernel_cache()
-
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
     return run_distilbert_question_and_answering_inference_squad_v2(

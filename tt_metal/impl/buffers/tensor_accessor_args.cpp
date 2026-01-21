@@ -57,7 +57,7 @@ void append_sharded_args(
     }
 
     if (add_bank_coords) {
-        auto device = buffer.device();
+        auto* device = buffer.device();
         auto bank_type = buffer.core_type();
         for (size_t i = 0; i < n_banks; i += 2) {
             // We don't virtualize DRAM coord, since we need logical x coord == bank_id to calculate the address

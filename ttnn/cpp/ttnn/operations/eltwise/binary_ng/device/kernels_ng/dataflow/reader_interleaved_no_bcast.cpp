@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -32,8 +32,9 @@ void kernel_main() {
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto src_args = TensorAccessorArgs<0, 0>();
+    constexpr auto src_b_args =
+        TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);

@@ -58,14 +58,14 @@ public:
      * 3. For each pool: pool-specific CT args via pool->emit_ct_args()
      *
      * @param ct_args Vector to append compile-time arguments to
-     * @param num_fwd_paths Number of forwarding paths
-     * @param num_used_sender_channels Number of sender channels in use
+     * @param num_used_vc0_sender_channels Number of VC0 sender channels in use
+     * @param num_used_vc1_sender_channels Number of VC1 sender channels in use
      * @param num_used_receiver_channels Number of receiver channels in use
      */
     void emit_ct_args(
         std::vector<uint32_t>& ct_args,
-        size_t num_fwd_paths,
-        size_t num_used_sender_channels,
+        size_t num_used_vc0_sender_channels,
+        size_t num_used_vc1_sender_channels,
         size_t num_used_receiver_channels) const;
 
     /**

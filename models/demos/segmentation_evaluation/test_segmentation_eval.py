@@ -15,8 +15,7 @@ from loguru import logger
 from skimage import io
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
-from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 def iou(y_true, y_pred):
@@ -190,212 +189,14 @@ def evaluation(
         logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
         logger.info(f"Results saved to {output_folder}")
 
+    # Note: YOLOv9c evaluation code was removed pending verification of usage rights.
+    # Previously, this file contained evaluation tests for YOLOv9c segmentation.
+
     if model_name == "yolov9c":
-        import json
-        from datetime import datetime
-
-        import fiftyone
-
-        from models.demos.utils.common_demo_utils import LoadImages, preprocess
-        from models.demos.yolov9c.demo.demo_utils import get_consistent_color, postprocess
-        from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-
-        dataset_name = "coco-2017"
-        if model_type == "torch_model":
-            dataset = fiftyone.zoo.load_zoo_dataset(
-                dataset_name,
-                split="validation",
-                max_samples=18,
-                label_types=["segmentations"],
-                include_id=True,
-            )
-        performant_runner = None
-        if model_type == "tt_model":
-            dataset = fiftyone.zoo.load_zoo_dataset(
-                dataset_name,
-                split="validation",
-                max_samples=200,
-                label_types=["segmentations"],
-                include_id=True,
-            )
-            performant_runner = YOLOv9PerformantRunner(
-                device,
-                1,
-                ttnn.bfloat8_b,
-                ttnn.bfloat8_b,
-                model_task="segment",
-                resolution=(640, 640),
-                model_location_generator=model_location_generator,
-            )
-
-        def load_coco_gt_mask(sample):
-            detections = sample["segmentations"].detections
-            height = sample.metadata.height
-            width = sample.metadata.width
-
-            gt_mask = np.zeros((height, width), dtype=np.uint8)
-
-            for det in detections:
-                if det.mask is not None and det.bounding_box is not None:
-                    mask = det.mask.astype(bool)  # (h, w)
-                    ymin, xmin, box_h, box_w = det.bounding_box  # normalized
-                    y = int(ymin * height)
-                    x = int(xmin * width)
-                    h = mask.shape[0]
-                    w = mask.shape[1]
-                    y2 = min(y + h, height)
-                    x2 = min(x + w, width)
-                    gt_mask[y:y2, x:x2] |= mask[: y2 - y, : x2 - x]
-
-            return gt_mask.astype(np.uint8)
-
-        source_list = [i["filepath"] for i in dataset]
-        data_set = LoadImages(path=[i["filepath"] for i in dataset])
-        save_dir = "models/demos/yolov9c/demo/runs"
-
-        with open(os.path.expanduser("~") + "/fiftyone" + "/" + dataset_name + "/info.json", "r") as file:
-            data = json.load(file)
-            classes = data["classes"]
-
-        model_save_dir = os.path.join(save_dir, model_type)
-        os.makedirs(model_save_dir, exist_ok=True)
-        index = 0
-        sample_count = 0
-
-        iou_list, dice_list, acc_list, prec_list, recall_list, f1_list = [], [], [], [], [], []
-        for sample, batch in zip(dataset, data_set):
-            paths, im0s, s = batch
-            im = preprocess(im0s, res=(640, 640))
-
-            if model_type == "torch_model":
-                preds = model(im)
-                results = postprocess(preds, im, im0s, batch)
-                os.makedirs(os.path.join(save_dir, model_type), exist_ok=True)
-
-                image = cv2.imread(source_list[index])
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-                masks = results[0].masks.data.cpu().detach().numpy()
-                pred_mask = np.any(masks, axis=0).astype(np.uint8)
-
-                gt_mask = load_coco_gt_mask(sample)
-                pred_mask_resized = cv2.resize(
-                    pred_mask, (gt_mask.shape[1], gt_mask.shape[0]), interpolation=cv2.INTER_NEAREST
-                )
-
-                iou_list.append(iou(gt_mask, pred_mask) * 100)
-                dice_list.append(dice_score(gt_mask, pred_mask) * 100)
-                acc_list.append(pixel_accuracy(gt_mask, pred_mask) * 100)
-                prec_list.append(precision(gt_mask, pred_mask) * 100)
-                recall_list.append(recall(gt_mask, pred_mask) * 100)
-                f1_list.append(f1_score(gt_mask, pred_mask) * 100)
-
-                sample_count += 1
-                logger.info(f"sample_count {sample_count}")
-                if sample_count <= 10:
-                    mask_h, mask_w = masks.shape[1], masks.shape[2]
-
-                    image = cv2.resize(image, (mask_w, mask_h))
-                    overlay = image.copy()
-
-                    for i in range(len(masks)):
-                        mask = masks[i]
-                        color = get_consistent_color(i)
-                        mask_rgb = np.zeros_like(image, dtype=np.uint8)
-                        for c in range(3):
-                            mask_rgb[:, :, c] = (mask * color[c]).astype(np.uint8)
-
-                        mask_bool = mask.astype(bool)
-                        overlay[mask_bool] = (0.5 * overlay[mask_bool] + 0.5 * mask_rgb[mask_bool]).astype(np.uint8)
-
-                    overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    out_path = os.path.join(save_dir, model_type, f"segmentation_{timestamp}.jpg")
-                    cv2.imwrite(out_path, overlay_bgr)
-                    logger.info(f"Saved to {out_path}")
-                index += 1
-            else:
-                preds = performant_runner.run(torch_input_tensor=im)
-                preds = [
-                    ttnn.to_torch(preds[0], dtype=torch.float32),
-                    [
-                        [ttnn.to_torch(t, dtype=torch.float32) for t in preds[1][0]],
-                        ttnn.to_torch(preds[1][1], dtype=torch.float32),
-                        ttnn.to_torch(preds[1][2], dtype=torch.float32)
-                        .reshape((1, 160, 160, 32))
-                        .permute((0, 3, 1, 2)),
-                    ],
-                ]
-                skipped_sample = 0
-                try:
-                    results = postprocess(preds, im, im0s, batch)
-                    for i in range(len(results)):
-                        os.makedirs(os.path.join(save_dir, "tt_model"), exist_ok=True)
-                        image = cv2.imread(paths[i])
-                        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-                        if results[i].masks is None:
-                            logger.warning(f"Skipping sample {paths[i]} due to missing mask in results[{i}]")
-                            continue
-                        try:
-                            masks = results[i].masks.data.cpu().detach().numpy()
-                            pred_mask = np.any(masks, axis=0).astype(np.uint8)
-
-                            gt_mask = load_coco_gt_mask(sample)
-                            pred_mask_resized = cv2.resize(
-                                pred_mask, (gt_mask.shape[1], gt_mask.shape[0]), interpolation=cv2.INTER_NEAREST
-                            )
-
-                            iou_list.append(iou(gt_mask, pred_mask) * 100)
-                            dice_list.append(dice_score(gt_mask, pred_mask) * 100)
-                            acc_list.append(pixel_accuracy(gt_mask, pred_mask) * 100)
-                            prec_list.append(precision(gt_mask, pred_mask) * 100)
-                            recall_list.append(recall(gt_mask, pred_mask) * 100)
-                            f1_list.append(f1_score(gt_mask, pred_mask) * 100)
-
-                            sample_count += 1
-                            logger.info(f"sample_count {sample_count}")
-                            if sample_count <= 10:
-                                mask_h, mask_w = masks.shape[1], masks.shape[2]
-
-                                image = cv2.resize(image, (mask_w, mask_h))
-                                overlay = image.copy()
-
-                                for i in range(len(masks)):
-                                    mask = masks[i]
-                                    color = get_consistent_color(i)
-                                    mask_rgb = np.zeros_like(image, dtype=np.uint8)
-                                    for c in range(3):
-                                        mask_rgb[:, :, c] = (mask * color[c]).astype(np.uint8)
-
-                                    mask_bool = mask.astype(bool)
-                                    overlay[mask_bool] = (0.5 * overlay[mask_bool] + 0.5 * mask_rgb[mask_bool]).astype(
-                                        np.uint8
-                                    )
-
-                                overlay_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                                out_path = os.path.join(save_dir, "tt_model", f"segmentation_{timestamp}.jpg")
-                                cv2.imwrite(out_path, overlay_bgr)
-                                logger.info(f"Saved to {out_path}")
-                        except Exception as e:
-                            logger.warning(f"Error processing result {i} in sample {paths[i]}: {e}")
-                            continue
-                except Exception as e:
-                    logger.warning(f"Failed to postprocess sample {paths[i]}: {e}")
-                    skipped_sample += 1
-                    logger.info(f"skipped_sample: {skipped_sample}")
-
-        if performant_runner is not None:
-            performant_runner.release()
-
-        logger.info(f"Sample Count: {sample_count}")
-        logger.info(f"IoU: {np.mean(iou_list):.2f}%")
-        logger.info(f"Dice Score: {np.mean(dice_list):.2f}%")
-        logger.info(f"Pixel Accuracy: {np.mean(acc_list):.2f}%")
-        logger.info(f"Precision: {np.mean(prec_list):.2f}%")
-        logger.info(f"Recall: {np.mean(recall_list):.2f}%")
-        logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
+        raise NotImplementedError(
+            "YOLOv9c evaluation has been temporarily removed pending verification of usage rights. "
+            "Please use one of the other supported models: Vanilla UNet, VGG UNet, or Segformer."
+        )
 
     if model_name == "segformer":
         from torch.utils.data import DataLoader
@@ -483,8 +284,6 @@ def run_vgg_unet(
     from models.demos.vgg_unet.common import load_torch_model
     from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
     from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
-
-    disable_persistent_kernel_cache()
 
     model_seg = UNetVGG19()
     if use_pretrained_weight:
@@ -575,62 +374,6 @@ def test_vgg_unet_dp(
 def test_vgg_unet(device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, batch_size):
     return run_vgg_unet(
         device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, batch_size
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": YOLOV9C_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
-    [
-        "True",
-    ],
-)
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize(
-    "model_task",
-    [
-        "segment",
-    ],
-)
-@pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov9c(
-    device,
-    model_type,
-    model_task,
-    use_weights_from_ultralytics,
-    res,
-    model_location_generator,
-    reset_seeds,
-):
-    from models.demos.yolov9c.common import load_torch_model
-
-    disable_persistent_kernel_cache()
-    enable_segment = model_task == "segment"
-
-    torch_model = load_torch_model(model_location_generator=model_location_generator, model_task=model_task)
-
-    model_name = "yolov9c"
-    input_dtype = ttnn.bfloat16
-    input_memory_config = ttnn.L1_MEMORY_CONFIG
-
-    evaluation(
-        device=device,
-        res=res,
-        model_type=model_type,
-        model=torch_model,
-        input_dtype=input_dtype,
-        input_memory_config=input_memory_config,
-        model_name=model_name,
     )
 
 

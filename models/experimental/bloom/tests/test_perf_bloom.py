@@ -7,10 +7,6 @@ from loguru import logger
 import pytest
 import ttnn
 from models.common.utility_functions import profiler
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
 from models.perf.perf_utils import prep_perf_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
@@ -24,7 +20,6 @@ BATCH_SIZE = 1
 
 
 def run_perf_bloom(expected_inference_time, expected_compile_time, device):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -60,8 +55,6 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model.forward(device, input_ids)

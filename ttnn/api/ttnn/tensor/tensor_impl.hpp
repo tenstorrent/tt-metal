@@ -6,21 +6,13 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 
-#include <tracy/Tracy.hpp>
-
-#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/types.hpp"
 
 namespace tt::tt_metal::tensor_impl {
 
@@ -35,81 +27,8 @@ struct bfloat8_b {};
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 
 // ======================================================================================
-//                        Data type converters, packers, and unpackers
-// ======================================================================================
-
-template <typename OutputDataType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
-    std::vector<OutputDataType> converted_data;
-    for (auto datum : data_to_convert) {
-        if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back(static_cast<float>(datum));
-        } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
-        } else {
-            converted_data.push_back(static_cast<OutputDataType>(datum));
-        }
-    }
-    return converted_data;
-}
-
-uint32_t element_size_bytes(DataType dtype);
-
-template <typename T>
-constexpr size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
-    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
-    return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
-}
-
-// Specialization for float because it gets converted to bfloat16 before being packed
-template <>
-constexpr size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
-    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
-    return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
-}
-
-template <>
-constexpr size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
-    return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
-}
-
-template <>
-constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
-    return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
-}
-
-// ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-template <typename T>
-std::vector<T> convert_layout_row_major_to_tile(
-    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
-    if (shape.width() * shape.height() == 0) {
-        return std::vector<T>();
-    }
-    TT_FATAL(
-        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
-        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
-        "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
-        tile.get_tile_shape()[0],
-        tile.get_tile_shape()[1],
-        shape);
-
-    auto tile_shape = tile.get_tile_shape();
-    auto face_shape = tile.get_face_shape();
-    auto transpose_within_face = tile.get_transpose_within_face();
-    auto transpose_of_faces = tile.get_transpose_of_faces();
-
-    return convert_layout(
-        data_to_convert,
-        shape,
-        TensorLayoutType::LIN_ROW_MAJOR,
-        TensorLayoutType::TILED_NFACES,
-        tile_shape,
-        face_shape,
-        transpose_within_face,
-        transpose_of_faces);
-}
 
 template <typename T>
 std::vector<T> convert_layout_tile_to_row_major(
@@ -155,12 +74,6 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
 template <typename T>
 std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
 
-// Returns true if the logical tensor data matches the physical tensor data:
-// 1. Row major layout is used.
-// 2. Logical 2D shape matches physical shape.
-// Used for optimizing conversion operations.
-bool logical_matches_physical(const TensorSpec& tensor_spec);
-
 // ===============================================================================================================================================
 //                                                              High Level APIs
 // ===============================================================================================================================================
@@ -178,47 +91,39 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
 void copy_to_host(
     const Tensor& device_tensor,
     Tensor& host_tensor,
     bool blocking = true,
     std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
     std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 
-template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
 
-template <typename T>
 Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
-template <typename T>
 Tensor pad(
     const Tensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-template <typename T>
 Tensor unpad(
     const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
 
@@ -248,10 +153,34 @@ struct PrintOptions {
 
 extern PrintOptions TTNN_PRINT_OPTIONS;
 
-template <typename T>
 std::string to_string(const Tensor& tensor);
 
-template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
+
+Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+
+// Utility to convert runtime DataType to compile-time constant and dispatch the function call
+template <typename Func, typename... Args>
+auto dispatch(DataType dtype, Func&& func, Args&&... args) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            return (std::forward<Func>(func)).template operator()<bfloat16>(std::forward<Args>(args)...);
+        case DataType::FLOAT32:
+            return (std::forward<Func>(func)).template operator()<float>(std::forward<Args>(args)...);
+        case DataType::INT32:
+            return (std::forward<Func>(func)).template operator()<int32_t>(std::forward<Args>(args)...);
+        case DataType::UINT32:
+            return (std::forward<Func>(func)).template operator()<uint32_t>(std::forward<Args>(args)...);
+        case DataType::UINT16:
+            return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
+        case DataType::UINT8:
+            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
+        case DataType::BFLOAT8_B:
+            return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
+        case DataType::BFLOAT4_B:
+            return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
+        default: TT_THROW("Unsupported data type");
+    }
+}
 
 }  // namespace tt::tt_metal::tensor_impl

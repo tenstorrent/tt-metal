@@ -289,7 +289,6 @@ def test_bert_question_and_answering_inference(
     pcc,
     model_location_generator,
 ):
-    # enable_persistent_kernel_cache()
     run_bert_question_and_answering_inference(
         device,
         model_version,

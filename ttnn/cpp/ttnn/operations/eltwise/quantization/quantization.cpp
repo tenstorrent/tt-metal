@@ -50,13 +50,14 @@ ttnn::DataType get_output_dtype(
     if (output_dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(output_dtype.value() == output_tensor->dtype(), "Mismatching output_dtype and output tensor dtype");
         return output_dtype.value();
-    } else if (output_dtype.has_value()) {
-        return output_dtype.value();
-    } else if (output_tensor.has_value()) {
-        return output_tensor->dtype();
-    } else {
-        return default_dtype;
     }
+    if (output_dtype.has_value()) {
+        return output_dtype.value();
+    }
+    if (output_tensor.has_value()) {
+        return output_tensor->dtype();
+    }
+    return default_dtype;
 }
 
 void check_per_tensor_scale(const ttnn::Tensor& scale) {
@@ -254,7 +255,8 @@ Tensor QuantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -271,7 +273,8 @@ Tensor QuantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
@@ -459,7 +462,8 @@ Tensor RequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
                 // Pass axis only to operations that have tensor parameters.
@@ -551,7 +555,8 @@ Tensor DequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -567,7 +572,8 @@ Tensor DequantOp::invoke(
                     /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);

@@ -75,16 +75,6 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
-}
-
-test_suite_bh_single_pcie_llama_demo_tests() {
-    echo "[upstream-tests] Running BH upstream Llama demo model tests"
-
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
@@ -169,7 +159,6 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
 test_suite_wh_6u_metal_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream metalium unit tests. Note that skips should be treated as failures"
-    ./build/test/tt_metal/tt_fabric/test_system_health
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
@@ -178,7 +167,7 @@ test_suite_wh_6u_metal_unit_tests() {
 
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
-    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
 }
 
 test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
@@ -224,12 +213,14 @@ test_suite_bh_ttnn_stress_tests() {
 
 test_suite_bh_glx_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
-    # Fabric
-    ./build/test/tt_metal/tt_fabric/test_system_health
+
+    # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
-    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
+    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
+    # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
+    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
@@ -254,7 +245,7 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 test_suite_bh_glx_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
-    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_torus.py
 }
 
 test_suite_bh_glx_llama_demo_tests() {
@@ -263,6 +254,15 @@ test_suite_bh_glx_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+}
+
+test_suite_bh_glx_torus_xyz_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus + Z links topology on BH 6U Galaxy"
+    # Fabric
+    # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
+    # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
+    # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
 # Define test suite mappings for different hardware topologies
@@ -310,10 +310,12 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
-hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
-test_suite_wh_6u_llama_demo_tests
-test_suite_wh_6u_metal_unit_tests
+# test_suite_wh_6u_llama_demo_tests was removed because of
+# https://github.com/tenstorrent/tt-metal/issues/34990
+hw_topology_test_suites["wh_6u"]="
 test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_model_unit_tests
+test_suite_wh_6u_metal_unit_tests
 test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="

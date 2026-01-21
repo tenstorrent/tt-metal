@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 

@@ -7,6 +7,19 @@ on:
         description: "vLLM branch or sha"
         required: false
         default: dev
+      model:
+        description: "Model to test"
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - all
+          - meta-llama/Llama-3.1-8B-Instruct
+          - meta-llama/Llama-3.3-70B-Instruct
+          - Qwen/Qwen2.5-VL-72B-Instruct
+          - google/gemma-3-27b-it
+          - openai/gpt-oss-120b
+          - models/vllm_test_utils/t3000_multiproc_test
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -28,3 +41,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
+      model: ${{ inputs.model || 'all' }}

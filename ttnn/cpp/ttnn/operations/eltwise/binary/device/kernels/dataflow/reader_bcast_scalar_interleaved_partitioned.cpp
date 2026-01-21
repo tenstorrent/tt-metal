@@ -7,7 +7,7 @@
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {

@@ -1,0 +1,35 @@
+training_config:
+  model_type: "gpt2"
+  seed: 5489
+  batch_size: 32
+  validation_batch_size: 4
+  num_epochs: 1
+  max_steps: 160
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  gradient_accumulation_steps: 1
+  eval_every: 20
+  model_save_interval: 50
+  tokenizer_type: "bpe"
+  checkpoint_dir: "checkpoints_gsm8k"
+  model_config: "model_configs/gpt2s.yaml"
+
+scheduler_config:
+  max_lr : 1e-4
+  min_lr : 3e-5
+  warmup_steps : 20
+  hold_steps : 1000
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.0
+  top_k: 50
+  top_p: 1.0
+
+device_config:
+  enable_ddp: True
+  mesh_shape: [1, 32]

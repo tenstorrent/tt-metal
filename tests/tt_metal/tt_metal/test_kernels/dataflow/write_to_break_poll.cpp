@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     set_l1_data_cache<true>();

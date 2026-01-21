@@ -21,15 +21,15 @@ This document provides advanced users and developers with comprehensive instruct
 ```
 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
 chmod +x install.sh
-./install.sh --no-install-podman --no-install-metalium-container
+./install.sh --install-container-runtime=no
 ```
 
 > [!WARNING]
 > TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
 > | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.3.0 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.28 or above      | N/A                          |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.4.1 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.31 or above      | N/A                          |
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.5.0 or above    | fw_pack-19.2.0.fwbundle (v19.2.0)          | v3.0.38 or above      | N/A                            |
 
 - If required, add the following flags for specifying dependencies versions:
 
@@ -38,11 +38,10 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.17 \
-  --fw-version=18.3.0 \
-  --kmd-version=1.34 \
-  --no-install-podman \
-  --no-install-metalium-container
+  --smi-version=v3.0.38 \
+  --fw-version=19.2.0 \
+  --kmd-version=2.5.0 \
+  --install-container-runtime=no
 ```
 
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).

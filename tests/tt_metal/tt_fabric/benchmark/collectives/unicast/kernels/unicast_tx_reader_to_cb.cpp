@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 
 //
 // Reader (sender-side) kernel — batched DRAM→L1 copies into CB.

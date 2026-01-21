@@ -13,18 +13,13 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-
-namespace ttnn::operations::experimental::ternary {
+namespace ttnn::experimental::prim {
 
 ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProgram::create(
-    const where_ttt_args::operation_attributes_type& operation_attributes,
-    const where_ttt_args::tensor_args_type& args,
-    where_ttt_args::tensor_return_value_type& output) {
+    const WhereParams& operation_attributes, const WhereInputs& args, Tensor& output) {
     using namespace ttnn::kernel::eltwise::where_args;
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::constants;
 
     TT_FATAL(
         args.condition_tensor.dtype() == args.true_value_tensor.dtype(),
@@ -138,9 +133,9 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
 
 void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
     cached_program_t& cached_program,
-    const where_ttt_args::operation_attributes_type& operation_attributes,
-    const where_ttt_args::tensor_args_type& tensor_args,
-    where_ttt_args::tensor_return_value_type& tensor_return_value) {
+    const WhereParams& /*operation_attributes*/,
+    const WhereInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;
     set_eltwise_ternary_runtime_args<false>(
         cached_program.program,
@@ -153,4 +148,4 @@ void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
         sh_var.eltwise_kernel_id,
         sh_var.all_device_cores);
 }
-}  // namespace ttnn::operations::experimental::ternary
+}  // namespace ttnn::experimental::prim

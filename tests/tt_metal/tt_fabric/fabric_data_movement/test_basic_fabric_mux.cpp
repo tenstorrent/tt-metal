@@ -4,15 +4,14 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
 #include <string_view>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -25,9 +24,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-namespace fabric_mux_tests {
+namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests {
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string sender_kernel_src =
@@ -115,7 +112,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     tt::tt_fabric::MeshId mesh_id = control_plane.get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -300,7 +297,7 @@ void create_worker_kernel(
     const CoreCoord& mux_virtual_core,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     tt::tt_metal::Program& program_handle) {
-    auto worker_memory_map = worker_test_config.memory_map;
+    auto* worker_memory_map = worker_test_config.memory_map;
     CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
     auto channel_type = worker_test_config.channel_type;
     auto worker_id = worker_test_config.worker_id;
@@ -518,17 +515,14 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         if (is_2d_fabric) {
             if (src_device_idx == 0) {
                 return hops;
-            } else {
-                return src_device_idx - hops;
             }
-        } else {
-            // for 1D return the neighboring device only
-            if (src_device_idx == 0) {
-                return 1;
-            } else {
-                return src_device_idx - 1;
-            }
+            return src_device_idx - hops;
+
+        }  // for 1D return the neighboring device only
+        if (src_device_idx == 0) {
+            return 1;
         }
+        return src_device_idx - 1;
     };
 
     for (auto i = 0; i < devices.size(); i++) {
@@ -615,16 +609,16 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         };
 
         log_info(LogTest, "Waiting for senders to complete");
-        for (auto i = 0; i < devices.size(); i++) {
-            for (const auto& [core, _] : device_senders_map[devices[i]]) {
-                wait_for_worker_completion(devices[i]->get_devices()[0], core);
+        for (const auto& device : devices) {
+            for (const auto& [core, _] : device_senders_map[device]) {
+                wait_for_worker_completion(device->get_devices()[0], core);
             }
         }
 
         log_info(LogTest, "Senders done, waiting for receivers to complete");
-        for (auto i = 0; i < devices.size(); i++) {
-            for (const auto& [core, _] : device_receivers_map[devices[i]]) {
-                wait_for_worker_completion(devices[i]->get_devices()[0], core);
+        for (const auto& device : devices) {
+            for (const auto& [core, _] : device_receivers_map[device]) {
+                wait_for_worker_completion(device->get_devices()[0], core);
             }
         }
 
@@ -652,13 +646,13 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     };
 
     log_info(LogTest, "Programs done, validating results");
-    for (auto i = 0; i < devices.size(); i++) {
-        for (const auto& [core, _] : device_senders_map[devices[i]]) {
-            validate_worker_results(devices[i]->get_devices()[0], core);
+    for (const auto& device : devices) {
+        for (const auto& [core, _] : device_senders_map[device]) {
+            validate_worker_results(device->get_devices()[0], core);
         }
 
-        for (const auto& [core, _] : device_receivers_map[devices[i]]) {
-            validate_worker_results(devices[i]->get_devices()[0], core);
+        for (const auto& [core, _] : device_receivers_map[device]) {
+            validate_worker_results(device->get_devices()[0], core);
         }
     }
 }
@@ -971,6 +965,4 @@ TEST_F(Fabric2DMuxFixture, TestFabricMux2DFourChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-}  // namespace fabric_mux_tests
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests

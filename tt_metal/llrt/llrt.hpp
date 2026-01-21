@@ -19,36 +19,8 @@
 
 // clang-format on
 
-namespace tt {
-
 // llrt = lower-level runtime
-namespace llrt {
-
-using RamSrcAddr = unsigned int;
-using RamDstAddr = unsigned int;
-using SrcL1Core = CoreCoord;
-using SrcL1Cores = std::vector<SrcL1Core>;
-using DstL1Core = CoreCoord;
-using DstL1Cores = std::vector<DstL1Core>;
-using SrcChannelId = int;
-using DstChannelId = int;
-using DramBufferSize = unsigned int;
-using DramSrcAddr = unsigned int;
-using DramDstAddr = unsigned int;
-using L1Addr = std::uint32_t;
-using SrcAddr = std::uint32_t;
-using DestAddr = std::uint32_t;
-using LoadFirmwareFlag = bool;
-using CountOffset = unsigned int;
-using NCHW = std::array<std::uint32_t, 4>;
-using RSUV = std::array<std::uint32_t, 4>;
-using BYTES_PER_DATUM = std::uint32_t;
-using TRANSACTION_SIZE = std::uint32_t;
-using NUM_TRANSACTIONS = std::uint32_t;
-using NUM_REPETITIONS = std::uint32_t;
-
-using WorkerCore = tt_cxy_pair;
-using WorkerCores = std::vector<WorkerCore>;
+namespace tt::llrt {
 
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
@@ -77,6 +49,16 @@ bool test_load_write_read_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
+
+bool test_load_multicast_write_risc_binary(
+    const ll_api::memory& mem,
+    tt::ChipId chip_id,
+    const CoreCoord& start_core,
+    const CoreCoord& end_core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx);
+
 void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const CoreCoord& core, uint32_t address);
 
 namespace internal_ {
@@ -105,6 +87,4 @@ void set_metal_eth_fw_run_flag(ChipId device_id, const CoreCoord& virtual_core, 
 
 }  // namespace internal_
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

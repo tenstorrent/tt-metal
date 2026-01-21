@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"

@@ -13,10 +13,8 @@ from models.experimental.bert_large_perf.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert_large_perf.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
 from models.common.utility_functions import (
-    enable_persistent_kernel_cache,
     comp_pcc,
     comp_allclose,
-    disable_persistent_kernel_cache,
 )
 from models.common.utility_functions import profiler
 from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
@@ -244,7 +242,6 @@ def run_bert_question_and_answering_inference(
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -337,8 +334,6 @@ def test_bert_batch_dram(
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
-
-    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(
         device,

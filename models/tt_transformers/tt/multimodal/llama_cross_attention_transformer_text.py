@@ -118,17 +118,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.dim,
         )
         learn_embedding_prefix = f"{state_dict_prefix}learnable_embedding."
-        emb_state_dict = {
-            k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)
-        }
-        if len(emb_state_dict) == 0:
-            # HF weights combines tok_embedding and learn_embedding into single weights
-            emb_state_dict = {
-                k[len(tok_embedding_prefix) :]: v[-8:]
-                for k, v in state_dict.items()
-                if k.startswith(tok_embedding_prefix)
-            }
-        self.learnable_embedding.load_state_dict(emb_state_dict)
+        self.learnable_embedding.load_state_dict(
+            {k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)}
+        )
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 

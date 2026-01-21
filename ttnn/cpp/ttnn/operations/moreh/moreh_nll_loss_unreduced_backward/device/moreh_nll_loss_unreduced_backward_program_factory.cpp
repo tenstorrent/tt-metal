@@ -80,10 +80,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_2d.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
@@ -204,10 +204,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_3d.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 
@@ -331,10 +331,10 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "reader_moreh_nll_loss_unreduced_backward_4d.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/"
         "writer_moreh_nll_loss_unreduced_backward.cpp";
 

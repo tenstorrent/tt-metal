@@ -8,7 +8,7 @@
 
 #include "tensix.h"
 #include "tensix_types.h"
-#include "tensix_functions.h"
+#include "internal/tensix_functions.h"
 #include "noc.h"
 
 #include "tdma_xmov.h"

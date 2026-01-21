@@ -11,9 +11,9 @@
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/rpow.h"
+#include "compute_kernel_api/eltwise_unary/rdiv.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
@@ -45,4 +45,3 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

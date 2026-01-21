@@ -7,7 +7,7 @@ mesh_descriptors {
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2
-    policy: STRICT
+    policy: RELAXED
   }
 }
 
@@ -25,13 +25,13 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 1 }
+    channels { count: 2 }
   }
   # M0 D3 <-> M1 D2
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 3 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-    channels { count: 1 }
+    channels { count: 2 }
   }
 }
 

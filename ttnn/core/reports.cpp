@@ -11,7 +11,6 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::reports {
@@ -43,7 +42,7 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
 
 std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
@@ -58,7 +57,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
             if (buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                 uint32_t bank_id = 0;
                 for (int page_index = 0; page_index < num_pages; page_index++) {
-                    if (bank_to_num_pages.find(bank_id) == bank_to_num_pages.end()) {
+                    if (!bank_to_num_pages.contains(bank_id)) {
                         bank_to_num_pages[bank_id] = 0;
                     }
                     bank_to_num_pages[bank_id]++;
@@ -99,7 +98,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
 
 std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
         // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {

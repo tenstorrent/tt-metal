@@ -65,23 +65,21 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& output_grad,
-        const Tensor& input,
-        const Tensor& mean,
-        const Tensor& rstd,
-        uint32_t num_groups,
-        const std::vector<bool>& are_required_outputs,
-        const std::optional<const Tensor>& gamma_grad,
-        const std::optional<const Tensor>& beta_grad,
-        const std::optional<MemoryConfig>& gamma_grad_memory_config,
-        const std::optional<MemoryConfig>& beta_grad_memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_group_norm_backward_gamma_beta_grad = ttnn::register_operation<
-    "ttnn::prim::moreh_group_norm_backward_gamma_beta",
-    ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardGammaBetaGradOperation>();
-}
+ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t
+moreh_group_norm_backward_gamma_beta_grad(
+    const Tensor& output_grad,
+    const Tensor& input,
+    const Tensor& mean,
+    const Tensor& rstd,
+    uint32_t num_groups,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<const Tensor>& gamma_grad = std::nullopt,
+    const std::optional<const Tensor>& beta_grad = std::nullopt,
+    const std::optional<MemoryConfig>& gamma_grad_memory_config = std::nullopt,
+    const std::optional<MemoryConfig>& beta_grad_memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+}  // namespace ttnn::prim

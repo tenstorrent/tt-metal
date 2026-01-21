@@ -7,10 +7,12 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <utility>
+#include <llrt/tt_cluster.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -29,7 +31,11 @@ void SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto device_buffer = buffer.get_device_buffer(device_coord);
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;  // Skip hardware write for mock devices
+    }
+
+    auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);
 
@@ -47,10 +53,15 @@ void SDMeshCommandQueue::read_shard_from_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     void* dst,
+    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto device_buffer = buffer.get_device_buffer(device_coord);
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;  // Skip hardware read for mock devices
+    }
+
+    auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
@@ -68,6 +79,10 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;  // Skip workload execution for mock devices
+    }
+
     auto lock = lock_api_function_();
     if (!blocking) {
         log_debug(
@@ -75,16 +90,16 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
-            if (mesh_device_->is_local(coord)) {
-                auto device = mesh_device_->get_device(coord);
+            if (mesh_device_->impl().is_local(coord)) {
+                auto* device = mesh_device_->impl().get_device(coord);
                 tt_metal::detail::LaunchProgram(device, program, false);
             }
         }
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
-            if (mesh_device_->is_local(coord)) {
-                auto device = mesh_device_->get_device(coord);
+            if (mesh_device_->impl().is_local(coord)) {
+                auto* device = mesh_device_->impl().get_device(coord);
                 tt_metal::detail::WaitProgramDone(device, program);
             }
         }
@@ -97,15 +112,25 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event(
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
-MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
+MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
+MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
+    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    // No synchronization is needed for slow dispatch, so we can call the non-locking version.
+    return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
+}
+
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     for (const auto& device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());

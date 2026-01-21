@@ -40,12 +40,11 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -88,16 +87,14 @@ float get_scaler(const ReduceConfig& test_config) {
     // but the scaler is 1
     if (test_config.reduce_type != ReduceType::AVG) {
         return 1.0f;
-    } else {
-        // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
-        switch (test_config.reduce_dim) {
-            case ReduceDim::H: return (1.0f / H);
-            case ReduceDim::W: return (1.0f / W);
-            case ReduceDim::HW: return (1.0f / (H * W));
-            default: {
-                TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
-                break;
-            }
+    }  // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
+    switch (test_config.reduce_dim) {
+        case ReduceDim::H: return (1.0f / H);
+        case ReduceDim::W: return (1.0f / W);
+        case ReduceDim::HW: return (1.0f / (H * W));
+        default: {
+            TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
+            break;
         }
     }
 }
@@ -433,8 +430,8 @@ void run_single_core_reduce_program(
         uint32_t uint32_scaler = *reinterpret_cast<uint32_t*>(&scaler);
         uint32_scaler &= (0xFFFFFFFF & (srcb_fid_mask << 16));
         scaler = *reinterpret_cast<float*>(&uint32_scaler);
-        for (auto i = 0; i < u16_src0_vec.size(); i++) {
-            u16_src0_vec[i] = u16_src0_vec[i] & srca_fid_mask;
+        for (unsigned short& val : u16_src0_vec) {
+            val &= srca_fid_mask;
         }
     }
     // recover a linear view of input vector for consumption by gold_ function

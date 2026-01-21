@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
-#include "accessor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);

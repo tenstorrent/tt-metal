@@ -11,17 +11,17 @@
 #include <filesystem>
 
 #include "fabric_fixture.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
-    control_plane->initialize_fabric_context(k_FabricConfig);
+    control_plane->initialize_fabric_context(k_FabricConfig, tt::tt_fabric::FabricRouterConfig{});
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
     return control_plane;
 }

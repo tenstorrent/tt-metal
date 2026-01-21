@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
 #include <iterator>
 #include <memory>
@@ -39,15 +39,15 @@ mapping_table_t map[9] = {0x00000001, 0x00020003, 0x00040200, 0x02010202, 0x0203
 uint64_t real_core_x_vals [18] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x2, 0x2, 0x2, 0x2, 0x3, 0x3, 0x3, 0x3, 0x4, 0x4, 0x4, 0x4};
 uint64_t real_core_y_vals [18] = {0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x0, 0x1, 0x2, 0x3};
 }  // namespace sharding_testing_parameters
-namespace tt {
-namespace tt_metal {
+
+namespace tt::tt_metal {
 
 template <typename ADDRgen, typename ADDRgenInfo>
 void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t rows[7] = {0, 1, 31, 32, 33, 66, 10000};
-    for (int i = 0; i < std::size(rows); i++) {
-        uint32_t page = constants.pages_per_tensor_row * rows[i];
-        uint32_t base_address = constants.pages_per_shard_width * rows[i] * constants.page_size_jump;
+    for (unsigned int row : rows) {
+        uint32_t page = constants.pages_per_tensor_row * row;
+        uint32_t base_address = constants.pages_per_shard_width * row * constants.page_size_jump;
         for (int j = 0; j < constants.number_of_cores; j++) {
             uint64_t l1_address = base_address;
             for (int k = 0; k < constants.pages_per_shard_width; k++) {
@@ -70,8 +70,7 @@ void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
 template <typename ADDRgen, typename ADDRgenInfo>
 void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t width_pages[5] = {0, 1, 31, 30, 14};
-    for (int i = 0; i < std::size(width_pages); i++) {
-        uint32_t page = width_pages[i];
+    for (unsigned int page : width_pages) {
         uint32_t base_address = page * constants.page_size_jump;
         for (int j = 0; j < constants.number_of_cores; j++) {
             uint32_t l1_address = base_address;
@@ -96,12 +95,11 @@ void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
     uint32_t random_height_offsets[4] = {0, 1, 5, 7};
     uint32_t cores_per_block_row = ((constants.pages_per_tensor_row - 1) / constants.pages_per_shard_width) + 1;
     uint32_t cores_height = constants.number_of_cores / cores_per_block_row;
-    for (int i = 0; i < std::size(random_width_offsets); i++) {
-        for (int j = 0; j < std::size(random_height_offsets); j++) {
-            uint64_t outer_page = random_width_offsets[i] + (random_height_offsets[j] * constants.pages_per_tensor_row);
-            uint64_t l1_address =
-                (random_width_offsets[i] + random_height_offsets[j] * constants.pages_per_shard_width) *
-                constants.page_size_jump;
+    for (unsigned int random_width_offset : random_width_offsets) {
+        for (unsigned int random_height_offset : random_height_offsets) {
+            uint64_t outer_page = random_width_offset + (random_height_offset * constants.pages_per_tensor_row);
+            uint64_t l1_address = (random_width_offset + random_height_offset * constants.pages_per_shard_width) *
+                                  constants.page_size_jump;
             for (int h = 0; h < cores_height; h++) {
                 uint64_t page = outer_page;
                 for (int w = 0; w < cores_per_block_row; w++) {
@@ -195,5 +193,4 @@ TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
     run_full_block_test(addrgen, info_var, tensor_address);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

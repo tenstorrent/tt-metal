@@ -15,12 +15,12 @@ uint32_t compute_weight_count_offset(
     const ttnn::MeshCoordinate& mesh_coordinate, uint32_t cluster_axis, uint32_t non_zero_per_device) {
     if (cluster_axis == 0) {
         return mesh_coordinate[0] * non_zero_per_device;
-    } else if (cluster_axis == 1) {
-        return mesh_coordinate[1] * non_zero_per_device;
-    } else {
-        TT_THROW("Unsupported cluster axis");
-        return 0;
     }
+    if (cluster_axis == 1) {
+        return mesh_coordinate[1] * non_zero_per_device;
+    }
+    TT_THROW("Unsupported cluster axis");
+    return 0;
 }
 }  // unnamed namespace
 
@@ -154,7 +154,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
 
 void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
@@ -167,9 +167,9 @@ void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
-        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
-        auto& utilized_core = shared_variables.utilized_core;
+        const auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+        const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+        const auto& utilized_core = shared_variables.utilized_core;
 
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, utilized_core);
         auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, utilized_core);

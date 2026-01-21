@@ -11,13 +11,12 @@
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -47,15 +46,20 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
     std::optional<uint32_t> dev_completion_q_rd_ptr;
+    std::optional<uint32_t> dev_dispatch_progress_ptr;
 
     std::optional<uint32_t> fabric_header_rb_base;
     std::optional<uint32_t> fabric_header_rb_entries;
     std::optional<uint32_t> my_fabric_sync_status_addr;
     std::optional<bool> is_2d_fabric;
-    std::optional<bool> is_2d_fabric_dynamic;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct dispatch_dependent_config_t {
@@ -103,6 +107,8 @@ public:
 
     void GenerateDependentConfigs() override;
 
+    void InitializeRuntimeArgsValues() override;
+
     void ConfigureCore() override;
 
     uint32_t GetDispatchBufferSize() const {
@@ -118,5 +124,4 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -7,13 +7,11 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -23,7 +21,7 @@ ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
-    const std::optional<float>& pad_value) {
+    float pad_value = 0.0f) {
     // Get the device
     uint32_t rank = a.logical_shape().rank();
 
@@ -50,7 +48,7 @@ ttnn::Tensor permute_impl(
 
     auto output = formatted_input_tensor;
     auto transpose_wh = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, -2, -1, output_mem_config, std::nullopt);
+        return ttnn::transpose(input, -2, -1, output_mem_config, 0.0f);
     };
 
     auto transpose_hc = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
@@ -64,7 +62,7 @@ ttnn::Tensor permute_impl(
     };
 
     auto transpose_cn = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, 0, 1, output_mem_config, std::nullopt);
+        return ttnn::transpose(input, 0, 1, output_mem_config, 0.0f);
     };
 
     // Keep limited sharding support with recursive calls
@@ -106,7 +104,7 @@ ttnn::Tensor permute_launch(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
-    const std::optional<float>& pad_value) {
+    float pad_value = 0.0f) {
     return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
@@ -126,9 +124,8 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
     // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
     // major, it is never a NOP if the last dimension is permuted.
-    if (a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) {
-        return false;
-    } else if (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1) {
+    if ((a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) ||
+        (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1)) {
         return false;
     }
 
@@ -167,7 +164,7 @@ ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<float>& pad_value) {
+    float pad_value) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -189,8 +186,8 @@ ttnn::Tensor ExecutePermute::invoke(
         for (int i = 0; i < additional_ranks; i++) {
             new_order.push_back(i);
         }
-        for (int i = 0; i < dims.size(); i++) {
-            new_order.push_back(dims[i] + additional_ranks);
+        for (unsigned int dim : dims) {
+            new_order.push_back(dim + additional_ranks);
         }
         return new_order;
     };
@@ -219,7 +216,7 @@ ttnn::Tensor ExecutePermute::invoke(
 }
 
 ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, float pad_value) {
     return invoke(input_tensor, dims, std::nullopt, pad_value);
 }
 

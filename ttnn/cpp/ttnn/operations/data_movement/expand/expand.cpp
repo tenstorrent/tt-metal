@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "expand.hpp"
-#include <tt-metalium/constants.hpp>
 #include <functional>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"

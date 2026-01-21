@@ -10,6 +10,7 @@
 #include <span>
 
 #include "tt_elffile.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace ll_api {
 
@@ -29,8 +30,9 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
         elf.MakeExecuteInPlace();
 
         // debug: dump disassembly after XIP transform
-        if (std::getenv("TT_METAL_DISABLE_XIP_DUMP") == nullptr) {
-            // Write the modified ELF out and run objdump -S -d on it
+        // this output is used for tt-triage
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_disable_xip_dump()) {
+            // Write the modified ELF out
             std::string out_elf_path = std::string(path) + ".xip.elf";
             try {
                 elf.WriteImage(out_elf_path);

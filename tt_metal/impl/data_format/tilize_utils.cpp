@@ -6,6 +6,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
+#include <functional>
+#include <numeric>
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
@@ -24,11 +26,7 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
 std::uint32_t TensAddr::numel() const {
-    std::uint32_t prod = 1;
-    for (int j = 0; j < sh.size(); j++) {
-        prod *= sh[j];
-    }
-    return prod;
+    return std::accumulate(sh.begin(), sh.end(), std::uint32_t{1}, std::multiplies<>{});
 }
 
 int TensAddr::offs(int n, int c, int h, int w) {
@@ -488,8 +486,8 @@ std::vector<T> convert_layout(
     const bool transpose_within_face,
     const bool transpose_of_faces) {
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
-    size_t H = shape[shape.size() - 2];
-    size_t W = shape[shape.size() - 1];
+    uint32_t H = shape[shape.size() - 2];
+    uint32_t W = shape[shape.size() - 1];
     for (size_t i = 0; i < shape.size() - 2; i++) {
         H *= shape[i];
     }

@@ -55,14 +55,14 @@ void BM_where_experimental_bf16_ttt(benchmark::State& state) {
     auto host_true_values = genRandomTensor<::bfloat16>(shape, layout);
     auto host_false_values = genRandomTensor<::bfloat16>(shape, layout);
 
-    auto dev_ptr = device.get();
+    auto* dev_ptr = device.get();
     auto cond_tensor = host_condition.to_device(dev_ptr);
     auto true_value_tensor = host_true_values.to_device(dev_ptr);
     auto false_value_tensor = host_false_values.to_device(dev_ptr);
 
     auto output = ttnn::operations::experimental::ternary::where(cond_tensor, true_value_tensor, false_value_tensor);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = ttnn::operations::experimental::ternary::where(cond_tensor, true_value_tensor, false_value_tensor);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         benchmark::DoNotOptimize(out);
@@ -85,14 +85,14 @@ void BM_where_bf16_ttt(benchmark::State& state) {
     auto host_true_values = genRandomTensor<::bfloat16>(shape, layout);
     auto host_false_values = genRandomTensor<::bfloat16>(shape, layout);
 
-    auto dev_ptr = device.get();
+    auto* dev_ptr = device.get();
     auto cond_tensor = host_condition.to_device(dev_ptr);
     auto true_value_tensor = host_true_values.to_device(dev_ptr);
     auto false_value_tensor = host_false_values.to_device(dev_ptr);
 
     auto output = ttnn::where(cond_tensor, true_value_tensor, false_value_tensor);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto out = ttnn::where(cond_tensor, true_value_tensor, false_value_tensor);
         tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
         benchmark::DoNotOptimize(out);

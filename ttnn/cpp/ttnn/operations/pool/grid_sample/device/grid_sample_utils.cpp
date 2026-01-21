@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "grid_sample_utils.hpp"
-#include "grid_sample_op.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::grid_sample {
+namespace ttnn::prim {
 
 bool should_use_split_reader(
     const Tensor& input_tensor, const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode) {
@@ -65,7 +65,7 @@ uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precompute
     return grid_tensor.logical_shape()[-1] / elements_per_point;
 }
 
-uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
+uint32_t get_aligned_stick_size(const Shape& shape, const Tensor& tensor) {
     const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
     const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                    ? tt::tt_metal::hal::get_dram_alignment()
@@ -73,4 +73,4 @@ uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) 
     return tt::round_up(stick_nbytes, alignment);
 }
 
-}  // namespace ttnn::operations::grid_sample
+}  // namespace ttnn::prim

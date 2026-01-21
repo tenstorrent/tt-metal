@@ -5,6 +5,7 @@
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto weight_addr = get_arg_val<uint32_t>(i++);

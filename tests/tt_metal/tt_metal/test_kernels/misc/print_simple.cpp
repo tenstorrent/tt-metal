@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"

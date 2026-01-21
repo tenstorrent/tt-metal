@@ -11,7 +11,6 @@ import traceback
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import disable_persistent_kernel_cache
 
 aten = torch.ops.aten
 
@@ -59,7 +58,6 @@ test_sweep_args = [
     (test_sweep_args),
 )
 def test_moreh_cumsum(x, device):
-    disable_persistent_kernel_cache()
     run_moreh_cumsum_tests(x, device)
 
 

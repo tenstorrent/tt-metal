@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "mod_div_lib.h"
+#include "internal/mod_div_lib.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"

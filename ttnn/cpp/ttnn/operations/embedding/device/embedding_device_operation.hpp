@@ -1,28 +1,50 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <optional>
+#include <variant>
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::embedding {
+#include "embedding_device_operation_types.hpp"
+#include "embeddings_fused_program_factory.hpp"
+#include "embeddings_rm_program_factory.hpp"
+#include "embeddings_tilized_indices_program_factory.hpp"
 
-enum class EmbeddingsType { GENERIC, PADDED, BINARY };
-enum class EmbeddingsIndexType { UINT32, BFP16 };
+namespace ttnn::prim {
 
-struct Embeddings {
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
+struct EmbeddingsDeviceOperation {
+    using operation_attributes_t = EmbeddingParams;
+    using tensor_args_t = EmbeddingInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<
+        EmbeddingsFusedProgramFactory,
+        EmbeddingsRMProgramFactory,
+        EmbeddingsTilizedIndicesProgramFactory
+    >;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
-}  // namespace ttnn::operations::embedding
+
+Tensor embedding(
+    const Tensor& input_tensor_arg,
+    const Tensor& weight_arg,
+    bool tilized,
+    EmbeddingsType embeddings_type,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<uint32_t>& pad_token = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+}  // namespace ttnn::prim

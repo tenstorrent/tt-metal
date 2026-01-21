@@ -96,7 +96,7 @@ def reference_decoder(model_args):
 def reference_attention(model_args):
     model = model_args.reference_transformer(wrap=False)
     layer = model.model.layers[0].self_attn
-    use_position_embeddings = model_args.from_hf_url or layer.__class__.__name__ in (
+    use_position_embeddings = layer.__class__.__name__ in (
         "Qwen3Attention",
         "MistralAttention",
         "Gemma3Attention",

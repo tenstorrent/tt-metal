@@ -7,15 +7,14 @@
 #include <cstdint>
 #include <optional>
 
-#include "conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::conv {
-namespace conv2d {
+namespace ttnn::prim {
 
 // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
 constexpr static uint32_t kInvalidCBIndex = 32;
@@ -110,5 +109,11 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled);
-}  // namespace conv2d
-}  // namespace ttnn::operations::conv
+
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor);
+
+}  // namespace ttnn::prim

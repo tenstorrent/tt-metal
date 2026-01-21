@@ -34,13 +34,6 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
     ttnn_dtype = get_lib_dtype(ttnn, dtype)
     if ttnn_dtype is None:
         ttnn_dtype = ttnn.bfloat16
-    any_cpu = torch.randn([32, 32])
-    any_npu = ttnn.from_torch(
-        any_cpu,
-        device=device,
-        dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
-    )
     L = expected_output.shape[0]
     output_npu = (
         ttnn.from_torch(
@@ -57,10 +50,10 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
         start,
         end,
         step,
-        any_npu,
+        device,
         output=output_npu,
         untilize_out=not tilized,
-        dtype=get_lib_dtype(ttnn, dtype),
+        dtype=ttnn_dtype,
     )
     actual_output = ttnn.to_torch(output_npu).reshape([L])
 

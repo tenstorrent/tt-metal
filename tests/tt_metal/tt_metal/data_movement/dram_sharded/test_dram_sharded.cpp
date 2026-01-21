@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,6 +29,8 @@ struct DramShardedConfig {
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores;
+    bool use_trid = false;
+    uint32_t num_of_trids = 0;
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
@@ -36,7 +39,7 @@ struct DramShardedConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramShardedConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -86,10 +89,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
 
+    string kernel_path = "tests/tt_metal/tt_metal/data_movement/dram_sharded/kernels/dram_sharded_read";
+    if (test_config.use_trid) {
+        kernel_path += "_trid";
+        reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
+    }
+    kernel_path += ".cpp";
+
     // Kernels
     auto reader_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/dram_sharded/kernels/dram_sharded_read.cpp",
+        kernel_path,
         test_config.cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -123,18 +133,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
         log_info(tt::LogTest, "Output vector");
         print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::dram_sharded
 
@@ -229,6 +238,35 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
             EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
+}
+
+/* ========== Directed Ideal Test Case with Transaction IDs; Test id = 87 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+
+    // Parameters
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t num_of_transactions = 256;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    // Test config
+    unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+        .test_id = 87,
+        .num_of_transactions = num_of_transactions,
+        .num_banks = mesh_device->num_dram_channels(),
+        .pages_per_bank = 32,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = l1_data_format,
+        .cores = core_range_set,
+        .use_trid = true,
+        .num_of_trids = 16};
+
+    // Run
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace tt::tt_metal

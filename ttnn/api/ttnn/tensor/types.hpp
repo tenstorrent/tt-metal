@@ -17,14 +17,11 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
 #include "ttnn/tensor/shape/shape.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 5;
 
@@ -99,5 +96,7 @@ struct NdShardSpec {
     bool operator!=(const NdShardSpec& other) const = default;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+using PadValue = std::variant<uint32_t, float>;
+std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
+
+}  // namespace tt::tt_metal

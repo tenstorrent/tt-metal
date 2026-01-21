@@ -10,7 +10,6 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>
-
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
@@ -349,7 +348,7 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
             dst_buffer = dst_buffer.transform(
                 [&tensor](const tt::tt_metal::HostBuffer& shard) {
                     return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
@@ -366,16 +365,20 @@ public:
         });
 
         tt::stl::SmallVector<int> num_chunks;
-        if (config_.dims.size() == 1) {
-            num_chunks.push_back(xtensor_views.size());
-        } else {
-            TT_FATAL(
-                xtensor_views.size() == distribution_shape_.mesh_size(),
-                "ND composition requires the number of tensors {} to match the mesh shape {}",
-                xtensor_views.size(),
-                distribution_shape_);
-            for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
-                num_chunks.push_back(distribution_shape_[i]);
+        // Scalar (0-dim tensor)
+        bool is_single_views = xtensor_views.size() == 1;
+        if (!is_single_views) {
+            if (config_.dims.size() == 1) {
+                num_chunks.push_back(xtensor_views.size());
+            } else {
+                TT_FATAL(
+                    xtensor_views.size() == distribution_shape_.mesh_size(),
+                    "ND composition requires the number of tensors {} to match the mesh shape {}",
+                    xtensor_views.size(),
+                    distribution_shape_);
+                for (size_t i = 0; i < distribution_shape_.dims(); ++i) {
+                    num_chunks.push_back(distribution_shape_[i]);
+                }
             }
         }
 

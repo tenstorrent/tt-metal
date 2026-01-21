@@ -51,6 +51,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
                 )
             else:
+                logger.info("No dtype specified for the model KV cache - defaulting to ttnn.bfloat8_b.")
                 kv_cache_dtype = None
             # Set default to bfloat8_b when no optimizations are configured
             kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
@@ -269,6 +270,12 @@ class MllamaMultiModalProcessor(EncDecMultiModalProcessor[TT_MllamaProcessingInf
     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
+    # Class-level capabilities
+    # Note: Mllama doesn't support prefix caching (it's V0 only)
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -353,6 +360,11 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
 
 
 class LlamaForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -373,7 +385,7 @@ class LlamaForCausalLM(Generator):
             and mesh_device.get_num_devices() == 1
             and is_wormhole_b0()
         ):
-            MAX_PROMPT_LEN = 65536
+            MAX_PROMPT_LEN = 32768
             if max_seq_len > MAX_PROMPT_LEN:
                 raise ValueError(
                     f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
@@ -409,6 +421,11 @@ class LlamaForCausalLM(Generator):
 
 
 class QwenForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -452,6 +469,11 @@ class QwenForCausalLM(Generator):
 
 
 class MistralForCausalLM(Generator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -564,6 +586,11 @@ class MultiModalProcessor(BaseMultiModalProcessor):
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -627,6 +654,11 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 class GptOssForCausalLM(Generator):
     """GPT-OSS model for vLLM integration"""
 
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -639,13 +671,10 @@ class GptOssForCausalLM(Generator):
         max_seq_len,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations: str = "performance",
+        optimizations: str = None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gpt_oss.tt.common import create_tt_model
-
-        optimizations = (
-            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
-        )
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
@@ -657,9 +686,7 @@ class GptOssForCausalLM(Generator):
             # Use the existing create_tt_model function
             model_args_i, model_i, _, state_dict = create_tt_model(
                 mesh_device=submesh,
-                instruct=True,
                 max_batch_size=max_batch_size // tt_data_parallel,
-                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
                 max_seq_len=max_seq_len,
                 paged_attention_config=None,
                 dtype=ttnn.bfloat8_b,

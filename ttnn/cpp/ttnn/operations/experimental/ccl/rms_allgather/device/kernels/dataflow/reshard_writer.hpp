@@ -5,7 +5,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 template <
     uint32_t cb_out,
