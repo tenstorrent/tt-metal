@@ -542,6 +542,8 @@ class ModelArgs:
         # Load model params
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
+        if "falcon3" in HF_MODEL.lower():
+            self.trust_remote_code_hf = True
 
         # Set checkpoint type - always HuggingFace since we only support HF_MODEL now
         self.checkpoint_type = CheckpointType.HuggingFace
@@ -568,6 +570,8 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Falcon3-7B": {"N150": None, "N300": 64, "T3K": None, "TG": None, "P150x4": None},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2439,6 +2443,10 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "Falcon3-1B-Base": "tiiuae/Falcon3-1B-Base",
+            "Falcon3-1B-Instruct": "tiiuae/Falcon3-1B-Instruct",
+            "Falcon3-7B-Base": "tiiuae/Falcon3-7B-Base",
+            "Falcon3-7B-Instruct": "tiiuae/Falcon3-7B-Instruct",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2494,6 +2502,18 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower and "base" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Base"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower and "instruct" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower and "base" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Base"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower and "instruct" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
 
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
