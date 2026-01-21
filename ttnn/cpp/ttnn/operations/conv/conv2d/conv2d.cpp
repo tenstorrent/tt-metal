@@ -530,8 +530,12 @@ Result conv2d_DRAM(
         conv_config.weights_dtype = weight_tensor.dtype();
     }
 
+    const auto input_channels_padded = input_tensor_on_device.padded_shape()[3];
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
-    input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
+    const auto unflattened_input_padded_shape =
+        ttnn::Shape{batch_size, input_height, input_width, input_channels_padded};
+    input_tensor_on_device =
+        ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_padded_shape);
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
