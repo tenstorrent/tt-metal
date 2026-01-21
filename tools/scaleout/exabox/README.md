@@ -99,10 +99,25 @@ Why 50? Some links only fail after a few resets - they train fine once but can't
 
 Analyze results with:
 ```bash
-./tools/scaleout/exabox/analyze_validation_results.sh
+./tools/scaleout/exabox/analyze_validation_results.py validation_output/
 ```
 
-This tells you how many iterations passed vs failed, and breaks down failures by type (timeouts, missing connections, DRAM issues). If the same channel keeps failing, that's a bad cable. If failures are scattered randomly, it's likely a system with flaky ethernet. In either case, escalate to the systems engineering team.
+**Useful flags:**
+- `--all` - Show comprehensive details: faulty links report, host summaries, recommendations, timeline, and unique errors
+- `--json` - JSON output for automation
+- `--timeline` - Timeline visualization of validation runs
+- `--errors` - Extract and display unique error messages
+- `--verbose` - Show matched log lines as evidence for each category
+- `--histogram` - Show faulty link histogram
+- `--hosts` - Show host-level summary
+
+**What to expect:**
+- Detailed breakdown by error category (unhealthy links, timeouts, missing connections, etc.)
+- Faulty link histograms showing which links/channels fail most often
+- Host-level summaries and failure type breakdowns
+- Actionable recommendations with links to relevant TROUBLESHOOTING.md sections
+
+The script tells you how many iterations passed vs failed, and breaks down failures by type (timeouts, missing connections, DRAM issues). If the same channel keeps failing, that's a bad cable. If failures are scattered randomly, it's likely a system with flaky ethernet. In either case, escalate to the systems engineering team.
 
 ### Dispatch Tests
 
@@ -210,7 +225,7 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `run_validation_*.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
 | `run_fabric_tests_*.sh` | Fabric connectivity tests |
-| `analyze_validation_results.sh` | Parse validation logs |
+| `analyze_validation_results.py` | Comprehensive log analysis |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files
