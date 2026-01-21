@@ -106,7 +106,6 @@ runs:
       shell: bash
 
     - name: Set up env vars for auto-triage
-      if: ${{ inputs.auto-triage == 'true' }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
