@@ -998,8 +998,8 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
-    uint32_t db_toggle = 0;
-    uint32_t scratch_write_addr;
+    uint32_t scratch_read_start_addr = scratch_db_top[1];
+    uint32_t scratch_write_start_addr = scratch_db_top[0];
     constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
     while (wlength != 0) {
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
@@ -1009,9 +1009,9 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             // TODO(pgk); we can do better on WH w/ tagging
             noc_async_writes_flushed();
 
-            db_toggle ^= 1;
-            scratch_read_addr = scratch_db_top[db_toggle];
-            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+            uint32_t scratch_read_addr = scratch_read_start_addr;
+            uint32_t scratch_write_addr = scratch_write_start_addr;
+            std::swap(scratch_read_start_addr, scratch_write_start_addr);
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
@@ -1032,9 +1032,8 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     }
 
     // Third step - write from DB
-    scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
