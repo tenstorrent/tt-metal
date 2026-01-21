@@ -13,7 +13,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -795,7 +794,6 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
     output_shard_shape = list(shard_shape)
     output_shard_shape[0] = 1
-    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
     output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
     if interleaved:
         memory_config = None
