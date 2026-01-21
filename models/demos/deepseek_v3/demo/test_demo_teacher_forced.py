@@ -32,7 +32,8 @@ REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
 
 
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
-def test_demo_teacher_forcing_accuracy(reference_file: Path):
+@pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
+def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int, is_ci_env: bool):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
 
@@ -65,6 +66,9 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
             "Generate it first by running "
             "`python generate_teacher_forced_file.py`."
         )
+
+    if is_ci_env and max_new_tokens != 128:
+        pytest.skip("CI runs only the 128-token teacher forcing test to keep runtime manageable.")
 
     payload = torch.load(REFERENCE_FILE, weights_only=False)
     assert "reference_tokens" in payload, "Reference file missing 'reference_tokens'"
@@ -116,24 +120,18 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
     logger.info("  reference_tokens: {} tokens (prompt + generated)", total_ref_tokens)
     logger.info("  top5_tokens: {} (HF model predictions)", tuple(top5_tokens.shape))
 
-    # Use the saved max_new_tokens from the reference file
-    max_new_tokens = min(saved_max_new_tokens, generated_tokens[0].shape[-1])
-    # Optional: allow truncating the test to the first N generated tokens
-    # Set DEEPSEEK_V3_TF_MAX_NEW_TOKENS to a positive int to cap the run.
-    env_max_new_tokens = os.getenv("DEEPSEEK_V3_TF_MAX_NEW_TOKENS")
-    if env_max_new_tokens:
-        try:
-            env_cap = int(env_max_new_tokens)
-            if env_cap > 0:
-                max_new_tokens = min(max_new_tokens, env_cap)
-                logger.info(
-                    "Truncating teacher-forced run to first {} tokens via DEEPSEEK_V3_TF_MAX_NEW_TOKENS",
-                    max_new_tokens,
-                )
-            else:
-                logger.warning("Ignoring non-positive DEEPSEEK_V3_TF_MAX_NEW_TOKENS='{}'", env_max_new_tokens)
-        except Exception as e:
-            logger.warning("Ignoring invalid DEEPSEEK_V3_TF_MAX_NEW_TOKENS='{}': {}", env_max_new_tokens, e)
+    # Ensure the requested length is available in the reference payload.
+    available_gen_tokens = generated_tokens[0].shape[-1]
+    if max_new_tokens > saved_max_new_tokens:
+        pytest.fail(
+            f"Requested max_new_tokens={max_new_tokens} exceeds reference file max_new_tokens={saved_max_new_tokens} "
+            f"({REFERENCE_FILE}). Regenerate the reference with a larger max_new_tokens."
+        )
+    if max_new_tokens > available_gen_tokens:
+        pytest.fail(
+            f"Requested max_new_tokens={max_new_tokens} exceeds available generated tokens={available_gen_tokens} "
+            f"in {REFERENCE_FILE}. Regenerate the reference with a larger max_new_tokens."
+        )
 
     logger.info("=== Phase 2: Run teacher forcing ===")
     logger.info("Loaded reference from: {}", REFERENCE_FILE)
