@@ -161,6 +161,8 @@ class StatsReporter:
                                 # If we have profiled data and it's not set in the test_information
                                 if field == "num_peers" and value == "":
                                     value = run_stats.get("num_peers", 0)
+                                if field == "same_axis" and value == "":
+                                    value = bool(run_stats.get("same_axis", 0))
                                 row.append(value)
                         row.extend(
                             [

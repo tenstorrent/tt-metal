@@ -193,7 +193,9 @@ class StatsCollector:
                             agg_data["grid_dimensions"] = f"{grid_x} x {grid_y}"
 
                 num_peers = attributes.get("Number of peers", 0)
+                same_axis = attributes.get("Same axis", 0)
                 agg_data["num_peers"] = num_peers
+                agg_data["same_axis"] = same_axis
 
                 agg[run_host_id] = agg_data
 

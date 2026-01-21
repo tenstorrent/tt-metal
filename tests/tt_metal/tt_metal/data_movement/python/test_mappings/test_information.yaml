@@ -27,6 +27,7 @@
 #       Leave empty to use real kernel data (num_peers = "")
 #   - same_axis: Whether the source and destination core share one axis
 #       Examples: true for (0,0)->(0,5), false for (0,0)->(2,2)
+#       Leave empty to use real kernel data (same_axis = "")
 #
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
