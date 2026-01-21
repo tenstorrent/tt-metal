@@ -313,6 +313,3 @@ endif()
 if(TT_INSTALL)
     include(packaging)
 endif()
-
-# Adding something to trigger all merge gate runs
-message(STATUS "CMake configuration complete.")
