@@ -266,7 +266,6 @@ class Generator:
         empty_slots=None,
         enable_trace=True,
         model_id_warmup=None,
-        start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
         **kwargs,
     ):
@@ -380,14 +379,13 @@ class Generator:
                 # For now, assume trace is enabled for embedding models
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
+                # We have to dispatch copy to host to avoid corruption by the next user's prefill
                 out_list.append(logits.cpu(blocking=False))
 
         # Process the outputs after all the prefill are done in data parallel mode
         for idx, out in enumerate(out_list):
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
-            num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
-            last_token_idx_relative = last_token_idx - num_cached_tokens
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
 
@@ -395,17 +393,16 @@ class Generator:
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
             # Extract the last token's output (logits or hidden states)
-            # Use last_token_idx_relative to account for cached prefixes
             if return_hidden_states:
                 # Extract hidden states (shape: [hidden_size])
                 output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
-                    out, last_token_idx=(last_token_idx_relative % 32)
+                    out, last_token_idx=(last_token_idx % 32)
                 )
             else:
                 # Extract logits (shape: [1, vocab_size])
                 # Since we give unpadded_seq_len, only the tile containing the last token is returned
                 output_tensor[idx] = self.model[model_id].process_output_prefill(
-                    out, last_token_idx=(last_token_idx_relative % 32)
+                    out, last_token_idx=(last_token_idx % 32)
                 )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
