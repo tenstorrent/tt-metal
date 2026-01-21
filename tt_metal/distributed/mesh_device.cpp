@@ -1216,17 +1216,26 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
     constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
 
-    // Use the dispatch_s core (program dispatch core for CQ 0) as the sender core for telemetry
-    // This core runs the dispatch_subordinate kernel which will push telemetry data
+    // Get the dispatch_s core which runs the dispatch_subordinate kernel
+    // This is the core that will push telemetry data to host
     constexpr uint8_t cq_id = 0;
-    CoreCoord dispatch_core = this->virtual_program_dispatch_core(cq_id);
 
-    // Use device (0,0) in the mesh, with the dispatch core as the sender
+    // Get reference device to query dispatch core info
+    auto* ref_device = this->reference_device();
+    auto device_id = ref_device->id();
+    auto channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+
+    // Get the dispatch_s core from the dispatch core manager
+    tt_cxy_pair dispatch_s_cxy =
+        MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_id, channel, cq_id);
+    CoreCoord dispatch_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
+
+    // Use device (0,0) in the mesh, with the dispatch_s core as the sender
     auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), dispatch_core};
 
     log_info(
         tt::LogMetal,
-        "Initializing perf telemetry D2H socket on MeshDevice {} using dispatch core ({}, {})",
+        "Initializing perf telemetry D2H socket on MeshDevice {} using dispatch_s core ({}, {})",
         this->id(),
         dispatch_core.x,
         dispatch_core.y);
