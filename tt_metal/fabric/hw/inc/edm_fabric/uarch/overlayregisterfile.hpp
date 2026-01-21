@@ -18,10 +18,36 @@ struct OverlayRegisterFile : public RegisterFile {
     static constexpr uint32_t const END_ADDR = 0xFFB5FFFF; // offset
     static constexpr uint32_t const ADDR_RNG = END_ADDR - BEG_ADDR + 1U;
 
-    template<uint32_t ADDR>
+    template<uint32_t Index>
     struct OverlayRegister {
-        static constexpr uint32_t index = ADDR;
-        static constexpr uint32_t ADDRESS = OverlayRegisterFile::BEG_ADDR + ADDR;
+        static constexpr uint32_t index = Index;
+        static constexpr uint32_t ADDRESS = OverlayRegisterFile::BEG_ADDR + Index;
+
+        static volatile uint32_t* get_address_ptr() {
+            return reinterpret_cast<volatile uint32_t*>(get_stream_scratch_register_address<ADDRESS>());
+        }
+
+        static FORCE_INLINE uint32_t load() {
+            return *get_address_ptr();
+        }
+
+        static FORCE_INLINE void store(uint32_t const value) {
+            // serves as convenient storage for bitfield manipulations (masks)
+            // used in load/store of combined registers
+            //
+            union {
+                uint32_t value;
+                struct {
+                    uint16_t lower_addr : NumLowerBits::value;
+                    uint8_t upper_addr : NumUpperBits::value;
+                    uint8_t reserved : NumReserveBits::value;
+                } fields;
+            } storage;
+
+            storage.value = value;
+            storage.fields.reserved = 0U;
+            write_stream_scratch_register<ADDRESS>(storage.value);
+        }
     };
 
     // None of these types are supposed to be instantiated
@@ -67,28 +93,13 @@ struct OverlayRegisterFile : public RegisterFile {
     template<typename T>
     static FORCE_INLINE uint32_t load() {
         static_assert(is_overlay_register_type<T>::value, "T must be an Overlay Register");
-        return get_stream_scratch_register_address<T::ADDRESS>();
+        return T::load();
     }
 
     template<typename T>
     static FORCE_INLINE void store(uint32_t const value) {
-        // serves as convenient storage for bitfield manipulations (masks)
-        // used in load/store of combined registers
-        //
-        union {
-            uint32_t value;
-            struct {
-                uint16_t lower_addr : NumLowerBits::value;
-                uint8_t upper_addr : NumUpperBits::value;
-                uint8_t reserved : NumReserveBits::value;
-            } fields;
-        } storage;
-
         static_assert(is_overlay_register_type<T>::value, "T must be an Overlay Register");
-
-        storage.value = value;
-        storage.fields.reserved = 0U;
-        write_stream_scratch_register<T::ADDRESS>(storage.value);
+        T::store(value);
     }
 };
 

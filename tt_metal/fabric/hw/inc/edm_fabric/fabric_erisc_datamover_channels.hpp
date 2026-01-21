@@ -688,7 +688,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE uint32_t get_connection_live_semaphore() const {
-        uint32_t const value = OverlayRegisterFile::load<connection_live_semaphore_register>();
+        uint32_t const value = connection_live_semaphore_register::load();
         if(connection_live_semaphore != nullptr) {
             *connection_live_semaphore = value;
         }
@@ -699,7 +699,7 @@ struct EdmChannelWorkerInterface {
         if(connection_live_semaphore != nullptr) {
             *connection_live_semaphore = value;
         }
-        OverlayRegisterFile::store<connection_live_semaphore_register>(value);
+        connection_live_semaphore_register::store(value);
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
