@@ -12,9 +12,8 @@ on:
           - update
           - rebuild
       start_date:
-        description: 'Start date for fetching Slack messages (format: January 1, 2026)'
+        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
         required: false
-        default: 'January 1, 2026'
         type: string
       end_date:
         description: "End date (cutoff) for fetching Slack messages (format: 'January 31, 2026'). Messages after this date are ignored. Leave empty for no cutoff."
@@ -33,6 +32,22 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Calculate start date (default to 3 days ago)
+        id: calc-date
+        if: ${{ !inputs.start_date }}
+        shell: bash
+        run: |
+          # Calculate date 3 days ago and format as "January 1, 2026"
+          # Remove leading zero from day using sed for portability
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            START_DATE=$(date -d "3 days ago" "+%B %d, %Y" | sed 's/ 0/ /')
+          else
+            # macOS uses different date command
+            START_DATE=$(date -v-3d "+%B %d, %Y" | sed 's/ 0/ /')
+          fi
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+          echo "Using calculated start date: $START_DATE"
+
       - name: Run analyze nd failures
         uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
@@ -44,7 +59,7 @@ jobs:
           # channel_id: Slack channel ID to fetch messages from
           channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           update_mode: ${{ inputs.update_mode || 'update' }}
-          start_date: ${{ inputs.start_date || 'January 1, 2026' }}
+          start_date: ${{ inputs.start_date || steps.calc-date.outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
 
       - name: Install infra dependencies
