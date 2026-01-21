@@ -25,7 +25,7 @@ If links are flaky, fabric tests will fail with routing errors - you'll waste ti
 
 ### Prerequisites
 
-- Clone tt-metal to `/data/<your-username>/` and run all commands from the repo root
+- Clone tt-metal to a shared NFS mount accessible from all hosts (e.g., `/data/<your-username>/` on Exabox) and run all commands from the repo root
 - Passwordless SSH to all hosts (using `ssh-add` for agent forwarding - see [SSH Setup](#ssh-setup) below)
 - `mpirun` available (Docker-based scripts also need `mpirun-ulfm`)
 - FSD file for your cluster topology (must be accessible on a shared filesystem)
