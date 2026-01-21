@@ -164,8 +164,7 @@ class Generator:
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
                 if deepstack_visual_embeds is not None:
                     deepstack_visual_embeds_chunk = [
-                        deepstack_visual_embeds[i][chunk_start:chunk_end]
-                        for i in range(len(deepstack_visual_embeds))
+                        deepstack_visual_embeds[i][chunk_start:chunk_end] for i in range(len(deepstack_visual_embeds))
                     ]
                 else:
                     deepstack_visual_embeds_chunk = None
@@ -199,7 +198,8 @@ class Generator:
 
                 if chunk_start == last_chunk_start:
                     logits = self.model.process_output_prefill(
-                        tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32),
+                        tt_logits.cpu(),
+                        last_token_idx=(last_token_idx_in_chunk % 32),
                     )
                     return logits
                 else:

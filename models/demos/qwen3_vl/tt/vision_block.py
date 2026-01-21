@@ -4,8 +4,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_vl.tt.vision_attention import VisionAttention
-from models.demos.qwen3_vl.tt.vision_mlp import MLP
 from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm
+from models.demos.qwen3_vl.tt.vision_mlp import MLP
 
 
 class VisionBlock(LightweightModule):

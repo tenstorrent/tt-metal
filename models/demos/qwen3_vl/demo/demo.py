@@ -439,7 +439,7 @@ def test_demo(
             text_embeds,
             image_embeds,
             reference_model.config,
-            deepstack_visual_embeds=deepstack_visual_embeds
+            deepstack_visual_embeds=deepstack_visual_embeds,
         )
         pad_token_id = tokenizer.pad_token_id
         assert (

@@ -249,7 +249,6 @@ class DropInVisionTransformer(torch.nn.Module):
             pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
 
-
             # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
@@ -311,7 +310,7 @@ class DropInVisionTransformer(torch.nn.Module):
             deepstack_visual_embeds_torch_list = [
                 ttnn.to_torch(
                     deepstack_visual_embeds[i],
-                    mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1),
                 )
                 for i in range(len(deepstack_visual_embeds))
             ]
@@ -389,7 +388,13 @@ class Transformer(TTTransformer):
         return outputs
 
     def prepare_inputs_prefill(
-        self, tokens, rot_mats, deepstack_visual_embeds=None, start_pos=0, page_table=None, chunk_page_table=None,
+        self,
+        tokens,
+        rot_mats,
+        deepstack_visual_embeds=None,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
     ):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
@@ -453,7 +458,7 @@ class Transformer(TTTransformer):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table, deepstack_visual_embeds
-  
+
     def deepstack_process(self, x, deepstack_visual_embeds):
         x = ttnn.add(x, deepstack_visual_embeds)
         return x
@@ -485,7 +490,7 @@ class Transformer(TTTransformer):
             kv_cache=kv_cache,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
-    
+
     def forward(
         self,
         x: ttnn.Tensor,

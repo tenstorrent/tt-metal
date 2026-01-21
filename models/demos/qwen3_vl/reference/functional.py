@@ -83,7 +83,7 @@ def qwen3_vl_rot_pos_emb(grid_thw: torch.Tensor, spatial_merge_size: int, head_d
 
 
 def qwen3_vl_fast_pos_embed_interpolation(
-        grid_thw: torch.Tensor, num_grid_per_side: int, pos_embed: torch.Tensor, spatial_merge_size: int
+    grid_thw: torch.Tensor, num_grid_per_side: int, pos_embed: torch.Tensor, spatial_merge_size: int
 ) -> torch.Tensor:
     grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
     device = grid_thw.device

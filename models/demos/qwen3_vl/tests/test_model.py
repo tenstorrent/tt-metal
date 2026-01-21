@@ -160,7 +160,7 @@ def test_vision_model_inference(
 
     tt_deepstack_visual_embeds = [
         ttnn.to_torch(
-            tt_deepstack_visual_embeds[i], 
+            tt_deepstack_visual_embeds[i],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
         )
         for i in range(len(tt_deepstack_visual_embeds))
@@ -170,7 +170,7 @@ def test_vision_model_inference(
     tt_deepstack_visual_embeds_torch = [
         tt_deepstack_visual_embeds[i][:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size]
         .squeeze(0)
-        .squeeze(0) 
+        .squeeze(0)
         for i in range(len(tt_deepstack_visual_embeds))
     ]
 
