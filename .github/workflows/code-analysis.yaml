@@ -319,11 +319,11 @@ jobs:
           CodeChecker parse "$OUTPUT_DIR" --export json --output "$JSON_OUTPUT" || true
 
           if [ -f "$JSON_OUTPUT" ] && [ -s "$JSON_OUTPUT" ]; then
-            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" || echo "0")
+            ISSUE_COUNT=$(jq '.reports | length' "$JSON_OUTPUT" || echo "0")
             echo "✅ JSON report contains $ISSUE_COUNT issues"
           else
             echo "⚠️ No JSON output, creating empty report"
-            echo "[]" > "$JSON_OUTPUT"
+            echo '{"version": 1, "reports": []}' > "$JSON_OUTPUT"
           fi
 
           echo ""
@@ -387,7 +387,7 @@ jobs:
             exit 0
           fi
 
-          ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
+          ISSUE_COUNT=$(jq '.reports | length' /tmp/codechecker_issues.json || echo "0")
 
           if [ "$ISSUE_COUNT" = "0" ] || [ -z "$ISSUE_COUNT" ]; then
             echo "No issues found"
@@ -401,14 +401,8 @@ jobs:
 
           # Format a list of issues for Copilot to choose from (max 15 to keep prompt reasonable)
           ISSUE_LIST=$(jq -r '
-            [.[:15][] | {
-              file: (.path // .fileId | sub("^/work/"; "")),
-              line: .line,
-              checker: (.checker.name // .checker),
-              severity: .severity,
-              message: .message
-            }] | to_entries | .[] |
-            "\(.key + 1). **\(.value.severity)** - `\(.value.checker)` in `\(.value.file):\(.value.line)`\n   Message: \(.value.message)"
+            .reports[:15] | to_entries | .[] |
+            "\(.key + 1). **\(.value.severity)** - `\(.value.checker_name)` in `\(.value.file.path | sub("^/work/"; "")):\(.value.line)`\n   Message: \(.value.message)"
           ' /tmp/codechecker_issues.json)
 
           echo "=== Issues to present to Copilot ==="
@@ -971,8 +965,9 @@ jobs:
           echo "Remote URL configured (token hidden): https://x-access-token:***@github.com/${{ github.repository }}.git"
 
           # Create a branch with timestamp
-          # Use users/ prefix as some orgs restrict top-level branch creation (like copilot/)
-          BRANCH_NAME="users/${{ github.actor }}/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
+          # Use the authenticated user from the token (not the workflow actor)
+          TOKEN_USER=$(gh api user --jq '.login' 2>/dev/null || echo "bot")
+          BRANCH_NAME="users/${TOKEN_USER}/fix-clangsa-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH_NAME"
 
           # Stage all changes
