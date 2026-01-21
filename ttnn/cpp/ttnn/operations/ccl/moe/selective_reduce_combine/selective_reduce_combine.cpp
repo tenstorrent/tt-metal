@@ -4,7 +4,7 @@
 
 #include "selective_reduce_combine.hpp"
 #include "device/selective_reduce_combine_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+// #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>

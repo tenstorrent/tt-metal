@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -73,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
-    constexpr tt::tt_fabric::Topology topology = get_named_compile_time_arg_val("topology");
+    constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
 
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
@@ -95,10 +96,9 @@ void kernel_main() {
             ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
             : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
     constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
-    constexpr uint32_t Replicate_Group = : (replicate_axis == ReplicateGroup::COLS) ? mesh_rows
-                                                                                    : mesh_cols;
+    constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::COLS) ? mesh_rows : mesh_cols;
 
-    constexpr uint32_t tokens_per_device = num_tokens_total / replicate_group_devices;
+    constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -109,7 +109,6 @@ void kernel_main() {
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto source_token_segment_size_bytes = get_arg_val<uint32_t>(rt_arg_count++);
     const auto dest_token_segment_offset_bytes = get_arg_val<uint32_t>(rt_arg_count++);
-    const auto dest_token_segment_size_bytes = get_arg_val<uint32_t>(rt_arg_count++);
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto is_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
@@ -126,7 +125,8 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, data_size_bytes);
+    const auto output_addrgen =
+        TensorAccessor(output_ta_args, output_base_addr, source_token_segment_buffer_size_bytes);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -137,7 +137,7 @@ void kernel_main() {
     }
 
     // rt_arg_count does not get incremented
-    open_direction_connections_barrier<Num_Directions, fabric_mux_channel_buffer_size_bytes, fabric_mux_status_address>(
+    open_direction_connections_barrier<Num_Directions, fabric_mux_num_buffers_per_channel, fabric_mux_status_address>(
         directions, fabric_connections, rt_arg_count);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
@@ -153,13 +153,13 @@ void kernel_main() {
     cb_wait_front(data_cb_id, 1);
     const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
 
-    cb_wait_front(metadata_cb_id);
+    cb_wait_front(metadata_cb_id, 1);
     const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
     auto * metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
 
     // stashed these values in metadata
-    const uint32_t token_start = metadata_ptr[num_tokens_total*metadata_entry_size];
-    const uint32_t token_end = metadata_ptr[num_tokens_total*metadata_entry_size + 1];
+    const uint32_t token_start = metadata_ptr[global_num_tokens * metadata_entry_size];
+    const uint32_t token_end = metadata_ptr[global_num_tokens * metadata_entry_size + 1];
     metadata_ptr += token_start * metadata_entry_size;
 
     noc_semaphore_wait((uint32_t*)init_semaphore_addr, replicate_group_devices - 1);
@@ -174,7 +174,8 @@ void kernel_main() {
             if (k != select_experts_k+1) {
 
                 // figure out output page index, noc address.
-                const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(st, k);
+                const uint32_t output_page_idx =
+                    detail::get_output_page_idx<tokens_per_device, select_experts_k>(st, k);
 
                 const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
                                                   dt * source_token_segment_buffer_size_bytes;
@@ -190,8 +191,8 @@ void kernel_main() {
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     const uint64_t output_noc_addr =
-                        get_noc_addr(output_page_idx, dest_token_segment_offset_bytes, output_addrgen);
-                    noc_async_write(src_data_l1_addr, output_noc_addr, token_segment_size_bytes);
+                        get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
+                    noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
                     needs_barrier = true;
                     noc_async_writes_flushed();
                 } else {
@@ -208,7 +209,7 @@ void kernel_main() {
                             dest_device_idx,
                             src_data_l1_addr,
                             output_page_idx,
-                            token_segment_size_bytes,
+                            source_token_segment_size_bytes,
                             alignment,
                             dest_token_segment_offset_bytes);
                     } else {
@@ -225,25 +226,22 @@ void kernel_main() {
                             dest_mesh_id,
                             src_data_l1_addr,
                             output_page_idx,
-                            token_segment_size_bytes,
+                            source_token_segment_size_bytes,
                             alignment,
                             dest_token_segment_offset_bytes);
                     }
-                }
-                cb_pop_front(data_cb_id,1);
-
-                if constexpr (locally_reduced) {
-                    break;
                 }
             }
         }
 
         metadata_ptr+=metadata_entry_size;
     }
-    cb_pop_front(local_experts_cb_id, 1);
+    cb_pop_front(metadata_cb_id, 1);
+
     if (needs_barrier) {
         noc_async_write_barrier();
     }
+    cb_pop_front(data_cb_id, 1);
 
     if (is_sync_core) {
         auto termination_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);

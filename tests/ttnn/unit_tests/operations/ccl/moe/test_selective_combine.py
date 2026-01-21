@@ -276,7 +276,7 @@ def _get_tt_sharded_dense_input(dense_contribs_tensor, core_range, device, clust
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("devices", [NUM_DEVICES])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 0))])
-@pytest.mark.parametrize("mux_core_range", [((0, 1), (0, 1))])
+@pytest.mark.parametrize("mux_core_range", [((0, 1), (0, 2))])
 @pytest.mark.parametrize("num_iters", [(8, 4)])
 def test_decode(
     mesh_device,
