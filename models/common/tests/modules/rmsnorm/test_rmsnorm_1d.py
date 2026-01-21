@@ -606,7 +606,13 @@ def test_rmsnorm_1d_vs_reference(
     is_default_eps = eps == 1e-5
     is_default_sharding = in_sharded and out_sharded
 
-    if is_default_eps and is_default_sharding:
+    # 1x4 mesh special case: Ring topology all_gather is not supported on 1x4 on WH LB/QB because
+    # fabric cannot route between non-adjacent devices (e.g., D0 -> D3). We must
+    # explicitly set prefill_distributed from test params to override auto-detection,
+    # which would otherwise enable distributed prefill based on num_devices and dim.
+    needs_explicit_distributed = mesh_shape == (1, 4)
+
+    if is_default_eps and is_default_sharding and not needs_explicit_distributed:
         tt_model = RMSNorm1D(weight=lazy_weight)
     else:
         config = RMSNorm1DConfig(
@@ -614,6 +620,7 @@ def test_rmsnorm_1d_vs_reference(
             eps=eps,
             decode_in_sharded=in_sharded,
             decode_out_sharded=out_sharded,
+            prefill_distributed=is_distributed if needs_explicit_distributed else None,
         )
         tt_model = RMSNorm1D.from_config(config)
 
