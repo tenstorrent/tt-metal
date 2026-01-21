@@ -15,7 +15,7 @@
 
 namespace nb = nanobind;
 
-namespace ttnn::operations::experimental::sequential::detail {
+namespace ttnn::operations::experimental::detail {
 
 // Import types from ttnn::experimental::prim
 using ttnn::experimental::prim::create_sequential_branch;
@@ -118,4 +118,4 @@ void bind_sequential_operation(nb::module_& mod) {
         )doc");
 }
 
-}  // namespace ttnn::operations::experimental::sequential::detail
+}  // namespace ttnn::operations::experimental::detail

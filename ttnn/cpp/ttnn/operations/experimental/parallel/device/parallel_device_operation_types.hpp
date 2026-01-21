@@ -418,7 +418,7 @@ std::shared_ptr<BranchDescriptor> create_branch(
 }  // namespace ttnn::experimental::prim
 
 // Convenience aliases for backward compatibility and easier access
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::operations::experimental {
 using ttnn::experimental::prim::Branch;
 using ttnn::experimental::prim::BranchDescriptor;
 using ttnn::experimental::prim::create_branch;
@@ -426,7 +426,7 @@ using ttnn::experimental::prim::make_descriptor;
 using ttnn::experimental::prim::ParallelParams;
 using ttnn::experimental::prim::supports_add_to;
 using ttnn::experimental::prim::TypedBranchDescriptor;
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::operations::experimental
 
 // Additional convenience alias for easier access
 namespace ttnn::parallel_internal {

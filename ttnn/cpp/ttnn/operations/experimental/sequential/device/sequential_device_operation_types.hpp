@@ -337,13 +337,13 @@ std::shared_ptr<StepDescriptor> create_step(
 }  // namespace ttnn::experimental::prim
 
 // Convenience aliases for backward compatibility
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::operations::experimental {
 using ttnn::experimental::prim::create_step;
 using ttnn::experimental::prim::SequentialParams;
 using ttnn::experimental::prim::Step;
 using ttnn::experimental::prim::StepDescriptor;
 using ttnn::experimental::prim::TypedStepDescriptor;
-}  // namespace ttnn::operations::experimental::sequential
+}  // namespace ttnn::operations::experimental
 
 // Custom fmt::formatter for StepDescriptor shared_ptr
 template <>

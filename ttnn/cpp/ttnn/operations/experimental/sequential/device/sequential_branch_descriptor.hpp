@@ -128,7 +128,7 @@ inline std::shared_ptr<BranchDescriptor> create_sequential_branch(
 }  // namespace ttnn::experimental::prim
 
 // Backward compatibility alias
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::operations::experimental {
 using ttnn::experimental::prim::create_sequential_branch;
 using ttnn::experimental::prim::SequentialBranchDescriptor;
-}  // namespace ttnn::operations::experimental::sequential
+}  // namespace ttnn::operations::experimental

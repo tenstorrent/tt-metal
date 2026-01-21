@@ -6,8 +6,8 @@
 
 #include <nanobind/nanobind.h>
 
-namespace ttnn::operations::experimental::sequential::detail {
+namespace ttnn::operations::experimental::detail {
 
 void bind_sequential_operation(nanobind::module_& module);
 
-}  // namespace ttnn::operations::experimental::sequential::detail
+}  // namespace ttnn::operations::experimental::detail

@@ -7,14 +7,14 @@
 #include "ttnn/decorators.hpp"
 #include "device/parallel_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::operations::experimental {
 
 // Import types from ttnn::experimental::prim
 using ttnn::experimental::prim::BranchDescriptor;
 using ttnn::experimental::prim::make_descriptor;
 
 // Each inner vector is the outputs from one branch
-using tensor_return_value_t = std::vector<std::vector<Tensor>>;
+using ParallelReturnType = std::vector<std::vector<Tensor>>;
 
 // =============================================================================
 // ExecuteParallel - The registered operation
@@ -28,7 +28,7 @@ struct ExecuteParallel {
     //       ttnn::branch<MatmulOp>{cores2, op_attrs2, tensor_args2}
     //   )
     template <typename... Branches>
-    static tensor_return_value_t invoke(Branches&&... branches) {
+    static ParallelReturnType invoke(Branches&&... branches) {
         std::vector<std::shared_ptr<BranchDescriptor>> branch_vec;
         branch_vec.reserve(sizeof...(branches));
         (branch_vec.push_back(make_descriptor(std::forward<Branches>(branches))), ...);
@@ -36,13 +36,13 @@ struct ExecuteParallel {
     }
 
     // Vector overload for dynamic number of branches
-    static tensor_return_value_t invoke(std::vector<std::shared_ptr<BranchDescriptor>> branches);
+    static ParallelReturnType invoke(std::vector<std::shared_ptr<BranchDescriptor>> branches);
 
     // Implementation
-    static tensor_return_value_t invoke_impl(std::vector<std::shared_ptr<BranchDescriptor>> branches);
+    static ParallelReturnType invoke_impl(std::vector<std::shared_ptr<BranchDescriptor>> branches);
 };
 
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::operations::experimental
 
 namespace ttnn {
 
@@ -51,8 +51,7 @@ template <typename DeviceOp>
 using branch = ttnn::experimental::prim::Branch<DeviceOp>;
 
 // The parallel operation
-constexpr auto parallel =
-    ttnn::register_operation<"ttnn::parallel", ttnn::operations::experimental::parallel::ExecuteParallel>();
+constexpr auto parallel = ttnn::register_operation<"ttnn::parallel", ttnn::operations::experimental::ExecuteParallel>();
 
 }  // namespace ttnn
 

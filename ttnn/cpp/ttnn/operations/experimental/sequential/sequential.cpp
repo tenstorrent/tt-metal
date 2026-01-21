@@ -5,7 +5,7 @@
 #include "sequential.hpp"
 #include "device/sequential_device_operation.hpp"
 
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::operations::experimental {
 
 std::vector<Tensor> ExecuteSequential::invoke(std::vector<std::shared_ptr<StepDescriptor>> steps) {
     TT_FATAL(!steps.empty(), "Sequential operation requires at least one step");
@@ -25,4 +25,4 @@ std::shared_ptr<BranchDescriptor> ExecuteSequential::branch(std::vector<std::sha
     return ttnn::experimental::prim::create_sequential_branch(cores, std::move(steps));
 }
 
-}  // namespace ttnn::operations::experimental::sequential
+}  // namespace ttnn::operations::experimental

@@ -5,13 +5,13 @@
 #include "parallel.hpp"
 #include "device/parallel_device_operation.hpp"
 
-namespace ttnn::operations::experimental::parallel {
+namespace ttnn::operations::experimental {
 
-tensor_return_value_t ExecuteParallel::invoke(std::vector<std::shared_ptr<BranchDescriptor>> branches) {
+ParallelReturnType ExecuteParallel::invoke(std::vector<std::shared_ptr<BranchDescriptor>> branches) {
     return invoke_impl(std::move(branches));
 }
 
-tensor_return_value_t ExecuteParallel::invoke_impl(std::vector<std::shared_ptr<BranchDescriptor>> branches) {
+ParallelReturnType ExecuteParallel::invoke_impl(std::vector<std::shared_ptr<BranchDescriptor>> branches) {
     TT_FATAL(!branches.empty(), "ParallelDeviceOperation requires at least one branch");
 
     // Extract mesh device from the first input tensor of the first branch
@@ -36,4 +36,4 @@ tensor_return_value_t ExecuteParallel::invoke_impl(std::vector<std::shared_ptr<B
     return ttnn::prim::parallel(operation_attributes);
 }
 
-}  // namespace ttnn::operations::experimental::parallel
+}  // namespace ttnn::operations::experimental

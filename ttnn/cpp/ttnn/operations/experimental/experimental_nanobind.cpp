@@ -132,9 +132,9 @@ void py_module(nb::module_& mod) {
 
     isin::detail::bind_isin_operation(mod);
 
-    parallel::detail::bind_parallel_operation(mod);
+    detail::bind_parallel_operation(mod);
 
-    sequential::detail::bind_sequential_operation(mod);
+    detail::bind_sequential_operation(mod);
 }
 
 }  // namespace ttnn::operations::experimental

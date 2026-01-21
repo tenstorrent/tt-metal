@@ -13,7 +13,7 @@
 
 namespace nb = nanobind;
 
-namespace ttnn::operations::experimental::parallel::detail {
+namespace ttnn::operations::experimental::detail {
 
 // Import types from ttnn::experimental::prim
 using ttnn::experimental::prim::BranchDescriptor;
@@ -91,4 +91,4 @@ void bind_parallel_operation(nb::module_& mod) {
         )doc");
 }
 
-}  // namespace ttnn::operations::experimental::parallel::detail
+}  // namespace ttnn::operations::experimental::detail

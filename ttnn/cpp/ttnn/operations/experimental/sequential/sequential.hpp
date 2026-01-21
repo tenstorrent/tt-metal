@@ -8,7 +8,7 @@
 #include "device/sequential_device_operation_types.hpp"
 #include "device/sequential_branch_descriptor.hpp"
 
-namespace ttnn::operations::experimental::sequential {
+namespace ttnn::operations::experimental {
 
 // Import types from ttnn::experimental::prim
 using ttnn::experimental::prim::BranchDescriptor;
@@ -33,7 +33,7 @@ struct ExecuteSequential {
     static std::shared_ptr<BranchDescriptor> branch(std::vector<std::shared_ptr<StepDescriptor>> steps);
 };
 
-}  // namespace ttnn::operations::experimental::sequential
+}  // namespace ttnn::operations::experimental
 
 namespace ttnn {
 
@@ -43,7 +43,7 @@ using step = ttnn::experimental::prim::Step<DeviceOp>;
 
 // The sequential operation
 constexpr auto sequential =
-    ttnn::register_operation<"ttnn::sequential", ttnn::operations::experimental::sequential::ExecuteSequential>();
+    ttnn::register_operation<"ttnn::sequential", ttnn::operations::experimental::ExecuteSequential>();
 
 }  // namespace ttnn
 

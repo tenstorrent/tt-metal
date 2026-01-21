@@ -6,9 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::parallel::detail {
+namespace ttnn::operations::experimental::detail {
 
 namespace nb = nanobind;
 void bind_parallel_operation(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::parallel::detail
+}  // namespace ttnn::operations::experimental::detail
