@@ -21,6 +21,7 @@
 #include "ttnn/operations/reduction/topk/topk_nanobind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_nanobind.hpp"
 #include "ttnn/operations/reduction/reduce_mean_w_rm/reduce_mean_w_rm_nanobind.hpp"
+#include "ttnn/operations/reduction/centralize_w_rm/centralize_w_rm_nanobind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -46,6 +47,7 @@ void py_module(nb::module_& mod) {
     detail::bind_reduction_topk_operation(mod);
     detail::bind_manual_seed_operation(mod);
     ::ttnn::operations::reduce_mean_w_rm::bind_reduce_mean_w_rm_operation(mod);
+    ::ttnn::operations::centralize_w_rm::bind_centralize_w_rm_operation(mod);
 }
 
 }  // namespace ttnn::operations::reduction

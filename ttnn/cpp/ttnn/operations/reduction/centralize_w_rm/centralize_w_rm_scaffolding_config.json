@@ -1,0 +1,61 @@
+{
+  "operation_name": "centralize_w_rm",
+  "operation_name_pascal": "CentralizeWRm",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::centralize_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/centralize_w_rm",
+  "parameters": [],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 2,
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input must be at least 2D, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input must be interleaved",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.padded_shape()[-1] % 32 == 0",
+      "error_message": "Width must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-1]"]
+    },
+    {
+      "condition": "input.padded_shape()[-2] % 32 == 0",
+      "error_message": "Height must be padded to tile boundary (32), got {}",
+      "error_args": ["input.padded_shape()[-2]"]
+    }
+  ],
+  "output_shape": {
+    "formula": "same_as_input",
+    "cpp_code": "ttnn::Shape output_shape = input.logical_shape();"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Centralizes data by subtracting the row-wise mean from each element.\n\nFor each row (along the last dimension), computes the arithmetic mean and subtracts it from all elements in that row.\nThe result has zero mean along each row.\n\nArgs:\n    input_tensor (ttnn.Tensor): Input tensor in row-major layout (must be at least 2D)\n    memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration\n\nReturns:\n    ttnn.Tensor: Centralized tensor with same shape as input\n\nExample:\n    >>> input = ttnn.from_torch(torch.randn(32, 64), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)\n    >>> output = ttnn.centralize_w_rm(input)\n    >>> # Each row in output has mean approximately 0"
+}

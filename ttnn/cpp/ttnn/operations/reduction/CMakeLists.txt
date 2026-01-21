@@ -78,6 +78,9 @@ target_sources(
         reduce_mean_w_rm/device/reduce_mean_w_rm_device_operation.cpp
         reduce_mean_w_rm/device/reduce_mean_w_rm_program_factory.cpp
         reduce_mean_w_rm/reduce_mean_w_rm.cpp
+        centralize_w_rm/device/centralize_w_rm_device_operation.cpp
+        centralize_w_rm/device/centralize_w_rm_program_factory.cpp
+        centralize_w_rm/centralize_w_rm.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
