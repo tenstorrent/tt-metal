@@ -387,6 +387,20 @@ class NormalRun:
     def to_torch(self):
         """Convert to PyTorch tensor."""
         begin = time.time()
+        if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
+            end = time.time()
+            DispatchManager.record_timing(
+                "Torch",
+                (
+                    ""
+                    if DispatchManager.current_module_name is None
+                    else DispatchManager.current_module_name + ".ttnn_to_torch_no_conversion"
+                ),
+                "ttnn_to_torch_no_conversion",
+                {},
+                end - begin,
+            )
+            return self.elem
 
         def _to_torch(self):
             is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
