@@ -959,10 +959,8 @@ void TestDevice::create_sender_kernels() {
 
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default;
         // Each sender will have the same NOC used for every pattern when parsing, take the one defined in the first config
-        if (!sender.configs_.empty()) {
-            if (sender.configs_[0].first.noc_id.has_value()) {
-                noc_id = sender.configs_[0].first.noc_id.value();
-            }
+        if (sender.configs_[0].first.noc_id.has_value()) {
+            noc_id = sender.configs_[0].first.noc_id.value();
         }
 
         sender.create_kernel(
