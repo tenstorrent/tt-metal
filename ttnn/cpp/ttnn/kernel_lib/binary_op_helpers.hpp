@@ -17,6 +17,30 @@
 /**
  * @file binary_op_helpers.hpp
  * @brief Unified binary operations with direct LLK calls - massively simplified from 1399 to ~500 lines
+ *
+ * ## Broadcast Dimension Reference
+ *
+ * BroadcastDim specifies the SHAPE of operand B and how it broadcasts to match A:
+ *
+ * | BroadcastDim | B Shape   | B Tiles | B Replicates | What Gets Broadcast                    |
+ * |--------------|-----------|---------|--------------|----------------------------------------|
+ * | NONE         | [Ht, Wt]  | Ht * Wt | (none)       | All elements used as-is                |
+ * | ROW          | [1, Wt]   | Wt      | Down (↓)     | Top row of each tile                   |
+ * | COL          | [Ht, 1]   | Ht      | Right (→)    | Leftmost column of each tile           |
+ * | SCALAR       | [1, 1]    | 1       | Both (↓→)    | Top-left element of the single tile    |
+ *
+ * ## Relationship to Reduce Operations
+ *
+ * After reduction, use the corresponding broadcast to apply the result:
+ *
+ * | Reduce Operation | Output Shape | Use Broadcast | Example                     |
+ * |------------------|--------------|---------------|-----------------------------|
+ * | REDUCE_ROW       | [Ht, 1]      | COL           | Subtract row-wise mean      |
+ * | REDUCE_COL       | [1, Wt]      | ROW           | Subtract column-wise mean   |
+ * | REDUCE_SCALAR    | [1, 1]       | SCALAR        | Subtract global mean        |
+ *
+ * Note: REDUCE_ROW produces COL-shaped output (this is correct but counterintuitive).
+ * "REDUCE_ROW" means "reduce along row direction" = sum across width = column output.
  */
 
 namespace compute_kernel_lib {
