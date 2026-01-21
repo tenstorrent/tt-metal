@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -117,7 +117,6 @@ class DRAMStreamingMatmul:
         # Get tiles
         in0_tile = input_a.get_tile()
         in1_tile = input_b.get_tile()
-        out_tile = output_tensor.get_tile()
 
         in0_tile_shape = in0_tile.tile_shape
         in1_tile_shape = in1_tile.tile_shape
@@ -172,9 +171,7 @@ class DRAMStreamingMatmul:
         logger.debug(f"subblock_w={subblock_w}, max_subblock_w={max_subblock_w}")
 
         # Data formats
-        in0_dtype = input_a.dtype
         in1_dtype = input_b.dtype
-        out_dtype = output_tensor.dtype
 
         # Get compute cores
         in1_noc = ttnn.NOC.NOC_0
