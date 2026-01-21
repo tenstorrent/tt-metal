@@ -177,11 +177,10 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     const Tensor& input,
     float /*alpha*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::assign(grad, input_grad.value());
-    result.emplace_back(input_grad);
+    result.emplace_back(
+        input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : ttnn::assign(grad, ttnn::empty_like(input)));
     return result;
 }
 
