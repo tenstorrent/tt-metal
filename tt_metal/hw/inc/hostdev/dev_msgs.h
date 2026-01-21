@@ -79,6 +79,14 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
+// Perf telemetry configuration for D2H socket streaming
+// Placed before profiler_msg_t in mailboxes_t, using space freed from profiler control_vector reduction
+struct perf_telemetry_config_t {
+    volatile uint32_t config_buffer_addr;  // Address of D2H socket config buffer in L1
+    volatile uint32_t trisc_terminate;     // Flag to signal dispatch TRISC to terminate (moved from profiler)
+    volatile uint32_t reserved[2];         // Reserved for future use, maintains 16-byte size
+};
+
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
@@ -392,8 +400,9 @@ struct mailboxes_t {
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
-    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
-        profiler_msg_t profiler;
+    struct perf_telemetry_config_t perf_telemetry;  // 16 bytes, uses space freed from profiler control_vector
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)        // CODEGEN:skip
+        profiler_msg_t profiler;                    // Now 16 bytes smaller (control_vector reduced from 32 to 28)
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().

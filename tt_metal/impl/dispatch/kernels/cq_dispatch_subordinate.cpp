@@ -47,16 +47,8 @@ constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
 // Perf telemetry socket compile-time arguments
-// These are optional - if PERF_TELEMETRY_SOCKET_CONFIG_ADDR is 0, telemetry is disabled
-#ifdef PERF_TELEMETRY_SOCKET_CONFIG_ADDR
-constexpr uint32_t perf_telemetry_socket_config_addr = PERF_TELEMETRY_SOCKET_CONFIG_ADDR;
-constexpr uint32_t perf_telemetry_page_size = PERF_TELEMETRY_PAGE_SIZE;
-constexpr uint32_t perf_telemetry_enabled = 1;
-#else
-constexpr uint32_t perf_telemetry_socket_config_addr = 0;
+// Perf telemetry page size - must match host-side kPerfTelemetryPageSize
 constexpr uint32_t perf_telemetry_page_size = 64;
-constexpr uint32_t perf_telemetry_enabled = 0;
-#endif
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -211,20 +203,28 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
 // Perf Telemetry Socket Functions
 // ============================================================================
 
+// Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
+volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+
 // Initialize the perf telemetry socket interface
-// Must be called once before any perf_telemetry_push() calls
+// Called lazily from perf_telemetry_push() - only inits once if config_buffer_addr is set
+// Returns: true if initialized successfully, false if config not available
 FORCE_INLINE
-void perf_telemetry_init() {
-    if constexpr (!perf_telemetry_enabled) {
-        return;
+bool perf_telemetry_init() {
+    if (perf_telemetry_initialized) {
+        return true;
     }
 
-    if (perf_telemetry_initialized) {
-        return;
+    // Read config buffer address from mailbox
+    uint32_t config_addr = perf_telemetry_mailbox->config_buffer_addr;
+    if (config_addr == 0) {
+        // Config not set by host yet
+        return false;
     }
 
     // Create socket interface from config buffer
-    perf_telemetry_socket = create_sender_socket_interface(perf_telemetry_socket_config_addr);
+    perf_telemetry_socket = create_sender_socket_interface(config_addr);
     set_sender_socket_page_size(perf_telemetry_socket, perf_telemetry_page_size);
 
     // Read PCIe-specific config from the config buffer
@@ -232,7 +232,7 @@ void perf_telemetry_init() {
     // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
     // [15] = l1_data_buffer_address, [16] = l1_data_buffer_size
     // [2] = data_addr_lo (write_ptr)
-    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(perf_telemetry_socket_config_addr);
+    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(config_addr);
     perf_telemetry_pcie_xy_enc = socket_config_words[12];
     perf_telemetry_data_addr_hi = socket_config_words[13];
     perf_telemetry_l1_data_addr = socket_config_words[15];
@@ -252,19 +252,23 @@ void perf_telemetry_init() {
     noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
 
     perf_telemetry_initialized = true;
+    return true;
 }
 
 // Push the L1 data buffer contents to the host as a telemetry page
-// Uses the pre-allocated L1 data buffer address from the socket config
-// Returns: true if data was sent, false if socket not initialized or no L1 buffer
+// Lazily initializes the socket on first call if config is available
+// Returns: true if data was sent, false if not initialized or no L1 buffer
 FORCE_INLINE
 bool perf_telemetry_push() {
     DeviceZoneScopedN("push_perf");
-    if constexpr (!perf_telemetry_enabled) {
+
+    // Try to init if not already initialized
+    if (!perf_telemetry_init()) {
         return false;
     }
 
-    if (!perf_telemetry_initialized || perf_telemetry_l1_data_addr == 0) {
+    // Check if L1 data buffer is available
+    if (perf_telemetry_l1_data_addr == 0) {
         return false;
     }
 
@@ -323,10 +327,6 @@ template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
 }
-
-// Pointer to profiler control buffer for signaling dispatch TRISC to terminate
-volatile tt_l1_ptr uint32_t* dispatch_profiler_control_buffer =
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
@@ -476,9 +476,6 @@ void kernel_main() {
         }
     }
 
-    // Initialize perf telemetry socket if enabled
-    perf_telemetry_init();
-
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
@@ -498,7 +495,7 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 // Signal dispatch TRISC to terminate
-                dispatch_profiler_control_buffer[kernel_profiler::DISPATCH_TRISC_TERMINATE] = 1;
+                perf_telemetry_mailbox->trisc_terminate = 1;
                 done = true;
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);

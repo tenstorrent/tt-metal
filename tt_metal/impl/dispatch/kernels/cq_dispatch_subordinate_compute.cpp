@@ -6,6 +6,7 @@
 #define DISPATCH_KERNEL 1
 #include "tools/profiler/kernel_profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "hostdev/dev_msgs.h"
 
 // Stream register definitions
 #define NOC_OVERLAY_START_ADDR 0xFFB40000
@@ -32,8 +33,12 @@ void MAIN {
     // Array to track last seen count for each stream
     uint32_t last_counts[num_streams_to_monitor] = {0};
 
+    // Pointer to perf telemetry config for reading terminate flag
+    volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_config =
+        reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+
     // Main loop: runs until dispatch_s BRISC signals terminate
-    while (kernel_profiler::profiler_control_buffer[kernel_profiler::DISPATCH_TRISC_TERMINATE] == 0) {
+    while (perf_telemetry_config->trisc_terminate == 0) {
         // Loop over all streams we're monitoring
         for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
             uint32_t stream_id = first_stream_index + i;

@@ -53,9 +53,6 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
-    // Flag set by dispatch_s BRISC when terminate command is received
-    // Used to signal dispatch TRISC to exit its main loop
-    DISPATCH_TRISC_TERMINATE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,
@@ -85,7 +82,8 @@ struct TimestampedDataSize<TS_DATA_16B> {
 };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
-constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+// Reduced from 32 to 28 - freed space used by perf_telemetry_config_t in mailboxes_t
+constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 28;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
