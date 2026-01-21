@@ -15,10 +15,10 @@ inline void llk_math_eltwise_unary_sfpu_silu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>(sfpu::silu_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, 8>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel
