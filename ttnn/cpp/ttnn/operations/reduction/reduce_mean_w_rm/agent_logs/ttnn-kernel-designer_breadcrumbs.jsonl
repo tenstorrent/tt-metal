@@ -12,3 +12,6 @@
 {"event":"design_decision","phase":"reader_scaler","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use generate_reduce_scaler pattern","ts":"2026-01-21T13:49:14+00:00"}
 {"event":"design_decision","phase":"reader_data","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use noc_async_read with TensorAccessor","ts":"2026-01-21T13:49:14+00:00"}
 {"event":"design_decision","phase":"writer","choice":"NO HELPER","rationale":"Dataflow kernels do not use compute helpers; use noc_async_write with TensorAccessor","ts":"2026-01-21T13:49:15+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-kernel-designer] design: reduce_mean_w_rm","ts":"2026-01-21T13:49:29+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"147408ed05","ts":"2026-01-21T13:49:29+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["kernel_design"],"final_commit":"147408ed05","ts":"2026-01-21T13:49:29+00:00"}
