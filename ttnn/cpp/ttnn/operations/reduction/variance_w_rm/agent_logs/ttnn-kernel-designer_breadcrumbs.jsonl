@@ -10,3 +10,5 @@
 {"event":"design_decision","phase":"square","choice":"USE HELPER","helper":"square<WaitUpfrontPopAtEnd>","rationale":"Uses binary_op<SQUARE> with same CB for A and B, WaitUpfront since centralized tiles just pushed","ts":"2026-01-21T16:12:41+00:00"}
 {"event":"design_decision","phase":"reduce_variance","choice":"USE HELPER","helper":"reduce<SUM, REDUCE_ROW, STREAMING>","rationale":"STREAMING mode since squared tiles not reused after variance reduce","ts":"2026-01-21T16:12:41+00:00"}
 {"event":"action","type":"git_commit","message":"[ttnn-kernel-designer] design: variance_w_rm","ts":"2026-01-21T16:12:42+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"92181e2830","ts":"2026-01-21T16:13:01+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["kernel_design"],"final_commit":"92181e2830","ts":"2026-01-21T16:13:01+00:00"}
