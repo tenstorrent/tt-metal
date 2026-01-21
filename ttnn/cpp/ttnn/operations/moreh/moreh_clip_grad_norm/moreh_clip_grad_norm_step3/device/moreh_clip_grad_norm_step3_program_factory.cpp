@@ -25,7 +25,7 @@ std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
 
 MorehClipGradNormStep3Operation::ProgramFactory::cached_program_t
 MorehClipGradNormStep3Operation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
     const auto& clip_coef_clamped = tensor_args.clip_coef_clamped;
@@ -137,7 +137,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
 
 void MorehClipGradNormStep3Operation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
     auto& program = cached_program.program;

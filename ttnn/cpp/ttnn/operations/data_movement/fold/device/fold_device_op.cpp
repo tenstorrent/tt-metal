@@ -4,11 +4,12 @@
 
 #include "fold_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
 
 Fold::program_factory_t Fold::select_program_factory(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    const operation_attributes_t& op_attr, const tensor_args_t& /*tensors*/) {
     if (op_attr.is_sharded) {
         return MultiCore{};
     }
@@ -126,10 +127,10 @@ ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
-    const std::optional<const ttnn::Shape>& output_shape,
-    uint32_t pad_c,
-    uint32_t pad_h,
-    uint32_t pad_w) {
+    const std::optional<const ttnn::Shape>& /*output_shape*/,
+    uint32_t /*pad_c*/,
+    uint32_t /*pad_h*/,
+    uint32_t /*pad_w*/) {
     using OperationType = ttnn::operations::data_movement::Fold;
     bool is_sharded = input_tensor.is_sharded();
     bool is_dram_interleaved =

@@ -140,7 +140,7 @@ void AllGatherAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.logical_shape();  // TODO: Replace with logical_shape()
+    auto shape = input_tensor.logical_shape();
     shape[this->dim] *= this->ring_size;
     return {TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
@@ -160,9 +160,10 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
+    } else {
+        TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
+        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
-    TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
-    return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_workload(
@@ -236,11 +237,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
 }
 
 tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].padded_shape();
-    auto input_memory_layout = input_tensors[0].layout();
-    auto input_dtype = input_tensors[0].dtype();
-    auto input_memory_config = input_tensors[0].memory_config();
+    log_trace(tt::LogOp, "AllGatherAsync::compute_program_hash is called");
+
+    const ttnn::Tensor& input_tensor = input_tensors[0];
+
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,
@@ -261,10 +261,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->use_all_gather_async_llama_sharded,
         this->use_optimal_ccl_for_llama,
         this->reverse_order,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        input_tensor);
 }
 
 namespace operations::experimental::ccl {

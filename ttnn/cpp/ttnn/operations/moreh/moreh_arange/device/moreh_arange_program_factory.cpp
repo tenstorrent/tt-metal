@@ -10,7 +10,7 @@
 namespace ttnn::operations::moreh::moreh_arange {
 MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     auto dtype = output.dtype();
     auto W = output.padded_shape()[-1];
@@ -84,8 +84,8 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
 
 void MorehArangeOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     const auto& program = cached_program.program;
     const auto& kernel_id = cached_program.shared_variables.kernel_id;

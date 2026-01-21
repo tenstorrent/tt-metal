@@ -111,7 +111,7 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -145,7 +145,8 @@ run_t3000_qwen3_tests() {
   qwen32b=Qwen/Qwen3-32B
   tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
+  # Run Qwen3.32B with max_seq_len 32k
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --max_seq_len 32768 --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -334,6 +335,10 @@ run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
+}
+
 
 run_t3000_gemma3_tests() {
   # Record the start time
@@ -413,7 +418,7 @@ run_t3000_gpt_oss_tests() {
   start_time=$(date +%s)
 
   # Install gpt-oss requirements
-  pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
   HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
@@ -477,6 +482,9 @@ run_t3000_tests() {
 
   # Run motif tests
   run_t3000_motif_tests
+
+  # Run qwenimage tests
+  run_t3000_qwenimage_tests
 
   # Run gemma3 tests
   run_t3000_gemma3_tests

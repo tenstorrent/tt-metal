@@ -7,9 +7,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
-namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct CreateQKVHeadsFromSeparateTensorsParams {
     const uint32_t num_q_heads;
     const uint32_t num_kv_heads;
     const uint32_t head_dim;
@@ -17,13 +17,13 @@ struct operation_attributes_t {
     const tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct CreateQKVHeadsFromSeparateTensorsInputs {
     const Tensor& input_tensor;
     const Tensor& input_tensor_kv;
     const std::optional<std::array<Tensor, 3>>& optional_output_tensors;
 };
 
-using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
-using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
+using CreateQKVHeadsFromSeparateTensorsResult = std::tuple<Tensor, Tensor, Tensor>;
+using CreateQKVHeadsFromSeparateTensorsResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors
+}  // namespace ttnn::experimental::prim

@@ -9,14 +9,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
 RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlamaFusedQKProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
+    const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
+    RotaryEmbeddingLlamaFusedQkResult& tensor_return_value) {
     Program program{};
 
     const auto& q_input = tensor_args.q_input;
@@ -223,9 +223,9 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
 
 void RotaryEmbeddingLlamaFusedQKProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RotaryEmbeddingLlamaFusedQkParams& /*operation_attributes*/,
+    const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
+    RotaryEmbeddingLlamaFusedQkResult& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
@@ -247,4 +247,4 @@ void RotaryEmbeddingLlamaFusedQKProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_k_output, *k_dst_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program
+}  // namespace ttnn::experimental::prim

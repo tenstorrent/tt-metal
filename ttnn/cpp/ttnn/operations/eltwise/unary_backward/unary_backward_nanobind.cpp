@@ -1254,11 +1254,11 @@ void py_module(nb::module_& mod) {
         ttnn::rdiv_bw,
         "scalar",
         "divisor",
-        "round_mode",
+        "rounding_mode",
         "Mode of Rounding",
         "None",
-        R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`round_mode`.
-        :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc");
+        R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`rounding_mode`.
+        :attr:`rounding_mode` can be 'None', 'trunc', or 'floor'.)doc");
 
     bind_unary_backward_shape(
         mod,

@@ -35,7 +35,7 @@ namespace decorators {
 namespace nb = nanobind;
 
 template <typename T, typename return_t, typename... args_t>
-constexpr auto resolve_call_method(return_t (*function)(args_t...)) {
+constexpr auto resolve_call_method(return_t (* /*function*/)(args_t...)) {
     return [](const T& self, args_t... args) { return self(std::forward<args_t>(args)...); };
 }
 
@@ -152,8 +152,7 @@ auto bind_registered_operation(
         "Fully qualified name of the api");
 
     // Attribute to identify of ttnn operations
-    py_operation.def_prop_ro(
-        "__ttnn_operation__", [](const registered_operation_t& self) { return std::nullopt; });
+    py_operation.def_prop_ro("__ttnn_operation__", [](const registered_operation_t& /*self*/) { return std::nullopt; });
 
     (
         [&py_operation](auto&& overload) {

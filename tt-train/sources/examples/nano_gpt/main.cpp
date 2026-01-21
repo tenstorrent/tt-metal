@@ -712,7 +712,7 @@ int main(int argc, char **argv) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
                 if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
-                    ttml::core::distributed::synchronize_parameters(parameters);
+                    ttml::core::distributed::synchronize_gradients(parameters);
                 }
 
                 if (training_config.use_clip_grad_norm) {

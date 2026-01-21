@@ -8,13 +8,14 @@
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
 LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return LlamaReduceScatterCreateHeads{};
 }
 
@@ -54,7 +55,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_mis
 }
 
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 LlamaReduceScatterCreateHeadsDeviceOperation::spec_return_value_t
 LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
