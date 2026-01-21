@@ -155,9 +155,6 @@ def run_deepseek_minimal_all_reduce_impl(
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
 
-    # Same memory config for intermediate tensor
-    intermediate_mem_config = input_mem_config
-
     input_tensor_mesh_list = []
     intermediate_tensor_list = []
     golden_output_list = []
