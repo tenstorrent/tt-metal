@@ -36,7 +36,6 @@ import sys
 import numpy as np
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-import ttnn
 import ttml
 
 if __name__ == "__main__":
@@ -56,14 +55,18 @@ if __name__ == "__main__":
         print("Rank 0 is sending data")
         tensor_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], dtype=np.float32)
         tensor_data = tensor_data.reshape(1, 1, 2, 4)
-        tensor = ttml.autograd.Tensor.from_numpy(tensor_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+        tensor = ttml.autograd.Tensor.from_numpy(
+            tensor_data, layout=ttml.Layout.TILE, new_type=ttml.autograd.DataType.BFLOAT16
+        )
 
         for dest_rank in range(1, world_size):
             socket_manager.send(tensor, distributed_ctx, dest_rank)
     else:
         print(f"Rank {rank} is receiving data")
         tensor_data = np.zeros((1, 1, 2, 4), dtype=np.float32)
-        tensor = ttml.autograd.Tensor.from_numpy(tensor_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+        tensor = ttml.autograd.Tensor.from_numpy(
+            tensor_data, layout=ttml.Layout.TILE, new_type=ttml.autograd.DataType.BFLOAT16
+        )
         tensor = socket_manager.recv(tensor, distributed_ctx, 0)
         tensor_data = tensor.to_numpy().flatten()
         assert tensor_data.tolist() == [

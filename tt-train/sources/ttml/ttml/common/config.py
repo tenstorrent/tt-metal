@@ -25,15 +25,19 @@ class DeviceConfig:
             device_config = yaml_config.get("device_config", {})
 
         self.mesh_shape = device_config.get("mesh_shape", [1, 1])
-        self.device_ids = device_config.get("device_ids", None)
+        self.device_ids = device_config.get("device_ids", [])
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 
         # Based on current configs, DDP and TP cannot be both enabled
-        assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
+        assert not (
+            self.enable_ddp and self.enable_tp
+        ), "DDP and TP cannot be both enabled."
 
         # we currently support only [1, N] mesh shapes
-        assert self.mesh_shape[0] == 1, f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
+        assert (
+            self.mesh_shape[0] == 1
+        ), f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -62,11 +66,8 @@ class TrainingConfig:
 
         self.seed = int(tc.get("seed", 42))
         self.batch_size = int(tc.get("batch_size", 64))
-        self.validation_batch_size = int(tc.get("validation_batch_size", max(self.batch_size // 2, 1)))
         self.steps = int(tc.get("max_steps", 1000))
-        self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
-        self.save_every = int(tc.get("model_save_interval", 500))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
         self.model_config = tc.get("model_config", None)
         tokenizer_type = tc.get("tokenizer_type", "bpe")
@@ -83,7 +84,6 @@ class TrainingConfig:
         self.beta2 = float(tc.get("beta2", 0.999))
         self.eps = float(tc.get("eps", 1e-8))
         self.weight_decay = float(tc.get("weight_decay", 0.01))
-        self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
 
 class TransformerConfig:
@@ -124,30 +124,9 @@ class TransformerConfig:
             self.scaling_factor = self.rope.get("scaling_factor", None)
             self.high_freq_factor = self.rope.get("high_freq_factor", None)
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
-            self.original_context_length = self.rope.get("original_context_length", None)
-
-
-class SchedulerConfig:
-    """Configuration for learning rate scheduler."""
-
-    def __init__(self, yaml_config: dict):
-        """Initialize scheduler configuration from YAML config.
-
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        sc = yaml_config.get("scheduler_config", {})
-        tc = yaml_config.get("training_config", {})
-        self.max_lr = float(sc.get("max_lr", 0.001))
-        self.min_lr = float(sc.get("min_lr", 0.0))
-        self.warmup_steps = int(sc.get("warmup_steps", 100))
-        self.hold_steps = int(sc.get("hold_steps", 0))
-        self.total_steps = int(tc.get("total_steps", 1000))
-
-        # optional momentum warmup (beta1 ramp)
-        self.beta1_start = float(sc.get("beta1_start", 0.85))
-        self.beta1_end = float(sc.get("beta1_end", 0.95))
-        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
+            self.original_context_length = self.rope.get(
+                "original_context_length", None
+            )
 
 
 class PipelineParallelHostConfig:
@@ -158,7 +137,9 @@ class PipelineParallelHostConfig:
 
     def __init__(self, cfg: dict):
         self.num_blocks = int(cfg.get("num_blocks", 0))
-        self.blocks_per_rank = {int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()}
+        self.blocks_per_rank = {
+            int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()
+        }
 
 
 class MultiHostConfig:
@@ -180,25 +161,9 @@ class MultiHostConfig:
         self.socket_type = str(mh.get("socket_type", "mpi")).strip().lower()
 
         pp_cfg = mh.get("pipeline_parallel_config")
-        self.pipeline_parallel_config = PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
-
-
-def yaml_deep_update(original: dict, updates: dict) -> dict:
-    """Recursively update a dictionary with another dictionary.
-
-    Args:
-        original: Original dictionary to be updated
-        updates: Dictionary containing updates
-
-    Returns:
-        Updated dictionary
-    """
-    for key, value in updates.items():
-        if isinstance(value, dict) and key in original and isinstance(original[key], dict):
-            original[key] = yaml_deep_update(original[key], value)
-        else:
-            original[key] = value
-    return original
+        self.pipeline_parallel_config = (
+            PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
+        )
 
 
 def load_config(path: str, configs_root: str = None) -> dict:

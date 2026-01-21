@@ -51,50 +51,21 @@ def save_to_yaml(data_list, vocab_size, output_file):
     print(f"Saved tokenized data as YAML to {output_file}")
 
 
-def tokenize_string(hf_tokenizer, text):
-    """
-    Tokenizes a single string and returns comma-separated token IDs.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer)
-    tokenized_data = tokenizer.encode(text)
-    return ",".join(map(str, tokenized_data))
-
-
-def decode_tokens(hf_tokenizer, tokens_str):
-    """
-    Decodes comma-separated token IDs back to text.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer)
-    # Parse comma-separated token IDs
-    token_ids = [int(token.strip()) for token in tokens_str.split(",")]
-    decoded_text = tokenizer.decode(token_ids)
-    return decoded_text
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Preprocess a text dataset using a tokenizer and save tokenized data with metadata (vocab size, data length) in YAML format, or tokenize/decode strings."
+        description="Preprocess a text dataset using a tokenizer and save tokenized data with metadata (vocab size, data length) in YAML format."
     )
     parser.add_argument(
         "--text_file",
         type=str,
+        required=True,
         help="Path to the input text dataset (e.g., merged.txt).",
-    )
-    parser.add_argument(
-        "--string",
-        type=str,
-        help="String to tokenize (outputs comma-separated token IDs).",
-    )
-    parser.add_argument(
-        "--decode",
-        type=str,
-        help="Comma-separated token IDs to decode back to text.",
     )
     parser.add_argument(
         "--hf_tokenizer",
         type=str,
         required=True,
-        help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2, meta-llama/Llama-3.2-1B).",
+        help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2).",
     )
     parser.add_argument(
         "--output_file",
@@ -105,26 +76,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Mode 1: Tokenize a single string
-    if args.string:
-        print(f"Tokenizing string using {args.hf_tokenizer}...")
-        tokens = tokenize_string(args.hf_tokenizer, args.string)
-        print(f"\nTokenized output:")
-        print(tokens)
-        return
-
-    # Mode 2: Decode tokens to text
-    if args.decode:
-        print(f"Decoding tokens using {args.hf_tokenizer}...")
-        decoded_text = decode_tokens(args.hf_tokenizer, args.decode)
-        print(f"\nDecoded text:")
-        print(decoded_text)
-        return
-
-    # Mode 3: Tokenize a file
-    if not args.text_file:
-        parser.error("Either --text_file, --string, or --decode must be provided")
-
     # Load text data
     print(f"Loading text data from {args.text_file}...")
     text_data = load_text_data(args.text_file)
@@ -134,7 +85,9 @@ def main():
     splits_num = 128
     tokenized_data = []
     for i in range(splits_num):
-        text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
+        text_data_split = text_data[
+            i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num
+        ]
         tokenized_data_split = tokenizer.encode(text_data_split)
         tokenized_data.extend(tokenized_data_split)
 

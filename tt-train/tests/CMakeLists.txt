@@ -57,11 +57,9 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
-    ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
-    utils/memory_utils_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -111,22 +109,3 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
-
-############################################################################################################################
-# Benchmark tests (using Google Benchmark)
-# Only available when building via tt-metal (Build from tt-train would require adding new dependency)
-############################################################################################################################
-
-if(TARGET benchmark::benchmark)
-    set(BENCHMARK_SOURCES benchmark/matmuls_benchmark.cpp)
-
-    add_executable(ttml_benchmarks ${BENCHMARK_SOURCES})
-    target_link_libraries(
-        ttml_benchmarks
-        PUBLIC
-            ttml
-            TTNN::TTNN
-            benchmark::benchmark
-    )
-    target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
-endif()

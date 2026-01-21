@@ -272,7 +272,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         // synchronize gradients for multi-device case, no-op if single device
         auto parameters = model->parameters();
         if (!use_tensor_parallel) {
-            ttml::core::distributed::synchronize_gradients(parameters);
+            ttml::core::distributed::synchronize_parameters(parameters);
         }
 
         optimizer->step();

@@ -13,17 +13,12 @@ import sys
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 
 import ttml
-from ttml.common.config import (
-    load_config,
-    DeviceConfig,
-    TrainingConfig,
-    MultiHostConfig,
-)
+from ttml.common.config import get_config, DeviceConfig, TrainingConfig, MultiHostConfig
 from ttml.common.utils import set_seed, initialize_device, create_optimizer
 from ttml.common.model_factory import TransformerModelFactory
 import click
 
-from ttml.common.data import prepare_data
+from data import prepare_data
 from trainer import train
 
 
@@ -38,7 +33,7 @@ def main(config: str):
         config: Path to YAML configuration file (relative to configs directory)
     """
     # Load configuration and set seed
-    yaml_config = load_config(config)
+    yaml_config = get_config(config)
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
@@ -89,13 +84,7 @@ def main(config: str):
 
     # Execute training
     train_losses, val_losses = train(
-        training_cfg,
-        model,
-        optimizer,
-        train_ids,
-        val_ids,
-        device_config.enable_ddp,
-        device_config.enable_tp,
+        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
     )
 
     # Cleanup

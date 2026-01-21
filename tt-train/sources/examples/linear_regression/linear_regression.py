@@ -30,7 +30,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ---------------------------------------------------------------------------
 # Import TTML (adjust path if needed)
 # ---------------------------------------------------------------------------
-import ttnn  # noqa: E402
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttml  # noqa: E402
 
 
@@ -53,11 +53,7 @@ def make_synthetic_regression(
     seed: int = 42,
 ) -> Split:
     X, y = datasets.make_regression(
-        n_samples=n_samples,
-        n_features=n_features,
-        n_targets=1,
-        noise=noise,
-        random_state=seed,
+        n_samples=n_samples, n_features=n_features, n_targets=1, noise=noise, random_state=seed
     )
     X = X.astype(np.float32)
     y = y.astype(np.float32)
@@ -83,11 +79,7 @@ class TTMLConfig:
 
 
 def train_ttml_linear_regression(
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    n_features: int,
-    cfg: TTMLConfig,
-    verbose: bool = True,
+    x_train: np.ndarray, y_train: np.ndarray, n_features: int, cfg: TTMLConfig, verbose: bool = True
 ):
     """
     Trains TTML linear regression (2D -> 1D generalizes via n_features).
@@ -123,7 +115,7 @@ def train_ttml_linear_regression(
             opt.step()
 
             if verbose:
-                loss_val = float(tt_loss.to_numpy(ttnn.DataType.FLOAT32))
+                loss_val = float(tt_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
                 print(f"[epoch {epoch+1}/{cfg.epochs}] step_loss={loss_val:.6f}")
 
             pos = end_pos
@@ -144,7 +136,7 @@ def predict_ttml(model, x: np.ndarray, n_features: int, batch_size: int = 256) -
         bsz = end_pos - pos
         x_batch = x[pos:end_pos].reshape(bsz, 1, 1, n_features)
         tt_x = ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
-        tt_y = model(tt_x).to_numpy(ttnn.DataType.FLOAT32).reshape(bsz)
+        tt_y = model(tt_x).to_numpy(ttml.autograd.DataType.FLOAT32).reshape(bsz)
         preds.append(tt_y)
         pos = end_pos
     return np.concatenate(preds, axis=0)
@@ -224,11 +216,7 @@ def main():
         lr=0.1,
     )
     model = train_ttml_linear_regression(
-        split.x_train,
-        split.y_train,
-        n_features=args.n_features,
-        cfg=cfg,
-        verbose=args.verbose,
+        split.x_train, split.y_train, n_features=args.n_features, cfg=cfg, verbose=args.verbose
     )
     # TTML predict & evaluate
     y_pred_ttml = predict_ttml(model, split.x_test, n_features=args.n_features, batch_size=32)
@@ -236,11 +224,11 @@ def main():
 
     # TTML params
     params = model.parameters()
-    # Find weight and bias keys dynamically (works for both Python and C++ models)
-    weight_key = [k for k in params.keys() if "weight" in k.lower()][0]
-    bias_key = [k for k in params.keys() if "bias" in k.lower()][0]
-    ttml_w = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)  # shape: [n_features]
-    ttml_b = params[bias_key].to_numpy(ttnn.DataType.FLOAT32).item()
+    print(params.keys())
+    ttml_w = (
+        params["linear/weight"].to_numpy(ttml.autograd.DataType.FLOAT32).reshape(-1)
+    )  # shape: [n_features] (no bias)
+    ttml_b = params["linear/bias"].to_numpy(ttml.autograd.DataType.FLOAT32).item()
 
     # sklearn baseline
     sk = fit_sklearn_baseline(split.x_train, split.y_train, split.x_test, split.y_test)

@@ -29,8 +29,7 @@ private:
 public:
     explicit DistributedLlama(const LlamaConfig& config);
     virtual ~DistributedLlama() = default;
-    ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
 };
 
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config);

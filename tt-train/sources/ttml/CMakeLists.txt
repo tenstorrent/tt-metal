@@ -129,8 +129,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
@@ -185,8 +183,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.hpp
 )
 
 # Manually select only specific files from metal ops
@@ -278,19 +274,6 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
-    # SDPA Backward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
     # SGD Fused Optimizer
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
@@ -571,20 +554,7 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-# Install Python source files
-install(
-    DIRECTORY
-        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
-    DESTINATION .
-    COMPONENT ttml
-    FILES_MATCHING
-    PATTERN
-    "*.py"
-    PATTERN
-    "__pycache__"
-        EXCLUDE
-)
-
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
         _ttml
@@ -593,7 +563,19 @@ install(
         COMPONENT ttml
 )
 
-target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+# Install Python source files
+install(
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
+    DESTINATION ttml
+    COMPONENT ttml
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
+)
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
