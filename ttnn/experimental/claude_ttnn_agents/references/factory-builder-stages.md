@@ -194,12 +194,8 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    # Note: Run 'tt-smi -ls' first to verify device 0 is available
-    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
+# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
 
 def test_device_op_called(device):
     """Operation should reach program factory, not fail at validation"""
@@ -331,12 +327,8 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    # Note: Run 'tt-smi -ls' first to verify device 0 is available
-    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
+# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
 
 def test_program_factory_creates_cbs(device):
     """Program factory should create CBs before failing at kernel creation"""
@@ -518,10 +510,7 @@ import pytest
 import torch
 import ttnn
 
-@pytest.fixture
-def device():
-    with ttnn.manage_device(device_id=0) as dev:
-        yield dev
+# NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
 
 def test_kernels_compile_at_runtime(device):
     """Kernels should compile without errors when operation runs"""
