@@ -13,10 +13,10 @@ import pathlib
 import sys
 from datetime import datetime
 from functools import wraps
-
+from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
-
 import ttnn
+
 
 # Global counter for operation numbering in trace files
 _OPERATION_COUNTER = 0
@@ -31,21 +31,33 @@ _TRACE_PARAMS_IN_ARGV = None
 # Flag to prevent recursion during serialization
 _IS_SERIALIZING = False
 
+# Flag to control whether tensor values are serialized (default False)
+_SERIALIZE_TENSOR_VALUES = False
 
-def _is_tracing_enabled():
+# Command-line flag constants
+_TRACE_PARAMS_FLAG = "--trace-params"
+_TRACE_PARAMS_WITH_VALUES_FLAG = "--trace-params-with-values"
+
+
+def _is_tracing_enabled() -> bool:
     """Check if tracing is enabled, caching the sys.argv check."""
     global _TRACE_PARAMS_IN_ARGV
 
     # Check sys.argv only once and cache the result
     if _TRACE_PARAMS_IN_ARGV is None:
-        _TRACE_PARAMS_IN_ARGV = "--trace-params" in sys.argv
+        _TRACE_PARAMS_IN_ARGV = _TRACE_PARAMS_FLAG in sys.argv
 
     return _ENABLE_TRACE or _TRACE_PARAMS_IN_ARGV
 
 
 def serialize_operation_parameters(
-    operation_name: str, function_args: tuple, function_kwargs: dict, log_dir: pathlib.Path, return_value=None
-):
+    operation_name: str,
+    function_args: Tuple[Any, ...],
+    function_kwargs: Dict[str, Any],
+    log_dir: pathlib.Path,
+    return_value: Optional[Any] = None,
+    serialize_tensor_values: bool = True,
+) -> None:
     """Serialize operation parameters and return value to a single JSON file.
 
     Args:
@@ -54,6 +66,7 @@ def serialize_operation_parameters(
         function_kwargs: Keyword arguments passed to the operation
         log_dir: Directory where to save the serialized parameters
         return_value: Optional return value from the operation to serialize
+        serialize_tensor_values: If True, include tensor values in serialization. If False, only include metadata.
     """
     global _OPERATION_COUNTER, _IS_SERIALIZING
 
@@ -76,39 +89,48 @@ def serialize_operation_parameters(
         serialized_args = []
         tensor_counter = 0
 
-        def serialize_value(value, name_prefix=""):
+        def serialize_value(value: Any, name_prefix: str = "") -> Any:
             """Recursively serialize a value, handling tensors specially."""
             nonlocal tensor_counter
 
             if isinstance(value, ttnn.Tensor):
-                # Move tensor to CPU and convert to numpy for human-readable format
-                cpu_tensor = value
-                if hasattr(ttnn, "from_device"):
-                    cpu_tensor = ttnn.from_device(value)
-                elif hasattr(value, "cpu"):
-                    cpu_tensor = value.cpu()
-
-                # Convert to torch then to numpy for readable values
-                import torch
-
-                torch_tensor = ttnn.to_torch(cpu_tensor)
-                # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                if torch_tensor.dtype == torch.bfloat16:
-                    torch_tensor = torch_tensor.float()
-                numpy_array = torch_tensor.numpy()
-
-                # Convert numpy array to nested lists for JSON serialization
-                values = numpy_array.tolist()
-
                 # Store tensor data directly in metadata (not as separate file)
-                tensor_data = {
+                tensor_data: Dict[str, Any] = {
                     "type": "ttnn.Tensor",
-                    "shape": list(numpy_array.shape),
-                    "dtype": str(numpy_array.dtype),
-                    "values": values,
                     "original_shape": list(value.shape) if hasattr(value, "shape") else None,
                     "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
                 }
+
+                # Only serialize tensor values if requested
+                if serialize_tensor_values:
+                    if torch is None:
+                        raise ImportError("torch is required for tensor value serialization")
+                    # Move tensor to CPU and convert to numpy for human-readable format
+                    cpu_tensor = value
+                    if hasattr(ttnn, "from_device"):
+                        cpu_tensor = ttnn.from_device(value)
+                    elif hasattr(value, "cpu"):
+                        cpu_tensor = value.cpu()
+
+                    # Convert to torch then to numpy for readable values
+                    torch_tensor = ttnn.to_torch(cpu_tensor)
+                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+                    if torch_tensor.dtype == torch.bfloat16:
+                        torch_tensor = torch_tensor.float()
+                    numpy_array = torch_tensor.numpy()
+
+                    # Convert numpy array to nested lists for JSON serialization
+                    values = numpy_array.tolist()
+
+                    tensor_data["shape"] = list(numpy_array.shape)
+                    tensor_data["dtype"] = str(numpy_array.dtype)
+                    tensor_data["values"] = values
+                else:
+                    # Only include shape and dtype metadata without values
+                    if hasattr(value, "shape"):
+                        tensor_data["shape"] = list(value.shape)
+                    if hasattr(value, "dtype"):
+                        tensor_data["dtype"] = str(value.dtype)
 
                 # Get layout if available (check if it's a property or method)
                 if hasattr(value, "layout"):
@@ -130,22 +152,28 @@ def serialize_operation_parameters(
                 return tensor_data
 
             # Handle torch.Tensor objects (e.g., passed to from_torch)
-            import torch
-
-            if isinstance(value, torch.Tensor):
-                # Convert torch tensor to numpy for serialization
-                # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                if value.dtype == torch.bfloat16:
-                    numpy_array = value.detach().cpu().float().numpy()
-                else:
-                    numpy_array = value.detach().cpu().numpy()
-
-                tensor_data = {
+            if torch is not None and isinstance(value, torch.Tensor):
+                tensor_data: Dict[str, Any] = {
                     "type": "torch.Tensor",
-                    "shape": list(numpy_array.shape),
-                    "dtype": str(numpy_array.dtype),
-                    "values": numpy_array.tolist(),
                 }
+
+                # Only serialize tensor values if requested
+                if serialize_tensor_values:
+                    # Convert torch tensor to numpy for serialization
+                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+                    if value.dtype == torch.bfloat16:
+                        numpy_array = value.detach().cpu().float().numpy()
+                    else:
+                        numpy_array = value.detach().cpu().numpy()
+
+                    tensor_data["shape"] = list(numpy_array.shape)
+                    tensor_data["dtype"] = str(numpy_array.dtype)
+                    tensor_data["values"] = numpy_array.tolist()
+                else:
+                    # Only include shape and dtype metadata without values
+                    tensor_data["shape"] = list(value.shape)
+                    tensor_data["dtype"] = str(value.dtype)
+
                 tensor_counter += 1
                 return tensor_data
 
@@ -195,16 +223,19 @@ def serialize_operation_parameters(
             operation_data["return_value"] = serialized_return_value
 
         # Save to single JSON file
-        with open(file_path, "w") as f:
-            json.dump(operation_data, f, indent=2, default=str)
-
-        logger.debug(f"Serialized operation {operation_name} parameters to {file_path}")
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(operation_data, f, indent=2, default=str)
+            logger.debug(f"Serialized operation {operation_name} parameters to {file_path}")
+        except (OSError, IOError) as e:
+            logger.error(f"Failed to write trace file {file_path}: {e}")
+            raise
     finally:
         # Always reset serialization flag, even if an exception occurs
         _IS_SERIALIZING = False
 
 
-def wrap_function_for_tracing(original_function, operation_name: str):
+def wrap_function_for_tracing(original_function: Any, operation_name: str) -> Any:
     """Wrap a function to trace its parameters and return value.
 
     Args:
@@ -238,8 +269,24 @@ def wrap_function_for_tracing(original_function, operation_name: str):
             else:
                 log_dir = pathlib.Path("generated/ttnn/operation_parameters")
 
+            # Determine if tensor values should be serialized
+            # Check config first, then command-line flag, then global flag (default False)
+            serialize_values = _SERIALIZE_TENSOR_VALUES
+            if hasattr(ttnn.CONFIG, "serialize_tensor_values"):
+                serialize_values = ttnn.CONFIG.serialize_tensor_values
+            # Check for --trace-params-with-values flag to enable value serialization
+            if _TRACE_PARAMS_WITH_VALUES_FLAG in sys.argv:
+                serialize_values = True
+
             # Serialize parameters and return value after the operation completes
-            serialize_operation_parameters(operation_name, function_args, function_kwargs, log_dir, return_value)
+            serialize_operation_parameters(
+                operation_name,
+                function_args,
+                function_kwargs,
+                log_dir,
+                return_value,
+                serialize_tensor_values=serialize_values,
+            )
 
         return return_value
 

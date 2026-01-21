@@ -18,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
