@@ -29,7 +29,7 @@ TtDeiTForImageClassification::TtDeiTForImageClassification(
             auto it = state_dict.find(full_key);
             if (it != state_dict.end()) {
                 required_state_dict[full_key] = it->second;
-                state_dict.erase(it);  // 直接从原始map中删除
+                state_dict.erase(it);  // Remove directly from the original map
             }
         }
 

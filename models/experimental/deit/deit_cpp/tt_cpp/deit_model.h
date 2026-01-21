@@ -94,7 +94,6 @@ private:
     // Configuration and device
     DeiTConfig config_;
     std::shared_ptr<ttnn::MeshDevice> device_;
-    bool add_pooling_layer_;
 
     // Model components
     std::unique_ptr<TtDeiTEmbeddings> embeddings_;

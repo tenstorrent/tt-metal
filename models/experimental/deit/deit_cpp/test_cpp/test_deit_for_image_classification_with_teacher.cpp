@@ -292,13 +292,11 @@ int main(int argc, char** argv) {
     try {
         std::cout << "Starting DeiT for Image Classification with Teacher test..." << std::endl;
 
-        // Default model path (relative path)
-        std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_teacher_model.pt";
-
-        // Check if model path is provided as command line argument
-        if (argc > 1) {
-            model_path = argv[1];
+        if (argc != 2) {
+            std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+            return -1;
         }
+        std::string model_path = argv[1];
 
         std::cout << "Using model path: " << model_path << std::endl;
 

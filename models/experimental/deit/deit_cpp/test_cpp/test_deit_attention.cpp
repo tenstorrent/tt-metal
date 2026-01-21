@@ -54,7 +54,7 @@ void test_deit_attention_inference(const std::string& model_path) {
 
         std::cout << "Successfully loaded model from: " << model_path << std::endl;
 
-        // 加载模型参数到state_dict
+        // Load model parameters into state_dict
         std::vector<std::string> required_params = {
             "attention.query.weight", "attention.query.bias",
             "attention.key.weight", "attention.key.bias",
@@ -62,7 +62,7 @@ void test_deit_attention_inference(const std::string& model_path) {
             "output.dense.weight", "output.dense.bias"
         };
 
-        // 使用 named_parameters() 方法直接获取参数
+        // Use the named_parameters() method to get parameters directly
         auto named_params = model.named_parameters();
         std::unordered_map<std::string, at::Tensor> param_map;
         for (const auto& pair : named_params) {
@@ -90,10 +90,10 @@ void test_deit_attention_inference(const std::string& model_path) {
         auto model_to_use = model.attr("model").toModule();
         auto encoder = model_to_use.attr("encoder").toModule();
 
-        // 从输出可以看到layer不是列表，而是直接的模块结构
-        // 尝试直接访问 encoder.layer.0
+        // As seen from the output, 'layer' is not a list, but a direct module structure
+        // Try to access encoder.layer.0 directly
         auto layer = encoder.attr("layer").toModule();
-        auto layer_0 = layer.attr("0").toModule();  // 访问第0层
+        auto layer_0 = layer.attr("0").toModule();  // Access layer 0
         attention_module = layer_0.attr("attention").toModule();
     } catch (const std::exception& e) {
         std::cerr << "Failed to get attention module: " << e.what() << std::endl;
@@ -166,7 +166,11 @@ int main(int argc, char** argv) {
     std::cout << "Starting DeiT Attention test..." << std::endl;
 
     // Default model path (relative path)
-    std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+        return -1;
+    }
+    std::string model_path = argv[1];
 
     // Check if model path is provided as command line argument
     if (argc > 1) {

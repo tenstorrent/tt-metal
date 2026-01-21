@@ -54,14 +54,14 @@ void test_deit_self_attention_inference(const std::string& model_path) {
 
         std::cout << "Successfully loaded model from: " << model_path << std::endl;
 
-        // 加载模型参数到state_dict
+        // Load model parameters into state_dict
         std::vector<std::string> required_params = {
             "query.weight", "query.bias",
             "key.weight", "key.bias",
             "value.weight", "value.bias"
         };
 
-        // 使用 named_parameters() 方法直接获取参数
+        // Use the named_parameters() method to get parameters directly
         auto named_params = model.named_parameters();
         std::unordered_map<std::string, at::Tensor> param_map;
         for (const auto& pair : named_params) {
@@ -108,13 +108,13 @@ void test_deit_self_attention_inference(const std::string& model_path) {
     torch::Tensor torch_head_mask; // None equivalent
 
     // Call self-attention module forward
-    // Traced模型的forward方法只接受2个参数：self和hidden_states
-    // 可选参数（head_mask, output_attentions）在traced时被优化掉了
+    // The forward method of the traced model only accepts 2 parameters: self and hidden_states
+    // Optional parameters (head_mask, output_attentions) are optimized away during tracing
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(hidden_states);
 
     auto output = self_attention_module.forward(inputs);
-    // Traced模型的forward方法直接返回Tensor，而不是Tuple
+    // The forward method of the traced model returns a Tensor directly, not a Tuple
     auto torch_output = output.toTensor();
 
     // Create DeiT config
@@ -166,7 +166,11 @@ int main(int argc, char** argv) {
     std::cout << "Starting DeiT Self Attention test..." << std::endl;
 
     // Default model path
-    std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <model_path>" << std::endl;
+        return -1;
+    }
+    std::string model_path = argv[1];
 
     // Parse command line arguments
     if (argc > 1) {
