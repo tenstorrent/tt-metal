@@ -24,7 +24,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     // hardcoded constants
-    // const uint32_t num_split_tensors = 8;
+    const uint32_t num_split_tensors = 8;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -44,24 +44,25 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     const uint32_t reduction_dim = operation_attributes.dim;
     // const uint32_t split_dim = operation_attributes.split_dim;
 
+    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
     // const uint32_t input_tensor_Ht = input_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_shape[-1] / tt::constants::TILE_WIDTH;
-    const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
+    const uint32_t slice_Wt = input_tensor_Wt / num_split_tensors;
 
     uint32_t inner_dims_product = 1;
     for (uint32_t dim = reduction_dim + 1; dim < input_rank; ++dim) {
         inner_dims_product *= input_shape[dim];
     }
 
-    const uint32_t num_tiles_to_reduce_together = input_shape[reduction_dim];
+    const uint32_t reduction_dim_size = input_shape[reduction_dim];
     const uint32_t inner_num_tiles = inner_dims_product / num_tile_elements;
-    const uint32_t reduction_num_tiles = inner_num_tiles * num_tiles_to_reduce_together;
+    const uint32_t reduction_num_tiles = inner_num_tiles * reduction_dim_size;
 
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
     uint32_t input_granularity;
     for (input_granularity = 8; input_granularity > 1; --input_granularity) {
-        if (num_tiles_to_reduce_together % input_granularity == 0) {
+        if (reduction_dim_size % input_granularity == 0) {
             break;
         }
     }
@@ -69,7 +70,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t num_output_tiles = input_tensor.physical_volume() / num_tile_elements / num_tiles_to_reduce_together;
+    const uint32_t num_output_tiles = input_tensor.physical_volume() / num_tile_elements / reduction_dim_size;
 
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_x = grid.x;
@@ -122,16 +123,19 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_ct_args = {
-        input_page_size,
-        input_granularity,
-        num_cores_to_be_used,
-        reduction_dim,
         compute_input_cb_id_0,
-        compute_input_cb_id_1};
+        compute_input_cb_id_1,
+        input_page_size,
+        num_cores_to_be_used,
+        input_granularity,
+        reduction_dim,
+        reduction_dim_size,
+        inner_num_tiles,
+        reduction_num_tiles};
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
-        output_page_size, num_cores_to_be_used, compute_output_cb_id, input_tensor_Wt};
+        compute_output_cb_id, output_page_size, num_cores_to_be_used, input_tensor_Wt, slice_Wt};
     TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(output_tensors.at(1).buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(output_tensors.at(2).buffer()).append_to(writer_ct_args);
@@ -170,7 +174,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
 
     std::vector<uint32_t> compute_ct_args_group_1 = {
         num_cols_per_core_group_1,
-        num_tiles_to_reduce_together,
+        reduction_dim_size,
         input_granularity,
         compute_input_cb_id_0,
         compute_input_cb_id_1,
@@ -190,7 +194,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_ct_args_group_2 = {
             num_cols_per_core_group_2,
-            num_tiles_to_reduce_together,
+            reduction_dim_size,
             input_granularity,
             compute_input_cb_id_0,
             compute_input_cb_id_1,
@@ -215,8 +219,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     // fashion. For a given core, the first index is i, and all subsequent
     // indicies are increments of num_cores_to_be_used. The total number of
     // units is num_tiles_per_group times num_cores_to_be_used.
-    // For example, with 130 output tiles to be processed and no shards (shard
-    // factor is 1) on an 8x8 grid
+    // For example, with 130 output tiles to be processed on an 8x8 grid
     // - the increment is 64
     // - the first 2 cores will have num_tiles_per_core 3 and the rest 2
     // - core x=0,y=0 will process output tiles 0, 64, and 128
@@ -230,10 +233,6 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     // the size of the inner dimensions in tiles (inner_num_tiles). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduction_num_tiles).
-    // The shard factor is used to iterate over shards instead of tiles.
-    // It is taken into account in the num_cols_per_core_group variables and
-    // the tile_offset is incremented by it for the reader to adjust it's
-    // reading pattern.
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
@@ -245,15 +244,16 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
-        uint32_t id_range_length = num_tiles_per_core * num_cores_to_be_used;
+        uint32_t page_id_range_length = num_tiles_per_core * num_cores_to_be_used;
+
+        uint32_t start_tiles_read = i;
+        uint32_t start_tiles_to_read = start_tiles_read + page_id_range_length;
+
+        uint32_t start_slice_row_offset = (start_tiles_read / input_tensor_Wt) * slice_Wt;
+        uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),
-            num_tiles_to_reduce_together,
-            id_range_length,
-            i,
-            reduction_num_tiles,
-            inner_num_tiles};
+            input_tensor.buffer()->address(), start_tiles_read, start_tiles_to_read};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {
@@ -265,8 +265,10 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
             output_tensors.at(5).buffer()->address(),
             output_tensors.at(6).buffer()->address(),
             output_tensors.at(7).buffer()->address(),
-            id_range_length,
-            i};
+            start_tiles_read,
+            start_tiles_to_read,
+            start_slice_row_offset,
+            start_pages_read_in_row};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 

@@ -4,12 +4,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-constexpr uint32_t page_size = get_compile_time_arg_val(0);
-constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(1);
-constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(2);
+constexpr uint32_t compute_output_cb_id = get_compile_time_arg_val(0);
+constexpr uint32_t page_size = get_compile_time_arg_val(1);
+constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(3);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(4);
 
-constexpr uint32_t initial_ct_idx = 4;
+constexpr uint32_t initial_ct_idx = 5;
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -23,8 +24,10 @@ void kernel_main() {
     uint32_t output_slice_6_address = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_slice_7_address = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t id_range_length = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t start_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_slice_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
 
     // TensorAccessors
     constexpr uint32_t output_slice_0_ct_val = initial_ct_idx;
@@ -75,21 +78,19 @@ void kernel_main() {
     const auto output_slice_7_tensor_accesor =
         TensorAccessor(output_slice_7_tensor_args, output_slice_7_address, page_size);
 
+    // hardcoded constants
+    constexpr uint32_t num_split_tensors = 8;
     constexpr uint32_t one_tile = 1;
 
-    constexpr uint32_t num_split_tensors = 8;
-    constexpr uint32_t slice_Wt = input_tensor_Wt / num_split_tensors;
+    uint32_t slice_row_offset = start_slice_row_offset;
+    uint32_t pages_read_in_row = start_pages_read_in_row;
 
-    // For each shard, start at the index of the first shard to be reduced (same
-    // index as output), then increment by the appropriate increment (based on
-    // the grid size), until the range length is reached. See reader and program
-    // factory for examples.
-    for (uint32_t page_id = start_id; page_id < start_id + id_range_length; page_id += num_cores_to_be_used) {
-        uint32_t num_rows_processed = page_id / input_tensor_Wt;
-        uint32_t page_id_within_row = page_id - (num_rows_processed * input_tensor_Wt);
-        uint32_t slice_id = page_id_within_row / slice_Wt;
-
-        uint32_t normalized_page_id = (num_rows_processed * slice_Wt) + (page_id_within_row % slice_Wt);
+    uint32_t tiles_read = start_tiles_read;
+    uint32_t tiles_to_read = start_tiles_to_read;
+    while (tiles_read < tiles_to_read) {
+        uint32_t slice_id = pages_read_in_row / slice_Wt;
+        uint32_t slice_offset = pages_read_in_row - (slice_id * slice_Wt);
+        uint32_t normalized_page_id = slice_row_offset + slice_offset;
 
         uint64_t noc_addr;
         switch (slice_id) {
@@ -108,6 +109,13 @@ void kernel_main() {
         noc_async_write(l1_read_addr, noc_addr, page_size);
         noc_async_writes_flushed();
         cb_pop_front(compute_output_cb_id, one_tile);
+
+        tiles_read += num_cores_to_be_used;
+        pages_read_in_row += num_cores_to_be_used;
+        while (pages_read_in_row >= input_tensor_Wt) {
+            pages_read_in_row -= input_tensor_Wt;
+            slice_row_offset += slice_Wt;
+        }
     }
     noc_async_write_barrier();
 }
