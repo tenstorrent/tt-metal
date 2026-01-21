@@ -61,7 +61,7 @@ def main():
         # Load model
         from models.demos.yolov3.tt.model_def import TtYoloV3
         
-        model = TtYoloV3(device=device, num_classes=80, parameters=None)
+        model = TtYoloV3(device=device, num_classes=80, parameters={})
         
         # Inference
         print("Running inference...")

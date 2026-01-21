@@ -14,16 +14,16 @@ import torch
 import ttnn
 from typing import Dict, List, Optional, Tuple
 
-# Constants for YOLOv3
-INPUT_SIZE = 416
-NUM_CLASSES = 80  # COCO classes
-NUM_ANCHORS = 3   # Anchors per scale
-
 
 def preprocess_conv(weights: torch.Tensor) -> torch.Tensor:
-    """Preprocess convolution weights for TTNN."""
-    out_c, in_c, kh, kw = weights.shape
-    return weights.view(out_c, -1)
+    """
+    Preprocess convolution weights for TTNN.
+    
+    TTNN conv2d expects 4D weight tensors with shape
+    (out_channels, in_channels, kernel_height, kernel_width).
+    """
+    # Preserve the original 4D layout
+    return weights
 
 
 def preprocess_batchnorm(
@@ -58,20 +58,46 @@ class TtConvBnLeaky:
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
-        self.parameters = parameters
+        
+        # Convert parameters to TTNN tensors
+        self.parameters: Dict = {}
+        if parameters is not None:
+            for name, value in parameters.items():
+                if isinstance(value, torch.Tensor):
+                    self.parameters[name] = ttnn.from_torch(
+                        value.to(dtype=torch.float32),
+                        device=device,
+                        layout=ttnn.TILE_LAYOUT
+                    )
+                else:
+                    self.parameters[name] = value
         
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward through Conv + BN + LeakyReLU."""
-        # Convolution
-        x = ttnn.conv2d(
+        if not self.parameters:
+            raise ValueError("Parameters must be provided for inference")
+        
+        # Convolution with proper API
+        batch_size = x.shape[0]
+        input_height = x.shape[2] if len(x.shape) > 2 else 1
+        input_width = x.shape[3] if len(x.shape) > 3 else 1
+        
+        x, _, _ = ttnn.conv2d(
             x,
             self.parameters["conv_weight"],
             bias=self.parameters.get("conv_bias"),
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            kernel_size=(self.kernel_size, self.kernel_size),
             stride=(self.stride, self.stride),
-            padding=(self.padding, self.padding)
+            padding=(self.padding, self.padding),
+            device=self.device
         )
         
-        # Fused BatchNorm
+        # Fused BatchNorm (scale + shift)
         x = ttnn.mul(x, self.parameters["bn_scale"])
         x = ttnn.add(x, self.parameters["bn_shift"])
         
@@ -222,9 +248,10 @@ class TtYOLOHead:
         self.device = device
         self.num_classes = num_classes
         self.num_anchors = num_anchors
+        self.in_channels = in_channels
         
         # Output channels: (x, y, w, h, obj, classes) * num_anchors
-        out_channels = num_anchors * (5 + num_classes)
+        self.out_channels = num_anchors * (5 + num_classes)
         
         # 5 conv layers before detection
         self.conv1 = TtConvBnLeaky(
@@ -253,8 +280,12 @@ class TtYOLOHead:
             device, in_channels // 2, in_channels, 3, 1, 1,
             parameters=parameters.get("conv6") if parameters else None
         )
-        # Output layer (no activation)
-        # Would be a regular conv2d in full implementation
+        
+        # Output layer (1x1 conv for predictions, no activation)
+        self.output_conv = TtConvBnLeaky(
+            device, in_channels, self.out_channels, 1, 1, 0,
+            parameters=parameters.get("output_conv") if parameters else None
+        )
     
     def __call__(self, x: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward through YOLO head."""
@@ -265,9 +296,9 @@ class TtYOLOHead:
         route = self.conv5(x)  # Used for upsampling path
         
         x = self.conv6(route)
-        # Detection output would be computed here
+        detection = self.output_conv(x)  # Final detection output
         
-        return x, route
+        return detection, route
 
 
 class TtYoloV3:
@@ -282,24 +313,41 @@ class TtYoloV3:
         self.device = device
         self.num_classes = num_classes
         
+        # Default to empty dict if None
+        if parameters is None:
+            parameters = {}
+        
         # Backbone
         self.backbone = TtDarknet53(
             device,
-            parameters=parameters.get("backbone") if parameters else None
+            parameters=parameters.get("backbone")
         )
         
         # Detection heads for 3 scales
+        # Note: Until upsampling is fully implemented, use backbone feature channel sizes
         self.head_13 = TtYOLOHead(
             device, 1024, num_classes,
-            parameters=parameters.get("head_13") if parameters else None
+            parameters=parameters.get("head_13")
         )
+        # Use 512 directly (backbone output) until upsample+concat implemented
         self.head_26 = TtYOLOHead(
-            device, 768, num_classes,  # 512 + 256 after concat
-            parameters=parameters.get("head_26") if parameters else None
+            device, 512, num_classes,
+            parameters=parameters.get("head_26")
         )
+        # Use 256 directly (backbone output) until upsample+concat implemented
         self.head_52 = TtYOLOHead(
-            device, 384, num_classes,  # 256 + 128 after concat
-            parameters=parameters.get("head_52") if parameters else None
+            device, 256, num_classes,
+            parameters=parameters.get("head_52")
+        )
+        
+        # Lateral convs for FPN
+        self.lateral_13 = TtConvBnLeaky(
+            device, 512, 256, 1, 1, 0,
+            parameters=parameters.get("lateral_13")
+        )
+        self.lateral_26 = TtConvBnLeaky(
+            device, 256, 128, 1, 1, 0,
+            parameters=parameters.get("lateral_26")
         )
     
     def __call__(self, x: ttnn.Tensor) -> List[ttnn.Tensor]:
@@ -311,40 +359,75 @@ class TtYoloV3:
         det_13, route_13 = self.head_13(out_13)
         
         # Upsample and concatenate for scale 2
-        # route_13 upsampled + out_26
+        route_13_up = self.lateral_13(route_13)
+        route_13_up = ttnn.upsample(route_13_up, scale_factor=2.0)
+        fused_26 = ttnn.concat([route_13_up, out_26], dim=1)
         
         # Scale 2: 26x26 (medium objects)
-        det_26, route_26 = self.head_26(out_26)
+        det_26, route_26 = self.head_26(fused_26)
         
         # Upsample and concatenate for scale 3
-        # route_26 upsampled + out_52
+        route_26_up = self.lateral_26(route_26)
+        route_26_up = ttnn.upsample(route_26_up, scale_factor=2.0)
+        fused_52 = ttnn.concat([route_26_up, out_52], dim=1)
         
         # Scale 3: 52x52 (small objects)
-        det_52, _ = self.head_52(out_52)
+        det_52, _ = self.head_52(fused_52)
         
         return [det_13, det_26, det_52]
 
 
-def custom_preprocessor(model, name: str = "") -> Dict:
-    """Preprocess PyTorch YOLOv3 weights for TTNN."""
-    parameters = {}
+def custom_preprocessor(
+    model,
+    device: Optional[ttnn.Device] = None,
+    name: str = ""
+) -> Dict:
+    """
+    Preprocess PyTorch YOLOv3 weights for TTNN.
+    
+    If a TTNN device is provided, all returned tensors are converted
+    to TTNN device tensors. Otherwise, returns torch tensors.
+    """
+    parameters: Dict = {}
     
     for param_name, param in model.named_parameters():
         full_name = f"{name}.{param_name}" if name else param_name
         
+        # Preprocess convolution weights (keep 4D shape)
         if "weight" in param_name and len(param.shape) == 4:
-            parameters[full_name] = preprocess_conv(param.data)
+            torch_tensor = preprocess_conv(param.data)
         else:
-            parameters[full_name] = param.data
+            torch_tensor = param.data
+        
+        if device is not None:
+            parameters[full_name] = ttnn.from_torch(
+                torch_tensor.to(dtype=torch.float32),
+                device=device,
+                layout=ttnn.TILE_LAYOUT
+            )
+        else:
+            parameters[full_name] = torch_tensor
     
     # Fuse batch norm
-    for name, module in model.named_modules():
-        if hasattr(module, 'bn') and hasattr(module.bn, 'running_mean'):
+    for module_name, module in model.named_modules():
+        if hasattr(module, "bn") and hasattr(module.bn, "running_mean"):
             bn = module.bn
             scale, shift = preprocess_batchnorm(
                 bn.weight, bn.bias, bn.running_mean, bn.running_var
             )
-            parameters[f"{name}.bn_scale"] = scale
-            parameters[f"{name}.bn_shift"] = shift
+            if device is not None:
+                parameters[f"{module_name}.bn_scale"] = ttnn.from_torch(
+                    scale.to(dtype=torch.float32),
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT
+                )
+                parameters[f"{module_name}.bn_shift"] = ttnn.from_torch(
+                    shift.to(dtype=torch.float32),
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT
+                )
+            else:
+                parameters[f"{module_name}.bn_scale"] = scale
+                parameters[f"{module_name}.bn_shift"] = shift
     
     return parameters
