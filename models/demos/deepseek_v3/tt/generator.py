@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -82,6 +83,7 @@ class DeepseekGenerator:
         dense_layers: int | None = None,
         override_num_layers: int | None = None,
         single_layer: str | None = None,
+        max_seq_len: int | None = None,
         enable_trace: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
@@ -94,8 +96,22 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 1024
+        # Ensure max_seq_len matches the reference config expectations (e.g. YARN-scaled context length)
+        self._ensure_max_seq_len(self.hf_config)
+        # Allow a smaller explicit max_seq_len to limit KV cache size (e.g. 32k).
+        # Default to 4096 unless DEEPSEEK_V3_MAX_SEQ_LEN is provided (issue #36180).
+        if max_seq_len is None:
+            env_max_seq_len = os.getenv("DEEPSEEK_V3_MAX_SEQ_LEN")
+            if env_max_seq_len:
+                try:
+                    max_seq_len = int(env_max_seq_len)
+                except Exception as e:
+                    logger.warning(f"Ignoring invalid DEEPSEEK_V3_MAX_SEQ_LEN='{env_max_seq_len}': {e}")
+                    max_seq_len = 4096
+            else:
+                max_seq_len = 4096
+        if max_seq_len is not None:
+            self.hf_config.max_seq_len = int(max_seq_len)
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -155,14 +171,22 @@ class DeepseekGenerator:
         if getattr(hf_config, "max_seq_len", None) is not None:
             return
         try:
+            max_pos = getattr(hf_config, "max_position_embeddings", None)
+            scaled = None
             if getattr(hf_config, "rope_scaling", None):
                 factor = hf_config.rope_scaling.get("factor")
                 orig = hf_config.rope_scaling.get("original_max_position_embeddings")
                 if factor and orig:
-                    hf_config.max_seq_len = int(factor * orig)
-                    return
-            if getattr(hf_config, "max_position_embeddings", None):
-                hf_config.max_seq_len = int(hf_config.max_position_embeddings)
+                    scaled = int(factor * orig)
+            if max_pos is not None and scaled is not None:
+                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
+                hf_config.max_seq_len = int(max(max_pos, scaled))
+                return
+            if scaled is not None:
+                hf_config.max_seq_len = int(scaled)
+                return
+            if max_pos is not None:
+                hf_config.max_seq_len = int(max_pos)
                 return
         except Exception:
             pass
