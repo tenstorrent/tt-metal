@@ -115,7 +115,7 @@ fi
 # Check for banned DeviceOperation::invoke (post-PR #35015)
 if grep -r "DeviceOperation::invoke" "$OP_PATH/device/" 2>/dev/null; then
     echo -e "${RED}  ✗ FAIL: Found banned pattern 'DeviceOperation::invoke'${NC}"
-    echo "    Modern pattern: primitives are free functions that call launch_on_device<>()"
+    echo "    Modern pattern: primitives are free functions that call ttnn::device_operation::launch<>()"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -162,10 +162,10 @@ if ! grep -r "tensor_args_t" "$OP_PATH/device/" 2>/dev/null >/dev/null; then
     ERRORS=$((ERRORS + 1))
 fi
 
-# Check for launch_on_device (post-PR #35013/#35015)
-if ! grep -r "launch_on_device<" "$OP_PATH/device/" 2>/dev/null >/dev/null; then
-    echo -e "${RED}  ✗ FAIL: Missing required pattern 'launch_on_device<'${NC}"
-    echo "    Primitive operations must call ttnn::device_operation::detail::launch_on_device<>()"
+# Check for launch<> (post-PR #35013/#35015, modern API is launch<> not launch_on_device<>)
+if ! grep -r "ttnn::device_operation::launch<" "$OP_PATH/device/" 2>/dev/null >/dev/null; then
+    echo -e "${RED}  ✗ FAIL: Missing required pattern 'ttnn::device_operation::launch<'${NC}"
+    echo "    Primitive operations must call ttnn::device_operation::launch<>()"
     ERRORS=$((ERRORS + 1))
 fi
 
