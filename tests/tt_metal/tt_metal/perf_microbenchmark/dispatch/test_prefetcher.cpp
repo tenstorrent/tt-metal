@@ -1069,7 +1069,6 @@ protected:
 
 public:
     std::vector<HostMemDeviceCommand> generate_prefetch_relay_h_commands(
-        const CoreCoord first_worker,
         const uint32_t mmio_dram_base,
         const uint32_t dram_alignment,
         Common::DeviceData& src_device_data,
@@ -2045,7 +2044,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         remote_device_, worker_range, l1_base, remote_dram_base, nullptr, true, 0 /* don't prepopulate */, cfg_);
 
     auto commands_per_iteration =
-        generate_prefetch_relay_h_commands(first_worker, mmio_dram_base, dram_alignment, mmio_device_data, device_data);
+        generate_prefetch_relay_h_commands(mmio_dram_base, dram_alignment, mmio_device_data, device_data);
 
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
