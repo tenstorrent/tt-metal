@@ -4,10 +4,7 @@
 
 #include "isocket.hpp"
 
-#include <cstdint>
 #include <memory>
-#include <optional>
-#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/unique_ptr.h>
