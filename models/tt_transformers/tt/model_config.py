@@ -772,8 +772,11 @@ class ModelArgs:
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
             # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
+            # Set TT_DISABLE_FUSED_CCL_MATMUL=1 to disable fused CCL+matmul ops for debugging
+            use_fused_ccl_matmul = os.getenv("TT_DISABLE_FUSED_CCL_MATMUL", "0") != "1"
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.num_devices == 8
+                use_fused_ccl_matmul
+                and self.num_devices == 8
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
@@ -802,6 +805,15 @@ class ModelArgs:
                 )
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
+
+            # Matmul + Reduce Scatter fusion for MLP w2 output
+            # Set TT_DISABLE_FUSED_CCL_MATMUL=1 to disable fused CCL+matmul ops for debugging
+            self.model_config["USE_FUSED_MATMUL_REDUCE_SCATTER"] = (
+                use_fused_ccl_matmul
+                and self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                and self.ccl_topology() == ttnn.Topology.Ring
+            )
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size

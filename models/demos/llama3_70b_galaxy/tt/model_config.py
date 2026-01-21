@@ -759,11 +759,14 @@ class TtModelArgs:
                 )
             )
 
-            # All Gather Matmul for Dense Out (DO)
+            # All Gather Matmul for Dense Out (DO) and MLP w2
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # Set TT_DISABLE_FUSED_CCL_MATMUL=1 to disable fused CCL+matmul ops for debugging
+            use_fused_ccl_matmul = os.getenv("TT_DISABLE_FUSED_CCL_MATMUL", "0") != "1"
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.ccl_topology() == ttnn.Topology.Ring
+                use_fused_ccl_matmul
+                and self.ccl_topology() == ttnn.Topology.Ring
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )

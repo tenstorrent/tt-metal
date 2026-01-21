@@ -863,6 +863,58 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out, w3_out
 
+    def all_gather_matmul(
+        self,
+        # All Gather input
+        input_tensor,
+        # Matmul weight
+        weight_tensor,
+        # All Gather config
+        dim=3,
+        cluster_axis=1,
+        num_links=1,
+        # Matmul config
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        ag_memory_config=None,
+        mm_memory_config=None,
+        global_cb=None,
+        buffer_key=None,
+    ):
+        """
+        Fused all_gather + matmul operation.
+        Replaces separate line_all_gather + ttnn.linear calls.
+        """
+        # Get intermediate buffer for all gather output
+        persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
+
+        # Get semaphore handles
+        semaphores = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+
+        # Call fused all_gather_matmul
+        out = ttnn.experimental.llama_all_gather_matmul_async(
+            input_tensor,
+            weight_tensor,
+            persistent_buffer,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=semaphores,
+            ag_memory_config=ag_memory_config,
+            mm_memory_config=mm_memory_config,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            num_links=num_links,
+            subdevice_id=self.worker_sub_device_id,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            global_cb=global_cb,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return out
+
     def llama_rs_create_heads(
         self,
         input_tensor_mesh,
