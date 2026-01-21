@@ -1,14 +1,10 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # TEMPORARY: used only for testing on PRs
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-  # Keep manual trigger
+  # Manual trigger for testing / debugging
   workflow_dispatch:
 
-  # Scheduled execution (will be primary trigger after merge)
+  # Scheduled execution (primary trigger after merge)
   schedule:
     - cron: "*/5 * * * *"   # every 5 minutes
 
@@ -24,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------------
-      # Build merge-queue snapshot derived from real GitHub APIs
+      # Build merge-queue snapshot derived from public GitHub APIs
       # ------------------------------------------------------------------
       - name: Build merge queue snapshot (derived from PRs)
         env:
@@ -57,7 +53,7 @@ jobs:
                 pr_author_login: .user.login,
                 head_sha: .head.sha,
 
-                # Derived state: checks still running / not merged yet
+                # Derived state (public-signal only)
                 state: "AWAITING_CHECKS",
 
                 queue_position: null,
