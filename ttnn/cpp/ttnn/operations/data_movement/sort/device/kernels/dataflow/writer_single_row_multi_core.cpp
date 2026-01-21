@@ -101,6 +101,7 @@ void kernel_main() {
                             noc_async_writes_flushed();
                             cb_pop_front(input_tensor_output_cb_index, one_tile);
 
+                            noc_async_write_barrier();
                             // Signalize readiness to the coordinator
                             noc_semaphore_inc(coordinator_core_addr, 1);
                             noc_async_atomic_barrier();

@@ -146,4 +146,6 @@ void kernel_main() {
         const uint64_t in0_sender_semaphore_noc_addr = get_noc_addr(send_core_x, send_core_y, semaphore_addr);
         noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

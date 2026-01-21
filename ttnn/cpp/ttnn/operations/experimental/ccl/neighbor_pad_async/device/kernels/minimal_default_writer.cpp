@@ -183,8 +183,6 @@ void kernel_main() {
                         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
                             (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                     }
-                    noc_async_writes_flushed();
-
                     dst_stick_id++;
 
                     noc_async_writes_flushed();
