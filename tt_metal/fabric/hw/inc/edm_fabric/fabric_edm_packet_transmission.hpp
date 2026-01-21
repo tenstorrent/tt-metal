@@ -121,7 +121,7 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) || defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void
@@ -130,6 +130,11 @@ FORCE_INLINE
         uint16_t payload_size_bytes,
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
+
+    // for (size_t i = 0 ; i < 500; i++) {
+    //     asm volatile("nop");
+    // }
+
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
@@ -372,7 +377,7 @@ void update_packet_header_for_next_hop(
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
 template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
-#if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
+#if !defined(FABRIC_2D) || defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void
