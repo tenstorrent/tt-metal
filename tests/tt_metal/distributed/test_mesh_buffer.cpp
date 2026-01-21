@@ -902,5 +902,70 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     }
 }
 
+TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+    // How many words to shift the source buffer by to get it to start an unaligned word
+    constexpr size_t unaligned_word_shift = 1;
+    // Prepare write source buffer and pin the entire destination range for the target shard
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        (bytes_per_device / sizeof(uint32_t)) + unaligned_word_shift, 0);
+
+    uint32_t* src_unaligned = src->data() + unaligned_word_shift;
+    std::iota(src_unaligned, src_unaligned + (bytes_per_device / sizeof(uint32_t)), 0);
+
+    // Create a copy of the source vector to make it easy to verify with the destination vector.
+    std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + (bytes_per_device / sizeof(uint32_t)));
+    // Create HostBuffer on top of src
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    std::vector<uint32_t> dst{bytes_per_device / sizeof(uint32_t), 0};
+
+    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    for (auto coord : coord_range) {
+        log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
+        auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+        auto pinned_unique = tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device_,
+            coordinate_range_set,
+            host_buffer,
+            /*map_to_noc=*/true);
+        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+        auto write_transfer = distributed::ShardDataTransfer{coord}
+                                  .host_data(static_cast<void*>(src->data()))
+                                  .region(BufferRegion(0, bytes_per_device));
+        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+        // Read back via hugepage
+        std::fill(dst.begin(), dst.end(), 0);
+        auto read_transfer = distributed::ShardDataTransfer{coord}
+                                 .host_data(static_cast<void*>(dst.data()))
+                                 .region(BufferRegion(0, bytes_per_device));
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        EXPECT_EQ(src_vector, dst);
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
