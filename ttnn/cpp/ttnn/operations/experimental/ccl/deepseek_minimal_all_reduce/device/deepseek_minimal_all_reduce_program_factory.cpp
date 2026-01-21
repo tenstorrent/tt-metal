@@ -146,115 +146,74 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     // Link 0 : Device 0 sends → Device 1 receives
     // Link 1 : Device 1 sends → Device 0 receives
 
-    // Divide compute across 28 cores
-    constexpr uint32_t num_compute_cores = 28;
-
-    CoreCoord data_core = cores[0];
-    std::vector<CoreCoord> compute_cores;
-    compute_cores.push_back(data_core);
-
-    // Determine sender_core first so we can exclude it from compute cores
-    CoreCoord sender_core;
-    if (data_core.y > 0) {
-        sender_core = CoreCoord{data_core.x, data_core.y - 1};
+    std::vector<CoreCoord> worker_cores;
+    worker_cores.push_back(cores[0]);
+    CoreCoord second_core;
+    if (cores[0].x > 0) {
+        second_core = CoreCoord{cores[0].x - 1, cores[0].y};
     } else {
-        sender_core = CoreCoord{data_core.x, data_core.y + 1};
+        second_core = CoreCoord{cores[0].x + 1, cores[0].y};
     }
 
-    // pick non-data compute cores to form a contiguous
-    // rectangular bounding box that does not include data_core or sender_core.
-    constexpr uint32_t grid_width = 7;
-    constexpr uint32_t grid_height = 7;
+    worker_cores.push_back(second_core);
+    auto worker_core_range = CoreRangeSet(worker_cores);
 
-    uint32_t data_row = data_core.y;
-    uint32_t sender_row = sender_core.y;
-    for (uint32_t row = 0; row < grid_height && compute_cores.size() < num_compute_cores; ++row) {
-        if (row == data_row || row == sender_row) {
-            continue;
-        }
-        for (uint32_t col = 0; col < grid_width && compute_cores.size() < num_compute_cores; ++col) {
-            compute_cores.push_back(CoreCoord{col, row});
-        }
-    }
-
-    std::vector<CoreCoord> all_worker_cores;
-    all_worker_cores.push_back(sender_core);
-    for (const auto& cc : compute_cores) {
-        all_worker_cores.push_back(cc);
-    }
-    auto all_worker_core_range = CoreRangeSet(all_worker_cores);
-    auto compute_core_range = CoreRangeSet(compute_cores);
+    CoreCoord sender_core = second_core;
+    CoreCoord receiver_core = cores[0];
 
     // Tensor Info - get num_pages early for CB config
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
 
-    // Calculate tile distribution across compute cores
-    const uint32_t tiles_per_core = (input_tensor_num_pages + num_compute_cores - 1) / num_compute_cores;
-
     const auto tiny_tile = tt::tt_metal::Tile({1, 32});
+    const auto standard_tile = tt::tt_metal::Tile({32, 32});
+
+    // 224 tiny tiles (1x32) = 7 standard tiles (32x32) in terms of data
+    // Each standard tile holds 32 tiny tiles worth of data
+    constexpr uint32_t tiny_tiles_per_standard_tile = 32;
+    const uint32_t num_standard_tiles =
+        (input_tensor_num_pages + tiny_tiles_per_standard_tile - 1) / tiny_tiles_per_standard_tile;
 
     // L1 Scratch CB Creation
-    const uint32_t input_page_size_bytes = input_tensor.buffer()->aligned_page_size();
+    const uint32_t input_page_size_bytes = input_tensor.buffer()->aligned_page_size();               // tiny tile size
+    const uint32_t standard_tile_size_bytes = input_page_size_bytes * tiny_tiles_per_standard_tile;  // 32x32 tile size
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const size_t packet_size_bytes = input_page_size_bytes * input_tensor_num_pages;
 
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    // Each compute core needs CBs for its tile subset
-    // CB sizes are based on tiles_per_core, not full tensor
-    const size_t compute_cb_size_bytes = tiles_per_core * input_page_size_bytes;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(input_tensor_num_pages * input_page_size_bytes, {{src0_cb_index, df}})
+            .set_page_size(src0_cb_index, input_page_size_bytes)
+            .set_tile_dims(src0_cb_index, tiny_tile);
+    CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
-    constexpr auto compute_cb_in1 = tt::CBIndex::c_1;  // remote data (intermediate tensor)
-    constexpr auto compute_cb_in2 = tt::CBIndex::c_2;  // local data (input tensor)
-    constexpr auto compute_cb_out = tt::CBIndex::c_3;  // output
-
-    // Data core (compute_cores[0]) uses CB-backed-by-tensor for all three CBs
-    tt::tt_metal::CircularBufferConfig compute_cb_in1_config_data_core =
-        tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_in1, df}})
-            .set_page_size(compute_cb_in1, input_page_size_bytes)
-            .set_tile_dims(compute_cb_in1, tiny_tile)
+    constexpr auto compute_cb_in1 = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig compute_cb_in1_config =
+        tt::tt_metal::CircularBufferConfig(num_standard_tiles * standard_tile_size_bytes, {{compute_cb_in1, df}})
+            .set_page_size(compute_cb_in1, standard_tile_size_bytes)
+            .set_tile_dims(compute_cb_in1, standard_tile)
             .set_globally_allocated_address(*intermediate_tensor.buffer());
     auto compute_cb_in1_handle =
-        CreateCircularBuffer(program, CoreRangeSet(CoreRange(data_core)), compute_cb_in1_config_data_core);
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_in1_config);
 
-    tt::tt_metal::CircularBufferConfig compute_cb_in2_config_data_core =
-        tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_in2, df}})
-            .set_page_size(compute_cb_in2, input_page_size_bytes)
-            .set_tile_dims(compute_cb_in2, tiny_tile)
+    constexpr auto compute_cb_in2 = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig compute_cb_in2_config =
+        tt::tt_metal::CircularBufferConfig(num_standard_tiles * standard_tile_size_bytes, {{compute_cb_in2, df}})
+            .set_page_size(compute_cb_in2, standard_tile_size_bytes)
+            .set_tile_dims(compute_cb_in2, standard_tile)
             .set_globally_allocated_address(*input_tensor.buffer());
     auto compute_cb_in2_handle =
-        CreateCircularBuffer(program, CoreRangeSet(CoreRange(data_core)), compute_cb_in2_config_data_core);
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_in2_config);
 
-    tt::tt_metal::CircularBufferConfig compute_cb_out_config_data_core =
-        tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_out, df}})
-            .set_page_size(compute_cb_out, input_page_size_bytes)
-            .set_tile_dims(compute_cb_out, tiny_tile)
+    constexpr auto compute_cb_out = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig compute_cb_out_config =
+        tt::tt_metal::CircularBufferConfig(num_standard_tiles * standard_tile_size_bytes, {{compute_cb_out, df}})
+            .set_page_size(compute_cb_out, standard_tile_size_bytes)
+            .set_tile_dims(compute_cb_out, standard_tile)
             .set_globally_allocated_address(*output_tensor.buffer());
     auto compute_cb_out_handle =
-        CreateCircularBuffer(program, CoreRangeSet(CoreRange(data_core)), compute_cb_out_config_data_core);
-
-    std::vector<CoreCoord> non_data_compute_cores(compute_cores.begin() + 1, compute_cores.end());
-    if (!non_data_compute_cores.empty()) {
-        auto non_data_core_range = CoreRangeSet(non_data_compute_cores);
-
-        tt::tt_metal::CircularBufferConfig compute_cb_in1_config =
-            tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_in1, df}})
-                .set_page_size(compute_cb_in1, input_page_size_bytes)
-                .set_tile_dims(compute_cb_in1, tiny_tile);
-        CreateCircularBuffer(program, non_data_core_range, compute_cb_in1_config);
-
-        tt::tt_metal::CircularBufferConfig compute_cb_in2_config =
-            tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_in2, df}})
-                .set_page_size(compute_cb_in2, input_page_size_bytes)
-                .set_tile_dims(compute_cb_in2, tiny_tile);
-        CreateCircularBuffer(program, non_data_core_range, compute_cb_in2_config);
-
-        tt::tt_metal::CircularBufferConfig compute_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(compute_cb_size_bytes, {{compute_cb_out, df}})
-                .set_page_size(compute_cb_out, input_page_size_bytes)
-                .set_tile_dims(compute_cb_out, tiny_tile);
-        CreateCircularBuffer(program, non_data_core_range, compute_cb_out_config);
-    }
+        CreateCircularBuffer(program, CoreRangeSet(CoreRange(receiver_core)), compute_cb_out_config);
 
     constexpr auto packet_header_cb_id = tt::CBIndex::c_4;
     constexpr auto buffering_factor = 2;
@@ -266,8 +225,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes)
             .set_tile_dims(packet_header_cb_id, tiny_tile);
-    std::vector<CoreCoord> fabric_cores = {sender_core, data_core};
-    CreateCircularBuffer(program, CoreRangeSet(fabric_cores), cb_header_config);
+    CreateCircularBuffer(program, worker_core_range, cb_header_config);
 
     // Packet CB for sender
     constexpr auto packet_cb_id = tt::CBIndex::c_5;
@@ -275,79 +233,55 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, df}})
             .set_page_size(packet_cb_id, input_page_size_bytes)
             .set_tile_dims(packet_cb_id, tiny_tile);
-    CreateCircularBuffer(program, CoreRangeSet(CoreRange(sender_core)), cb_packet_config);
+    CreateCircularBuffer(program, worker_core_range, cb_packet_config);
 
-    // Create L1 semaphore on ALL compute cores (data_core + non-data cores) for synchronization
-    // receiver_reader on data_core will set locally and mcast to signal all non-data cores when data is ready
-    auto compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, CoreRangeSet(compute_cores), 0);
-
-    // Physical core coordinates
-    auto data_core_physical = mesh_device->worker_core_from_logical_core(data_core);
-    auto data_noc_x = data_core_physical.x;
-    auto data_noc_y = data_core_physical.y;
+    // Sender info - use the data core (where input tensor is sharded)
+    auto data_core_coord = mesh_device->worker_core_from_logical_core(cores[0]);
+    auto core_noc_x = data_core_coord.x;
+    auto core_noc_y = data_core_coord.y;
 
     auto sender_physical = mesh_device->worker_core_from_logical_core(sender_core);
+    auto receiver_physical = mesh_device->worker_core_from_logical_core(receiver_core);
 
-    // Remote cores have same layout (symmetric)
     auto remote_sender_noc_x = sender_physical.x;
     auto remote_sender_noc_y = sender_physical.y;
-    auto remote_receiver_noc_x = data_core_physical.x;
-    auto remote_receiver_noc_y = data_core_physical.y;
-
-    // Calculate mcast range for non-data compute cores (for signaling)
-    // Find the bounding box of non-data compute cores in physical coordinates
-    uint32_t mcast_start_x = UINT32_MAX, mcast_start_y = UINT32_MAX;
-    uint32_t mcast_end_x = 0, mcast_end_y = 0;
-    for (const auto& core : non_data_compute_cores) {
-        auto phys = mesh_device->worker_core_from_logical_core(core);
-        mcast_start_x = std::min(mcast_start_x, static_cast<uint32_t>(phys.x));
-        mcast_start_y = std::min(mcast_start_y, static_cast<uint32_t>(phys.y));
-        mcast_end_x = std::max(mcast_end_x, static_cast<uint32_t>(phys.x));
-        mcast_end_y = std::max(mcast_end_y, static_cast<uint32_t>(phys.y));
-    }
-    uint32_t mcast_num_dests = non_data_compute_cores.size();
+    auto remote_receiver_noc_x = receiver_physical.x;
+    auto remote_receiver_noc_y = receiver_physical.y;
 
     // KERNEL CREATION
     // Sender kernels run on sender_core, receiver kernels run on receiver_core
     std::vector<uint32_t> sender_reader_compile_args = {
-        packet_cb_id,            // cb0_id
+        src0_cb_index,           // cb0_id
         input_tensor_num_pages,  // num_tiles
         input_page_size_bytes,   // tensor0_page_size
-        data_noc_x,
-        data_noc_y,
+        core_noc_x,
+        core_noc_y,
     };
 
     std::vector<uint32_t> sender_writer_compile_args = {
         packet_header_cb_id,
-        packet_cb_id,
+        src0_cb_index,
         l1_alignment,
         input_tensor_num_pages,
         input_page_size_bytes,
         packet_size_bytes,
-        data_noc_x,  // data core for writing payload
-        data_noc_y,
+        core_noc_x,  // data core for writing payload
+        core_noc_y,
         remote_receiver_noc_x,  // remote receiver core for semaphore
         remote_receiver_noc_y,
     };
 
     std::vector<uint32_t> receiver_reader_compile_args = {
         packet_header_cb_id,
-        compute_cb_in1,
+        compute_cb_in1,  // CB for remote data (intermediate tensor)
         l1_alignment,
-        compute_cb_in2,
-        tiles_per_core,
-        input_page_size_bytes,
-        packet_size_bytes,
-        data_noc_x,  // data core for reading local tensor
-        data_noc_y,
+        compute_cb_in2,       // CB for local data (input tensor)
         remote_sender_noc_x,  // remote sender core for semaphore
         remote_sender_noc_y,
-        mcast_start_x,  // mcast range for signaling compute cores
-        mcast_start_y,
-        mcast_end_x,
-        mcast_end_y,
-        mcast_num_dests,
+        num_standard_tiles,  // num standard tiles (7)
     };
+
+    // output writes directly to output tensor memory
 
     // Create sender kernels on sender_core
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -362,11 +296,11 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         {sender_core},
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args));
 
-    // Create receiver reader kernel on data_core
+    // Create receiver reader kernel on receiver_core
     auto worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/receiver_reader.cpp",
-        {data_core},
+        {receiver_core},
         tt::tt_metal::ReaderDataMovementConfig(receiver_reader_compile_args));
 
     auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
@@ -375,72 +309,17 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_configuration);
 
-    // Create compute kernels for all compute cores
-    // Each core processes a subset of tiles
-    std::vector<tt::tt_metal::KernelHandle> compute_reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> compute_writer_kernel_ids;
-
-    for (uint32_t core_idx = 0; core_idx < num_compute_cores; ++core_idx) {
-        const auto& compute_core = compute_cores[core_idx];
-        uint32_t tile_offset = core_idx * tiles_per_core;
-        uint32_t num_tiles_this_core = std::min(tiles_per_core, input_tensor_num_pages - tile_offset);
-
-        if (num_tiles_this_core == 0) {
-            break;
-        }
-
-        std::vector<uint32_t> compute_ct_args = {
-            compute_cb_in1, compute_cb_in2, compute_cb_out, 1, num_tiles_this_core};
-
-        tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/reduction.cpp",
-            {compute_core},
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = true,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_ct_args,
-            });
-
-        if (core_idx == 0) {
-            // Data core: receiver_reader handles data movement, no separate reader/writer needed
-            continue;
-        }
-
-        std::vector<uint32_t> compute_reader_compile_args = {
-            compute_cb_in1,       // cb_in1
-            compute_cb_in2,       // cb_in2
-            num_tiles_this_core,  // num_tiles
-            tile_offset,          // tile_offset
-            input_page_size_bytes,
-            data_noc_x,
-            data_noc_y,
-        };
-
-        auto compute_reader_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/compute_reader.cpp",
-            {compute_core},
-            tt::tt_metal::ReaderDataMovementConfig(compute_reader_compile_args));
-        compute_reader_kernel_ids.push_back(compute_reader_kernel_id);
-
-        std::vector<uint32_t> compute_writer_compile_args = {
-            compute_cb_out,       // cb_out
-            num_tiles_this_core,  // num_tiles
-            tile_offset,          // tile_offset
-            input_page_size_bytes,
-            data_noc_x,
-            data_noc_y,
-        };
-
-        auto compute_writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/compute_writer.cpp",
-            {compute_core},
-            tt::tt_metal::WriterDataMovementConfig(compute_writer_compile_args));
-        compute_writer_kernel_ids.push_back(compute_writer_kernel_id);
-    }
+    std::vector<uint32_t> compute_ct_args = {compute_cb_in1, compute_cb_in2, compute_cb_out, 1, num_standard_tiles};
+    tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/device/kernels/reduction.cpp",
+        {receiver_core},
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = true,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_ct_args,
+        });
 
     // Kernel Runtime Args
     // For 2-device all-reduce:
@@ -486,10 +365,7 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
 
     // === RECEIVER RUNTIME ARGS ===
     std::vector<uint32_t> receiver_reader_rt_args = {
-        input_tensor.buffer()->address(),
-        intermediate_tensor.buffer()->address(),
         receiver_semaphore.address(),
-        compute_sync_semaphore_id,
     };
     append_routing_plane_connection_manager_rt_args(
         self_fabric_node_id,
@@ -497,34 +373,16 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         {receiver_link},
         program,
         worker_receiver_reader_kernel_id,
-        data_core,
+        receiver_core,
         receiver_reader_rt_args);
-    tt::tt_metal::SetRuntimeArgs(program, worker_receiver_reader_kernel_id, {data_core}, receiver_reader_rt_args);
-    for (size_t i = 0; i < compute_reader_kernel_ids.size(); ++i) {
-        const auto& compute_core = compute_cores[i + 1];  // Skip data_core (index 0)
-
-        std::vector<uint32_t> compute_reader_rt_args = {
-            input_tensor.buffer()->address(),
-            intermediate_tensor.buffer()->address(),
-            compute_sync_semaphore_id,
-        };
-        tt::tt_metal::SetRuntimeArgs(program, compute_reader_kernel_ids[i], {compute_core}, compute_reader_rt_args);
-
-        std::vector<uint32_t> compute_writer_rt_args = {
-            output_tensor.buffer()->address(),
-        };
-        tt::tt_metal::SetRuntimeArgs(program, compute_writer_kernel_ids[i], {compute_core}, compute_writer_rt_args);
-    }
+    tt::tt_metal::SetRuntimeArgs(program, worker_receiver_reader_kernel_id, {receiver_core}, receiver_reader_rt_args);
 
     shared_variables_t shared_variables{
         .sender_worker_cores = {sender_core},
-        .receiver_worker_cores = {data_core},
-        .compute_worker_cores = compute_cores,
+        .receiver_worker_cores = {receiver_core},
         .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .worker_receiver_reader_kernel_id = worker_receiver_reader_kernel_id,
-        .compute_reader_kernel_ids = std::move(compute_reader_kernel_ids),
-        .compute_writer_kernel_ids = std::move(compute_writer_kernel_ids),
         .compute_cb_in1_handle = compute_cb_in1_handle,
         .compute_cb_in2_handle = compute_cb_in2_handle,
         .compute_cb_out_handle = compute_cb_out_handle,
@@ -577,20 +435,7 @@ void DeepseekMinimalAllReduceProgramFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.receiver_worker_cores) {
             // Receiver reader
             auto& reader_args = GetRuntimeArgs(program, shared_vars.worker_receiver_reader_kernel_id)[core.x][core.y];
-            reader_args[0] = input.buffer()->address();
-            reader_args[1] = intermediate.buffer()->address();
-            reader_args[2] = receiver_semaphore.address();
-        }
-
-        // Update compute reader/writer runtime args for non-data cores
-        for (size_t i = 0; i < shared_vars.compute_reader_kernel_ids.size(); ++i) {
-            const auto& core = shared_vars.compute_worker_cores[i + 1];
-            auto& reader_args = GetRuntimeArgs(program, shared_vars.compute_reader_kernel_ids[i])[core.x][core.y];
-            reader_args[0] = input.buffer()->address();
-            reader_args[1] = intermediate.buffer()->address();
-
-            auto& writer_args = GetRuntimeArgs(program, shared_vars.compute_writer_kernel_ids[i])[core.x][core.y];
-            writer_args[0] = output.buffer()->address();
+            reader_args[0] = receiver_semaphore.address();
         }
     }
 }

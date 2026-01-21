@@ -22,31 +22,19 @@ using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t receiver_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_in1 = get_compile_time_arg_val(1);  // CB for remote data (intermediate tensor)
     constexpr uint32_t alignment = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_compute = get_compile_time_arg_val(3);
-    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t data_noc_x = get_compile_time_arg_val(7);
-    constexpr uint32_t data_noc_y = get_compile_time_arg_val(8);
-    constexpr uint32_t remote_sender_noc_x = get_compile_time_arg_val(9);
-    constexpr uint32_t remote_sender_noc_y = get_compile_time_arg_val(10);
-    constexpr uint32_t mcast_start_x = get_compile_time_arg_val(11);
-    constexpr uint32_t mcast_start_y = get_compile_time_arg_val(12);
-    constexpr uint32_t mcast_end_x = get_compile_time_arg_val(13);
-    constexpr uint32_t mcast_end_y = get_compile_time_arg_val(14);
-    constexpr uint32_t mcast_num_dests = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_in2 = get_compile_time_arg_val(3);  // CB for local data (input tensor)
+    constexpr uint32_t remote_sender_noc_x = get_compile_time_arg_val(4);
+    constexpr uint32_t remote_sender_noc_y = get_compile_time_arg_val(5);
+    constexpr uint32_t num_standard_tiles = get_compile_time_arg_val(6);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint8_t sender_num_hops = 1;
     constexpr uint32_t num_connections = 1;
 
     size_t arg_idx = 0;
-    uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t compute_sync_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
@@ -68,24 +56,15 @@ void kernel_main() {
     // Wait for remote sender to signal data has been written to intermediate tensor
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    noc_semaphore_set(local_semaphore_ptr, 0);  // Reset for next iteration
+    noc_semaphore_set(local_semaphore_ptr, 0);
 
     close_connections(fabric_connection);
 
-    // Signal all non-data compute cores via NOC multicast semaphore set
-    // Each compute_reader will wait locally on its semaphore
-    if constexpr (mcast_num_dests > 0) {
-        // Set the source semaphore value to 1
-        auto compute_sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_sem_addr);
-        noc_semaphore_set(compute_sync_sem_ptr, 1);
+    // Now both local and remote data are ready
+    // Just reserve and push to make tiles available for compute
+    cb_reserve_back(cb_in1, num_standard_tiles);
+    cb_push_back(cb_in1, num_standard_tiles);
 
-        // Multicast the semaphore value to all non-data compute cores
-        uint64_t mcast_sem_addr =
-            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, compute_sync_sem_addr);
-        noc_semaphore_set_multicast(compute_sync_sem_addr, mcast_sem_addr, mcast_num_dests);
-    }
-    // Now both local and remote data are ready, push to compute
-    cb_push_back(cb_compute, input_num_tiles);
-
-    cb_push_back(receiver_cb, input_num_tiles);
+    cb_reserve_back(cb_in2, num_standard_tiles);
+    cb_push_back(cb_in2, num_standard_tiles);
 }

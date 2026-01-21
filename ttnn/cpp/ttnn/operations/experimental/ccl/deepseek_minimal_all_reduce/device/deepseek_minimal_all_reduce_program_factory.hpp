@@ -10,12 +10,9 @@ struct DeepseekMinimalAllReduceProgramFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
         std::vector<tt::tt_metal::CoreCoord> receiver_worker_cores;
-        std::vector<tt::tt_metal::CoreCoord> compute_worker_cores;
         tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
         tt::tt_metal::KernelHandle worker_receiver_reader_kernel_id{};
-        std::vector<tt::tt_metal::KernelHandle> compute_reader_kernel_ids;
-        std::vector<tt::tt_metal::KernelHandle> compute_writer_kernel_ids;
         tt::tt_metal::CBHandle compute_cb_in1_handle{};
         tt::tt_metal::CBHandle compute_cb_in2_handle{};
         tt::tt_metal::CBHandle compute_cb_out_handle{};

@@ -199,15 +199,27 @@ def run_deepseek_minimal_all_reduce_impl(
         )
         input_tensor_mesh_list.append(input_tensor_mesh)
 
-        # Create intermediate tensor with same shape and memory config
-        intermediate_tensor_torch = torch.zeros_like(mesh_tensor_torch)
+        # Create intermediate tensor with standard 32x32 tiles
+        # Reshape from [1, 7168] to [32, 224] for proper tile alignment (7 tiles of 32x32)
+        intermediate_shape = [32, 224]  # 7 tiles of 32x32
+        intermediate_tensor_torch = torch.zeros(intermediate_shape, dtype=torch.bfloat16)
+
+        intermediate_shard_spec = ttnn.ShardSpec(
+            input_shard_grid,
+            (32, 224),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        intermediate_mem_config_32x32 = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=intermediate_shard_spec
+        )
+
         intermediate_tensor = ttnn.from_torch(
             intermediate_tensor_torch,
             device=mesh_device,
             layout=layout,
-            tile=ttnn.Tile((1, 32)),
+            tile=ttnn.Tile((32, 32)),
             dtype=input_dtype,
-            memory_config=intermediate_mem_config,
+            memory_config=intermediate_mem_config_32x32,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
                 mesh_mapper_config,
