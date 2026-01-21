@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #include <noc_functions.hpp>
 
 // All functions here can be accelerated by hardware
-// Legacy functions that should NOT be used.
 
 bool cmd_buf_ok(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);

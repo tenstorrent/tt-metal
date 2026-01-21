@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 /**
  * @file addrgen_api.hpp
  * @brief Hardware Address Generator API for Overlay Command Buffers
@@ -146,7 +147,7 @@ struct LoopConfig {
      * If we have 3 banks (common scenario is to define bank 0 as local L1):                                         \
      * (0, 0, 0), (1, 2, 0),(2, 2, 1)                                                                                \
      * Since first bank is local L1 we want to skip it in this example and only iterate trough other 2 banks,        \
-     * this can be done with following configuration                                                                 \
+     * this can be done with following configuraiton                                                                 \
      * size = 2                                                                                                      \
      * skip = 1                                                                                                      \
      * base = 1                                                                                                      \

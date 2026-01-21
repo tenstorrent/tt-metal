@@ -1,7 +1,7 @@
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #include "noc.h"
 #include <stdint.h>
@@ -9,9 +9,9 @@
 #include "noc_parameters.h"
 
 // generated code
-#include "registers/noc_niu_reg.h"
-#include "registers/noc_config_reg.h"
-#include "registers/noc_status_reg.h"
+#include "../registers/c/noc_niu_reg.h"
+#include "../registers/c/noc_config_reg.h"
+#include "../registers/c/noc_status_reg.h"
 
 #ifdef TB_NOC
 
@@ -21,10 +21,10 @@
 
 #define NOC_WRITE_REG(addr, val)                                      \
     ((*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + \
-                             noc_get_active_instance() * NOC_INSTANCE_OFFSET + ((uintptr_t)addr)))) = (val))
+                             noc_get_active_instance() * NOC_INSTANCE_OFFSET + (addr)))) = (val))
 #define NOC_READ_REG(addr)                                                                                             \
     (*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + noc_get_active_instance() * NOC_INSTANCE_OFFSET + \
-                            ((uintptr_t)addr))))
+                            (addr))))
 
 #endif
 
@@ -32,9 +32,24 @@
 #include "arc_fw_noc.h"
 #endif
 
+///
+
+#include <stdarg.h>
+#include <stdio.h>
+
+// Log messages to stdout with variable arguments
+void LOG_C(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vfprintf(stdout, format, args);
+    va_end(args);
+    fflush(stdout);
+}
+
 static uint32_t active_cmd_buf = 0;
 static uint32_t active_noc_instance = 0;
 
+// Set the active command buffer (0-3) for NOC operations
 void noc_set_cmd_buf(uint32_t cmd_buf_id) {
 #ifdef TB_NOC
     api_set_active_cmd_buf(cmd_buf_id);
@@ -43,6 +58,7 @@ void noc_set_cmd_buf(uint32_t cmd_buf_id) {
 #endif
 }
 
+// Get the currently active command buffer ID
 uint32_t noc_get_cmd_buf() {
 #ifdef TB_NOC
     return api_get_active_cmd_buf();
@@ -51,6 +67,7 @@ uint32_t noc_get_cmd_buf() {
 #endif
 }
 
+// Set the active NOC instance for subsequent operations
 void noc_set_active_instance(uint32_t noc_id) {
 #ifdef TB_NOC
     api_set_active_noc_instance(noc_id);
@@ -59,6 +76,7 @@ void noc_set_active_instance(uint32_t noc_id) {
 #endif
 }
 
+// Get the currently active NOC instance ID
 uint32_t noc_get_active_instance() {
 #ifdef TB_NOC
     return api_get_active_noc_instance();
@@ -103,6 +121,15 @@ typedef struct {
     bool cmd_mem_rd_drop_ack;
 } TransferParams;
 
+// Core NOC transfer function that executes data transfers based on TransferParams
+// Supports all NOC transaction types:
+// - Unicast/Multicast: single destination or rectangular broadcast region
+// - Read/Write operations: data movement between NOC nodes
+// - Inline writes: small payloads embedded in packet headers (up to 64 bits)
+// - Byte-enable writes: selective byte writing within NOC words (256 bytes)
+// - Atomic operations: read-modify-write with increment and wrap-around
+// - L1 accumulation: tensor operations with configurable data formats
+// Configures NIU registers, validates virtual channels, and triggers execution
 void noc_transfer(TransferParams* p) {
     // if (size > 0x4000) {
     //    LOGC_("Size of noc bytes is over 16KB ! Req sent should be incremented\n");
@@ -211,7 +238,7 @@ void noc_transfer(TransferParams* p) {
 
             NOC_WRITE_REG(
                 NOC_NIU_BRCST_LO_REG_ADDR,
-                (uint32_t)(shifted_value | (brcst_value_lo.val & 0xEFF)));  // upper 10 bits not used.
+                (uint32_t)(shifted_value | brcst_value_lo.val & 0xEFF));  // upper 10 bits not used.
             NOC_WRITE_REG(NOC_NIU_BRCST_HI_REG_ADDR, (uint32_t)(p->multicast_hi));
         } else {
             NOC_WRITE_REG(NOC_NIU_BRCST_LO_REG_ADDR, brcst_value_lo.val);
@@ -222,46 +249,46 @@ void noc_transfer(TransferParams* p) {
         cmd_value_lo.f.cmd_path_reserve = 0;
     }
 
-    // LOG_C(
-    //     "Writing CMD_BUF: %d, CMD_LO: cmd_at_cpy_bit=%d,  cmd_rw_bit=%d,  cmd_wr_be_bit=%d,  cmd_wr_inline_bit=%d, "
-    //     "cmd_resp_marked_bit=%d,  cmd_brcst_bit=%d,  cmd_linked_bit=%d,  cmd_path_reserve=%d, cmd_mem_rd_drop_ack=%d,
-    //     " " cmd_dyna_routing_en=%d,  cmd_l1_acc_at_en=%d,  cmd_flush_bit=%d,  cmd_snoop_bit=%d,  cmd_static_vc=%d,  "
-    //     "resp_static_vc=%d, cmd_port_req_mask=%d \n",
-    //     p->cmd_select,
-    //     cmd_value_lo.f.cmd_at_cpy_bit,
-    //     cmd_value_lo.f.cmd_rw_bit,
-    //     cmd_value_lo.f.cmd_wr_be_bit,
-    //     cmd_value_lo.f.cmd_wr_inline_bit,
-    //     cmd_value_lo.f.cmd_resp_marked_bit,
-    //     cmd_value_lo.f.cmd_brcst_bit,
-    //     cmd_value_lo.f.cmd_linked_bit,
-    //     cmd_value_lo.f.cmd_path_reserve,
-    //     cmd_value_lo.f.cmd_mem_rd_drop_ack,
-    //     cmd_value_lo.f.cmd_dyna_routing_en,
-    //     cmd_value_lo.f.cmd_l1_acc_at_en,
-    //     cmd_value_lo.f.cmd_flush_bit,
-    //     cmd_value_lo.f.cmd_snoop_bit,
-    //     cmd_value_lo.f.cmd_static_vc,
-    //     cmd_value_lo.f.resp_static_vc,
-    //     cmd_value_lo.f.cmd_port_req_mask);
+    LOG_C(
+        "Writing CMD_BUF: %d, CMD_LO: cmd_at_cpy_bit=%d,  cmd_rw_bit=%d,  cmd_wr_be_bit=%d,  cmd_wr_inline_bit=%d, "
+        "cmd_resp_marked_bit=%d,  cmd_brcst_bit=%d,  cmd_linked_bit=%d,  cmd_path_reserve=%d,  cmd_mem_rd_drop_ack=%d, "
+        " cmd_dyna_routing_en=%d,  cmd_l1_acc_at_en=%d,  cmd_flush_bit=%d,  cmd_snoop_bit=%d,  cmd_static_vc=%d,  "
+        "resp_static_vc=%d, cmd_port_req_mask=%d \n",
+        p->cmd_select,
+        cmd_value_lo.f.cmd_at_cpy_bit,
+        cmd_value_lo.f.cmd_rw_bit,
+        cmd_value_lo.f.cmd_wr_be_bit,
+        cmd_value_lo.f.cmd_wr_inline_bit,
+        cmd_value_lo.f.cmd_resp_marked_bit,
+        cmd_value_lo.f.cmd_brcst_bit,
+        cmd_value_lo.f.cmd_linked_bit,
+        cmd_value_lo.f.cmd_path_reserve,
+        cmd_value_lo.f.cmd_mem_rd_drop_ack,
+        cmd_value_lo.f.cmd_dyna_routing_en,
+        cmd_value_lo.f.cmd_l1_acc_at_en,
+        cmd_value_lo.f.cmd_flush_bit,
+        cmd_value_lo.f.cmd_snoop_bit,
+        cmd_value_lo.f.cmd_static_vc,
+        cmd_value_lo.f.resp_static_vc,
+        cmd_value_lo.f.cmd_port_req_mask);
 
-    // LOG_C(
-    //     "Writing CMD_HI: cmd_pkt_tag_id=%d, cmd_force_dim_routing=%d \n",
-    //     cmd_value_hi.f.cmd_pkt_tag_id,
-    //     cmd_value_hi.f.cmd_force_dim_routing);
+    LOG_C(
+        "Writing CMD_HI: cmd_pkt_tag_id=%d, cmd_force_dim_routing=%d \n",
+        cmd_value_hi.f.cmd_pkt_tag_id,
+        cmd_value_hi.f.cmd_force_dim_routing);
 
-    // if (cmd_value_lo.f.cmd_brcst_bit) {
-    //     if (cmd_value_lo.f.cmd_static_vc < NOC_BCAST_VC_START ||
-    //         cmd_value_lo.f.cmd_static_vc > NOC_BCAST_VC_START + 3) {
-    //         LOG_C("ERROR: Invalid static VC for multicast\n");
-    //         exit(1);
-    //     }
-    // } else {
-    //     if (cmd_value_lo.f.cmd_static_vc < 0 || cmd_value_lo.f.cmd_static_vc > 7) {
-    //         LOG_C("ERROR: Invalid static VC for unicast\n");
-    //         exit(1);
-    //     }
-    // }
+    if (cmd_value_lo.f.cmd_brcst_bit) {
+        if (cmd_value_lo.f.cmd_static_vc < NOC_BCAST_VC_START ||
+            cmd_value_lo.f.cmd_static_vc > NOC_BCAST_VC_START + 3) {
+            LOG_C("ERROR: Invalid static VC for multicast\n");
+            exit(1);
+        }
+    } else {
+        if (cmd_value_lo.f.cmd_static_vc < 0 || cmd_value_lo.f.cmd_static_vc > 7) {
+            LOG_C("ERROR: Invalid static VC for unicast\n");
+            exit(1);
+        }
+    }
 
     NOC_WRITE_REG(NOC_NIU_CMD_LO_REG_ADDR, cmd_value_lo.val);
 
@@ -272,6 +299,7 @@ void noc_transfer(TransferParams* p) {
 
 ////
 ///
+// Check if the given NOC coordinate matches the local node coordinates
 static bool unicast_addr_local(uint32_t noc_coordinate) {
     uint32_t local_node_id = noc_local_node_id();
     uint32_t local_x = local_node_id & NOC_NODE_ID_MASK;
@@ -286,7 +314,7 @@ static bool unicast_addr_local(uint32_t noc_coordinate) {
 
 // Normally when you write to the l1 memory you get an ack from it
 // however when we do autocfg we do not get an ack from the overlay registers, this bit disables the logic that expects
-// an ack back
+// an ack back Enable/disable acknowledgment dropping for memory read operations
 void set_rd_ack_drop(uint32_t drop, uint32_t cmd_buf) {
     noc_set_cmd_buf(cmd_buf);
     NOC_NIU_CMD_LO_reg_u cmd_value_lo;
@@ -296,6 +324,7 @@ void set_rd_ack_drop(uint32_t drop, uint32_t cmd_buf) {
 }
 
 // When set, this bit guarantees that transactions have completed before issuing the next one
+// Set flush bit to ensure transaction completion before issuing next command
 void set_flush_bit(uint32_t flush, uint32_t cmd_buf) {
     noc_set_cmd_buf(cmd_buf);
     NOC_NIU_CMD_LO_reg_u cmd_value_lo;
@@ -305,6 +334,7 @@ void set_flush_bit(uint32_t flush, uint32_t cmd_buf) {
 }
 
 // force dimension routing for outside mesh space, within mesh it is guaranteed to be dim-order
+// Force dimension-order routing for transactions outside mesh space
 void force_dim_routing(uint32_t enable, uint32_t cmd_buf) {
     noc_set_cmd_buf(cmd_buf);
     NOC_NIU_CMD_HI_reg_u cmd_value_hi;
@@ -313,6 +343,7 @@ void force_dim_routing(uint32_t enable, uint32_t cmd_buf) {
     NOC_WRITE_REG(NOC_NIU_CMD_HI_REG_ADDR, cmd_value_hi.val);
 }
 
+// Copy data between NOC nodes with full parameter control
 void noc_copy(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -346,6 +377,37 @@ void noc_copy(
     noc_transfer(&transferParams);
 }
 
+// Read data from a remote NOC node to a local destination
+void noc_read(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t size,
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id) {
+    // Create TransferParams struct and initialize to zero
+    TransferParams transferParams = {0};
+
+    // Assign specific values
+    transferParams.src_coordinate = src_coordinate;
+    transferParams.src_addr = src_addr;
+    transferParams.dst_coordinate = dst_coordinate;
+    transferParams.dst_addr = dst_addr;
+    transferParams.size = size;
+    transferParams.linked = false;
+    transferParams.posted = false;
+    transferParams.static_vc = static_vc;
+    transferParams.resp_static_vc = resp_static_vc;
+    transferParams.src_local = 0;
+    transferParams.transaction_id = transaction_id;
+
+    // Call noc_transfer with the created TransferParams struct
+    noc_transfer(&transferParams);
+}
+
+// Copy data with explicit command buffer selection
 void noc_copy_cmd(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -381,6 +443,7 @@ void noc_copy_cmd(
     noc_transfer(&transferParams);
 }
 
+// Perform L1 accumulation operations with configurable data format and saturation
 void noc_accumulate(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -423,6 +486,7 @@ void noc_accumulate(
     noc_transfer(&transferParams);
 }
 
+// Write small data payload using inline header space for efficiency
 void noc_write_inline(
     uint32_t dst_coordinate,
     uint64_t dst_addr,
@@ -452,6 +516,7 @@ void noc_write_inline(
     noc_transfer(&transferParams);
 }
 
+// Multicast inline write to multiple destinations in rectangular region
 void noc_multicast_write_inline(
     uint32_t dst_coordinate,
     uint64_t dst_addr,
@@ -484,6 +549,7 @@ void noc_multicast_write_inline(
     noc_transfer(&transferParams);
 }
 
+// Multicast inline write including the source node in the destination set
 void noc_multicast_write_inline_src_include(
     uint32_t dst_coordinate,
     uint64_t dst_addr,
@@ -517,6 +583,7 @@ void noc_multicast_write_inline_src_include(
     noc_transfer(&transferParams);
 }
 
+// Copy single NOC word with byte-enable masks for selective byte writes
 void noc_copy_word_be(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -550,6 +617,7 @@ void noc_copy_word_be(
     noc_transfer(&transferParams);
 }
 
+// Multicast copy single word with byte-enable masks to multiple destinations
 void noc_multicast_copy_word_be(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -586,6 +654,7 @@ void noc_multicast_copy_word_be(
     noc_transfer(&transferParams);
 }
 
+// Multicast copy data to rectangular region of NOC nodes
 void noc_multicast_copy(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -622,6 +691,7 @@ void noc_multicast_copy(
     noc_transfer(&transferParams);
 }
 
+// Multicast copy including the source node as a destination
 void noc_multicast_copy_src_include(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -659,6 +729,7 @@ void noc_multicast_copy_src_include(
     noc_transfer(&transferParams);
 }
 
+// Multicast copy with explicit exclusion masks for fine-grained destination control
 void noc_multicast_copy_exclude(
     uint32_t src_coordinate,
     uint64_t src_addr,
@@ -699,6 +770,7 @@ void noc_multicast_copy_exclude(
     noc_transfer(&transferParams);
 }
 
+// Perform atomic increment operation with configurable wrap-around value
 void noc_atomic_increment(
     uint32_t noc_coordinate,
     uint64_t addr,
@@ -725,6 +797,7 @@ void noc_atomic_increment(
     noc_transfer(&transferParams);
 }
 
+// Atomic read-modify-write operation returning original value before increment
 void noc_atomic_read_and_increment(
     uint32_t noc_coordinate,
     uint64_t addr,
@@ -757,6 +830,7 @@ void noc_atomic_read_and_increment(
     noc_transfer(&transferParams);
 }
 
+// Multicast atomic increment operation to multiple NOC destinations
 void noc_multicast_atomic_increment(
     uint32_t noc_coordinate,
     uint64_t addr,
@@ -786,6 +860,7 @@ void noc_multicast_atomic_increment(
     noc_transfer(&transferParams);
 }
 
+// Multicast atomic read-and-increment with read response to specified location
 void noc_multicast_atomic_read_and_increment(
     uint32_t noc_coordinate,
     uint64_t addr,
@@ -821,12 +896,14 @@ void noc_multicast_atomic_read_and_increment(
     noc_transfer(&transferParams);
 }
 
+// Check if the specified command buffer is ready to accept new commands
 bool noc_command_ready(uint32_t cmd_select) {
     noc_set_cmd_buf(cmd_select);
 
     return (NOC_READ_REG(NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+// Get count of completed atomic read responses received
 uint32_t noc_atomic_read_updates_completed() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -835,6 +912,7 @@ uint32_t noc_atomic_read_updates_completed() {
     return result;
 }
 
+// Get count of write acknowledgments received
 volatile uint32_t noc_wr_ack_received() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -843,6 +921,7 @@ volatile uint32_t noc_wr_ack_received() {
     return result;
 }
 
+// Get count of read responses received
 volatile uint32_t noc_rd_resp_received() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -851,6 +930,7 @@ volatile uint32_t noc_rd_resp_received() {
     return result;
 }
 
+// Get the local NOC node ID coordinates
 uint32_t noc_local_node_id() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -859,6 +939,7 @@ uint32_t noc_local_node_id() {
     return result;
 }
 
+// Read value from NOC status register by ID
 uint32_t noc_status_reg(uint32_t status_reg_id) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -867,6 +948,7 @@ uint32_t noc_status_reg(uint32_t status_reg_id) {
     return result;
 }
 
+// Write value to NOC configuration register by ID
 void noc_set_cfg_reg(uint32_t cfg_reg_id, uint32_t val) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -874,6 +956,7 @@ void noc_set_cfg_reg(uint32_t cfg_reg_id, uint32_t val) {
     noc_set_cmd_buf(save_cmd_buf);
 }
 
+// Read value from NOC configuration register by ID
 uint32_t noc_get_cfg_reg(uint32_t cfg_reg_id) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -886,6 +969,7 @@ uint32_t noc_get_cfg_reg(uint32_t cfg_reg_id) {
 //////////////////////// ECC Functions ///////////////////////////
 //////////////////////////////////////////////////////////////////
 
+// Configure ECC stage 1: Enable header check bits generation
 void noc_ecc_cfg_stage_1(bool header_ckh_bits_en) {
     uint32_t mask;
     uint32_t cfg_reg;
@@ -896,6 +980,7 @@ void noc_ecc_cfg_stage_1(bool header_ckh_bits_en) {
     noc_set_cfg_reg(ROUTER_CFG_0, cfg_reg);
 }
 
+// Configure ECC stage 2: Enable memory parity, SECDED, and interrupt settings
 void noc_ecc_cfg_stage_2(
     bool niu_mem_parity_en,
     bool router_mem_parity_en,
@@ -922,6 +1007,7 @@ void noc_ecc_cfg_stage_2(
     noc_set_cfg_reg(ROUTER_CFG_0, cfg_reg);
 }
 
+// Clear ECC error flags for memory parity, single-bit, and double-bit errors
 void noc_ecc_clear_err(bool clear_mem_parity_err, bool clear_header_sec, bool clear_header_ded) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -929,6 +1015,7 @@ void noc_ecc_clear_err(bool clear_mem_parity_err, bool clear_header_sec, bool cl
     noc_set_cmd_buf(save_cmd_buf);
 }
 
+// Force ECC errors for testing memory parity, single-bit, and double-bit scenarios
 void noc_ecc_force_err(bool force_mem_parity_err, bool force_header_sec, bool force_header_ded) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -936,6 +1023,7 @@ void noc_ecc_force_err(bool force_mem_parity_err, bool force_header_sec, bool fo
     noc_set_cmd_buf(save_cmd_buf);
 }
 
+// Get count of detected memory parity errors
 uint32_t noc_ecc_get_num_mem_parity_errs() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -944,6 +1032,7 @@ uint32_t noc_ecc_get_num_mem_parity_errs() {
     return result;
 }
 
+// Get count of detected single-bit correctable header errors
 uint32_t noc_ecc_get_num_header_sec() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -952,6 +1041,7 @@ uint32_t noc_ecc_get_num_header_sec() {
     return result;
 }
 
+// Get count of detected double-bit uncorrectable header errors
 uint32_t noc_ecc_get_num_header_ded() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
@@ -960,6 +1050,7 @@ uint32_t noc_ecc_get_num_header_ded() {
     return result;
 }
 
+// Clear outstanding request counters for specified transaction IDs
 void noc_clear_req_id_cnt(uint32_t id_mask) {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);

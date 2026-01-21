@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #ifndef _NOC_H_
 #define _NOC_H_
@@ -92,6 +93,16 @@ void noc_copy(
     uint32_t size,
     bool linked,
     bool posted,
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
+
+void noc_read(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t size,
     uint32_t static_vc,
     uint32_t resp_static_vc,
     uint32_t transaction_id);

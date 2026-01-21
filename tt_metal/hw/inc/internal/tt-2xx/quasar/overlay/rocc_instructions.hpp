@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
-#pragma once
+#ifndef __ROCC_INSTRUCTIONS_TEST_HPP__
+#define __ROCC_INSTRUCTIONS_TEST_HPP__
 
 #include <stdint.h>
 #include "xcustom_test.hpp"
 #include "overlay_reg.h"
+
 /////////////////
 // MISC
 /////////////////
@@ -389,12 +392,14 @@
     }
 
 // Issues an inline transaction
+// see issue_write_inline_ in software/pkernels/common/cmdbuf_accel.hpp
 #define CMDBUF_ISSUE_INLINE_TRANS(cmdbuf, val)              \
     {                                                       \
         ROCC_INSTRUCTION_S(0, (val), ((cmdbuf) * 64 + 63)); \
     }
 
 // Issues an inline transaction with extended params
+// see issue_write_inline_len_ in software/pkernels/common/cmdbuf_accel.hpp for encoding
 #define CMDBUF_ISSUE_INLINE_ADDR_TRANS(cmdbuf, val, rs2)            \
     {                                                               \
         ROCC_INSTRUCTION_SS(0, (val), (rs2), ((cmdbuf) * 64 + 63)); \
@@ -402,6 +407,7 @@
 
 // Issues a read transaction
 // This preprograms the command buffer to a set of default values that allow for simple read operations
+// See noc_fast_read_ in software/pkernels/common/cmdbuf_accel.hpp for encoding
 // This variant can be used if you only want to change the dest address
 #define CMDBUF_ISSUE_READ1_TRANS(cmdbuf, rs1)               \
     {                                                       \
@@ -410,6 +416,7 @@
 
 // Issues a read transaction
 // This preprograms the command buffer to a set of default values that allow for simple read operations
+// See noc_fast_read_ in software/pkernels/common/cmdbuf_accel.hpp for encoding
 #define CMDBUF_ISSUE_READ2_TRANS(cmdbuf, rs1, rs2)                  \
     {                                                               \
         ROCC_INSTRUCTION_SS(0, (rs1), (rs2), ((cmdbuf) * 64 + 56)); \
@@ -417,6 +424,7 @@
 
 // Issues a write transaction
 // This preprograms the command buffer to a set of default values that allow for simple write operations
+// See noc_fast_write_ in software/pkernels/common/cmdbuf_accel.hpp for encoding
 // This variant can be used if you only want to change the src address
 #define CMDBUF_ISSUE_WRITE1_TRANS(cmdbuf, rs1)              \
     {                                                       \
@@ -425,6 +433,7 @@
 
 // Issues a write transaction
 // This preprograms the command buffer to a set of default values that allow for simple write operations
+// See noc_fast_write_ in software/pkernels/common/cmdbuf_accel.hpp for encoding
 #define CMDBUF_ISSUE_WRITE2_TRANS(cmdbuf, rs1, rs2)                 \
     {                                                               \
         ROCC_INSTRUCTION_SS(0, (rs1), (rs2), ((cmdbuf) * 64 + 55)); \
