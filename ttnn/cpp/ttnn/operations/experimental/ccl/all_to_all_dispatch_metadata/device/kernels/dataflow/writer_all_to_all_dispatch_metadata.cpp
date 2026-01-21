@@ -552,9 +552,9 @@ void kernel_main() {
     // TODO: Implement sparse multicast that collects target devices and sends optimally
     //   through the ring (e.g., device 0 sends to device 1 which forwards to device 2).
     // ============================================================================
-    constexpr bool USE_BIDIRECTIONAL_MULTICAST = true;
+    constexpr bool USE_BIDIRECTIONAL_MULTICAST = false;
     constexpr bool USE_POINT_TO_POINT_UNICAST = false;
-    constexpr bool USE_SPARSE_MULTICAST = false;
+    constexpr bool USE_SPARSE_MULTICAST = true;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
@@ -607,6 +607,49 @@ void kernel_main() {
                 local_token,
                 token_start_idx,
                 alignment);
+        } else if constexpr (USE_SPARSE_MULTICAST) {
+            // Assume that num_experts <= num_devices
+            // Assume that num_devices <= 16
+            uint32_t remote_token_destinations[num_devices];
+            uint32_t num_remote_token_destinations = 0;
+            for (uint32_t k = 0; k < selected_experts_k; k++) {
+                uint16_t expert_chosen = token_indices[k];
+                // Direct lookup: get target device from expert mapping
+                uint16_t target_device = expert_mapping[expert_chosen];
+                if (send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] == 0) {
+                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] = 1;
+                    if (target_device == linearized_mesh_coord) {
+                        // if the expert lives on the current device, we dispatch the input token to it
+                        detail::dispatch_input_local_device_flushed(
+                            input_token_read_addr, output_token_write_addr, output_page_size);
+                        needs_barrier = true;
+                    } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(target_device)) {
+                        // if the expert lives on a remote device, we dispatch the input token to it
+                        // Add the destination to the list of destinations
+                        remote_token_destinations[num_remote_token_destinations++] = target_device;
+                    }
+                }
+            }
+            // If there are any remote destinations, send the input token to them in a single multicast packet
+            if (num_remote_token_destinations > 0) {
+                fabric_send_chip_sparse_multicast_noc_unicast_1d<
+                    linearized_mesh_coord,
+                    topology,
+                    mesh_rows,
+                    mesh_cols,
+                    num_devices,
+                    fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections,
+                    unicast_packet_header_neg,
+                    remote_token_destinations,
+                    num_remote_token_destinations,
+                    input_token_read_addr,
+                    global_token,
+                    (int)output_page_size,
+                    alignment);
+                // noc_async_writes_flushed();
+            }
         }
 
         cb_pop_front(indices_tensor_cb_id, 1);
