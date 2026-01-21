@@ -12,8 +12,7 @@
 #include "compute_kernel_api/eltwise_unary/cbrt.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
@@ -79,4 +78,3 @@ void MAIN {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

@@ -267,6 +267,10 @@ public:
     // implementation of build, to avoid breaking users / tools.
     // We can migrate build to use arch-independent target names, and then this can be removed.
     virtual std::string target_name(const Params& params) const = 0;
+    // Returns the target name for the weakened firmware.
+    // This is usually the same as the target name, but in some cases, the target name for
+    // the weakened firmware may be different.
+    virtual std::string weakened_firmware_target_name(const Params& params) const = 0;
 };
 
 class Hal {

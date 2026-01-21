@@ -94,6 +94,14 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         uint64_t src_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
         uint64_t counter_value : 12;   // Counter value
 
+        LocalNocEventDstTrailer() = default;
+
+        // Prevent accidental construction from raw integers due to bit fields above. Use
+        // EMD::getLocalNocEventDstTrailer() instead.
+        explicit LocalNocEventDstTrailer(uint64_t) = delete;
+        explicit LocalNocEventDstTrailer(uint32_t) = delete;
+        explicit LocalNocEventDstTrailer(int) = delete;
+
         void setDstAddr(uint32_t addr) {
             dst_addr_4b = addr >> 2;
             dst_addr_offset = addr & 0x3;

@@ -27,6 +27,7 @@
 #include "debug/inspector/data.hpp"
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
+#include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
@@ -217,6 +218,7 @@ void MetalContext::initialize(
     }
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
+    noc_debug_state_ = std::make_unique<NOCDebugState>();
 
     if (rtoptions_.get_profiler_enabled()) {
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
@@ -414,6 +416,8 @@ void MetalContext::teardown() {
     inspector_data_.reset();
 
     control_plane_.reset();
+
+    noc_debug_state_.reset();
 
     // Clear mock mode configuration if it was enabled
     if (experimental::is_mock_mode_registered()) {

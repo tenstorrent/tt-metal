@@ -14,8 +14,6 @@ run_dual_galaxy_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_galaxy_unit_tests"
 
-  source python_env/bin/activate
-
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpi_args="--host g10glx03,g10glx04 $mpi_args_base"
   local mpi_args_reversed="--host g10glx04,g10glx03 $mpi_args_base"

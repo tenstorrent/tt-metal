@@ -1391,27 +1391,14 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     } else {
         const bool is_2D_routing =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
-        uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
-        // Setup VC0 downstream edm semaphore settings.
-        // 1D has 1 downstream edm. 2D has 3 downstream EDMs (excluding router's own direction)
-        // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
-        for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
+        uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
+
+        for (uint32_t i = 0; i < num_downstream_edms; i++) {
             receiver_channels_downstream_flow_control_semaphore_id[i] =
                 config.receiver_channels_downstream_flow_control_semaphore_address[i];
             receiver_channels_downstream_teardown_semaphore_id[i] =
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
-        }
-
-        // Setup VC1 downstream edm semaphore settings (only for 2D routing)
-        if (is_2D_routing) {
-            uint32_t num_vc1_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
-            for (uint32_t i = 0; i < num_vc1_downstream_edms; i++) {
-                receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms + i] =
-                    config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms + i];
-                receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms + i] =
-                    config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms + i];
-            }
         }
 
         // Initialize ALL max sender channels (up to 9 for Z routers) with their addresses

@@ -10,8 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/where.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t scalar_value = get_arg_val<uint32_t>(3);
 
@@ -81,4 +80,3 @@ void MAIN {
         cb_pop_front(cb_pre_in2, num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE

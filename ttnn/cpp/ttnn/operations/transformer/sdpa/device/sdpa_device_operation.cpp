@@ -101,7 +101,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             const auto q_shape = q.logical_shape();
             const auto k_shape = k.logical_shape();
 
-            TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
+            TT_FATAL(
+                mask_shape[0] == 1 || mask_shape[0] == q_shape[0],
+                "Mask batch dim must either be 1 (to be broadcasted across all batches) or must match Q batch "
+                "dimension");
             TT_FATAL(
                 mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
                 "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");

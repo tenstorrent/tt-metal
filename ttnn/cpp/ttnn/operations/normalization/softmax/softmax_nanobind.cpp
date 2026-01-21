@@ -79,6 +79,9 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
             nb::arg("subblock_w").noconvert(),
             nb::arg("block_h").noconvert(),
             nb::arg("block_w").noconvert())
+        .def_rw("compute_with_storage_grid_size", &SoftmaxShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
+        .def_rw("subblock_w", &SoftmaxShardedMultiCoreProgramConfig::subblock_w)
+        .def_rw("block_h", &SoftmaxShardedMultiCoreProgramConfig::block_h)
         .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
 }
 
