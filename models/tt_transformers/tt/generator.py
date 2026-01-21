@@ -356,7 +356,7 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
-
+            local_kwargs["global_user_id"] = user_id
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
