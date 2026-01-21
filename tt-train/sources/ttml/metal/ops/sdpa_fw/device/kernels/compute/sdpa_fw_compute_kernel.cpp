@@ -86,8 +86,6 @@ void MAIN {
         // For causal mask: only process K/V tiles up to and including the diagonal
         // q_row_tile determines how many K/V chunks we need (0..q_row_tile inclusive)
         const uint32_t num_kv_tiles_to_process = q_row_tile + 1;
-        DPRINT << "COMPUTE: row=" << row << " global_row_idx=" << global_row_idx << " q_row_tile=" << q_row_tile
-               << " num_kv=" << num_kv_tiles_to_process << ENDL();
 #else
         // For non-causal: process all K/V tiles
         const uint32_t num_kv_tiles_to_process = Ht;
@@ -122,7 +120,6 @@ void MAIN {
             // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
             // Writer generates causal mask tile once, reused for every diagonal
             if (h == q_row_tile) {
-                DPRINT << "COMPUTE: applying mask at h=" << h << " q_row_tile=" << q_row_tile << ENDL();
                 apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
             } else {
                 // For non-diagonal tiles (past tokens): no mask needed but still need to scale
@@ -130,12 +127,13 @@ void MAIN {
                 mul_unary_tile(matmul_accum_reg, scaler_bits);
             }
 #elif defined(USE_ATTN_MASK)
-            /*
-             * apply attention mask on dest_reg.
-             * function assumes that dest_reg is in acquired state via *acquire_dst* call
-             * function transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
-             */
+            // Apply attention mask from DRAM
+            // Transforms mask from 1/0 to 0/-1e9F and applies it on dest_reg
             apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+#else
+            // NO MASK: just scale attention scores
+            binop_with_scalar_tile_init();
+            mul_unary_tile(matmul_accum_reg, scaler_bits);
 #endif
             tile_regs_commit();
             tile_regs_wait();

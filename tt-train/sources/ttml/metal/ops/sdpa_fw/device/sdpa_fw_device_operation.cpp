@@ -133,12 +133,16 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             qSt);
     }
 
-    // CAUSAL_MASK and USE_ATTN_MASK are mutually exclusive
+    // Validate mask type and mask tensor consistency
     TT_FATAL(
-        !(args.is_mask_causal && tensor_args.mask.has_value()),
-        "Cannot use both causal mask and attention mask simultaneously. "
-        "Set is_mask_causal=false when providing an explicit attention mask tensor, "
-        "or remove the mask tensor when using causal masking.");
+        !(args.mask_type == AttentionMaskType::Arbitrary && !tensor_args.mask.has_value()),
+        "AttentionMaskType::Arbitrary requires a mask tensor to be provided.");
+
+    TT_FATAL(
+        !(args.mask_type != AttentionMaskType::Arbitrary && tensor_args.mask.has_value()),
+        "Mask tensor provided but mask_type is not Arbitrary. "
+        "Use AttentionMaskType::Arbitrary to apply a custom mask, "
+        "or remove the mask tensor for None/Causal modes.");
 
     if (preallocated_output.has_value()) {
         check_tensor(
@@ -147,7 +151,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             tt::tt_metal::Layout::TILE,
             tt::tt_metal::DataType::BFLOAT16);
 
-        auto output_shape = preallocated_output->padded_shape();
+        const auto output_shape = preallocated_output->padded_shape();
         // Output shape (B, H, S, D) - heads NOT fused
         TT_FATAL(
             output_shape[0] == query_shape[0] &&      // B
@@ -274,8 +278,8 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
+    ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
-    const bool is_mask_causal,
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
@@ -284,7 +288,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
-        .is_mask_causal = is_mask_causal,
+        .mask_type = mask_type,
         .dropout_probability = dropout_probability};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,

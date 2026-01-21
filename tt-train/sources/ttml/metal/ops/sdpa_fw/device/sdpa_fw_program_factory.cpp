@@ -97,7 +97,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -148,21 +148,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
     const auto& attn_mask = tensor_args.mask;
-    const bool is_mask_causal = args.is_mask_causal;
+    const AttentionMaskType mask_type = args.mask_type;
     /*
     Shape note:
     Q: B x qNH x S x qE
     K: B x kNH x S x kE
     V: B x vNH x S x vE
-    attn_mask: B x qNH x S x S
+    attn_mask: 1 x 1 x S x S
     */
 
     auto* device = query.device();
 
     tt::tt_metal::Program program{};
-    auto input_data_format = datatype_to_dataformat_converter(query.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const auto input_data_format = datatype_to_dataformat_converter(query.dtype());
+    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
     auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
@@ -176,34 +176,23 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         key.physical_volume(),
         value.physical_volume());
 
-    TT_FATAL(qEmbd == kEmbd && qEmbd == vEmbd, "Embedding dims of Q, K, V must be the same");
-    TT_FATAL(qB == kB, "Query and Key batch sizes must be the same");
-    TT_FATAL(qS == kS, "Query and Key sequence lengths must be the same");
+    const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
+    const uint32_t NC = qB * qNH;
+    const uint32_t total_rows_to_process =
+        NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
 
-    uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    uint32_t NC = qB * qNH;
-    uint32_t total_rows_to_process = NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+    const uint32_t heads_per_group = qNH / kNH;  // we read heads_per_group heads from Q for one group of K and V
+    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
+    const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
+    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
-    TT_FATAL(kNH == vNH, "Number of heads in Key and Value must be the same");
-    uint32_t kv_heads = kNH;  // number of heads in Key and Value
+    const uint32_t scaler =
+        std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(qEmbd)));  // calculate scale factor
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    TT_FATAL(
-        qNH % kv_heads == 0,
-        "Number of heads must be divisible by number of groups, got heads={}, groups={}",
-        qNH,
-        kv_heads);
-
-    uint32_t heads_per_group = qNH / kv_heads;         // we read heads_per_group heads from Q for one group of K and V
-    uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
-
-    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(qEmbd)));  // calculate scale factor
-    uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
-    uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     /* TODO[optimization](vmelnykov): #29160 - explore more efficient ways to split work across kernels.
      * For example, instead of processing a single row per core, process multiple rows at once
@@ -214,12 +203,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    uint32_t block_size = get_block_size(qWt, 4U);
+    const uint32_t block_size = get_block_size(qWt, 4U);
 
-    const bool use_attn_mask = attn_mask.has_value();
-
-    auto data_format = input_data_format;
-    auto precise_data_format = tt::DataFormat::Float32;
+    const auto data_format = input_data_format;
+    const auto precise_data_format = tt::DataFormat::Float32;
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -235,7 +222,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
     // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
-    if (use_attn_mask || is_mask_causal) {
+    // Not needed for AttentionMaskType::None
+    if (mask_type != AttentionMaskType::None) {
         [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
     }
@@ -337,13 +325,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kReturnIntermediates] = "1";
     }
 
-    // CAUSAL_MASK and USE_ATTN_MASK are mutually exclusive:
-    // - CAUSAL_MASK: generate triangular mask on-the-fly (no DRAM read)
-    // - USE_ATTN_MASK: read mask from DRAM tensor
-    if (is_mask_causal) {
-        defines[kCausalMaskDefKey] = "1";
-    } else if (use_attn_mask) {
-        defines[kUseAttnMaskDefKey] = "1";
+    // Set defines based on mask type (mutually exclusive)
+    switch (mask_type) {
+        case AttentionMaskType::Causal: defines[kCausalMaskDefKey] = "1"; break;
+        case AttentionMaskType::Arbitrary: defines[kUseAttnMaskDefKey] = "1"; break;
+        case AttentionMaskType::None:
+            // No mask define - kernel will just scale attention scores
+            break;
     }
 
     SDPAForwardKernels kernels;
@@ -455,8 +443,8 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel;
     auto& program = cached_program.program;
 
-    uint32_t num_cores = shared_vars.num_cores;
-    uint32_t num_cores_y = shared_vars.num_cores_y;
+    const uint32_t num_cores = shared_vars.num_cores;
+    const uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto* query_buffer = tensor_args.query.buffer();
     const auto* key_buffer = tensor_args.key.buffer();
@@ -472,7 +460,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

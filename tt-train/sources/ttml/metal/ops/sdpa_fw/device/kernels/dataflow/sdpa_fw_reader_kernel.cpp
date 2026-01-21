@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);        // query buffer address
     uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);          // key buffer address
     uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);        // value buffer address
-    [[maybe_unused]] uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);  // mask buffer address
+    uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);         // mask buffer address
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);  // rows to process in this kernel
     uint32_t start_row =
         get_arg_val<uint32_t>(runtime_args_counter++);  // pre calculated num_rows_written in program factory
@@ -56,9 +56,6 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    DPRINT << "SDPA FW: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", qWt=" << qWt
-           << ", Ht=" << Ht << ", q_heads=" << q_heads << ENDL();
-
     // while we process one q_chunk (head of Q), we stream all K and V chunks (heads of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
@@ -81,7 +78,6 @@ void kernel_main() {
 #ifdef CAUSAL_MASK
         // For causal mask: only read K/V tiles up to and including the diagonal
         const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
-        DPRINT << "READER: i=" << i << " q_row_tile=" << q_row_tile << " num_kv=" << num_kv_tiles_to_read << ENDL();
 #else
         const uint32_t num_kv_tiles_to_read = Ht;
 #endif
@@ -92,7 +88,7 @@ void kernel_main() {
 #endif
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
-            uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row
+            const uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row
             read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
 
 #ifdef USE_ATTN_MASK

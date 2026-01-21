@@ -4,14 +4,15 @@
 
 #pragma once
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::sdpa_fw::device {
 
 struct operation_attributes_t {
     bool return_intermediates{false};
-    bool is_mask_causal{true};
-    float dropout_probability{0.0F};  // default value
+    AttentionMaskType mask_type{AttentionMaskType::Causal};
+    float dropout_probability{0.0F};
 };
 
 struct tensor_args_t {
