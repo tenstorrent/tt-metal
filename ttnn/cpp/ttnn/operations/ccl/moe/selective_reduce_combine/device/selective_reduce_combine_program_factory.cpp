@@ -67,11 +67,12 @@ auto launch_mux_workers(
     std::vector<std::map<ttnn::MeshCoordinate,CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
 
-    auto mux_core_iter = mux_core_range_set.ranges().cbegin();
+    const auto mux_cores = corerange_to_cores(mux_core_range_set);
+    auto mux_core_iter = mux_cores.begin();
     for (uint32_t link = 0; link < num_links; ++link) {
         std::map<ttnn::MeshCoordinate,CoreCoord> mux_neigbor_core_map;
         for (const auto & neighbor_coord : neighbors){
-            auto mux_logical_core = *((mux_core_iter++)->begin());
+            auto mux_logical_core = *(mux_core_iter++);
             const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
 
             std::vector<uint32_t> mux_rt_args = {};
@@ -224,9 +225,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     // metadata page buffer
     constexpr auto metadata_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t metadata_extra_size_bytes = 8;
     CircularBufferConfig cb_metadata_config =
-        CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
-            .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
+        CircularBufferConfig(
+            aligned_metadata_page_size_bytes + metadata_extra_size_bytes, {{metadata_cb_id, metadata_data_format}})
+            .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes + metadata_extra_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
@@ -256,8 +259,9 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"metadata_cb_id", metadata_cb_id},
+        {"num_local_experts", experts_per_device},
         {"metadata_entry_size", detail::metadata_entry_size(experts_per_device)},
-        {"metadata_entry_bytes", detail::metadata_entry_bytes * detail::metadata_entry_size(experts_per_device)},
+        {"metadata_entry_size_bytes", detail::metadata_entry_bytes * detail::metadata_entry_size(experts_per_device)},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
     };
@@ -297,17 +301,17 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         {"src_chip_id", src_chip_id},
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
-        {"fabric_max_packet_size", max_packet_size_bytes},
+        {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)}};
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     ttnn::ccl::fabric_mux_connection_ct_args(
         num_data_parallel_cores * num_token_parallel_cores,
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
@@ -322,11 +326,12 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
         .compile_args = writer_compile_time_args,
-        .defines = writer_defines};
+        .defines = writer_defines,
+        .named_compile_args = writer_named_ct_args};
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
         worker_core_range_set,
         writer_config);
 
@@ -336,7 +341,6 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     const uint32_t num_workers_per_link = num_worker_cores / num_links;
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
-    ;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
     for (const auto& sender_core : sender_cores) {

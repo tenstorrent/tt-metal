@@ -18,6 +18,8 @@ SelectiveReduceCombineDeviceOperation::program_factory_t SelectiveReduceCombineD
     return UnifiedSelectReduce{};
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // TODO
@@ -25,6 +27,7 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+#pragma clang diagnostic pop
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

@@ -1863,13 +1863,13 @@ void fabric_mux_connection_ct_args(
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args) {
-    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel 0
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
+        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes 1
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address 2
     worker_ct_args.push_back(
-        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
-    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
+        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address 3
+    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4
 }
 
 void fabric_mux_connection_rt_args(
