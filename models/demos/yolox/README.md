@@ -19,6 +19,7 @@ YOLOX object detection model implemented using TTNN APIs for Tenstorrent Wormhol
 | YOLOX-S | 0.33 | 0.50 | 9.0M |
 | YOLOX-M | 0.67 | 0.75 | 25.3M |
 | YOLOX-L | 1.0 | 1.0 | 54.2M |
+| YOLOX-X | 1.33 | 1.25 | 99.1M |
 
 ## Quick Start
 

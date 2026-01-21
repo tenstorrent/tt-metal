@@ -11,10 +11,6 @@ import ttnn
 from PIL import Image
 import numpy as np
 
-try:
-    from transformers import AutoImageProcessor
-except ImportError:
-    AutoImageProcessor = None
 
 
 def preprocess_image(image_path: str, input_size: int = 640) -> torch.Tensor:

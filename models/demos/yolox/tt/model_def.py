@@ -14,12 +14,6 @@ import torch
 import ttnn
 from typing import Dict, List, Optional, Tuple
 
-# Constants for YOLOX-S (small) variant
-INPUT_SIZE = 640
-NUM_CLASSES = 80  # COCO classes
-DEPTH_MULTIPLIER = 0.33
-WIDTH_MULTIPLIER = 0.50
-
 
 def preprocess_conv(weights: torch.Tensor, bias: Optional[torch.Tensor] = None) -> Tuple:
     """Preprocess convolution weights for TTNN."""
@@ -70,6 +64,9 @@ class TtConvBnSiLU:
         
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through Conv + BN + SiLU."""
+        if self.parameters is None:
+            raise ValueError("Parameters must be provided for inference")
+        
         # Convolution
         x = ttnn.conv2d(
             x,
@@ -271,6 +268,99 @@ class TtCSPDarknet:
         return outputs
 
 
+
+class TtYOLOXPAFPN:
+    """Feature Pyramid Network (FPN) + Path Aggregation Network (PAN)."""
+    
+    def __init__(
+        self,
+        device,
+        depth_multiplier: float = 1.0,
+        width_multiplier: float = 1.0,
+        in_features: Tuple[str, ...] = ("dark3", "dark4", "dark5"),
+        in_channels: List[int] = [256, 512, 1024],
+        parameters: Optional[Dict] = None
+    ):
+        self.device = device
+        self.in_features = in_features
+        self.in_channels = in_channels
+        
+        # Base channel configuration
+        in_ch = [int(ch * width_multiplier) for ch in in_channels]
+        out_ch = int(256 * width_multiplier)
+        
+        # FPN Top-down
+        self.upsample = ttnn.upsample
+        
+        # Reduce C5 (dark5)
+        self.lateral_conv0 = TtConvBnSiLU(
+            device, in_ch[2], out_ch, 1, 1, 0,
+            parameters=parameters.get("lateral_conv0") if parameters else None
+        )
+        # C4 (dark4) + P5 -> P4
+        self.C3_p4 = TtCSPLayer(
+            device, 2 * out_ch, out_ch, round(3 * depth_multiplier), False,
+            parameters=parameters.get("C3_p4") if parameters else None
+        )
+        self.reduce_conv1 = TtConvBnSiLU(
+            device, out_ch, out_ch, 1, 1, 0,
+            parameters=parameters.get("reduce_conv1") if parameters else None
+        )
+        # C3 (dark3) + P4 -> P3
+        self.C3_p3 = TtCSPLayer(
+            device, 2 * out_ch, out_ch, round(3 * depth_multiplier), False,
+            parameters=parameters.get("C3_p3") if parameters else None
+        )
+        
+        # PAN Bottom-up
+        self.bu_conv2 = TtConvBnSiLU(
+            device, out_ch, out_ch, 3, 2, 1,
+            parameters=parameters.get("bu_conv2") if parameters else None
+        )
+        self.C3_n3 = TtCSPLayer(
+            device, 2 * out_ch, 2 * out_ch, round(3 * depth_multiplier), False,
+            parameters=parameters.get("C3_n3") if parameters else None
+        )
+        self.bu_conv1 = TtConvBnSiLU(
+            device, 2 * out_ch, 2 * out_ch, 3, 2, 1,
+            parameters=parameters.get("bu_conv1") if parameters else None
+        )
+        self.C3_n4 = TtCSPLayer(
+            device, 4 * out_ch, 4 * out_ch, round(3 * depth_multiplier), False,
+            parameters=parameters.get("C3_n4") if parameters else None
+        )
+
+    def __call__(self, inputs: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ...]:
+        # Top-down
+        features = [inputs[f] for f in self.in_features]
+        [x2, x1, x0] = features  # dark3, dark4, dark5
+        
+        # P5
+        fpn_out0 = self.lateral_conv0(x0)
+        
+        # P4
+        f_out0 = ttnn.upsample(fpn_out0, scale_factor=2.0)
+        f_out0 = ttnn.concat([f_out0, x1], dim=1)
+        f_out0 = self.C3_p4(f_out0)
+        
+        # P3
+        fpn_out1 = self.reduce_conv1(f_out0)
+        f_out1 = ttnn.upsample(fpn_out1, scale_factor=2.0)
+        f_out1 = ttnn.concat([f_out1, x2], dim=1)
+        pan_out2 = self.C3_p3(f_out1)
+        
+        # Bottom-up
+        p_out1 = self.bu_conv2(pan_out2)
+        p_out1 = ttnn.concat([p_out1, fpn_out1], dim=1)
+        pan_out1 = self.C3_n3(p_out1)
+        
+        p_out0 = self.bu_conv1(pan_out1)
+        p_out0 = ttnn.concat([p_out0, fpn_out0], dim=1)
+        pan_out0 = self.C3_n4(p_out0)
+        
+        return (pan_out2, pan_out1, pan_out0)
+
+
 class TtYOLOXHead:
     """Decoupled head for YOLOX predictions."""
     
@@ -313,8 +403,25 @@ class TtYOLOXHead:
                             parameters=scale_params.get("reg_conv_1") if scale_params else None),
             ])
             
-            # Prediction layers (1x1 conv, no activation)
-            # These would be simple linear projections in TTNN
+            # Prediction layers (1x1 conv)
+            self.cls_preds.append(
+                TtConvBnSiLU(
+                    device, hidden_ch, self.num_classes, 1, 1, 0,
+                    parameters=scale_params.get("cls_pred") if scale_params else None
+                )
+            )
+            self.reg_preds.append(
+                TtConvBnSiLU(
+                    device, hidden_ch, 4, 1, 1, 0,
+                    parameters=scale_params.get("reg_pred") if scale_params else None
+                )
+            )
+            self.obj_preds.append(
+                TtConvBnSiLU(
+                    device, hidden_ch, 1, 1, 1, 0,
+                    parameters=scale_params.get("obj_pred") if scale_params else None
+                )
+            )
     
     def __call__(
         self,
@@ -323,9 +430,7 @@ class TtYOLOXHead:
         """Forward through decoupled heads for each scale."""
         outputs = []
         
-        feature_list = [features["dark3"], features["dark4"], features["dark5"]]
-        
-        for i, feat in enumerate(feature_list):
+        for i, feat in enumerate(features):
             # Classification branch
             cls_feat = feat
             for conv in self.cls_convs[i]:
@@ -336,8 +441,12 @@ class TtYOLOXHead:
             for conv in self.reg_convs[i]:
                 reg_feat = conv(reg_feat)
             
-            # Predictions would be made here with final 1x1 convs
-            outputs.append((cls_feat, reg_feat, feat))
+            # Predictions
+            cls_output = self.cls_preds[i](cls_feat)
+            reg_output = self.reg_preds[i](reg_feat)
+            obj_output = self.obj_preds[i](reg_feat)
+            
+            outputs.append(ttnn.concat([reg_output, obj_output, cls_output], dim=1))
         
         return outputs
 
@@ -369,6 +478,15 @@ class TtYOLOX:
             parameters=parameters.get("backbone") if parameters else None
         )
         
+        self.neck = TtYOLOXPAFPN(
+            device,
+            depth_multiplier=depth_multiplier,
+            width_multiplier=width_multiplier,
+            parameters=parameters.get("neck") if parameters else None
+        )
+        
+
+        
         self.head = TtYOLOXHead(
             device,
             num_classes=num_classes,
@@ -379,11 +497,14 @@ class TtYOLOX:
     
     def __call__(self, x: ttnn.Tensor) -> List:
         """Forward pass through YOLOX."""
-        # Extract multi-scale features
-        features = self.backbone(x)
+        # Extract backbone features
+        backbone_feats = self.backbone(x)
+        
+        # FPN+PAN
+        neck_feats = self.neck(backbone_feats)
         
         # Get predictions from decoupled head
-        outputs = self.head(features)
+        outputs = self.head(neck_feats)
         
         return outputs
 

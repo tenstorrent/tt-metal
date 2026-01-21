@@ -8,7 +8,6 @@ PCC test for YOLOX model comparing TTNN output with PyTorch reference.
 import pytest
 import torch
 import ttnn
-from typing import Optional
 
 
 @pytest.fixture
@@ -74,17 +73,17 @@ def test_yolox_pcc(device, model_variant: str, expected_pcc: float):
     input_size = 640
     input_tensor = torch.randn(batch_size, 3, input_size, input_size)
     
-    # PyTorch reference would go here
-    # For now, using placeholder
-    pytorch_output = torch.randn(batch_size, 85, 80, 80)  # Example output shape
+    # PyTorch reference inference and output tensor would go here.
+    # For now, using placeholder since we don't have the weights loaded
+    # pytorch_output = torch.randn(batch_size, 85, 80, 80)
     
     # TTNN inference
-    tt_input = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device
-    )
+    # tt_input = ttnn.from_torch(
+    #     input_tensor,
+    #     dtype=ttnn.bfloat16,
+    #     layout=ttnn.TILE_LAYOUT,
+    #     device=device
+    # )
     
     # Import and run TTNN model
     from models.demos.yolox.tt.model_def import TtYOLOX
@@ -121,6 +120,27 @@ def test_yolox_backbone_output_shapes(device):
         "dark5": (1, 512, 20, 20),
     }
     
-    # This test would verify backbone output dimensions
-    # Placeholder for actual implementation
-    assert True, "Backbone shape test placeholder"
+    # Instantiate backbone
+    backbone = TtCSPDarknet(device, depth_multiplier=0.33, width_multiplier=0.5)
+    
+    # Create input tensor
+    input_tensor = torch.randn(1, 3, 640, 640)
+    tt_input = ttnn.from_torch(
+        input_tensor, 
+        dtype=ttnn.bfloat16, 
+        layout=ttnn.TILE_LAYOUT, 
+        device=device
+    )
+    
+    # Run backbone
+    outputs = backbone(tt_input)
+    
+    # Verify shapes
+    for name, expected_shape in expected_shapes.items():
+        assert name in outputs, f"Feature {name} missing from outputs"
+        
+        # Convert to torch to check shape (or check ttnn shape)
+        # Using ttnn shape directly
+        out_shape = tuple(outputs[name].shape)
+        # Verify H, W (last two dims)
+        assert out_shape[-2:] == expected_shape[-2:], f"Shape mismatch for {name}: expected {expected_shape}, got {out_shape}"
