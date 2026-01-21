@@ -57,6 +57,7 @@ void kernel_main() {
     // Bypass checks. Nothing reported
     local_buffer.get_unsafe_ptr()[0] = 1;
 
+    // Read or Write
     struct MyStruct {
         uint32_t x;
     };

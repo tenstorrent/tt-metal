@@ -366,7 +366,7 @@ def test_device_api_debugger_non_dropping():
 
     expected_local_read_count = 2 * NUM_DM_RISCS
     expected_local_write_count = 7 * NUM_DM_RISCS
-    expected_local_read_write_count = 0 * NUM_DM_RISCS
+    expected_local_read_write_count = 1 * NUM_DM_RISCS
 
     for event in noc_trace_data:
         assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"

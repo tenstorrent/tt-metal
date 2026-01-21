@@ -201,6 +201,7 @@ public:
      */
     tt_l1_ptr T* operator->() const {
         DEBUG_SANITIZE_L1_ADDR(address_, sizeof(T));
+        RECORD_LOCAL_MEM_EVENT(KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_READ_WRITE, address_, sizeof(T));
         return get_unsafe_ptr();
     }
 
