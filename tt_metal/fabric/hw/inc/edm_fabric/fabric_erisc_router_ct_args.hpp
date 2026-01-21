@@ -686,4 +686,17 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
     eth_remote_channel_pools_args::receiver_channel_to_pool_index,
     NUM_RECEIVER_CHANNELS>();
 
+// Get maximum buffer slots across all sender channels (for packed credit width calculation)
+constexpr size_t get_max_sender_buffer_slots() {
+    size_t max_slots = 0;
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (SENDER_NUM_BUFFERS_ARRAY[i] > max_slots) {
+            max_slots = SENDER_NUM_BUFFERS_ARRAY[i];
+        }
+    }
+    return max_slots;
+}
+
+constexpr size_t MAX_SENDER_BUFFER_SLOTS = get_max_sender_buffer_slots();
+
 }  // namespace tt::tt_fabric

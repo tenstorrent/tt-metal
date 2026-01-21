@@ -9,10 +9,7 @@
 #include "internal/ethernet/tt_eth_api.h"
 #include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
-
-
-static constexpr size_t PACKED_CREDITS_PER_STREAM_AUTOINC_REG = 2;
-static constexpr size_t BITS_PER_PACKED_CREDITS_IN_AUTOINC_REG = 8;
+#include "tt_metal/fabric/hw/inc/edm_fabric/flow-control/credits.hpp"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
@@ -62,11 +59,12 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
             if constexpr (ENABLE_FIRST_LEVEL_ACK) {
                 sender_channel_packets_completed_stream_ids[i] = to_receiver_packets_sent_streams[0];
-                sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i / PACKED_CREDITS_PER_STREAM_AUTOINC_REG];
+                // All sender channels pack into the first ack stream register (register 0)
+                sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[0];
             } else {
                 sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+                sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i];
             }
-            sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i];
         }
     }
 
@@ -165,8 +163,8 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
         to_sender_packets_acked_stream(
-            ENABLE_FIRST_LEVEL_ACK 
-                ? to_sender_packets_acked_streams[sender_channel_index / PACKED_CREDITS_PER_STREAM_AUTOINC_REG]
+            ENABLE_FIRST_LEVEL_ACK
+                ? to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
                 : to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(
             ENABLE_FIRST_LEVEL_ACK ? to_receiver_packets_sent_streams[0]
@@ -271,4 +269,99 @@ FORCE_INLINE void receiver_send_received_ack(
         };
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id, count);
+}
+
+/**
+ * Adapter functions to abstract packing/unpacking logic for different architectures.
+ * - WH with ENABLE_FIRST_LEVEL_ACK: Uses packed credits (multiple channels in one register)
+ * - BH with multi_txq: Uses counter-based (one counter per channel, no packing)
+ * - Non-ENABLE_FIRST_LEVEL_ACK: Uses individual stream registers (no packing)
+ */
+
+/**
+ * Extract individual sender channel ACKs from packed value.
+ * WH: Unpacks from shared register. BH: Pass-through (already unpacked).
+ */
+template <uint8_t sender_channel_index>
+FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
+    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+        // Should never be called - this path doesn't use ACKs
+        return packed_acks;
+    } else if constexpr (multi_txq_enabled) {
+        // BH: Counter-based, already unpacked (one counter per channel)
+        return packed_acks;
+    } else {
+        // WH: Stream register with packing - need to extract this channel's credits
+        auto packed_acks_named =
+            tt::tt_fabric::PackedCreditValue<NUM_SENDER_CHANNELS, tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS>{packed_acks};
+        return tt::tt_fabric::PackedCredits<
+            NUM_SENDER_CHANNELS,
+            tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+            to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
+    }
+}
+
+/**
+ * Build ACK decrement value for sender channel.
+ * WH: Pack into register position. BH: Direct value (no packing).
+ */
+template <uint8_t sender_channel_index>
+FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
+    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+        // Should never be called - this path doesn't use ACKs
+        return acks_count;
+    } else if constexpr (multi_txq_enabled) {
+        // BH: Direct value, no packing
+        return acks_count;
+    } else {
+        // WH: Pack into register position for this channel
+        return tt::tt_fabric::PackedCredits<
+                   NUM_SENDER_CHANNELS,
+                   tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+                   to_sender_packets_acked_streams[0]>::template pack_value<sender_channel_index>(acks_count)
+            .get();
+    }
+}
+
+/**
+ * Build packet forward increment value for sender channel.
+ * WH: Pack into register position. BH: Always 1 (no packing).
+ */
+template <uint8_t sender_channel_index, uint32_t to_receiver_pkts_sent_id>
+FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
+    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+        // No first-level ACK: just send 1
+        return 1;
+    } else if constexpr (multi_txq_enabled) {
+        // BH: Always 1 (counter-based, no packing needed)
+        return 1;
+    } else {
+        // WH: Pack 1 credit into this channel's position
+        return tt::tt_fabric::PackedCredits<
+                   NUM_SENDER_CHANNELS,
+                   tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+                   to_receiver_pkts_sent_id>::template pack_value<sender_channel_index>(1)
+            .get();
+    }
+}
+
+/**
+ * Accumulate receiver channel credits from packed value.
+ * WH: Unpack and sum all channels. BH: Direct value (no packing).
+ */
+FORCE_INLINE uint32_t accumulate_receiver_channel_credits(uint32_t packed_value) {
+    if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+        // No first-level ACK: value is already the count
+        return packed_value;
+    } else if constexpr (multi_txq_enabled) {
+        // BH: Already unpacked (direct count)
+        return packed_value;
+    } else {
+        // WH: Unpack and sum across all sender channels
+        using PC = tt::tt_fabric::PackedCredits<
+            NUM_SENDER_CHANNELS,
+            tt::tt_fabric::MAX_SENDER_BUFFER_SLOTS,
+            to_sender_packets_completed_streams[0]>;
+        return PC::get_sum(typename PC::PackedCreditValueType(packed_value));
+    }
 }
