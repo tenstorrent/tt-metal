@@ -1,7 +1,14 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
+  # TEMPORARY: used only for testing on PRs
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  # Keep manual trigger
   workflow_dispatch:
+
+  # Scheduled execution (will be primary trigger after merge)
   schedule:
     - cron: "*/5 * * * *"   # every 5 minutes
 
@@ -16,28 +23,72 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch open PRs (merge queue inference)
+      # ------------------------------------------------------------------
+      # Build merge-queue snapshot derived from real GitHub APIs
+      # ------------------------------------------------------------------
+      - name: Build merge queue snapshot (derived from PRs)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           mkdir -p generated/merge_queue
 
-          gh api repos/tenstorrent/tt-metal/pulls \
+          REPO="tenstorrent/tt-metal"
+          COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "Fetching open pull requests..."
+          gh api repos/${REPO}/pulls \
             -f state=open \
             -f per_page=100 \
-            > generated/merge_queue/open_prs.json
+            > pulls.json
 
-          echo "Fetched PR count:"
-          jq 'length' generated/merge_queue/open_prs.json
+          echo "Building merge queue snapshot JSON..."
 
+          jq --arg repo "${REPO}" --arg ts "${COLLECTED_AT}" '
+          {
+            repository: $repo,
+            collected_at: $ts,
+            merge_queue: [
+              .[] | {
+                merge_queue_id: null,
+                pr_number: .number,
+                pr_title: .title,
+                pr_author_login: .user.login,
+                head_sha: .head.sha,
+
+                # Derived state: checks still running / not merged yet
+                state: "AWAITING_CHECKS",
+
+                queue_position: null,
+                enqueued_at: null,
+                estimated_time_to_merge_sec: null,
+                collected_at: $ts
+              }
+            ]
+          }
+          ' pulls.json > generated/merge_queue/merge_queue_snapshot.json
+
+          echo "Snapshot preview:"
+          jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
+          jq '.merge_queue[0]' generated/merge_queue/merge_queue_snapshot.json || true
+
+      # ------------------------------------------------------------------
+      # Add timestamp to filename
+      # ------------------------------------------------------------------
       - name: Add timestamp to filename
         run: |
-          ts=$(date -u +"%Y%m%dT%H%M%SZ")
-          mv generated/merge_queue/open_prs.json \
-             generated/merge_queue/${ts}_merge_queue_pr_snapshot.json
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
 
+          mv generated/merge_queue/merge_queue_snapshot.json \
+             generated/merge_queue/${TS}_merge_queue_snapshot.json
+
+          echo "Generated files:"
           ls -lh generated/merge_queue
 
+      # ------------------------------------------------------------------
+      # Upload snapshot via existing SFTP mechanism
+      # ------------------------------------------------------------------
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
