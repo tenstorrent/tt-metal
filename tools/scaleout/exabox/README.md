@@ -27,6 +27,7 @@ If links are flaky, fabric tests will fail with routing errors - you'll waste ti
 
 - Clone tt-metal to a shared NFS mount accessible from all hosts (e.g., `/data/<your-username>/` on Exabox) and run all commands from the repo root
 - Passwordless SSH to all hosts (using `ssh-add` for agent forwarding - see [SSH Setup](#ssh-setup) below)
+- **Docker** installed on all hosts (required for Docker-based validation scripts)
 - **Tenstorrent-modified OpenMPI v5.0.7** installed on all hosts
   - Install from: https://github.com/tenstorrent/ompi/releases/tag/v5.0.7
   - Provides `mpirun` and `mpirun-ulfm` (required for Docker-based scripts)
@@ -61,6 +62,14 @@ On the jump host, verify MPI can reach all hosts (`<hosts>` = comma-separated li
 mpirun --host <hosts> hostname
 ```
 This should print the hostname of each machine. If it hangs or prompts for a password, fix SSH first.
+
+**Docker Check**
+
+Verify Docker is installed and running on all hosts:
+```bash
+mpirun --host <hosts> docker --version
+```
+This should print the Docker version on each machine. If any host fails, install Docker on that host.
 
 **Docker Image**
 
