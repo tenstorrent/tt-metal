@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from _pytest.mark.structures import ParameterSet
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
@@ -63,8 +64,9 @@ def expand_test_cases_with_position_ids_ranges(base_cases):
             ("decode", 1, 32, 4100),
         ]
     """
-    expanded_cases = []
-    for mode, seq_len, batch_size_per_row, decode_position_ids in base_cases:
+
+    def _process_tuple(mode, seq_len, batch_size_per_row, decode_position_ids):
+        expanded_cases = []
         if isinstance(decode_position_ids, tuple):
             if len(decode_position_ids) == 2:
                 # Expand range into individual position_ids with step=1
@@ -87,6 +89,22 @@ def expand_test_cases_with_position_ids_ranges(base_cases):
             # Keep as is (None or int)
             expanded_cases.append((mode, seq_len, batch_size_per_row, decode_position_ids))
 
+        return expanded_cases
+
+    expanded_cases = []
+    for sample in base_cases:
+        is_pytest_param = isinstance(sample, ParameterSet)
+        if is_pytest_param:
+            mode, seq_len, batch_size_per_row, decode_position_ids = sample.values
+        else:
+            mode, seq_len, batch_size_per_row, decode_position_ids = sample
+
+        cur_cases = _process_tuple(mode, seq_len, batch_size_per_row, decode_position_ids)
+
+        if is_pytest_param:
+            cur_cases = [pytest.param(*values, marks=sample.marks, id=sample.id) for values in cur_cases]
+        expanded_cases.extend(cur_cases)
+
     return expanded_cases
 
 
@@ -98,7 +116,11 @@ def build_expanded_test_ids(expanded_cases):
             expanded_ids.append(str(val))
             continue
 
-        mode, seq_len, batch_size_per_row, decode_pos = val
+        if isinstance(val, ParameterSet):
+            mode, seq_len, batch_size_per_row, decode_pos = val.values
+        else:
+            mode, seq_len, batch_size_per_row, decode_pos = val
+
         if mode == "decode":
             pos_str = decode_pos if decode_pos is not None else "random"
             expanded_ids.append(f"mode_{mode}_seq_{seq_len}_batch_{batch_size_per_row}_pos_{pos_str}")
@@ -531,11 +553,24 @@ BASE_TEST_CASES = [
     ("decode", 1, USERS_PER_ROW, None),
     # ("decode", 1, USERS_PER_ROW, (4096, 8192, 32)), # Example.
 ] + [
-    ("prefill", seq_len, 1, None) for seq_len in PREFILL_SEQ_LENS
+    ("prefill", seq_len, 1, None)
+    if seq_len == 128
+    else pytest.param(
+        "prefill",
+        seq_len,
+        1,
+        None,
+        marks=pytest.mark.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        ),
+    )
+    for seq_len in PREFILL_SEQ_LENS
 ]  # decode_position_ids is not applicable for prefill
 
 # Expand ranges into individual position_ids for pytest
+# TODO: check expand_test_cases_with_position_ids_ranges
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
+# TODO: check build_expanded_test_ids
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 
 
@@ -577,12 +612,6 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
-
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
 
