@@ -310,11 +310,111 @@ Background: Data Reuse in Multi Core Matmul
 Motivation
 ==========
 
-In the multi core SPMD implementation above, each core processes a subset of the output tiles.
-For each output tile, the reader kernel streams in all required tiles of ``A`` and ``B`` across
-the inner dimension ``K``, and the compute kernel accumulates the results.
-Repeatedly fetching the same input tiles from device memory is expensive in both time and bandwidth.
-However, matrix multiplication has significant structure that allows **inputs to be reused**.
+In the basic multi-core implementation, each core computes one output tile at a time.
+For each output tile ``C[i,j]``, the reader kernel fetches **all** tiles along the
+inner dimension ``K`` for both the corresponding row of ``A`` and column of ``B``.
+This approach has a critical inefficiency: **tiles from input matrices are re-fetched
+from DRAM multiple times**.
+
+Consider a concrete example with matrices A (4x4 tiles), B (4x4 tiles), producing
+C (4x4 tiles). To compute output tiles ``C[0,0]`` and ``C[0,1]``:
+
++----------------+----------------------------------------+----------------------------------------+
+| Output Tile    | Tiles Read from A                      | Tiles Read from B                      |
++================+========================================+========================================+
+| C[0,0]         | A[0,0], A[0,1], A[0,2], A[0,3]         | B[0,0], B[1,0], B[2,0], B[3,0]         |
++----------------+----------------------------------------+----------------------------------------+
+| C[0,1]         | A[0,0], A[0,1], A[0,2], A[0,3]         | B[0,1], B[1,1], B[2,1], B[3,1]         |
++----------------+----------------------------------------+----------------------------------------+
+
+Notice that **the entire row 0 of A is read twice** -- once for C[0,0] and once for C[0,1].
+In general, for an MxK @ KxN matmul producing MxN output tiles:
+
+- Each row of A is read N times (once per column of C in that row)
+- Each column of B is read M times (once per row of C in that column)
+
+This redundant DRAM traffic becomes the performance bottleneck, especially as matrix
+dimensions grow.
+A simple optimization would be to store the whole row of A in a temporary on-chip buffer, and then
+use that buffer to compute all the output tiles in the row. However, this naive approach doesn't scale
+well to large matrices because the amount of on-chip memory is limited.
+
+Multi-Step Optimization: Blocking and Subblocking
+=================================================
+
+A more general approach is to group output tiles into blocks, and then reuse the data within the blocks.
+The blocking implementation requires computation of partial results for each block. Storing these partial
+results in off-chip DRAM would result in poor perfromance. Therefore, they should ideally be stored in on-chip
+SRAM, as long as the amount of on-chip SRAM is sufficient.
+While this approach is also limited by the amount of on-chip SRAM, it breaks up data into smaller chunks
+than the naive approach, thus supporting larger matrices.
+
+There are two distinct ways in which Tenstorrent architecture allows storing partial results in on-chip memory:
+
+* Using a **circular buffer** in on-chip SRAM.
+  As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used as
+  temporary storage for partial results.
+* Using **destination registers** in Tensix cores.
+  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
+  Specifically, the destination register array can hold 8 tiles of data.
+  Previously we only used a single tile in the destination register array.
+  However, in blocked matrix multiplication, we can use the destination register array to hold
+  a subset of partial results.
+
+Visualizing the Data Reuse Opportunity
+======================================
+
+The following diagram illustrates the basic approach versus the optimized approach
+for a 4x4 output tile matrix with K=4 inner dimension tiles::
+
+    BASIC APPROACH: Process output tiles one at a time (high DRAM traffic)
+    ======================================================================
+
+         K tiles (inner dimension)
+         <---------------------->
+       +----+----+----+----+
+    M  | A0 | A1 | A2 | A3 |  Row 0 of A read for EACH output tile in row 0 of C
+    t  +----+----+----+----+
+    i  | A4 | A5 | A6 | A7 |  Row 1 of A read for EACH output tile in row 1 of C
+    l  +----+----+----+----+
+    e  | A8 | A9 |A10 |A11 |  ...
+    s  +----+----+----+----+
+       |A12 |A13 |A14 |A15 |
+       +----+----+----+----+
+
+    For C[0,0]: Read A row 0 (4 tiles) + B col 0 (4 tiles) = 8 DRAM reads
+    For C[0,1]: Read A row 0 (4 tiles) + B col 1 (4 tiles) = 8 DRAM reads
+    ...
+    Total for row 0 of C: 4 outputs x 8 reads = 32 DRAM reads
+    But A row 0 could be reused! Wasted: 3 x 4 = 12 redundant reads of A row 0
+
+
+    OPTIMIZED APPROACH: Group outputs into blocks, reuse data within blocks
+    =======================================================================
+
+    Assign a BLOCK of output tiles to each core (e.g., 2x2 tiles per core):
+
+       +----+----+----+----+
+       | C0 | C0 | C1 | C1 |   <- Core 0 computes top-left 2x2 block
+       +----+----+----+----+      Core 1 computes top-right 2x2 block
+       | C0 | C0 | C1 | C1 |
+       +----+----+----+----+
+       | C2 | C2 | C3 | C3 |   <- Core 2 computes bottom-left 2x2 block
+       +----+----+----+----+      Core 3 computes bottom-right 2x2 block
+       | C2 | C2 | C3 | C3 |
+       +----+----+----+----+
+
+    Now Core 0 can:
+    1. Read A rows 0-1 once (a "block" of A)
+    2. Read B columns 0-1 once (a "block" of B)
+    3. Compute partial products for **all 4 output tiles** simultaneously
+    4. Accumulate partial results in L1 (intermediate buffer)
+    5. Repeat for next block along K dimension
+    6. Write final results only once
+
+This blocking strategy reduces DRAM traffic by reusing input tiles across multiple
+output tiles computed by the same core.
+
 An optimized multi-core matmul can reduce this overhead by:
 
 * Grouping tiles into **blocks** and **subblocks**.
