@@ -6,9 +6,10 @@
 
 namespace tt::noc_estimator::offline {
 
-static std::string to_lower(std::string str) {
-    transform(str.begin(), str.end(), str.begin(), ::tolower);
-    return str;
+static std::string to_lower(const std::string& str) {
+    std::string result = str;
+    transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
 }
 
 bool CsvReader::load_csv(const std::string& filepath) {
@@ -159,7 +160,7 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
 
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "Failed to parse data line: " << line << std::endl;
+        std::cerr << "Failed to parse data line: " << line << " | error: " << e.what() << std::endl;
         return false;
     }
 }

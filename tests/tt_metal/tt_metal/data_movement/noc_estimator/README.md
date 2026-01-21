@@ -17,11 +17,11 @@ NocEstimatorParams params{
     .transaction_size_bytes = 2048
 };
 
-// Get estimate
+// Get estimate (throws std::runtime_error on failure)
 NocEstimate result = estimate_noc_performance(params);
 
 double latency = result.latency_cycles;
-double bandwidth = result.bandwidth_gbps;
+double bandwidth = result.bandwidth_bytes_per_cycle;
 ```
 
 ## Parameters
@@ -33,8 +33,10 @@ double bandwidth = result.bandwidth_gbps;
 | memory | MemoryType | L1 | L1 or DRAM |
 | arch | Architecture | WORMHOLE_B0 | WORMHOLE_B0 or BLACKHOLE |
 | num_transactions | uint32_t | 64 | Total number of transactions |
+| num_transactions_per_barrier | uint32_t | 1 | Number of transactions issued between sync barriers |
 | transaction_size_bytes | uint32_t | 512 | Size of each transaction in bytes |
 | num_peers | uint32_t | 1 | Number of destination cores (for *_ALL patterns) |
+| same_axis | bool | false | Whether src and dst have one shared axis |
 | linked | bool | false | Use linked multicast (multicast only) |
 
 ### Patterns
@@ -117,3 +119,4 @@ double lat = estimate_noc_latency(params);
 - All parameters have sensible defaults, set only what you need
 - The estimator auto-initializes on first call
 - Estimates are based on empirical measurements from the data movement test suite
+- estimate_noc_performance throws std::runtime_error if data is missing or no match is found

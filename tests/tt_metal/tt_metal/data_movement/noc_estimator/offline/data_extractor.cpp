@@ -13,6 +13,9 @@ common::LatencyData extract_latencies(const std::vector<DataPoint>& points) {
     for (const auto& p : points) {
         size_to_latency[p.transaction_size_bytes] = p.latency_cycles;
     }
+    if (size_to_latency.empty()) {
+        return result;
+    }
 
     // Extract latency for each standard size
     for (size_t i = 0; i < sizes.size(); i++) {

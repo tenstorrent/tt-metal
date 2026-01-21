@@ -4,6 +4,8 @@
 #include "common/interpolation.hpp"
 #include <map>
 #include <iostream>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 
 namespace tt::noc_estimator {
@@ -13,31 +15,28 @@ static constexpr const char* DEFAULT_YAML_PATH =
 
 static std::map<common::GroupKey, common::LatencyData> g_entries;
 static std::vector<uint32_t> g_transaction_sizes;
-static bool g_initialized = false;
+static std::once_flag g_init_once;
 
 static bool initialize_from_yaml(const std::string& yaml_path) {
     auto loaded = loader::load_latency_data_from_yaml(yaml_path);
     g_entries = std::move(loaded.entries);
     g_transaction_sizes = std::move(loaded.transaction_sizes);
-    g_initialized = !g_entries.empty();
-    return g_initialized;
+    return !g_entries.empty();
 }
 
 NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
     NocEstimate result{};
 
     // Auto-initialize on first call
-    if (!g_initialized) {
+    std::call_once(g_init_once, []() {
         std::cout << "Auto-initializing from default YAML: " << DEFAULT_YAML_PATH << "\n";
         if (!initialize_from_yaml(DEFAULT_YAML_PATH)) {
-            std::cerr << "Error: Failed to auto-load data. Generate YAML first.\n";
-            return result;
+            throw std::runtime_error("Failed to auto-load latency data. Generate YAML first.");
         }
-    }
+    });
 
     if (g_entries.empty()) {
-        std::cerr << "Error: No data loaded.\n";
-        return result;
+        throw std::runtime_error("No latency data loaded.");
     }
 
     // Build group key with all parameters
@@ -76,17 +75,15 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
         if (result.latency_cycles > 0) {
             std::cerr << "Warning: Used fallback (relaxed " << relaxed_param << ")\n";
         } else {
-            std::cerr << "Error: No match found for the given parameters even with relaxation\n";
-            std::exit(1);
+            throw std::runtime_error("No match found for the given parameters, even with relaxation.");
         }
     }
 
-    // TODO , verify that N iterations of M noc operations followed by a barrier has the same BW as 1 iteration
     result.latency_cycles *= num_iterations;
 
     // Calculate bandwidth from latency
     if (result.latency_cycles > 0) {
-        result.bandwidth_gbps =
+        result.bandwidth_bytes_per_cycle =
             static_cast<double>(params.transaction_size_bytes) * num_transactions_d / result.latency_cycles;
     }
 
@@ -94,7 +91,7 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
 }
 
 double estimate_noc_bandwidth(const NocEstimatorParams& params) {
-    return estimate_noc_performance(params).bandwidth_gbps;
+    return estimate_noc_performance(params).bandwidth_bytes_per_cycle;
 }
 
 double estimate_noc_latency(const NocEstimatorParams& params) {

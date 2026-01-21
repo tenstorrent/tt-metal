@@ -67,6 +67,12 @@ bool save_latency_data_to_yaml(
     }
 
     file << out.c_str();
+    file.flush();
+    if (!file) {
+        std::cerr << "Failed to write YAML data to file: " << yaml_path << std::endl;
+        file.close();
+        return false;
+    }
     file.close();
 
     return true;

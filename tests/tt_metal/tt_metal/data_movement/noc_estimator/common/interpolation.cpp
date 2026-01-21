@@ -1,20 +1,22 @@
 #include "interpolation.hpp"
+#include <algorithm>
 #include <limits>
 #include <set>
 
 namespace tt::noc_estimator::common {
 
-// Linear interpolation, TODO: approximate the curve with a polynomial for better accuracy
+// Quadratic interpolation for better accuracy when possible
 double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size) {
-    if (sizes.empty() || data.latencies.empty()) {
+    const std::size_t count = std::min(sizes.size(), data.latencies.size());
+    if (count == 0) {
         return 0.0;
     }
 
-    // Find bounds for linear interpolation
+    // Find bounds for interpolation
     std::size_t lower_idx = 0;
     std::size_t upper_idx = 0;
 
-    for (std::size_t i = 0; i < sizes.size(); i++) {
+    for (std::size_t i = 0; i < count; i++) {
         if (sizes[i] <= transaction_size) {
             lower_idx = i;
         }
@@ -29,10 +31,46 @@ double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>&
         return data.latencies[lower_idx];
     }
 
-    double t = static_cast<double>(transaction_size - sizes[lower_idx]) /
-               static_cast<double>(sizes[upper_idx] - sizes[lower_idx]);
+    if (count >= 3) {
+        std::size_t i0 = 0;
+        std::size_t i1 = 1;
+        std::size_t i2 = 2;
+        if (lower_idx == 0) {
+            i0 = 0;
+            i1 = 1;
+            i2 = 2;
+        } else if (upper_idx >= count - 1) {
+            i0 = count - 3;
+            i1 = count - 2;
+            i2 = count - 1;
+        } else {
+            i0 = lower_idx - 1;
+            i1 = lower_idx;
+            i2 = upper_idx;
+        }
 
-    return data.latencies[lower_idx] + t * (data.latencies[upper_idx] - data.latencies[lower_idx]);
+        const double x0 = static_cast<double>(sizes[i0]);
+        const double x1 = static_cast<double>(sizes[i1]);
+        const double x2 = static_cast<double>(sizes[i2]);
+        const double x = static_cast<double>(transaction_size);
+        const double denom0 = (x0 - x1) * (x0 - x2);
+        const double denom1 = (x1 - x0) * (x1 - x2);
+        const double denom2 = (x2 - x0) * (x2 - x1);
+        if (denom0 != 0.0 && denom1 != 0.0 && denom2 != 0.0) {
+            const double y0 = data.latencies[i0];
+            const double y1 = data.latencies[i1];
+            const double y2 = data.latencies[i2];
+            const double l0 = (x - x1) * (x - x2) / denom0;
+            const double l1 = (x - x0) * (x - x2) / denom1;
+            const double l2 = (x - x0) * (x - x1) / denom2;
+            return y0 * l0 + y1 * l1 + y2 * l2;
+        }
+    }
+
+    const double t = static_cast<double>(transaction_size - sizes[lower_idx]) /
+                     static_cast<double>(sizes[upper_idx] - sizes[lower_idx]);
+
+    return data.latencies[lower_idx] + (t * (data.latencies[upper_idx] - data.latencies[lower_idx]));
 }
 
 struct InterpolationBounds {
