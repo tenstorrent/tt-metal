@@ -862,6 +862,7 @@ void write_to_device_buffer(
                 pinned_src_addr = pinned_noc_base + src_offset_base;
                 pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                 use_pinned_transfer = true;
+                fmt::println(stderr, "Using pinned memory");
             }
         }
     }
