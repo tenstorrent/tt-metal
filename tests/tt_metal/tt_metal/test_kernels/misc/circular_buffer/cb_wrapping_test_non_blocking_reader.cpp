@@ -17,6 +17,7 @@ void core_agnostic_main();
 
 #ifdef COMPILE_FOR_BRISC
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() { core_agnostic_main(); }
 #else
