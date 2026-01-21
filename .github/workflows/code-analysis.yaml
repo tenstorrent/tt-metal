@@ -33,7 +33,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (blank = all)"
+        description: "Maximum number of issues for Copilot to fix (default: 15)"
         required: false
         type: string
         default: ""
@@ -67,7 +67,7 @@ on:
         type: boolean
         default: false
       copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (blank = all)"
+        description: "Maximum number of issues for Copilot to fix (default: 15)"
         required: false
         type: string
         default: ""
