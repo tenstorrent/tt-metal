@@ -60,6 +60,20 @@ struct NocWriteFlushEvent {
     uint8_t noc;
 };
 
+struct LocalMemWriteEvent {
+    uint32_t local_start_addr;
+    uint32_t local_end_addr;
+    // Nonposted writes sent counter value
+    uint32_t counter_snapshot;
+};
+
+struct LocalMemReadEvent {
+    uint32_t local_start_addr;
+    uint32_t local_end_addr;
+    // Read received counter value
+    uint32_t counter_snapshot;
+};
+
 struct UnknownNocEvent {};
 
 using NOCDebugEvent = std::variant<
@@ -68,6 +82,8 @@ using NOCDebugEvent = std::variant<
     NocReadBarrierEvent,
     NocWriteBarrierEvent,
     NocWriteFlushEvent,
+    LocalMemWriteEvent,
+    LocalMemReadEvent,
     UnknownNocEvent>;
 
 enum class NOCDebugIssueType : uint8_t {

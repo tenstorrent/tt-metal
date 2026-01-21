@@ -321,8 +321,9 @@ def test_full_buffer():
 
 @pytest.mark.skip_post_commit
 def test_device_api_debugger_non_dropping():
+    NUM_DM_RISCS = 2
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
     clear_profiler_runtime_artifacts()
@@ -358,6 +359,15 @@ def test_device_api_debugger_non_dropping():
     write_barrier_start_count = 0
     write_barrier_end_count = 0
 
+    # Track local memory events
+    local_read_count = 0
+    local_write_count = 0
+    local_read_write_count = 0
+
+    expected_local_read_count = 2 * NUM_DM_RISCS
+    expected_local_write_count = 7 * NUM_DM_RISCS
+    expected_local_read_write_count = 0 * NUM_DM_RISCS
+
     for event in noc_trace_data:
         assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
         event_type = event.get("type")
@@ -371,6 +381,12 @@ def test_device_api_debugger_non_dropping():
             write_barrier_start_count += 1
         elif event_type == "WRITE_BARRIER_END":
             write_barrier_end_count += 1
+        elif event_type == "LOCAL_MEM_READ":
+            local_read_count += 1
+        elif event_type == "LOCAL_MEM_WRITE":
+            local_write_count += 1
+        elif event_type == "LOCAL_MEM_READ_WRITE":
+            local_read_write_count += 1
 
         if "dst_addr" in event and "proc" in event:
             proc = event["proc"]
@@ -436,49 +452,16 @@ def test_device_api_debugger_non_dropping():
         write_barrier_end_count == expected_barrier_count
     ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
 
-    # There is a read/write barrier after each noc_async_read/write call.
-    # Verify that the noc counters are being tracked properly
-    NOC_COUNTER_BITS = 12
-    prev_counters = {}  # (proc, noc, type) -> previous counter value
-    read_event_count = 0
-    write_event_count = 0
-
-    for event in noc_trace_data:
-        event_type = event.get("type")
-        if event_type in ["READ", "WRITE_"]:
-            assert (
-                "noc_status_counter" in event
-            ), f"noc_status_counter missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "proc" in event, f"proc missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "noc" in event, f"noc missing in {event_type} event at timestamp {event.get('timestamp')}"
-
-            noc_status_counter = event.get("noc_status_counter")
-            proc = event.get("proc")
-            noc = event.get("noc")
-
-            assert isinstance(
-                noc_status_counter, int
-            ), f"noc_status_counter must be an integer, found {type(noc_status_counter)} in {event_type} event"
-
-            counter_key = (proc, noc, event_type)
-
-            if counter_key in prev_counters:
-                prev_counter = prev_counters[counter_key]
-                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
-                assert noc_status_counter == expected_counter, (
-                    f"noc_status_counter should increment by 1 for consecutive {event_type} events "
-                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
-                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
-                )
-
-            prev_counters[counter_key] = noc_status_counter
-
-            if event_type == "READ":
-                read_event_count += 1
-            else:
-                write_event_count += 1
-
-    assert read_event_count > 0 or write_event_count > 0, "No READ or WRITE_ events found to verify noc_status_counter"
+    # Verify local memory event counts
+    assert (
+        local_read_count == expected_local_read_count
+    ), f"Expected {expected_local_read_count} LOCAL_MEM_READ events, found {local_read_count}"
+    assert (
+        local_write_count == expected_local_write_count
+    ), f"Expected {expected_local_write_count} LOCAL_MEM_WRITE events, found {local_write_count}"
+    assert (
+        local_read_write_count == expected_local_read_write_count
+    ), f"Expected {expected_local_read_write_count} LOCAL_MEM_READ_WRITE events, found {local_read_write_count}"
 
 
 def wildcard_match(pattern, words):

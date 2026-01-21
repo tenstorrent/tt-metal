@@ -201,6 +201,8 @@ void NOCDebugState::push_event(size_t chip_id, uint64_t timestamp, int processor
             } else if constexpr (std::is_same_v<T, NocWriteFlushEvent>) {
                 tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                 handle_write_flush_event(key, processor_id, timestamp, e);
+            } else if constexpr (std::is_same_v<T, LocalMemWriteEvent>) {
+            } else if constexpr (std::is_same_v<T, LocalMemReadEvent>) {
             }
         },
         event);

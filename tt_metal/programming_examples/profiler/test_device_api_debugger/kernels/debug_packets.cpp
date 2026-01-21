@@ -40,4 +40,26 @@ void kernel_main() {
             });
         noc.async_write_barrier();
     }
+
+    // Test read
+    [[maybe_unused]] volatile uint32_t rd = local_buffer[0];
+    rd = local_buffer[5];
+
+    // Test write
+    local_buffer[0] = START_DELAY;
+    local_buffer[0]++;
+    local_buffer[1]++;
+    local_buffer[0]--;
+    local_buffer[1]--;
+    local_buffer[0] += 10;
+    local_buffer[0] -= 10;
+
+    // Bypass checks. Nothing reported
+    local_buffer.get_unsafe_ptr()[0] = 1;
+
+    struct MyStruct {
+        uint32_t x;
+    };
+    experimental::CoreLocalMem<MyStruct> struct_mem(L1_BUFFER_ADDR);
+    struct_mem->x = 1;
 }
