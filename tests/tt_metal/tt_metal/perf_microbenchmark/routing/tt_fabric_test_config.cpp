@@ -150,29 +150,32 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
+    // Special case for sequential high level patterns, which are allowed 
     if(test_config.patterns.has_value()){
         auto iterator = std::find_if_not(test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) { return config.is_sequential; });
         TT_FATAL(
             // If no config which is NOT sequential was found (all configs were sequential), we can proceed
             // Otherwise, print the first non-sequential high-level pattern returned from std::find_if_not
             iterator == test_config.patterns.value().end(),
-            "Test '{}': latency_test_mode does not support non-sequential high-level pattern {}",
+            "Test '{}': latency_test_mode does not support non-sequential high-level pattern: {}",
             test_config.name, iterator->type);
     }
-    TT_FATAL(
-        test_config.senders.size() == 1,
-        "Test '{}': latency_test_mode requires exactly one sender, got {}",
-        test_config.name,
-        test_config.senders.size());
-    TT_FATAL(
-        test_config.senders[0].patterns.size() == 1,
-        "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
-        test_config.name,
-        test_config.senders[0].patterns.size());
-    TT_FATAL(
-        test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
-        "Test '{}': latency_test_mode only supports unicast",
-        test_config.name);
+    else{
+        TT_FATAL(
+            test_config.senders.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one sender, got {}",
+            test_config.name,
+            test_config.senders.size());
+        TT_FATAL(
+            test_config.senders[0].patterns.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+            test_config.name,
+            test_config.senders[0].patterns.size());
+        TT_FATAL(
+            test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+            "Test '{}': latency_test_mode only supports unicast",
+            test_config.name);
+    }
 }
 
 ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
@@ -927,6 +930,7 @@ TestConfig TestConfigBuilder::resolve_test_config(const ParsedTestConfig& parsed
     resolved_test.global_sync = parsed_test.global_sync;
     resolved_test.enable_flow_control = parsed_test.enable_flow_control;
     resolved_test.skip_packet_validation = parsed_test.skip_packet_validation;
+    resolved_test.from_sequential_pattern = parsed_test.from_sequential_pattern;
 
     // Resolve defaults
     if (parsed_test.defaults.has_value()) {
@@ -1078,6 +1082,19 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     "Please specify one or the other.",
                     p_config.name);
             }
+
+            // If we are in latency test mode, all high-level patterns need to be sequential
+            if(p_config.performance_test_mode == PerformanceTestMode::LATENCY){
+                // This is a redundant check; also performed in `validate_latency_test_config`
+                bool all_sequential = std::all_of(
+                    p_config.patterns.value().begin(),
+                    p_config.patterns.value().end(),
+                    [](const auto& pattern) { return pattern.is_sequential; });
+
+                // Need to remember this field so we can allow multiple iterations on a latency test in the sequential case
+                iteration_test.from_sequential_pattern = all_sequential;
+            }
+
             expand_patterns_into_test(iteration_test, p_config.patterns.value(), i);
         } else if (p_config.defaults.has_value()) {
             // if we have concrete senders, we still need to apply the defaults to them
