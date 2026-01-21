@@ -33,7 +33,7 @@ struct RotateDeviceOperation {
             std::size_t num_cores{};
             std::size_t num_cores_y{};
             bool is_sharded{};
-            std::vector<CoreCoord> logical_cores{};
+            std::vector<CoreCoord> logical_cores;
             tt::tt_metal::CBHandle input_cb_handle{};
             tt::tt_metal::CBHandle output_cb_handle{};
         };

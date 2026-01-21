@@ -8,7 +8,6 @@
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
-namespace ttnn::prim {
 
 bool should_use_split_reader(
     const Tensor& input_tensor, const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode) {
@@ -66,11 +65,11 @@ uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precompute
     return grid_tensor.logical_shape()[-1] / elements_per_point;
 }
 
-uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
+uint32_t get_aligned_stick_size(const Shape& shape, const Tensor& tensor) {
     const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
     const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? hal::get_dram_alignment()
-                                   : hal::get_l1_alignment();
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
     return tt::round_up(stick_nbytes, alignment);
 }
 
