@@ -16,3 +16,4 @@
 {"event":"decision","topic":"scaler_value","choice":"Use 1/W for MEAN","rationale":"reduce_w with SUM and 1/W scaler computes mean","ts":"2026-01-21T13:25:00+00:00"}
 {"event":"action","type":"write_spec","file":"reduce_mean_w_rm_spec.md","ts":"2026-01-21T13:28:01+00:00"}
 {"event":"complete","final_status":"SUCCESS","artifacts":["reduce_mean_w_rm_spec.md"],"ts":"2026-01-21T13:28:02+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-planner] spec: reduce_mean_w_rm","commit":"c04c5d1a55","ts":"2026-01-21T13:28:54+00:00"}
