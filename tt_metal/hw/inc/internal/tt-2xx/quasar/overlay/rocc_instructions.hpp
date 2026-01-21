@@ -620,5 +620,3 @@
     {                                                    \
         ROCC_INSTRUCTION_S(0, (trid), (64 + 49));        \
     }
-
-#endif
