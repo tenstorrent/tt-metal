@@ -1682,7 +1682,12 @@ class ModelArgs:
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
-        if self.sliding_window is not None and self.rope_theta_local is None:
+        self.use_sliding_window = text_config.get("use_sliding_window", None)
+        if (
+            self.sliding_window is not None
+            and self.rope_theta_local is None
+            and (self.use_sliding_window == True or self.use_sliding_window is None)
+        ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
