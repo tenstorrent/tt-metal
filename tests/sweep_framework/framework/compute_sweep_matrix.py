@@ -66,6 +66,7 @@ def get_lead_models_mesh_runner_config():
             "test_group_name": "lead-models-single-chip",
             "arch": "wormhole_b0",
             "runs_on": "tt-ubuntu-2204-n150-stable",
+            "runner_label": "N150",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },
@@ -81,6 +82,7 @@ def get_lead_models_mesh_runner_config():
                 "in-service",  # Available for use
                 "pipeline-functional",  # Functional pipeline
             ],
+            "runner_label": "topology-6u",
             "tt_smi_cmd": "tt-smi -r",
             "suite_name": "model_traced",
         },
@@ -205,6 +207,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
         "test_group_name": "wormhole-n150-sweeps",
         "arch": "wormhole_b0",
         "runs_on": "tt-ubuntu-2204-n150-stable",
+        "runner_label": "N150",
         "tt_smi_cmd": "tt-smi -r",
     }
 
@@ -224,6 +227,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
             "test_group_name": "n300-llmbox-ccl",
             "arch": "wormhole_b0",
             "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+            "runner_label": "n300-llmbox",
             "tt_smi_cmd": "tt-smi -r",
         }
         for batch in ccl_batches:
