@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operation_concepts.hpp"
 
@@ -16,7 +17,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ternary {
+namespace ttnn::experimental::prim {
 
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
@@ -155,4 +156,4 @@ WhereDeviceOperation::invoke(
             .output_tensor = output_tensor}};
 }
 
-}  // namespace ttnn::operations::experimental::ternary
+}  // namespace ttnn::experimental::prim

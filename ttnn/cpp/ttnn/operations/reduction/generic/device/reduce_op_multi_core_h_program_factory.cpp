@@ -12,13 +12,13 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::reduction::generic::program {
+namespace ttnn::prim {
 
 ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory::create(
-    const GenericParams& operation_attributes, const GenericInputs& tensor_args, Tensor& tensor_return_value) {
+    const ReduceParams& operation_attributes, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args.input_tensor;
+    const auto& a = tensor_args;
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -269,15 +269,14 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
 void ReduceMultiCoreHProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const GenericParams& /*operation_attributes*/,
-    const GenericInputs& tensor_args,
+    const ReduceParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
     Tensor& tensor_return_value) {
-    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* src_buffer = tensor_args.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
-    bool use_width_sharding =
-        tensor_args.input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    bool use_width_sharding = tensor_args.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                              tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     if (use_width_sharding) {
         UpdateDynamicCircularBufferAddress(
@@ -303,4 +302,4 @@ void ReduceMultiCoreHProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::generic::program
+}  // namespace ttnn::prim

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import glob
+import os
 import pathlib
 import shutil
 import sys
@@ -671,6 +673,8 @@ class Operation:
                         cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
                         if not cluster_descriptor_path.exists():
                             save_cluster_descriptor(str(cluster_descriptor_path))
+                        if not glob.glob(str(ttnn.CONFIG.report_path) + "/physical_chip_mesh_coordinate_mapping*.yaml"):
+                            save_mesh_descriptor(ttnn.CONFIG.report_path)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
                         ttnn.database.insert_stack_trace(
                             ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
@@ -1053,3 +1057,18 @@ def save_cluster_descriptor(dest_path):
         return None
 
     shutil.copy(temp_path, dest_path)
+
+
+def save_mesh_descriptor(dest_path):
+    if not "TT_METAL_HOME" in os.environ:
+        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
+        return
+
+    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
+
+    if not mesh_descriptor_paths:
+        logger.warning("Mesh descriptor not found")
+        return
+
+    for path in mesh_descriptor_paths:
+        shutil.copy(path, dest_path)

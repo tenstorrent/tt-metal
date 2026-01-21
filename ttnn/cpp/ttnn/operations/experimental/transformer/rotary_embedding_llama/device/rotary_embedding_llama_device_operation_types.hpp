@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
@@ -22,4 +22,4 @@ struct RotaryEmbeddingLlamaInputs {
     tt::tt_metal::Tensor trans_mat;
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
+}  // namespace ttnn::experimental::prim

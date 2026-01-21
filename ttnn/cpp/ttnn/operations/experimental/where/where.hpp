@@ -13,7 +13,7 @@
 namespace ttnn::operations::experimental::ternary {
 
 struct WhereOperation {
-    template <FloatOrTensorConcept T, FloatOrTensorConcept U>
+    template <ttnn::experimental::prim::FloatOrTensorConcept T, ttnn::experimental::prim::FloatOrTensorConcept U>
     static Tensor invoke(
         const Tensor& condition,
         const T& value_true,
@@ -28,9 +28,10 @@ struct WhereOperation {
         }
 
         if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
-            auto [operation_attributes, tensor_args] = WhereDeviceOperation::invoke(
+            auto [operation_attributes, tensor_args] = ttnn::experimental::prim::WhereDeviceOperation::invoke(
                 condition, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
-            return ttnn::device_operation::launch<WhereDeviceOperation>(operation_attributes, tensor_args);
+            return ttnn::device_operation::launch<ttnn::experimental::prim::WhereDeviceOperation>(
+                operation_attributes, tensor_args);
 
         } else {
             TT_FATAL((!std::is_same_v<T, Tensor> || !std::is_same_v<U, Tensor>), "Scalar values are not supported!");

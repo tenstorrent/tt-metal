@@ -9,9 +9,9 @@
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
-struct LayerNormPostAllGatherOperationAttributes {
+struct LayerNormPostAllGatherParams {
     LayerNormDistributedType norm_type;
     float eps;
     tt::tt_metal::MemoryConfig memory_config;
@@ -21,14 +21,11 @@ struct LayerNormPostAllGatherOperationAttributes {
     LayerNormProgramConfig program_config;
 };
 
-struct LayerNormPostAllGatherTensorArgs {
+struct LayerNormPostAllGatherInputs {
     const Tensor& input;
     const Tensor& stats;
     std::optional<Tensor> gamma;
     std::optional<Tensor> beta;
 };
 
-using LayerNormPostAllGatherTensorReturnValue = Tensor;
-using LayerNormPostAllGatherSpecReturnValue = TensorSpec;
-
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

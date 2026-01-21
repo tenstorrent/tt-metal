@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_decode::program {
+namespace ttnn::prim {
 
 SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const SdpaDecodeParams& operation_attributes, const SdpaDecodeInputs& tensor_args, Tensor& tensor_return_value) {
@@ -1162,4 +1162,4 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_decode::program
+}  // namespace ttnn::prim

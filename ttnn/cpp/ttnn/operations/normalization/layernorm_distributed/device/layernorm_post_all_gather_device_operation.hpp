@@ -12,15 +12,15 @@
 
 #include "layernorm_post_all_gather_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 struct LayerNormPostAllGatherDeviceOperation {
-    using operation_attributes_t = LayerNormPostAllGatherOperationAttributes;
-    using tensor_args_t = LayerNormPostAllGatherTensorArgs;
-    using spec_return_value_t = LayerNormPostAllGatherSpecReturnValue;
-    using tensor_return_value_t = LayerNormPostAllGatherTensorReturnValue;
-    using program_factory_t = std::
-        variant<program::LayerNormPostAllGatherProgramFactory, program::LayerNormPostAllGatherWelfordProgramFactory>;
+    using operation_attributes_t = LayerNormPostAllGatherParams;
+    using tensor_args_t = LayerNormPostAllGatherInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t =
+        std::variant<LayerNormPostAllGatherProgramFactory, LayerNormPostAllGatherWelfordProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
@@ -35,14 +35,14 @@ struct LayerNormPostAllGatherDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
 Tensor layer_norm_post_all_gather(
     const Tensor& input,
     const Tensor& stats,
-    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    LayerNormDistributedType norm_type,
     float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -50,6 +50,6 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config);
+    const LayerNormProgramConfig& program_config);
 
 }  // namespace ttnn::prim
