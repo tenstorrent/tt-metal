@@ -13,9 +13,8 @@ This module contains the training logic for both 2-tier and 3-tier architectures
 from time import time
 
 import numpy as np
-import ttnn
 import ttml
-from ttml.common.data import get_batch, build_causal_mask
+from data import get_batch, build_causal_mask
 from ttml.common.utils import no_grad, PerformanceMeter
 
 
@@ -39,18 +38,18 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
+            ttml.Layout.ROW_MAJOR,
+            ttml.autograd.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.DataType.UINT32,
+            ttml.Layout.ROW_MAJOR,
+            ttml.autograd.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
     return tt_x, tt_y
 
 
@@ -86,7 +85,7 @@ def worker(
     reduce = ttml.ops.ReduceType.MEAN
 
     causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -305,12 +304,7 @@ def optimizer(model, cfg, optimizer_instance):
     for step in range(cfg.steps):
         # Receive gradients from aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.recv(
-                tensor_ptr,
-                aggregator_and_optimizer_ctx,
-                aggregator_local_rank,
-                use_grad=True,
-            )
+            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank, use_grad=True)
 
         # Apply optimizer step
         optimizer_instance.step()
