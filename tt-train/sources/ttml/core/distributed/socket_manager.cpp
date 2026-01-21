@@ -48,7 +48,7 @@ namespace ttml::core::distributed {
 SocketManager::SocketManager(SocketType type) : m_type(type) {
 }
 
-// TODO: Remove legacy send/recv/get_socket when implementing pipeline parallelism - use unified API instead
+// TODO: Remove legacy send/recv/get_socket when revisiting pipeline parallelism - use unified API instead
 void SocketManager::send(const ttnn::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
     auto socket = get_socket(rank, distributed_ctx);
     socket->send(tensor);
