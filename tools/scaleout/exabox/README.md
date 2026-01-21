@@ -27,7 +27,10 @@ If links are flaky, fabric tests will fail with routing errors - you'll waste ti
 
 - Clone tt-metal to a shared NFS mount accessible from all hosts (e.g., `/data/<your-username>/` on Exabox) and run all commands from the repo root
 - Passwordless SSH to all hosts (using `ssh-add` for agent forwarding - see [SSH Setup](#ssh-setup) below)
-- `mpirun` available (Docker-based scripts also need `mpirun-ulfm`)
+- **Tenstorrent-modified OpenMPI v5.0.7** installed on all hosts
+  - Install from: https://github.com/tenstorrent/ompi/releases/tag/v5.0.7
+  - Provides `mpirun` and `mpirun-ulfm` (required for Docker-based scripts)
+  - No manual PATH setup needed - installation handles symlinks automatically
 - FSD file for your cluster topology (must be accessible on a shared filesystem)
   - **Note**: The paths below are specific to the current BH Exabox setup. Your system may have different descriptors depending on your topology and deployment.
   - 8x16: `/data/local-syseng-manual/5x8x16_fsd.textproto`
