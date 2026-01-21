@@ -157,8 +157,8 @@ void kernel_main() {
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                         // TODO: wait on the semaphore here!
                         // uint32_t chunk_piece_tile_width = 1;
-                        uint32_t tiles_to_read_in_current_direction = chunk_width;
-                        uint32_t direction_offset = 0;
+                        uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
+                        uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                         uint32_t input_row_offset = start_row_offset;
                         // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
