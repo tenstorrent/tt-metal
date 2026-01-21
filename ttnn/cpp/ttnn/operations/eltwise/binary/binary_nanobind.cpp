@@ -149,7 +149,9 @@ void bind_binary_operation(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {6}
         )doc",
@@ -281,7 +283,9 @@ void bind_binary_gcd_lcm_operation(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -368,7 +372,9 @@ void bind_binary_unary_max_operation(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {4}
         )doc",
@@ -494,7 +500,9 @@ void bind_binary_unary_operation(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {6}
         )doc",
@@ -619,7 +627,9 @@ void bind_binary_with_float_param(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -691,7 +701,9 @@ void bind_bitwise_binary_ops_operation(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {6}
         )doc",
@@ -811,7 +823,9 @@ void bind_logical_binary_ops_operation(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {6}
         )doc",
@@ -892,7 +906,9 @@ void bind_binary_composite(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -956,7 +972,9 @@ void bind_binary_composite_with_rtol_atol(
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
         )doc",
 
         operation.base_name(),
@@ -1025,7 +1043,9 @@ void bind_binary_composite_overload(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {4}
         )doc",
@@ -1098,7 +1118,9 @@ void bind_prelu(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {4}
         )doc",
@@ -1188,7 +1210,9 @@ void bind_div(
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
         )doc",
 
@@ -1329,7 +1353,9 @@ void bind_binary_operation_with_fast_approx(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1461,7 +1487,9 @@ void bind_polyval(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1527,7 +1555,9 @@ void bind_binary_overload_operation(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1611,7 +1641,9 @@ void bind_inplace_operation(
                 * - Dtypes
                   - Layouts
                 * - {4}
-                  - TILE
+                  - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1723,7 +1755,9 @@ void bind_inplace_operation_with_fast_approx(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1837,7 +1871,9 @@ void bind_logical_inplace_operation(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -1919,7 +1955,9 @@ void bind_binary_inplace_operation(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {5}
         )doc",
@@ -2026,8 +2064,10 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            ROW_MAJOR layout is only supported for the 2nd input tensor.
 
             {2}
         )doc",
@@ -2151,14 +2191,14 @@ void py_module(nb::module_& mod) {
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2166,14 +2206,14 @@ void py_module(nb::module_& mod) {
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2181,14 +2221,14 @@ void py_module(nb::module_& mod) {
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
 
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::multiply_,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2248,7 +2288,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
 
     detail::bind_binary_operation(
@@ -2257,7 +2297,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2265,7 +2305,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2273,7 +2313,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2281,7 +2321,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2289,7 +2329,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2297,7 +2337,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2383,7 +2423,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_unary_max_operation(
         mod,
@@ -2396,7 +2436,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
     detail::bind_binary_operation(
@@ -2405,28 +2445,28 @@ void py_module(nb::module_& mod) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
         ".",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_or_,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_xor_,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         mod,
         ttnn::logical_and_,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         mod,
@@ -2451,14 +2491,14 @@ void py_module(nb::module_& mod) {
         ttnn::addalpha,
         R"doc(Computes addalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_with_float_param(
         mod,
         ttnn::subalpha,
         R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_composite_with_rtol_atol(
         mod,
@@ -2500,7 +2540,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::prelu,
         R"doc(Perform an eltwise-prelu operation.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
@@ -2508,7 +2548,7 @@ void py_module(nb::module_& mod) {
         ttnn::outer,
         R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_polyval(
         mod,
@@ -2516,7 +2556,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes polyval of all elements of :attr:`input_tensor_a` with coefficients :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
         )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_binary_overload_operation(
         mod,
@@ -2530,77 +2570,77 @@ void py_module(nb::module_& mod) {
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::gt_,
         R"doc(Performs Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ge_,
         R"doc(Performs Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::lt_,
         R"doc(Performs Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::le_,
         R"doc(Performs Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::eq_,
         R"doc(Performs Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ne_,
         R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::ldexp_,
         R"doc(Performs ldexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::logaddexp_,
         R"doc(Performs logaddexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::logaddexp2_,
         R"doc(Performs logaddexp2 in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation(
         mod,
         ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation_with_fast_approx(
         mod,
@@ -2626,7 +2666,7 @@ void py_module(nb::module_& mod) {
         ttnn::bias_gelu_,
         R"doc(Performs bias_gelu in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_power(
         mod,

@@ -28,7 +28,7 @@ void bind_ternary_composite_float(
     const ternary_operation_t& operation,
     const std::string& description,
     const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16") {
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -210,7 +210,7 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 
                 * - Dtypes
                   - Layouts
-                * - BFLOAT16, BFLOAT8_B
+                * - BFLOAT16, BFLOAT8_B, FLOAT32
                   - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
@@ -334,7 +334,7 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT

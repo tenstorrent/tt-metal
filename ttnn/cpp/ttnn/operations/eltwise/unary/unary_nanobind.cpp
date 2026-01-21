@@ -52,7 +52,7 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             INT32 is supported only for Tensor-scalar-scalar version.
         )doc",
@@ -133,7 +133,7 @@ void bind_unary_composite_optional_floats_with_default(
                * - Dtypes
                  - Layouts
                * - {9}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -216,7 +216,7 @@ void bind_unary_operation(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {5}
 
@@ -280,7 +280,7 @@ void bind_unary_operation_subcoregrids(
                * - Dtypes
                  - Layouts
                * - {4}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {5}
 
@@ -344,7 +344,7 @@ void bind_unary_sqrt_operation(
                * - Dtypes
                  - Layouts
                * - {2}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {3}
         )doc",
@@ -405,7 +405,7 @@ void bind_unary_operation_overload_complex(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -472,7 +472,7 @@ void bind_unary_operation_overload_complex_return_complex(
                * - Dtypes
                  - Layouts
                * - {2}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {3}
             More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
@@ -542,7 +542,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
                * - Dtypes
                  - Layouts
                * - {3}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -611,7 +611,7 @@ void bind_unary_operation_with_float_parameter(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -680,7 +680,7 @@ void bind_unary_operation_with_scalar_parameter(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -750,7 +750,7 @@ void bind_unary_operation_with_float_parameter_default(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -814,7 +814,7 @@ void bind_unary_composite_with_default_float(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -883,7 +883,7 @@ void bind_unary_operation_with_int_parameter(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -951,7 +951,7 @@ void bind_unary_operation_with_dim_parameter(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -1015,7 +1015,7 @@ void bind_unary_rdiv(
                * - Dtypes
                  - Layouts
                * - {8}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {9}
         )doc",
@@ -1080,8 +1080,8 @@ void bind_softplus(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -1136,7 +1136,7 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
         )doc",
@@ -1188,8 +1188,8 @@ void bind_sigmoid_accurate(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -1243,7 +1243,7 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::sigmoid.base_name(),
         ttnn::sigmoid.python_fully_qualified_name());
@@ -1297,8 +1297,8 @@ void bind_unary_chain(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
@@ -1350,7 +1350,7 @@ void bind_identity(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
-                 - TILE
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::identity.base_name(),
         ttnn::identity.python_fully_qualified_name());
@@ -1466,7 +1466,7 @@ void bind_unary_composite_int_with_default(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -1533,7 +1533,7 @@ void bind_unary_composite_floats_with_default(
                * - Dtypes
                  - Layouts
                * - {8}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {9}
         )doc",
@@ -1598,7 +1598,7 @@ void bind_unary_composite_int(
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1660,7 +1660,7 @@ void bind_unary_threshold(
                * - Dtypes
                  - Layouts
                * - BFLOAT16
-                 - TILE
+                 - TILE, ROW_MAJOR
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1725,7 +1725,7 @@ void bind_unary_composite_float_with_default(
                * - Dtypes
                  - Layouts
                * - {5}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -1779,7 +1779,7 @@ void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, cons
                * - Dtypes
                  - Layouts
                * - FLOAT32, BFLOAT16, BFLOAT8_B
-                 - TILE
+                 - TILE, ROW_MAJOR
 
 
         Example:
@@ -1838,7 +1838,7 @@ void bind_unary_composite_rpow(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -1873,7 +1873,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::abs,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::acos,
@@ -1891,7 +1891,7 @@ void py_module(nb::module_& mod) {
         ttnn::atan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::atanh,
@@ -1903,7 +1903,7 @@ void py_module(nb::module_& mod) {
         ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::acosh,
@@ -1916,28 +1916,28 @@ void py_module(nb::module_& mod) {
         ttnn::erfinv,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|erfinv|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
         ttnn::exp2,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|exp2|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
         ttnn::expm1,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::floor,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::trunc,
@@ -1955,19 +1955,19 @@ void py_module(nb::module_& mod) {
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
     bind_unary_operation(
         mod,
         ttnn::ceil,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::mish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
         "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::hardmish,
@@ -1993,7 +1993,7 @@ void py_module(nb::module_& mod) {
         ttnn::i0,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::i1,
@@ -2006,31 +2006,31 @@ void py_module(nb::module_& mod) {
         ttnn::isfinite,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isfinite|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isnan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isneginf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isneginf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isposinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isposinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::lez,
@@ -2054,13 +2054,13 @@ void py_module(nb::module_& mod) {
         ttnn::neg,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
 
     bind_unary_operation_overload_complex_return_complex(
         mod,
@@ -2072,19 +2072,19 @@ void py_module(nb::module_& mod) {
         ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::relu6,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::sign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sign|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::signbit,
@@ -2108,7 +2108,7 @@ void py_module(nb::module_& mod) {
         ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
@@ -2121,13 +2121,13 @@ void py_module(nb::module_& mod) {
         ttnn::tan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc",
         "Supported input range is (-1.45, 1.45)",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::log_sigmoid,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::bitwise_not,
@@ -2207,7 +2207,7 @@ void py_module(nb::module_& mod) {
         "value",
         "The value parameter for the Heaviside function",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_float_parameter(
         mod,
         ttnn::leaky_relu,
@@ -2229,7 +2229,7 @@ void py_module(nb::module_& mod) {
         "lower_limit",
         "The min value for ReLU function",
         "This will carry out ReLU operation at min value instead of the standard 0",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(System memory is not supported.)doc");
     bind_unary_operation_with_float_parameter(
         mod, ttnn::rpow, "exponent", "exponent value. Non-positive values are not supported.", "");
@@ -2324,7 +2324,7 @@ void py_module(nb::module_& mod) {
         ttnn::cosh,
         R"doc(Performs cosh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::digamma,
@@ -2337,20 +2337,20 @@ void py_module(nb::module_& mod) {
         ttnn::lgamma,
         R"doc(Performs lgamma function on :attr:`input_tensor`.)doc",
         "[supported for value greater than 0].",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::multigammaln,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
         "[supported range 1.6 to inf].",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::sinh,
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::var_hw,
@@ -2364,7 +2364,7 @@ void py_module(nb::module_& mod) {
         ttnn::normalize_hw,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(ROW_MAJOR, TILE)doc");
     bind_unary_composite(
         mod,
@@ -2377,7 +2377,7 @@ void py_module(nb::module_& mod) {
         ttnn::normalize_global,
         R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(ROW_MAJOR, TILE)doc");
 
     bind_unary_composite_optional_floats_with_default(
@@ -2418,7 +2418,7 @@ void py_module(nb::module_& mod) {
         "diagonal value",
         0,
         R"doc(Performs tril function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_int_with_default(
         mod,
         ttnn::triu,
@@ -2426,7 +2426,7 @@ void py_module(nb::module_& mod) {
         "diagonal value",
         0,
         R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_int_parameter(
         mod,
         ttnn::round,
@@ -2460,11 +2460,11 @@ void py_module(nb::module_& mod) {
         "None",
         R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using rounding_mode.
 
-        Input tensor must have BFLOAT16 data type.
+        Input tensor must have BFLOAT16 or FLOAT32 data type.
 
-        Output tensor will have BFLOAT16 data type.)doc",
+        Output tensor will have BFLOAT16 or FLOAT32 data type.)doc",
 
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(System memory is not supported.)doc");
 
     // Bind bitcast operation
@@ -2492,7 +2492,7 @@ void py_module(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
-                 - TILE
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::bitcast.base_name());
 
