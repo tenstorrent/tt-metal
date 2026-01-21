@@ -947,8 +947,8 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     return stride;
 }
 
-template <bool set_src_noc_addr = false>
-void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+template <bool set_src_noc_addr = false, bool set_trid = false>
+void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size, uint32_t trid = 0) {
     // noc_read_state_init is unnecessary.
     if constexpr (set_src_noc_addr) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(
@@ -957,6 +957,9 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
         // wait on command buf to be ready before issuing new programming
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, 0);
+    }
+    if constexpr (set_trid) {
+        noc_async_read_set_trid(trid);
     }
     if (size > NOC_MAX_BURST_SIZE) {
         // Set length to max burst size.
@@ -987,14 +990,15 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
 
+    uint32_t current_trid = 2;
+
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
-    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+    noc_read_64bit_any_len<true, true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read, current_trid);
 
     read_addr += amt_to_read;
     wlength -= amt_to_read;
-    noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
@@ -1013,10 +1017,16 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             uint32_t scratch_write_addr = scratch_write_start_addr;
             std::swap(scratch_read_start_addr, scratch_write_start_addr);
 
+            uint32_t last_trid = current_trid;
+            // Alternate between trids 2 and 3.
+            current_trid = 5 - current_trid;
+
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-            noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+            noc_read_64bit_any_len<false, true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read, current_trid);
             read_addr += amt_to_read;
+
+            noc_async_read_barrier_with_trid(last_trid);
 
             // Third step - write from DB
             uint32_t npages =
@@ -1025,11 +1035,9 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
             read_length -= amt_to_read;
-
-            // TODO(pgk); we can do better on WH w/ tagging
-            noc_async_read_barrier();
         }
     }
+    noc_async_read_barrier_with_trid(current_trid);
 
     // Third step - write from DB
     uint32_t amt_to_write = amt_to_read;
