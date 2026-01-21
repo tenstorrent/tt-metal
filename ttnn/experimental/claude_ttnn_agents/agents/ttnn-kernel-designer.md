@@ -60,13 +60,42 @@ You MUST produce a structured Kernel Design Document saved to:
 - **Problem**: {why this is incorrect}
 - **Resolution**: {how this design corrects it}
 
-## Data Semantics Model
+## Data Semantics Model (MANDATORY)
 
 ### Buffer Content Analysis
 
-| CB | Layout | Valid Region | Element Meaning | Lifetime |
-|----|--------|--------------|-----------------|----------|
-| cb_X | TILE/RM | All/Row0/Col0 | {what the data represents} | {when released} |
+**This table is MANDATORY. Every CB must have all columns filled.**
+
+| CB | Layout | Logical Shape | Tile Shape | Valid Region | Lifetime |
+|----|--------|---------------|------------|--------------|----------|
+| cb_X | TILE/RM | [H,W] or [W] | Ht×Wt or N/A | All/Row0/Col0/[0,0] | {when released} |
+
+**Column definitions**:
+- **Logical Shape**: Original tensor shape BEFORE tilizing (e.g., `[H,W]`, `[W]`, `[1]`)
+- **Tile Shape**: Shape in tiles after tilizing (e.g., `Ht×Wt`, `1×Wt`, `Ht×1`)
+- **Valid Region**: Which elements contain meaningful data:
+  - `All` - all 32×32 elements in each tile are valid
+  - `Row0` - only top row (row 0) of each tile is valid (from 1D tensor or REDUCE_COL)
+  - `Col0` - only left column (col 0) of each tile is valid (from REDUCE_ROW)
+  - `[0,0]` - only top-left element of the single tile is valid (from REDUCE_SCALAR)
+
+### Binary Op Broadcast Verification (MANDATORY)
+
+**For EVERY binary operation, verify broadcast dimension matches valid regions:**
+
+| Phase | Op | CB_A Valid | CB_B Valid | Broadcast Required |
+|-------|-----|------------|------------|-------------------|
+| N | add/sub/mul | All/Row0/Col0 | All/Row0/Col0 | NONE/ROW/COL/SCALAR |
+
+**Broadcast selection rules**:
+| CB_A Valid | CB_B Valid | Required Broadcast |
+|------------|------------|-------------------|
+| All | All | NONE |
+| All | Row0 | **ROW** (replicate B's row 0 down) |
+| All | Col0 | **COL** (replicate B's col 0 right) |
+| All | [0,0] | **SCALAR** |
+
+**If this table is missing or broadcasts don't match valid regions, the design is INVALID.**
 
 ### Dataflow Graph
 
@@ -215,16 +244,34 @@ For every format conversion (tilize, untilize), verify SEPARATE input and output
 
 **Common spec error**: Listing only the output CB, forgetting the intermediate input CB.
 
-#### 0b. Validate Persistence Decisions
+#### 0b. Validate Persistence and CB Allocation
 
-For each CB marked "persistent" or "reused across phases", ask:
-1. What operations READ this data?
-2. After each read, is the ORIGINAL data still needed, or is a DERIVED result needed?
-3. Could we release the original and persist a derived buffer instead?
+**Design principle: SIMPLE over CLEVER. Prefer dedicated CBs over recomputation.**
 
-**General principle**: Persist the MINIMAL data that's ACTUALLY reused. Often the spec says "persist the input" when really a derived intermediate is what's needed multiple times.
+For each intermediate result:
+1. How many times is this result READ?
+2. If read more than once → allocate a DEDICATED CB that persists until all reads complete
+3. Do NOT reuse a CB if it means recomputing a result later
 
-**How to check**: Draw the dataflow. Count how many times each buffer is read. If buffer A is read once to produce buffer B, and buffer B is read multiple times, then B should persist, not A.
+**Anti-pattern (AVOID)**:
+```
+cb_scratch = center(x, mean)     // centered data
+cb_scratch2 = square(cb_scratch) // cb_scratch consumed
+... later ...
+cb_scratch = center(x, mean)     // RECOMPUTING same result!
+```
+
+**Correct pattern (USE)**:
+```
+cb_centered = center(x, mean)    // dedicated CB for centered data
+cb_squared = square(cb_centered) // cb_centered PERSISTS
+... later ...
+use cb_centered directly         // no recomputation needed
+```
+
+**Rule**: If a result is needed N times, store it in a dedicated CB and keep it until after the Nth use. CBs are cheap compared to recomputation complexity and bugs.
+
+**How to check**: Draw the dataflow. For each intermediate result with read count > 1, verify it has a dedicated CB that persists.
 
 #### 0c. Validate Broadcast Semantics
 
@@ -276,23 +323,42 @@ Common issue categories:
 
 Before mapping to helpers, understand the SEMANTIC MEANING of data in each buffer.
 
-#### Buffer Content Model
+#### Buffer Content Model (MANDATORY)
 
-For each CB, document:
+For each CB, you MUST document:
 
-| CB | Layout | Valid Region | Element Meaning |
-|----|--------|--------------|-----------------|
-| cb_X | TILE/ROW_MAJOR | All / Row 0 / Col 0 / [0,0] | {semantic description} |
+| CB | Layout | Logical Shape | Tile Shape | Valid Region | Lifetime |
+|----|--------|---------------|------------|--------------|----------|
 
-**Valid region depends on source**:
-- ROW_MAJOR input: All elements valid
-- Tilized 2D tensor: All elements valid
-- Tilized 1D tensor: Row 0 only (padding below)
-- REDUCE_ROW output: Col 0 only (one scalar per tile-row)
-- REDUCE_COL output: Row 0 only (one scalar per tile-col)
-- REDUCE_SCALAR output: Element [0,0] only
+**Logical Shape**: The tensor's shape BEFORE tilizing. This is critical for 1D tensors.
+**Tile Shape**: The shape in tiles AFTER tilizing.
+**Valid Region**: Which elements are meaningful (not padding).
 
-**Why this matters**: Binary ops must use correct broadcast to match valid regions. A full tensor combined with a col-0-only tensor needs COL broadcast.
+**Valid region rules**:
+| Source | Logical Shape | Valid Region |
+|--------|---------------|--------------|
+| 2D tensor tilized | [H, W] | All |
+| 1D tensor tilized | [W] | **Row0** (only top row) |
+| REDUCE_ROW output | [H, 1] | **Col0** (only left column) |
+| REDUCE_COL output | [1, W] | **Row0** (only top row) |
+| REDUCE_SCALAR output | [1, 1] | **[0,0]** (single element) |
+
+#### Binary Op Broadcast Verification (MANDATORY)
+
+**You MUST create this table for EVERY binary operation in the design:**
+
+| Phase | Op | CB_A | CB_A Valid | CB_B | CB_B Valid | Broadcast |
+|-------|-----|------|------------|------|------------|-----------|
+
+Then verify each row using:
+| CB_A Valid | CB_B Valid | Required Broadcast |
+|------------|------------|-------------------|
+| All | All | NONE |
+| All | Row0 | **ROW** |
+| All | Col0 | **COL** |
+| All | [0,0] | **SCALAR** |
+
+**This verification catches the most common design error**: using `BroadcastDim::NONE` when operands have different valid regions.
 
 #### Derived Data Tracking
 
@@ -376,15 +442,15 @@ Before finalizing the design document:
 
 ### Spec Validation (Step 0)
 - [ ] Verified all format conversions have separate input/output CBs
-- [ ] Questioned each "persistent" CB - is it the RIGHT data to persist?
-- [ ] Checked broadcast semantics for all 1D parameter tensors
+- [ ] For each multi-read result: dedicated CB allocated (no recomputation)
+- [ ] Checked broadcast semantics using Binary Op Broadcast Verification table
 - [ ] Documented any spec issues found (or stated "No issues found")
 
 ### Data Semantics (Step 0.5)
-- [ ] Created Buffer Content Analysis table with valid regions
-- [ ] Drew Dataflow Graph showing transformations
-- [ ] Created Persistence Analysis table with read counts and release points
-- [ ] Identified which derived buffers need persistence vs original buffers
+- [ ] Created Buffer Content Analysis table with Logical Shape, Tile Shape, Valid Region
+- [ ] Created Binary Op Broadcast Verification table for ALL binary ops
+- [ ] Drew Dataflow Graph showing transformations and read counts
+- [ ] Each multi-read intermediate has dedicated persistent CB (no recomputation)
 
 ### Design Quality
 - [ ] Read all relevant helper headers (not assumed)
@@ -406,8 +472,9 @@ Before finalizing the design document:
 **Spec Validation Anti-Patterns**:
 - **Blindly follow the spec** - you are a validator, not just an executor
 - **Assume tile counts matching means semantics match** - always check valid regions
-- **Persist the first buffer in a chain** - trace read counts to find what's actually reused
 - **Choose broadcast based on tile shape alone** - match to valid regions, not tile counts
+- **Reuse CBs when it causes recomputation** - use dedicated CBs for multi-read results
+- **Optimize for minimal CBs** - optimize for simplicity and correctness first
 
 ## Final Output
 
