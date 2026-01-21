@@ -687,41 +687,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
-// Legacy wrapper for single output tensor (backward compatibility)
-MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    const std::optional<const MinimalMatmulConfig>& config,
-    const Tensor& output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
-    // Wrap single output in vector and call shared implementation
-    std::vector<Tensor> output_tensors = {output_tensor};
-    return minimal_matmul_factory_helper_common(
-        program,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        fused_activation,
-        config,
-        output_tensors,
-        compute_kernel_config,
-        fused_op_signaler,
-        1  // N_chunks = 1 for regular minimal_matmul
-    );
-}
-
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
     const MinimalMatmulParams& operation_attributes,
     const MinimalMatmulInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
 
-    auto shared_vars = minimal_matmul_factory_helper(
+    auto shared_vars = minimal_matmul_factory_helper_common(
         program,
         tensor_args.input_tensor,
         tensor_args.weight_tensor,
@@ -730,19 +703,18 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         operation_attributes.config,
         tensor_return_value,
         operation_attributes.compute_kernel_config,
-        empty_fused_op_signaler);
+        empty_fused_op_signaler,
+        static_cast<uint32_t>(operation_attributes.chunks));
 
     return {std::move(program), std::move(shared_vars)};
 }
 
 // Common helper for override_runtime_arguments - works with both single and multiple output tensors
-void override_runtime_arguments_common(
-    MinimalMatmulProgramFactory::cached_program_t& cached_program,
-    uint32_t in0_addr,
-    uint32_t in1_addr,
-    uint32_t in2_addr,
-    uint32_t in3_addr,
-    const std::vector<uint32_t>& output_addrs) {
+void MinimalMatmulProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const MinimalMatmulParams& /*operation_attributes*/,
+    const MinimalMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& override_variables = cached_program.shared_variables;
 
@@ -767,56 +739,41 @@ void override_runtime_arguments_common(
 
         if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-            in0_sender_args[0] = in0_addr;
-            in0_sender_args[in0_in2_addr_idx] = in2_addr;
-            in0_sender_args[in0_in3_addr_idx] = in3_addr;
+            in0_sender_args[0] = tensor_args.input_tensor.buffer()->address();
+            in0_sender_args[in0_in2_addr_idx] = tensor_args.weight_tensor.buffer()->address();
+            in0_sender_args[in0_in3_addr_idx] =
+                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
-                in0_sender_args[in0_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in0_sender_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
             }
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[in0_in2_addr_idx] = in2_addr;
+            in0_receiver_args[in0_in2_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
-                in0_receiver_args[in0_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in0_receiver_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
             }
         }
 
         if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-            in1_sender_args[0] = in1_addr;
-            in1_sender_args[in1_in2_addr_idx] = in2_addr;
+            in1_sender_args[0] = tensor_args.weight_tensor.buffer()->address();
+            in1_sender_args[in1_in2_addr_idx] =
+                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
-                in1_sender_args[in1_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in1_sender_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
             }
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[in1_in2_addr_idx] = in2_addr;
+            in1_receiver_args[in1_in2_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < output_addrs.size(); ++out_idx) {
-                in1_receiver_args[in1_out_addr_start_idx + out_idx] = output_addrs[out_idx];
+            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+                in1_receiver_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
             }
         }
     }
-}
-
-void MinimalMatmulProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const MinimalMatmulParams& /*operation_attributes*/,
-    const MinimalMatmulInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-    auto in3_addr =
-        tensor_args.optional_input_tensor.has_value() && cached_program.shared_variables.read_local_slice_from_input
-            ? tensor_args.optional_input_tensor.value().buffer()->address()
-            : 0;
-
-    std::vector<uint32_t> output_addrs = {tensor_return_value.buffer()->address()};
-    override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
 }
 
 }  // namespace ttnn::experimental::prim

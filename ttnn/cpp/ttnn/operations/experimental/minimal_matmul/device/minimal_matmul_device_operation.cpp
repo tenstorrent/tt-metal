@@ -86,6 +86,23 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "minimal_matmul dimensions must be positive");
 
+    // Validate chunks and dim parameters
+    const int32_t chunks = operation_attributes.chunks;
+    const int32_t dim = operation_attributes.dim;
+    TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
+    TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
+
+    // Validate N is divisible by chunks
+    TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
+
+    // Validate each chunk is tile-aligned
+    const uint32_t N_per_chunk = N / chunks;
+    TT_FATAL(
+        N_per_chunk % tt::constants::TILE_WIDTH == 0,
+        "Each chunk size N/chunks={} must be a multiple of TILE_WIDTH={}",
+        N_per_chunk,
+        tt::constants::TILE_WIDTH);
+
     if (has_bias) {
         const auto& b_logical = bias_ptr->logical_shape();
         TT_FATAL(b_logical.rank() >= 1, "minimal_matmul bias must have rank >= 1");
@@ -150,28 +167,46 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    uint32_t N = in1_input_tensor_shape[-1];
-
-    ttnn::Shape output_shape(in0_input_tensor_shape);
-    output_shape[-1] = N;
+    const uint32_t N = in1_input_tensor_shape[-1];
+    const int32_t chunks = operation_attributes.chunks;
 
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+    // Create specs for output tensors
+    std::vector<TensorSpec> output_specs;
+    output_specs.reserve(chunks);
+
+    const uint32_t N_per_chunk = N / chunks;
+    for (int32_t i = 0; i < chunks; ++i) {
+        ttnn::Shape output_shape(in0_input_tensor_shape);
+        output_shape[-1] = N_per_chunk;
+        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+    }
+
+    return output_specs;
 }
 
 MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    auto* device = tensor_args.input_tensor.device();
+
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(output_specs.size());
+
+    for (const auto& spec : output_specs) {
+        output_tensors.push_back(create_device_tensor(spec, device));
+    }
+
+    return output_tensors;
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-Tensor minimal_matmul(
+std::vector<Tensor> minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
@@ -179,7 +214,9 @@ Tensor minimal_matmul(
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t chunks,
+    int32_t dim) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -195,7 +232,9 @@ Tensor minimal_matmul(
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config,
             .output_dtype = dtype,
-            .compute_kernel_config = kernel_config_val},
+            .compute_kernel_config = kernel_config_val,
+            .chunks = chunks,
+            .dim = dim},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
 }
