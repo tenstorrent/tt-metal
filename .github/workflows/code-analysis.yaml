@@ -22,8 +22,8 @@ on:
         required: false
         type: boolean
         default: false
-      previous-run-id:
-        description: "Run ID of a previous workflow to download CodeChecker results from (skips analysis)"
+      debug-file-filter:
+        description: "Analyze only specific file(s) for fast debugging (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')"
         required: false
         type: string
         default: ""
@@ -56,8 +56,8 @@ on:
         required: false
         type: boolean
         default: false
-      previous-run-id:
-        description: "Run ID of a previous workflow to download CodeChecker results from (skips analysis)"
+      debug-file-filter:
+        description: "Analyze only specific file(s) for fast debugging (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')"
         required: false
         type: string
         default: ""
@@ -236,7 +236,7 @@ jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
     needs: [ build-docker-image ]
-    if: ${{ (inputs.enable-static-analysis == true || github.event_name == 'schedule') && inputs.previous-run-id == '' }}
+    if: ${{ inputs.enable-static-analysis == true || github.event_name == 'schedule' }}
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
@@ -276,117 +276,96 @@ jobs:
           uv pip install codechecker==6.27.1
 
       - name: 🔬 Analyze with CodeChecker
-        uses: blozano-tt/CodeChecker-Action@v1.0.5-tt
         id: codechecker
-        with:
-          logfile: /work/.build/clang-static-analyzer/compile_commands.json
-          llvm-version: ignore # Already installed in our Docker container
-          config: /work/.codechecker.json
-          version: ignore # Already installed in our Docker container
-
-      - name: Upload CodeChecker HTML reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        timeout-minutes: 10
-        with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: ${{ steps.codechecker.outputs.result-html-dir }}
-
-      - name: Find and upload raw CodeChecker reports
-        id: find-raw-reports
-        if: always()
         run: |
           set -euo pipefail
-          echo "=== Searching for CodeChecker plist reports ==="
 
-          # CodeChecker-Action typically stores reports in various locations
-          # Try to find the directory containing plist files
-          POSSIBLE_DIRS=(
-            "/work/.codechecker_reports"
-            "/work/codechecker_reports"
-            "/tmp/codechecker_reports"
-            "${{ steps.codechecker.outputs.result-html-dir }}/../reports"
-            "${{ steps.codechecker.outputs.result-html-dir }}/reports"
-          )
+          OUTPUT_DIR=/tmp/codechecker-reports
+          mkdir -p "$OUTPUT_DIR"
 
-          RAW_REPORTS_DIR=""
+          echo "=== Starting CodeChecker analysis ==="
 
-          # First check the possible directories
-          for dir in "${POSSIBLE_DIRS[@]}"; do
-            if [ -d "$dir" ]; then
-              echo "Found directory: $dir"
-              if find "$dir" -name "*.plist" -type f 2>/dev/null | head -1 | grep -q .; then
-                RAW_REPORTS_DIR="$dir"
-                echo "Found plist files in: $dir"
-                break
-              fi
-            fi
-          done
+          # Build the command with optional file filter
+          ANALYZE_CMD="CodeChecker analyze \
+            /work/.build/clang-static-analyzer/compile_commands.json \
+            --output $OUTPUT_DIR \
+            --jobs $(nproc) \
+            --config /work/.codechecker.json"
 
-          # If not found, search more broadly
-          if [ -z "$RAW_REPORTS_DIR" ]; then
-            echo "Searching for plist files in /work and /tmp..."
-            PLIST_FILE=$(find /work /tmp -name "*.plist" -type f 2>/dev/null | head -1 || true)
-            if [ -n "$PLIST_FILE" ]; then
-              RAW_REPORTS_DIR=$(dirname "$PLIST_FILE")
-              echo "Found plist files in: $RAW_REPORTS_DIR"
-            fi
+          # Add file filter if specified (for fast debugging)
+          if [ -n "${{ inputs.debug-file-filter }}" ]; then
+            echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
+            ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
           fi
 
-          if [ -n "$RAW_REPORTS_DIR" ] && [ -d "$RAW_REPORTS_DIR" ]; then
-            echo "raw-reports-dir=$RAW_REPORTS_DIR" >> "$GITHUB_OUTPUT"
-            echo "has-raw-reports=true" >> "$GITHUB_OUTPUT"
-            PLIST_COUNT=$(find "$RAW_REPORTS_DIR" -name "*.plist" -type f | wc -l)
-            echo "Found $PLIST_COUNT plist files"
+          echo "Running: $ANALYZE_CMD"
+
+          # Run analysis, but don't fail on analyzer crashes (common with static analysis)
+          if eval "$ANALYZE_CMD"; then
+            echo "✅ Analysis completed successfully"
           else
-            echo "No raw reports directory found"
-            echo "has-raw-reports=false" >> "$GITHUB_OUTPUT"
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "⚠️ Some analysis actions failed (exit code: $EXIT_CODE)"
+              echo "This is common with static analyzers and doesn't necessarily indicate a problem."
+            fi
           fi
 
-      - name: Upload raw CodeChecker reports (plist)
+          # Set output for downstream steps
+          echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+
+          # Show what was generated
+          echo "=== Analysis output ==="
+          ls -lah "$OUTPUT_DIR" || echo "No output directory created"
+          find "$OUTPUT_DIR" -name "*.plist" | wc -l | xargs echo "Number of plist files:"
+
+      - name: Upload raw CodeChecker reports
         uses: actions/upload-artifact@v4
-        if: always() && steps.find-raw-reports.outputs.has-raw-reports == 'true'
+        if: always()
         timeout-minutes: 10
         with:
           name: CodeChecker-Raw-Reports
-          path: ${{ steps.find-raw-reports.outputs.raw-reports-dir }}
+          path: ${{ steps.codechecker.outputs.analyze-output }}
 
-      - name: Extract CodeChecker issues to JSON
-        id: extract-issues
-        if: always()
+  copilot-fix-clangsa-issue:
+    name: 🤖 Copilot Fix ClangSA Issue
+    needs: [ clang-static-analyzer ]
+    if: |
+      always() &&
+      inputs.enable-copilot-fix == true &&
+      needs.clang-static-analyzer.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr-url: ${{ steps.create-pr.outputs.pr-url }}
+      pr-created: ${{ steps.create-pr.outputs.pr-created }}
+    steps:
+      - name: Download CodeChecker raw reports
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Raw-Reports
+          path: /tmp/reports
+
+      - name: Install CodeChecker
+        run: |
+          pip install codechecker==6.27.1
+
+      - name: Generate JSON from raw reports
+        id: generate-json
         run: |
           set -euo pipefail
-          REPORT_DIR="${{ steps.codechecker.outputs.result-html-dir }}"
-          if [ ! -d "$REPORT_DIR" ]; then
+
+          if [ ! -d "/tmp/reports" ]; then
             echo "No CodeChecker reports found"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # CodeChecker stores reports in a specific structure
-          # Try to find the actual report directory (contains plist files or can be parsed)
-          # First, try to find plist files or the reports subdirectory
-          REPORTS_BASE=""
-
-          # Look for a reports subdirectory
-          if [ -d "$REPORT_DIR/reports" ]; then
-            REPORTS_BASE="$REPORT_DIR/reports"
-          # Look for plist files in the directory
-          elif find "$REPORT_DIR" -name "*.plist" -type f | head -1 | grep -q .; then
-            REPORTS_BASE="$REPORT_DIR"
-          # Try parent directory (sometimes reports are one level up)
-          elif [ -d "$(dirname "$REPORT_DIR")/reports" ]; then
-            REPORTS_BASE="$(dirname "$REPORT_DIR")/reports"
-          else
-            # Last resort: try the HTML dir itself
-            REPORTS_BASE="$REPORT_DIR"
-          fi
-
-          echo "Using report directory: $REPORTS_BASE"
-
-          # Export issues to JSON using CodeChecker parse
+          # Generate JSON using CodeChecker parse
           JSON_OUTPUT="/tmp/codechecker_issues.json"
-          if CodeChecker parse "$REPORTS_BASE" --export json > "$JSON_OUTPUT" 2>&1; then
+          if CodeChecker parse /tmp/reports --export json --output "$JSON_OUTPUT" 2>&1; then
             # Check if we have any issues
             if [ ! -s "$JSON_OUTPUT" ]; then
               echo "Empty JSON output from CodeChecker"
@@ -394,8 +373,9 @@ jobs:
               exit 0
             fi
 
-            # Try to parse as JSON array
+            # Parse JSON to count issues
             ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" 2>/dev/null || echo "0")
+
             if [ "$ISSUE_COUNT" = "0" ]; then
               echo "No issues found in CodeChecker reports"
               echo "has-issues=false" >> "$GITHUB_OUTPUT"
@@ -405,156 +385,15 @@ jobs:
             echo "Found $ISSUE_COUNT issues"
             echo "has-issues=true" >> "$GITHUB_OUTPUT"
             echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
-
-            # Upload JSON for use in next job
-            cp "$JSON_OUTPUT" /work/codechecker_issues.json
           else
-            echo "Failed to parse CodeChecker reports (this may be normal if no issues found)"
-            cat "$JSON_OUTPUT" || true
+            echo "Failed to parse CodeChecker reports"
             echo "has-issues=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-      - name: Upload CodeChecker issues JSON
-        uses: actions/upload-artifact@v4
-        if: steps.extract-issues.outputs.has-issues == 'true'
-        with:
-          name: CodeChecker-Issues-JSON
-          path: /work/codechecker_issues.json
-
-  # Job to download CodeChecker artifacts from a previous workflow run
-  download-previous-results:
-    name: 📥 Download Previous Results
-    if: ${{ inputs.previous-run-id != '' }}
-    runs-on: ubuntu-latest
-    outputs:
-      has-issues: ${{ steps.extract-issues.outputs.has-issues }}
-    steps:
-      # Download HTML reports (contains *.plist.html files with all issue info)
-      - name: Download CodeChecker HTML Reports from previous run
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-html
-          run-id: ${{ inputs.previous-run-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract issues from HTML reports
-        id: extract-issues
-        run: |
-          set -euo pipefail
-          REPORT_DIR="/tmp/previous-html"
-
-          # Find all .plist.html files (each contains embedded JSON with full issue details)
-          mapfile -t PLIST_HTML_FILES < <(find "$REPORT_DIR" -name "*.plist.html" -type f 2>/dev/null | head -100)
-          FILE_COUNT="${#PLIST_HTML_FILES[@]}"
-
-          echo "Found $FILE_COUNT plist.html files"
-
-          if [ "$FILE_COUNT" = "0" ]; then
-            echo "No issues found in CodeChecker HTML reports"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Extract the embedded JSON from HTML files
-          # The HTML contains: var data = {"files": {...}, "reports": [...]}
-          JSON_OUTPUT="/tmp/codechecker_issues.json"
-          echo "[" > "$JSON_OUTPUT"
-
-          FIRST=true
-          TOTAL_ISSUES=0
-          for html_file in "${PLIST_HTML_FILES[@]}"; do
-            [ -z "$html_file" ] && continue
-
-            # Extract the JSON data from the HTML (it's in a "var data = {...}" line)
-            # Use grep to find the line and sed to extract just the JSON
-            DATA_LINE=$(grep -o 'var data = {.*};' "$html_file" 2>/dev/null | head -1 || true)
-
-            if [ -z "$DATA_LINE" ]; then
-              echo "Warning: Could not extract data from $html_file"
-              continue
-            fi
-
-            # Extract just the JSON object (remove "var data = " prefix and ";" suffix)
-            JSON_DATA=$(echo "$DATA_LINE" | sed 's/^var data = //; s/;$//')
-
-            # Extract reports array and append to our output
-            REPORTS=$(echo "$JSON_DATA" | jq -c '.reports[]?' 2>/dev/null || true)
-
-            if [ -z "$REPORTS" ]; then
-              continue
-            fi
-
-            while IFS= read -r report; do
-              [ -z "$report" ] && continue
-              TOTAL_ISSUES=$((TOTAL_ISSUES + 1))
-
-              if [ "$FIRST" = true ]; then
-                FIRST=false
-              else
-                echo "," >> "$JSON_OUTPUT"
-              fi
-
-              echo "$report" >> "$JSON_OUTPUT"
-            done <<< "$REPORTS"
-          done
-
-          echo "]" >> "$JSON_OUTPUT"
-
-          echo "Total issues extracted: $TOTAL_ISSUES"
-
-          if [ "$TOTAL_ISSUES" = "0" ]; then
-            echo "No issues found in CodeChecker HTML reports"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "has-issues=true" >> "$GITHUB_OUTPUT"
-          echo "issue-count=$TOTAL_ISSUES" >> "$GITHUB_OUTPUT"
-
-          echo "=== Sample of extracted issues ==="
-          jq '.[0:3]' "$JSON_OUTPUT" || cat "$JSON_OUTPUT"
-
-      - name: Upload extracted issues JSON
-        if: steps.extract-issues.outputs.has-issues == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: CodeChecker-Issues-JSON
-          path: /tmp/codechecker_issues.json
-
-      - name: Re-upload HTML reports as current workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: /tmp/previous-html
-
-  copilot-fix-clangsa-issue:
-    name: 🤖 Copilot Fix ClangSA Issue
-    needs: [ clang-static-analyzer, download-previous-results ]
-    # Run if: (analysis ran successfully OR we downloaded from previous run) AND copilot fix is enabled
-    if: |
-      always() &&
-      inputs.enable-copilot-fix == true &&
-      (needs.clang-static-analyzer.result == 'success' || needs.download-previous-results.result == 'success')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      pr-url: ${{ steps.create-pr.outputs.pr-url }}
-      pr-created: ${{ steps.create-pr.outputs.pr-created }}
-    steps:
-      - name: Download CodeChecker issues JSON
-        id: download-json
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: CodeChecker-Issues-JSON
-          path: /tmp
 
       - name: Check if issues exist and prepare list
         id: select-issue
+        if: steps.generate-json.outputs.has-issues == 'true'
         run: |
           set -euo pipefail
           if [ ! -f "/tmp/codechecker_issues.json" ]; then
@@ -1272,35 +1111,35 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Output no issues summary
-        if: steps.select-issue.outputs.has-issues != 'true'
+        if: steps.generate-json.outputs.has-issues != 'true'
         run: |
           echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "No Clang Static Analyzer issues found to fix." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "${{ steps.download-json.outcome }}" = "failure" ]; then
-            echo "**Note:** Could not download issue data." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "This could mean:" >> "$GITHUB_STEP_SUMMARY"
-            echo "- The previous run had no static analysis issues" >> "$GITHUB_STEP_SUMMARY"
-            echo "- The HTML report parsing failed to extract issues" >> "$GITHUB_STEP_SUMMARY"
-            echo "- The artifact has expired" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer, download-previous-results ]
-    if: ${{ always() && (needs.clang-static-analyzer.result == 'success' || needs.download-previous-results.result == 'success') }}
+    needs: [ clang-static-analyzer ]
+    if: ${{ always() && needs.clang-static-analyzer.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download CodeChecker reports artifact
+      - name: Download CodeChecker raw reports
         uses: actions/download-artifact@v4
         with:
-          name: CodeChecker-Static-Analysis-Reports
-          path: site
+          name: CodeChecker-Raw-Reports
+          path: /tmp/reports
+
+      - name: Install CodeChecker
+        run: |
+          pip install codechecker==6.27.1
+
+      - name: Generate HTML from raw reports
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          CodeChecker parse /tmp/reports --export html --output site
 
       - name: Add .nojekyll
         run: touch site/.nojekyll
