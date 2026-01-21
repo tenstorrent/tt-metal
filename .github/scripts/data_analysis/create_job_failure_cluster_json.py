@@ -4,14 +4,70 @@ to pydantic model and save as JSON for upload to database.
 
 This script:
 1. Reads error_report.json from workspace root (output by slack-output-analysis action)
-2. Creates JobFailureCluster pydantic model instances
-3. Serializes to JSON and saves to generated/job_failure_cluster/
+2. Transforms data to ensure all required fields are populated (handles None values)
+3. Creates JobFailureCluster pydantic model instances
+4. Serializes to JSON and saves to generated/job_failure_cluster/
 """
 import json
 import pathlib
+from datetime import datetime, timezone
 from loguru import logger
 
 from infra.data_collection.pydantic_models import JobFailureCluster
+
+
+def ensure_required_fields(cluster_data: dict) -> dict:
+    """
+    Ensure all required fields are populated, using fallbacks for None values.
+
+    The pydantic model requires all timestamp fields to be datetime (not Optional),
+    but the source data may have None values. This function provides fallbacks.
+    """
+    # Make a copy to avoid modifying the original
+    data = cluster_data.copy()
+
+    # Get the job timestamp as a fallback (it should always exist)
+    job_timestamp = data.get("job_slack_ts")
+
+    # Handle None timestamps - use job timestamp as fallback
+    if data.get("centroid_job_slack_ts") is None:
+        logger.warning(
+            f"centroid_job_slack_ts is None for job {data.get('github_job_id')}, " f"using job_slack_ts as fallback"
+        )
+        data["centroid_job_slack_ts"] = job_timestamp
+
+    if data.get("oldest_job_slack_ts") is None:
+        logger.warning(
+            f"oldest_job_slack_ts is None for job {data.get('github_job_id')}, " f"using job_slack_ts as fallback"
+        )
+        data["oldest_job_slack_ts"] = job_timestamp
+
+    # Ensure job_name, centroid_job_name, oldest_job_name are never None
+    if data.get("job_name") is None:
+        job_id = data.get("github_job_id", "unknown")
+        data["job_name"] = f"Job-{job_id}"
+        logger.warning(f"job_name is None for job {job_id}, using fallback")
+
+    if data.get("centroid_job_name") is None:
+        centroid_id = data.get("centroid_job_id", "unknown")
+        data["centroid_job_name"] = f"Job-{centroid_id}"
+        logger.warning(f"centroid_job_name is None for centroid {centroid_id}, using fallback")
+
+    if data.get("oldest_job_name") is None:
+        oldest_id = data.get("oldest_job_id", "unknown")
+        data["oldest_job_name"] = f"Job-{oldest_id}"
+        logger.warning(f"oldest_job_name is None for oldest {oldest_id}, using fallback")
+
+    # Ensure error messages are never None (use empty string as fallback)
+    if data.get("centroid_job_error_message") is None:
+        data["centroid_job_error_message"] = data.get("job_error_message", "")
+        logger.warning(f"centroid_job_error_message is None, using job_error_message as fallback")
+
+    if data.get("oldest_job_error_message") is None:
+        data["oldest_job_error_message"] = data.get("job_error_message", "")
+        logger.warning(f"oldest_job_error_message is None, using job_error_message as fallback")
+
+    return data
 
 
 def find_job_failure_cluster_data():
@@ -93,6 +149,8 @@ def create_job_failure_cluster_json():
         combined_file = output_dir / "job_failure_cluster_batch.json"
         clusters_list = []
         for cluster_data in clusters_data:
+            # Ensure all required fields are populated
+            cluster_data = ensure_required_fields(cluster_data)
             cluster = JobFailureCluster(**cluster_data)
             clusters_list.append(json.loads(cluster.model_dump_json()))
 
