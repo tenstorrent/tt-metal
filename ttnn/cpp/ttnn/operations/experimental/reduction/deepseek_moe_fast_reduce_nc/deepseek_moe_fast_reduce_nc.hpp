@@ -17,10 +17,9 @@ namespace operations::experimental::reduction {
 struct DeepseekMoEFastReduceNCOperation {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
-        int32_t reduction_dim,
-        int32_t split_dim,
+        int32_t dim,
         const ttnn::MemoryConfig& output_memory_config,
-        const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+        const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::reduction

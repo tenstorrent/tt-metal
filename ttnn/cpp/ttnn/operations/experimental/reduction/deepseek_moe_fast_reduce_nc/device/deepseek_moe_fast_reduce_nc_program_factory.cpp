@@ -41,7 +41,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
 
     const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
 
-    const uint32_t reduction_dim = operation_attributes.reduction_dim;
+    const uint32_t reduction_dim = operation_attributes.dim;
     // const uint32_t split_dim = operation_attributes.split_dim;
 
     // const uint32_t input_tensor_Ht = input_shape[-2] / tt::constants::TILE_HEIGHT;

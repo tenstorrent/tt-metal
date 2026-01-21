@@ -14,8 +14,7 @@
 namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
 
 struct operation_attributes_t {
-    uint32_t reduction_dim;
-    uint32_t split_dim;
+    uint32_t dim;
     tt::tt_metal::MemoryConfig output_memory_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };

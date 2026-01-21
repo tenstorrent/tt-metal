@@ -40,8 +40,7 @@ ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::
     tensor_return_value_t
     deepseek_moe_fast_reduce_nc(
         const ttnn::Tensor& input_tensor,
-        uint32_t reduction_dim,
-        uint32_t split_dim,
+        uint32_t dim,
         const ttnn::MemoryConfig& output_memory_config,
         const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 

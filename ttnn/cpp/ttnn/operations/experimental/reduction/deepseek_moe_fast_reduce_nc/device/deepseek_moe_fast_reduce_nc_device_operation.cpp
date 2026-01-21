@@ -27,68 +27,46 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
-    // hardcoded constants
-    const uint32_t num_split_tensors = 8;
-
-    const uint32_t reduction_dim = operation_attributes.reduction_dim;
-    const uint32_t split_dim = operation_attributes.split_dim;
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_rank = input_shape.rank();
+    const uint32_t reduction_dim = operation_attributes.dim;
+
+    // hardcoded constants
+    const uint32_t num_split_tensors = 8;
+    const uint32_t split_dim = input_rank - 1;
 
     // validate tensor
     check_tensor(input_tensor, "DeepseekMoEFastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    TT_FATAL(input_tensor.layout() == ttnn::Layout::TILE, "input tensor must be tiled");
 
     // validate rank
     TT_FATAL(input_rank > 2, "input tensor rank must be greater than 2, but has {}", input_rank);
 
     // validate reduction dim
     TT_FATAL(
-        reduction_dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2,
+        reduction_dim < input_rank - 3,
         "reduction dim must be between 0 and {}, but has {}",
-        tt::tt_metal::MAX_NUM_DIMENSIONS - 2,
-        reduction_dim);
-    TT_FATAL(
-        reduction_dim < input_rank,
-        "reduction dim must be smaller than input tensor rank {}, but has {}",
-        input_rank,
+        input_rank - 2,
         reduction_dim);
 
     // validate split dim
     uint32_t split_dim_size = input_shape[split_dim];
     TT_FATAL(
-        split_dim < input_rank,
-        "split dim must be smaller than input tensor rank {}, but has {}",
-        input_rank,
-        split_dim);
-    TT_FATAL(split_dim_size % num_split_tensors == 0, "split dim must be divisible by {}", num_split_tensors);
-    if (split_dim == input_rank - 1) {
-        TT_FATAL(
-            (split_dim_size / num_split_tensors) % tt::constants::TILE_WIDTH == 0,
-            "split size must be divisible by tile width {}",
-            tt::constants::TILE_WIDTH);
-    } else if (split_dim == input_rank - 2) {
-        TT_FATAL(
-            (split_dim_size / num_split_tensors) % tt::constants::TILE_HEIGHT == 0,
-            "split size must be divisible by tile height {}",
-            tt::constants::TILE_HEIGHT);
-    }
-
-    // dim likeness
-    TT_FATAL(
-        reduction_dim != split_dim, "reduction dim {} must be different than split dim {}", reduction_dim, split_dim);
+        split_dim_size % (num_split_tensors * tt::constants::TILE_WIDTH) == 0,
+        "input tensor width must be divisible by {}",
+        num_split_tensors * tt::constants::TILE_WIDTH);
 }
 
 spec_return_value_t DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const uint32_t reduction_dim = operation_attributes.reduction_dim;
-    const uint32_t split_dim = operation_attributes.split_dim;
+    const uint32_t reduction_dim = operation_attributes.dim;
     const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
     // hardcoded constants
     const uint32_t num_split_tensors = 8;
+    const uint32_t split_dim = input_tensor.padded_shape().rank() - 1;
 
     auto output_shape = input_tensor.padded_shape();
     output_shape[reduction_dim] = 1;  // keepdim = true
@@ -123,16 +101,14 @@ ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::
     tensor_return_value_t
     deepseek_moe_fast_reduce_nc(
         const ttnn::Tensor& input_tensor,
-        uint32_t reduction_dim,
-        uint32_t split_dim,
+        uint32_t dim,
         const ttnn::MemoryConfig& output_memory_config,
         const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::
         DeepseekMoEFastReduceNCDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            reduction_dim, split_dim, std::move(output_memory_config), compute_kernel_config},
+        OperationType::operation_attributes_t{dim, std::move(output_memory_config), compute_kernel_config},
         OperationType::tensor_args_t{input_tensor});
 }
 
