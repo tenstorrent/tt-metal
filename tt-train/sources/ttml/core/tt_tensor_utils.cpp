@@ -202,9 +202,9 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
                                            : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
 
     if (layout == ttnn::Layout::TILE) {
-        // I'd imagine should be tilized on device not on host for performance
-        // ttnn::to_layout doesn't correctly change the layout for fp32
-        // i.e. TestFloatToFromTensorFloat32Precision test fails after putting ttnn::to_layout after ttnn::to_device
+        // NOTE: Layout conversion is currently performed on host.
+        // ttnn::to_layout does not correctly handle FP32 tensors after device transfer.
+        // Performing tilization before to_device avoids precision issues.
         output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
     }
     output = ttnn::to_device(output, device, output_mem_config);
