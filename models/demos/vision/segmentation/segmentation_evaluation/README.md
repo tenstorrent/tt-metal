@@ -32,6 +32,11 @@ pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentatio
 pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_yolov9c[res0-segment-tt_model-True-device_params0]
 ```
 
+**Yolov9c (640x640):**
+```sh
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_yolov9c[res0-segment-tt_model-True-device_params0]
+```
+
 **Segformer-b0 (512x512):**
 
 **_Single-Device (BS-1):_**<br>
@@ -69,6 +74,11 @@ pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentatio
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
 pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-torch_model]
+```
+
+**Yolov9c (640x640):**
+```sh
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_yolov9c[res0-segment-torch_model-True-device_params0]
 ```
 
 **Yolov9c (640x640):**
