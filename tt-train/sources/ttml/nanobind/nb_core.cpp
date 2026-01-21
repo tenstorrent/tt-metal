@@ -5,7 +5,6 @@
 #include "nb_core.hpp"
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -90,22 +89,6 @@ void py_module(nb::module_& m) {
         nb::arg("tensor"),
         "Create an empty tensor with the same shape and properties as the input tensor");
 
-    m.def(
-        "zeros_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
-            return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
-        nb::arg("tensor"),
-        "Create a zero tensor with the same shape and properties as the input tensor");
-
-    m.def(
-        "ones_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
-            return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
-        nb::arg("tensor"),
-        "Create a ones tensor with the same shape and properties as the input tensor");
-
     // Gradient clipping
     m.def(
         "clip_grad_norm",
@@ -128,12 +111,9 @@ void py_module(nb::module_& m) {
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
             "shard_tensor_to_mesh_mapper",
-            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(
-                ttnn::distributed::MeshDevice&, int, std::optional<int>)>(
-                &ttnn::distributed::shard_tensor_to_mesh_mapper),
+            &ttnn::distributed::shard_tensor_to_mesh_mapper,
             nb::arg("device"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("rank"));
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(

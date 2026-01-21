@@ -30,12 +30,8 @@ class Embedding(AbstractModuleBase):
         # Embedding weights must be BFLOAT16 - use ml_dtypes.bfloat16 on NumPy side
         # Weight must be in TILE layout because embedding calls untilize on it
         weight_shape = (1, 1, num_embeddings, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
+        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(ml_dtypes.bfloat16)
+        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
         self.weight = Parameter(weight_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:

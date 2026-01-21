@@ -3,24 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <api/debug/dprint.h>
-#include <api/compute/reg_api.h>
+#include <compute_kernel_api/reg_api.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/negative.h"
-#include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/eltwise_unary/softplus.h"
-#include "api/compute/matmul.h"
-#include "api/compute/reduce.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/exp.h"
+#include "compute_kernel_api/eltwise_unary/negative.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/softplus.h"
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 constexpr uint32_t onetile = 1U;
+
+#ifdef FP32_DEST_ACC_EN
+constexpr uint32_t dst_reg_number = 4U;
+#else
+constexpr uint32_t dst_reg_number = 8U;
+#endif
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
@@ -31,9 +37,6 @@ constexpr uint32_t onetile = 1U;
 //   masked ones.
 // This way, after applying softmax, masked positions will effectively become zero,
 // and only the unmasked positions will retain meaningful attention weights
-//
-// Note: Does NOT pop the mask tile - caller must pop explicitly when done with the tile.
-// This allows reusing the same mask tile for causal masks.
 void apply_mask_on_reg(
     const uint32_t register_idx,
     const uint32_t cb_attn_mask,
@@ -65,6 +68,8 @@ void apply_mask_on_reg(
     // unmasked positions remain unchanged
     add_binary_tile_init();
     add_binary_tile(register_idx, mask_register, register_idx);
+
+    cb_pop_front(cb_attn_mask, onetile);
 }
 
 // Recomputes attention weights from pre-softmax scores using stored statistics.
@@ -269,66 +274,16 @@ void compute_grad_scores(
     cb_push_back(cb_grad_scores, onetile);
 }
 
-// Computes gradient w.r.t. Query tensor: dQ = dS @ K
-// where dS = scaled gradient w.r.t. scores (already includes 1/sqrt(d_k) scaling).
-// Uses L1 accumulation to accumulate across sequence blocks (do_accumulate=true).
-void update_grad_query(
-    const uint32_t cb_grad_scores,
-    const uint32_t cb_key,
-    const uint32_t cb_grad_query_accum,
-    const uint32_t tiles_per_row,
-    const uint32_t block_size,
-    const bool do_accumulate = false) {
-    cb_wait_front(cb_grad_scores, onetile);
-
-    pack_reconfig_data_format(cb_grad_query_accum);
-    // First iteration: reserve space for result
-    // Subsequent iterations: enable L1 accumulation to add to existing values
-    if (!do_accumulate) {
-        cb_reserve_back(cb_grad_query_accum, tiles_per_row);
-    } else {
-        // This function would ideally be called after other initialization functions that initialize the packer for a
-        // specific operation.
-        pack_reconfig_l1_acc(true);
-    }
-
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
-        tile_regs_acquire();
-        mm_init_short_with_dt(cb_grad_scores, cb_key, cb_grad_query_accum, /*transpose*/ 0);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
-                cb_grad_scores,
-                cb_key,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                /* dst_reg_idx*/ block_idx);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile(/*dst_reg_idx*/ block_idx, cb_grad_query_accum);
-        }
-        tile_regs_release();
-    }
-
-    if (do_accumulate) {
-        pack_reconfig_l1_acc(false);
-        cb_pop_front(cb_grad_query_accum, tiles_per_row);
-        cb_reserve_back(cb_grad_query_accum, tiles_per_row);
-    }
-
-    cb_push_back(cb_grad_query_accum, tiles_per_row);
-    cb_pop_front(cb_grad_scores, onetile);
-}
-
 // Computes gradient w.r.t. Value tensor: dV = P^T @ dO
-// Uses L1 accumulation to accumulate across sequence blocks and query heads (do_accumulate=true).
+// For grouped query attention, gradients from multiple query heads are accumulated
+// into their shared KV head using do_accumulate flag.
 // Uses cb_transpose_wh as scratch space for transposed attention weights.
 void update_grad_value(
     const uint32_t cb_attention_weights,
     const uint32_t cb_transpose_wh,
     const uint32_t cb_grad_output,
-    const uint32_t cb_grad_value_accum,
+    const uint32_t cb_prev_grad_value,
+    const uint32_t cb_cur_grad_value,
     const uint32_t tiles_per_row,
     const uint32_t block_size,
     const bool do_accumulate = false) {
@@ -337,92 +292,135 @@ void update_grad_value(
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_value_accum);
-    // First iteration: reserve space for result
-    // Subsequent iterations: enable L1 accumulation to add to existing values
-    if (!do_accumulate) {
-        cb_reserve_back(cb_grad_value_accum, tiles_per_row);
-    } else {
-        pack_reconfig_l1_acc(true);
-    }
-
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
+    cb_reserve_back(cb_cur_grad_value, tiles_per_row);
+    pack_reconfig_data_format(cb_cur_grad_value);
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         tile_regs_acquire();
-        mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_grad_value_accum, /*transpose*/ 0);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
-                cb_transpose_wh,
-                cb_grad_output,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                /* dst_reg_idx*/ block_idx);
+        // This call is required to set up the matmul correctly
+        mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_prev_grad_value, /*transpose*/ 0);
+        matmul_tiles(
+            cb_transpose_wh,
+            cb_grad_output,
+            /* tile_idx */ 0,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0);
+
+        if (do_accumulate) {
+            copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_value);
+            copy_tile_init(cb_prev_grad_value);
+            copy_tile(cb_prev_grad_value, /* tile_idx */ tile_idx, /* register idx */ 1U);
+
+            add_binary_tile_init();
+            add_binary_tile(0, 1U, 0);  // accumulate in register 0
         }
         tile_regs_commit();
+
         tile_regs_wait();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile(/*dst_reg_idx*/ block_idx, cb_grad_value_accum);
-        }
+        pack_tile(0, cb_cur_grad_value);
         tile_regs_release();
     }
+    cb_push_back(cb_cur_grad_value, tiles_per_row);
 
-    if (do_accumulate) {
-        pack_reconfig_l1_acc(false);
-        cb_pop_front(cb_grad_value_accum, tiles_per_row);
-        cb_reserve_back(cb_grad_value_accum, tiles_per_row);
-    }
-
-    cb_push_back(cb_grad_value_accum, tiles_per_row);
+    // pop temporary cbs
     cb_pop_front(cb_transpose_wh, onetile);
+    if (do_accumulate) {
+        cb_pop_front(cb_prev_grad_value, tiles_per_row);
+    }
 }
 
 // Computes gradient w.r.t. Key tensor: dK = dS^T @ Q
-// Uses L1 accumulation to accumulate across sequence blocks and query heads (do_accumulate=true).
-// Uses cb_transpose_wh as scratch space for transposed grad scores.
+// where dS = scaled gradient w.r.t. scores (already includes 1/sqrt(d_k) scaling).
+// For grouped query attention, gradients from multiple query heads are accumulated
+// into their shared KV head using do_accumulate flag.
 void update_grad_key(
     const uint32_t cb_grad_scores,
     const uint32_t cb_query,
+    const uint32_t scaler_bits,
     const uint32_t cb_transpose_wh,
-    const uint32_t cb_grad_key_accum,
+    const uint32_t cb_prev_grad_key,
+    const uint32_t cb_cur_grad_key,
     const uint32_t tiles_per_row,
-    const uint32_t block_size,
     const bool do_accumulate = false) {
     transpose_tile(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_key_accum);
-    // First iteration: reserve space for result
-    // Subsequent iterations: enable L1 accumulation to add to existing values
-    if (!do_accumulate) {
-        cb_reserve_back(cb_grad_key_accum, tiles_per_row);
-    } else {
-        pack_reconfig_l1_acc(true);
-    }
-
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
+    cb_reserve_back(cb_cur_grad_key, tiles_per_row);
+    pack_reconfig_data_format(cb_cur_grad_key);
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         tile_regs_acquire();
-        mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_grad_key_accum, /*transpose*/ 0);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            matmul_tiles(
-                cb_transpose_wh,
-                cb_query,
-                /* tile_idx */ 0,
-                /* tile_idx */ tile_idx + block_idx,
-                /* dst_reg_idx*/ block_idx);
+        // This call is required to set up the matmul correctly
+        mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_prev_grad_key, /*transpose*/ 0);
+        matmul_tiles(
+            cb_transpose_wh,
+            cb_query,
+            /* tile_idx */ 0,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0);
+
+        if (do_accumulate) {
+            copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_key);
+            copy_tile(cb_prev_grad_key, /* tile_idx */ tile_idx, /* register idx */ 1U);
+
+            add_binary_tile_init();
+            add_binary_tile(0, 1U, 0);  // accumulate in register 0
         }
         tile_regs_commit();
+
         tile_regs_wait();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile(/*dst_reg_idx*/ block_idx, cb_grad_key_accum);
-        }
+        pack_tile(0, cb_cur_grad_key);
         tile_regs_release();
     }
+    cb_push_back(cb_cur_grad_key, tiles_per_row);
 
-    if (do_accumulate) {
-        pack_reconfig_l1_acc(false);
-        cb_pop_front(cb_grad_key_accum, tiles_per_row);
-        cb_reserve_back(cb_grad_key_accum, tiles_per_row);
-    }
-
-    cb_push_back(cb_grad_key_accum, tiles_per_row);
     cb_pop_front(cb_transpose_wh, onetile);
+    if (do_accumulate) {
+        cb_pop_front(cb_prev_grad_key, tiles_per_row);
+    }
+}
+
+// Computes gradient w.r.t. Query tensor: dQ = dS @ K
+// where dS = scaled gradient w.r.t. scores (already includes 1/sqrt(d_k) scaling).
+// Accumulates across sequence blocks when processing in tiles (do_accumulate=true).
+void update_grad_query(
+    const uint32_t cb_grad_scores,
+    const uint32_t cb_key,
+    const uint32_t scaler_bits,
+    const uint32_t cb_prev_grad_query,
+    const uint32_t cb_cur_grad_query,
+    const uint32_t tiles_per_row,
+    const bool do_accumulate = false) {
+    cb_wait_front(cb_grad_scores, onetile);
+    cb_reserve_back(cb_cur_grad_query, tiles_per_row);
+    pack_reconfig_data_format(cb_cur_grad_query);
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        tile_regs_acquire();
+        // This call is required to set up the matmul correctly
+        mm_init_short_with_dt(cb_grad_scores, cb_key, cb_prev_grad_query, /*transpose*/ 0);
+        matmul_tiles(
+            cb_grad_scores,
+            cb_key,
+            /* tile_idx */ 0,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0);
+
+        if (do_accumulate) {
+            copy_tile_to_dst_init_short_with_dt(cb_grad_scores, cb_prev_grad_query);
+            copy_tile_init(cb_prev_grad_query);
+            copy_tile(cb_prev_grad_query, /* tile_idx */ tile_idx, /* register idx */ 1U);
+
+            add_binary_tile_init();
+            add_binary_tile(0, 1U, 0);  // accumulate in register 0
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, cb_cur_grad_query);
+        tile_regs_release();
+    }
+    cb_push_back(cb_cur_grad_query, tiles_per_row);
+
+    cb_pop_front(cb_grad_scores, onetile);
+    if (do_accumulate) {
+        cb_pop_front(cb_prev_grad_query, tiles_per_row);
+    }
 }

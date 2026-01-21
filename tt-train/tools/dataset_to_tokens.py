@@ -134,9 +134,7 @@ def main():
     splits_num = 128
     tokenized_data = []
     for i in range(splits_num):
-        text_data_split = text_data[
-            i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num
-        ]
+        text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
         tokenized_data_split = tokenizer.encode(text_data_split)
         tokenized_data.extend(tokenized_data_split)
 

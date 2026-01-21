@@ -45,21 +45,22 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-constexpr auto kGradValueAccumCbIndex = tt::CBIndex::c_8;
-constexpr auto kGradKeyAccumCbIndex = tt::CBIndex::c_9;
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_15;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_16;
+constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_8;
+constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_9;
+constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_10;
+constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_11;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_12;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_13;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_14;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_15;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_16;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_17;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
-const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
-const std::string kCausalMaskDefKey = "CAUSAL_MASK";
+const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -132,10 +133,6 @@ void assign_per_core_runtime_args(
             kernels.writer,
             core,
             {grad_key_buffer->address(), grad_value_buffer->address(), num_rows_per_core, num_rows_written});
-
-        // Compute kernel runtime args - needed for causal mask to know global position
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -214,12 +211,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
-    // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
-    // Not needed for AttentionMaskType::None
-    if (args.mask_type != AttentionMaskType::None) {
-        [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
-            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer);
-    }
+    [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
+        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
         program,
@@ -238,11 +231,17 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_value_accum = create_circular_buffer(
-        program, all_cores, kGradValueAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
+        program, all_cores, kPrevGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
-        program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
+        program, all_cores, kCurGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
+        program, all_cores, kPrevGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
+        program, all_cores, kCurGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
         program,
@@ -310,22 +309,12 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     auto* grad_value_buffer = grad_value.buffer();
 
     // Configure defines
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
-    std::map<std::string, std::string> compute_defines;
+    std::map<std::string, std::string> defines;
+    defines["REDUCE_OP"] = "PoolType::SUM";
+    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    // Common defines for all kernels
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-
-    // Mask type defines
-    if (args.mask_type == AttentionMaskType::Causal) {
-        reader_defines[kCausalMaskDefKey] = "1";
-        writer_defines[kCausalMaskDefKey] = "1";
-        compute_defines[kCausalMaskDefKey] = "1";
-    } else if (args.mask_type == AttentionMaskType::Arbitrary) {
-        reader_defines[kUseAttnMaskDefKey] = "1";
-        compute_defines[kUseAttnMaskDefKey] = "1";
+    if (args.fp32_dest_acc_en) {
+        defines[kFP32DestAccEnKey] = "1";
     }
 
     SDPABackwardKVKernels kernels;
@@ -346,7 +335,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, defines, kReaderKernelPath);
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
@@ -358,7 +347,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     tt::tt_metal::TensorAccessorArgs(grad_key_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(grad_value_buffer).append_to(writer_compile_args);
 
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels
@@ -367,8 +356,10 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
+        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradValueHolderCbIndex
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kCurGradValueHolderCbIndex
+        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradKeyHolderCbIndex
+        mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradKeyHolderCbIndex
         return mode;
     };
 
@@ -390,11 +381,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
-            .defines = compute_defines});
+            .defines = defines});
 
     // Group 2 (if present)
     if (!core_group_2.ranges().empty()) {
@@ -415,11 +406,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
+                .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,
-                .defines = compute_defines});
+                .defines = defines});
     }
 
     // -------------------------------------------------------------------------

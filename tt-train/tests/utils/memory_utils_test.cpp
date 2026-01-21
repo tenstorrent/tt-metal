@@ -9,7 +9,6 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn/types.hpp"
@@ -31,10 +30,6 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
-    // Test is skipped with watcher due to the nature of the test.
-    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
-    // since watcher adds code overhead and uses memory to store its assert messages
-    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data1(64 * 128, 1.0F);
@@ -104,10 +99,6 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
-    // Test is skipped with watcher due to the nature of the test.
-    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
-    // since watcher adds code overhead and uses memory to store its assert messages
-    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Create multiple tensors of various sizes
@@ -188,10 +179,6 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
-    // Test is skipped with watcher due to the nature of the test.
-    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
-    // since watcher adds code overhead and uses memory to store its assert messages
-    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
     // First capture: two 256x256 tensors added
@@ -287,10 +274,6 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 }
 
 TEST_F(MemoryUtilsTest, SnapshotFeature) {
-    // Test is skipped with watcher due to the nature of the test.
-    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
-    // since watcher adds code overhead and uses memory to store its assert messages
-    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     device->disable_and_clear_program_cache();
 

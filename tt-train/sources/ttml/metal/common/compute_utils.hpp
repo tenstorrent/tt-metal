@@ -5,11 +5,11 @@
 #pragma once
 #include <cstdint>
 
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/pack.h"
-#include "api/compute/reconfig_data_format.h"
-#include "api/compute/reg_api.h"
-#include "api/compute/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
+#include "compute_kernel_api/pack.h"
+#include "compute_kernel_api/reconfig_data_format.h"
+#include "compute_kernel_api/reg_api.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 inline void pack_and_push(uint32_t reg, uint32_t cb) {
     // NOTE:

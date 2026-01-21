@@ -29,6 +29,10 @@ namespace ttml::nanobind {
 using namespace ::nanobind;
 
 NB_MODULE(_ttml, m) {
+    // Import ttnn first to ensure all shared types (Layout, DataType, etc.) are registered
+    // before _ttml uses them in function signatures
+    nb::module_::import_("ttnn");
+
     // Bind NamedParameters as a proper map type at the top level
     nb::bind_map<ttml::serialization::NamedParameters>(m, "NamedParameters");
 

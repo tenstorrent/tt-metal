@@ -15,20 +15,14 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices for gradients
-    constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;    // Output: grad_K
-    constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;  // Output: grad_V
+    constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;    // Output: grad_K
+    constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;  // Output: grad_V
 
     // Get compile-time arguments
     constexpr uint32_t kWt = get_compile_time_arg_val(0);              // key/value width in tiles
     constexpr uint32_t Ht = get_compile_time_arg_val(1);               // sequence length in tiles
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // heads per group
-
-#ifdef CAUSAL_MASK
-    // Generate causal mask tile ONCE - will be reused for every diagonal
-    constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
-    generate_causal_mask_tile(cb_attn_mask);
-#endif
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_key);
 

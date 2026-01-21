@@ -55,17 +55,20 @@ ttml::serialization::NamedParameters get_model_parameters(Model &model) {
 }
 
 uint64_t get_number_of_parameters(Model &model, bool tp) {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+
     auto contains = [](const std::string &str, const std::string &substr) {
         return str.find(substr) != std::string::npos;
     };
+
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
         auto tensor = tensor_ptr->get_value();
         auto params_in_tensor = tensor.logical_volume();
-        if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
-            auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
-            num_params += params_in_tensor * tp_size;
+        if (tp && (contains(name, "fc") || contains(name, "linear"))) {
+            num_params += params_in_tensor * num_devices;
         } else {
             num_params += params_in_tensor;
         }
@@ -188,6 +191,10 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
 
+    if (config.enable_ddp && config.enable_tp) {
+        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp;
     if (multidevice && !mesh_shape_node) {
@@ -195,8 +202,8 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     }
     if (mesh_shape_node) {
         assert(mesh_shape_node.size() == 2);
-        const std::vector<uint32_t> mesh_shape = mesh_shape_node.as<std::vector<uint32_t>>();
-        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape);
+        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
     }
 
     auto device_ids_node = device_node["device_ids"];
@@ -428,10 +435,6 @@ int main(int argc, char **argv) {
     initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
 
-    // Configure parallelization context from device config
-    ttml::autograd::ctx().initialize_parallelism_context(
-        {.enable_ddp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
-
     struct CachedHostData {
         std::vector<uint32_t> data;
         std::vector<uint32_t> targets;
@@ -449,7 +452,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -469,12 +472,8 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
-
-                if (pctx.is_ddp_enabled()) {
-                    // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
-                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
-                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis());
+                if (device_config.enable_ddp) {
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -519,10 +518,7 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                const auto coef =
-                    (device_config.enable_tp ? ttml::autograd::ctx().get_parallelism_context().get_tp_size() : 1U) *
-                    32U;
-                arg.vocab_size = (arg.vocab_size + coef - 1) / coef * coef;
+                arg.vocab_size = round_up_to_tile(arg.vocab_size, (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -554,7 +550,6 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
-    fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
     ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
 
     if (!safetensors_path.empty()) {
@@ -647,12 +642,12 @@ int main(int argc, char **argv) {
     }
 
     if (device_config.enable_ddp) {
-        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_ddp_size();
-        if (training_config.batch_size % dp_size != 0) {
+        auto num_devices = static_cast<uint32_t>(device->num_devices());
+        if (training_config.batch_size % num_devices != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
                 training_config.batch_size,
-                dp_size));
+                num_devices));
         }
     }
 

@@ -33,7 +33,9 @@ HOSTS = [
 DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
 # If config contains "socket_type: fabric", override MESH_IDS with this:
 FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.textproto"
+MESH_GRAPH_DESC_REL = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.textproto"
+)
 
 
 # --------------------------
@@ -101,9 +103,7 @@ def verify_local_files(
             print(f"✓ Found: {mesh_desc}")
 
     if missing:
-        print(
-            f"ERROR: {missing} required files are missing or invalid", file=sys.stderr
-        )
+        print(f"ERROR: {missing} required files are missing or invalid", file=sys.stderr)
         print(f"Build directory: {bin_dir}", file=sys.stderr)
         print(f"Config directory: {cfg_dir}", file=sys.stderr)
         print("\nTo build the missing binaries, try:", file=sys.stderr)
@@ -299,9 +299,7 @@ def write_appfile(
         xflags += ["-x", f"TT_MESH_ID={m['tt_mesh_id']}"]
 
         # One app context per rank
-        line = " ".join(
-            ["-np", "1", "-host", m["host"], *xflags] + [shlex.quote(a) for a in args]
-        )
+        line = " ".join(["-np", "1", "-host", m["host"], *xflags] + [shlex.quote(a) for a in args])
         lines.append(line)
 
     fpath.write_text("\n".join(lines) + "\n")
@@ -315,18 +313,10 @@ def main():
             "Per-rank TT_MESH_ID is precomputed into an Open MPI appfile."
         )
     )
-    parser.add_argument(
-        "-m", "--metal-home", default=DEFAULT_METAL_HOME, help="TT_METAL_HOME"
-    )
-    parser.add_argument(
-        "-c", "--config", default=DEFAULT_CONFIG, help="Config filename"
-    )
-    parser.add_argument(
-        "-n", "--dry-run", action="store_true", help="Dry run (print commands only)"
-    )
-    parser.add_argument(
-        "--hosts", nargs="*", default=HOSTS, help="Host list (MPI rank order)"
-    )
+    parser.add_argument("-m", "--metal-home", default=DEFAULT_METAL_HOME, help="TT_METAL_HOME")
+    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG, help="Config filename")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Dry run (print commands only)")
+    parser.add_argument("--hosts", nargs="*", default=HOSTS, help="Host list (MPI rank order)")
     parser.add_argument(
         "--mesh-ids",
         nargs="*",
@@ -334,15 +324,9 @@ def main():
         default=DEFAULT_MESH_IDS,
         help="MESH_IDs per global rank",
     )
-    parser.add_argument(
-        "--ssh-user", default=SSH_USER, help="SSH username for remote copy"
-    )
-    parser.add_argument(
-        "--skip-copy", action="store_true", help="Skip remote copy step"
-    )
-    parser.add_argument(
-        "--workers", type=int, default=None, help="Number of worker ranks"
-    )
+    parser.add_argument("--ssh-user", default=SSH_USER, help="SSH username for remote copy")
+    parser.add_argument("--skip-copy", action="store_true", help="Skip remote copy step")
+    parser.add_argument("--workers", type=int, default=None, help="Number of worker ranks")
     parser.add_argument(
         "--aggregators",
         type=int,
@@ -372,11 +356,7 @@ def main():
     extra_args = []
     if args.remainder:
         # argparse keeps the "--" as first token if present
-        extra_args = (
-            args.remainder[1:]
-            if args.remainder and args.remainder[0] == "--"
-            else args.remainder
-        )
+        extra_args = args.remainder[1:] if args.remainder and args.remainder[0] == "--" else args.remainder
         if extra_args:
             print("Additional arguments to forward to workers:", " ".join(extra_args))
         else:
@@ -393,9 +373,7 @@ def main():
     # Verify files including mesh descriptor if using fabric
     mesh_desc_rel_path = MESH_GRAPH_DESC_REL if use_fabric else None
     required_binaries = ("nano_gpt",) if args.pp_only else BINARIES
-    bin_dir, cfg_dir = verify_local_files(
-        metal_home, args.config, mesh_desc_rel_path, required_binaries
-    )
+    bin_dir, cfg_dir = verify_local_files(metal_home, args.config, mesh_desc_rel_path, required_binaries)
     cfg_path = cfg_dir / args.config
 
     num_hosts = len(args.hosts)
@@ -495,10 +473,7 @@ def main():
         ]
 
         if args.pp_only:
-            print(
-                "Launching MPI pipeline-parallel run with "
-                f"{worker_count} workers (no aggregator/optimizer)..."
-            )
+            print("Launching MPI pipeline-parallel run with " f"{worker_count} workers (no aggregator/optimizer)...")
         else:
             print(
                 "Launching MPI 3-tier demo with "
