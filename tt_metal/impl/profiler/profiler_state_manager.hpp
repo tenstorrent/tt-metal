@@ -30,7 +30,8 @@ void ReadDeviceProfilerResultsInternal(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata);
+    const std::optional<ProfilerOptionalMetadata>& metadata,
+    bool include_l1 = false);
 }  // namespace detail
 
 void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
@@ -47,6 +48,7 @@ public:
     void cleanup_device_profilers();
     void start_debug_dump_thread(
         std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map);
+    void signal_debug_dump_read();
     uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const;
 
     void mark_trace_begin(ChipId device_id, uint32_t trace_id);
@@ -81,7 +83,10 @@ public:
     std::thread debug_dump_thread;
     std::mutex debug_dump_thread_mutex;
     std::atomic<bool> stop_debug_dump_thread = false;
+    std::atomic<bool> force_read_debug_dump = false;
+    std::atomic<bool> force_read_complete = false;
     std::condition_variable stop_debug_dump_thread_cv;
+    std::condition_variable force_read_complete_cv;
 };
 
 }  // namespace tt_metal
