@@ -68,7 +68,7 @@ KERNEL_ENTRY {
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    // Matmul3CTArgs removed - using inline subblock processing
+    using Matmul3CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
 
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
@@ -151,7 +151,7 @@ KERNEL_ENTRY {
     // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    // Matmul3CTArgs removed - using inline subblock processing
+    using Matmul3CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
 
     // Matmul writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
@@ -264,8 +264,12 @@ KERNEL_ENTRY {
     // Mcast2 compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast2_args{};
 
-    // Matmul3 CTArgs and args - using inline subblock processing, args kept for potential future use
-    [[maybe_unused]] deepseek_b1_ops::Matmul::ComputeArgs matmul3_args{
+    // Matmul3 CTArgs type alias (out_w is compile-time for TRISC)
+    using Matmul3CTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul3_out_w_per_core")>;
+
+    // Matmul3 compute args (from compile-time args)
+    deepseek_b1_ops::Matmul::ComputeArgs matmul3_args{
         get_named_compile_time_arg_val("matmul3_in0"),
         get_named_compile_time_arg_val("matmul3_in1"),
         get_named_compile_time_arg_val("matmul3_out"),
@@ -406,60 +410,14 @@ KERNEL_ENTRY {
         matmul2(matmul2_args);
     }
 
-    // ========================================================================
-    // Matmul3: Batched matmul for Qnope heads
-    // After matmul2, Qnope cores have [1, 128] data (1 head) in matmul2_output_cb
-    // Batched matmul: [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
-    // Each of 64 Qnope cores computes one head's KV projection
-    // Process in 4-tile subblocks to avoid DST register aliasing issues
-    // ========================================================================
-#if defined(COMPILE_FOR_TRISC)
-    if constexpr (Core::is_qnope_core) {
-        constexpr uint32_t matmul3_in0 = get_named_compile_time_arg_val("matmul3_in0");
-        constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
-        constexpr uint32_t matmul3_out = get_named_compile_time_arg_val("matmul3_out");
-        constexpr uint32_t k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
-        constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul3_out_w_per_core");
-        constexpr uint32_t subblock_w = 4;                      // Process 4 output tiles at a time
-        constexpr uint32_t num_subblocks = out_w / subblock_w;  // 16/4 = 4 subblocks
-
-        // Wait for all inputs
-        cb_wait_front(matmul3_in0, k_num_tiles);
-        cb_wait_front(matmul3_in1, k_num_tiles * out_w);
-        cb_reserve_back(matmul3_out, out_w);
-
-        // Initialize matmul for subblock_w output tiles
-        mm_block_init(matmul3_in0, matmul3_in1, matmul3_out, false, subblock_w, 1, 1);
-
-        // Process each 4-tile subblock separately
-        for (uint32_t subblock = 0; subblock < num_subblocks; subblock++) {
-            uint32_t out_base = subblock * subblock_w;
-
-            tile_regs_acquire();
-
-            // Accumulate across all K tiles for this subblock
-            for (uint32_t k = 0; k < k_num_tiles; k++) {
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t in1_idx = k * out_w + out_base + w;
-                    matmul_tiles(matmul3_in0, matmul3_in1, k, in1_idx, w);  // DST[0-3]
-                }
-            }
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            // Pack to correct output positions
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, matmul3_out, out_base + w);
-            }
-
-            tile_regs_release();
-        }
-
-        cb_pop_front(matmul3_in0, k_num_tiles);
-        cb_push_back(matmul3_out, out_w);
+    {
+        DeviceZoneScopedN("MATMUL3");
+        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
+        // On Qrope cores: output will be copied to qrope_output_cb
+        deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
+        matmul3(matmul3_args);
     }
-#endif
 
     // ========================================================================
     // Qrope output: Copy matmul2 output to qrope_output_cb on Qrope cores
