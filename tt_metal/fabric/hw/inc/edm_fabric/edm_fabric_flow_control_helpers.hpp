@@ -234,13 +234,13 @@ template <uint8_t RECEIVER_NUM_BUFFERS, bool ENABLE_FIRST_LEVEL_ACK>
 struct ReceiverChannelPointersMembers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    uint32_t unsent_first_level_acks;
     uint8_t unsent_messages;
-    uint8_t unsent_first_level_acks;
-    uint8_t unsent_completions;
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
         completion_counter.reset();
+        unsent_first_level_acks = 0;
         unsent_messages = 0;
     }
 };

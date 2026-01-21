@@ -1773,7 +1773,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Track newly received packets that need first-level acks
         if (num_packets_to_process > 0) {
             PackedCredits credits{.packed = num_packets_to_process};
+            receiver_channel_pointers.m.unsent_first_level_acks += num_packets_to_process;
             if constexpr (NUM_SENDER_CHANNELS != 2) {
+                // TODO: tree add. First add as two uint16, then add the two bytes of that uint16
                 for (size_t i = 0; i < 4; i++) {
                     receiver_channel_pointers.m.unsent_messages += credits.bytes[i];
                 }
@@ -1781,12 +1783,14 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_channel_pointers.m.unsent_messages += credits.bytes[0] +
                                                              credits.bytes[1];
             }
+            increment_local_update_ptr_val(to_sender_packets_completed_streams[0], -num_packets_to_process);
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
         pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
         unwritten_packets = pkts_received_since_last_check != 0;
     }
+
 
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
@@ -1882,13 +1886,17 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Track newly received packets that need first-level acks
         // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
 
-        if (num_packets_to_process > 0) {
-            increment_local_update_ptr_val(to_sender_packets_completed_streams[0], -num_packets_to_process);
-            
+        if (receiver_channel_pointers.m.unsent_first_level_acks) {
             // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
-            // receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-            receiver_send_received_ack<true>(
-                receiver_channel_response_credit_sender, 0, num_packets_to_process);
+            bool can_send = true;
+            if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+                can_send = !internal_::eth_txq_is_busy(receiver_txq_id);
+            }
+            if (can_send) {
+                receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                    receiver_channel_response_credit_sender, 0, receiver_channel_pointers.m.unsent_first_level_acks);
+                    receiver_channel_pointers.m.unsent_first_level_acks = 0;
+            }
         }
     }
 
