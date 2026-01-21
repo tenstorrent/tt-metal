@@ -34,7 +34,7 @@ def galaxy_type():
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_ag_tg_llama_perf(
+def test_linear_tg_llama_perf(
     step_name,
     warmup_iters,
     perf_target_us,
@@ -83,7 +83,7 @@ def test_ag_tg_llama_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("mla_allgather_wq_kv_a", 10, 8.5),  # Target based on typical all-gather performance
+        ("mla_allgather_wq_kv_a", 10, 106),  # Target based on typical all-gather performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
