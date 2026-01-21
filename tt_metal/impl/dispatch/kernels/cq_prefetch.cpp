@@ -1661,10 +1661,10 @@ bool process_cmd(
 
 /* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d. test_for_nonzero is an optimization that can be false
  * if amt_to_write >= downstream_cb_page_size. For simplicity this code will always acquire the exact number of pages
- * needed, unlike write_pages_to_dispatcher may acquire an extra page if we hit an exact page boundary. */
+ * needed, unlike write_pages_to_dispatcher which may acquire an extra page if we hit an exact page boundary. */
 template<bool test_for_nonzero>
 static void relay_linear_to_downstream(
-    uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
+    uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
     // Unlike in write_pages_to_dispatcher we always round npages down, so if downstream_data_ptr is at the start of a
     // page, that means page_residual_space is 0. This is why the logic is different from write_pages_to_dispatcher.
     uint32_t page_residual_space = -downstream_data_ptr & (downstream_cb_page_size - 1);
@@ -1763,6 +1763,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
+    // RelayLinearH is a large command.
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
