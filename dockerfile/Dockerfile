@@ -2,8 +2,10 @@
 
 #############################################################
 
-# Accept an argument to specify the Ubuntu version
+# Global build arguments (defined before FROM to be available in all stages)
 ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,6 +23,8 @@ RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 #############################################################
 
 FROM base AS ci-build
+
+ARG PYTHON_VERSION
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -66,14 +70,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set up virtual environment using uv
-# Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
 ENV PYTHON_ENV_DIR=/opt/venv
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --link-mode copy --managed-python --relocatable $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -142,7 +145,6 @@ RUN umask 000 && \
 
 FROM ci-test AS dev
 
-
 ARG UBUNTU_VERSION=22.04
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
@@ -197,13 +199,15 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
+ARG PYTHON_VERSION
+
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --link-mode copy --managed-python --relocatable $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -246,8 +250,8 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
-    && source $PYTHON_ENV_DIR/bin/activate \
+    && ./create_venv.sh --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands
