@@ -134,13 +134,13 @@ The script categorizes each log file and gives you a summary with success rate. 
 
 **Interpreting success rate:**
 
-These are baseline expectations for the current BH Exabox clusters. Success rates may vary as new pods and mesh configurations are brought up.
+For current validation results and baseline expectations, see the [Physical Validation Results spreadsheet](https://docs.google.com/spreadsheets/d/1lg6cG0TovYqwJtn6kkm5Fb1erQHH9p-p8NIUL279V0U/edit?pli=1&gid=489670889#gid=489670889).
 
-- 100% (50/50): Ideal state - cluster is solid. We are yet to achieve this consistently.
-- 80%+ (40+/50): Expected for current setup - counts as physical validation pass, cluster is in usable state.
-- <80%: Below expected threshold - indicates potential serious issue. Check for consistent failure patterns, may need cable swap or hardware investigation.
+As a general guide for the current BH Exabox clusters:
+- **80%+ success rate** (40+/50): Typically indicates a usable cluster, counts as physical validation pass
+- **<80%**: May indicate hardware issues - check for consistent failure patterns, may need cable swap or hardware investigation
 
-**Note:** These thresholds are as of January 2026 and may become stricter as cluster stability improves and more hardware is qualified.
+**Note:** These thresholds are being refined as we bring up different pods and mesh configurations. Check the spreadsheet for the latest observed performance. Official thresholds will be published once numbers stabilize.
 
 **Manual log inspection - error strings to grep for:**
 
