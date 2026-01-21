@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <vector>
+#include <iostream>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -59,8 +60,46 @@ TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
 
     detail::LaunchProgram(dev, program);
 
+    std::cout << ">>> LaunchProgram completed, about to ReadFromBuffer..." << std::endl;
+    std::cout.flush();
+
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(output_dram_buffer, result_vec);
+
+    std::cout << ">>> ReadFromBuffer completed!" << std::endl;
+    std::cout.flush();
+
+    // Debug: Print buffer addresses
+    std::cout << "=== DEBUG OUTPUT ===" << std::endl;
+    std::cout << "Input DRAM buffer addr: " << input_dram_buffer_addr << std::endl;
+    std::cout << "Output DRAM buffer addr: " << output_dram_buffer_addr << std::endl;
+    std::cout << "Input vec size: " << input_vec.size() << ", Result vec size: " << result_vec.size() << std::endl;
+
+    // Debug: Print first 10 values of input and output
+    std::cout << "First 10 input values:" << std::endl;
+    for (size_t i = 0; i < std::min(input_vec.size(), size_t(10)); i++) {
+        std::cout << "  input[" << i << "] = 0x" << std::hex << input_vec[i] << std::dec << std::endl;
+    }
+
+    std::cout << "First 10 output values:" << std::endl;
+    for (size_t i = 0; i < std::min(result_vec.size(), size_t(10)); i++) {
+        std::cout << "  result[" << i << "] = 0x" << std::hex << result_vec[i] << std::dec << std::endl;
+    }
+
+    // Debug: Find first mismatch
+    size_t mismatch_count = 0;
+    for (size_t i = 0; i < std::min(input_vec.size(), result_vec.size()); i++) {
+        if (input_vec[i] != result_vec[i]) {
+            if (mismatch_count < 5) {
+                std::cout << "Mismatch at index " << i << ": input=0x" << std::hex << input_vec[i] << ", result=0x"
+                          << result_vec[i] << std::dec << std::endl;
+            }
+            mismatch_count++;
+        }
+    }
+    std::cout << "Total mismatches: " << mismatch_count << " out of " << input_vec.size() << std::endl;
+    std::cout << "=== END DEBUG ===" << std::endl;
+    std::cout.flush();
 
     // Validation
     EXPECT_EQ(input_vec, result_vec);
