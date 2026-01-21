@@ -109,25 +109,49 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
         cb_out_rm_idx, program, all_cores, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // ============================================================
-    // 5. Create kernels (Stage 6 - will throw here until kernels exist)
+    // 5. Create kernels (Stage 6 - empty stubs)
     // ============================================================
-    TT_THROW("reduce_mean_w_rm: Kernel creation not yet implemented (Stage 6)");
 
-    // The code below will be uncommented in Stage 6
-    /*
-    // Compile-time args for kernels
-    std::vector<uint32_t> reader_compile_time_args = {...};
-    std::vector<uint32_t> compute_compile_time_args = {...};
-    std::vector<uint32_t> writer_compile_time_args = {...};
+    // Compile-time args for kernels (minimal for empty stubs)
+    const std::vector<uint32_t> reader_compile_time_args = {};
+    const std::vector<uint32_t> compute_compile_time_args = {};
+    const std::vector<uint32_t> writer_compile_time_args = {};
 
-    // Create kernels
-    const auto reader_id = tt::tt_metal::CreateKernel(...);
-    const auto compute_id = tt::tt_metal::CreateKernel(...);
-    const auto writer_id = tt::tt_metal::CreateKernel(...);
+    // Reader kernel (RISCV_0 / BRISC / NOC0)
+    const auto reader_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/reduce_mean_w_rm/device/kernels/dataflow/reader_reduce_mean_w_rm.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Set runtime args
-    ...
+    // Compute kernel (RISCV_2,3,4 / Unpack, Math, Pack)
+    const auto compute_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/reduce_mean_w_rm/device/kernels/compute/reduce_mean_w_rm_compute.cpp",
+        all_cores,
+        tt::tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_time_args});
 
+    // Writer kernel (RISCV_1 / NCRISC / NOC1)
+    const auto writer_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/reduce_mean_w_rm/device/kernels/dataflow/writer_reduce_mean_w_rm.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    // ============================================================
+    // 6. Set runtime args (minimal for empty stubs)
+    // ============================================================
+    const std::vector<uint32_t> reader_runtime_args = {src_buffer->address()};
+    const std::vector<uint32_t> compute_runtime_args = {};
+    const std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
+
+    SetRuntimeArgs(program, reader_id, single_core, reader_runtime_args);
+    SetRuntimeArgs(program, compute_id, single_core, compute_runtime_args);
+    SetRuntimeArgs(program, writer_id, single_core, writer_runtime_args);
+
+    // ============================================================
+    // 7. Return cached program with shared variables
+    // ============================================================
     return {
         std::move(program),
         ReduceMeanWRmSharedVariables{
@@ -136,7 +160,6 @@ ReduceMeanWRmProgramFactory::cached_program_t ReduceMeanWRmProgramFactory::creat
             .writer_kernel_id = writer_id,
             .all_cores = all_cores,
             .num_cores = 1}};
-    */
 }
 
 void ReduceMeanWRmProgramFactory::override_runtime_arguments(
@@ -144,12 +167,23 @@ void ReduceMeanWRmProgramFactory::override_runtime_arguments(
     const ReduceMeanWRmParams& operation_attributes,
     const ReduceMeanWRmInputs& tensor_args,
     Tensor& tensor_return_value) {
-    (void)cached_program;
-    (void)operation_attributes;
-    (void)tensor_args;
-    (void)tensor_return_value;
-    // Stub - update runtime arguments for cached program
-    // This will update tensor buffer addresses when program is reused
+    (void)operation_attributes;  // Unused in single-core implementation
+
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+
+    // Update buffer addresses for cached program reuse
+    const uint32_t input_addr = input.buffer()->address();
+    const uint32_t output_addr = output.buffer()->address();
+
+    // Single core - update runtime args directly
+    const CoreCoord single_core = {0, 0};
+    SetRuntimeArgs(program, reader_kernel_id, single_core, {input_addr});
+    SetRuntimeArgs(program, writer_kernel_id, single_core, {output_addr});
 }
 
 }  // namespace ttnn::operations::reduction::reduce_mean_w_rm::program

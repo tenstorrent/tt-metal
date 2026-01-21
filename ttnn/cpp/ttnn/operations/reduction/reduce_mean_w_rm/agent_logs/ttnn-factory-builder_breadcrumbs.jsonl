@@ -17,3 +17,8 @@
 {"event":"result","type":"build","success":true,"ts":"2026-01-21T13:41:42+00:00"}
 {"event":"tdd_cycle","stage":5,"phase":"GREEN","result":"PASS","ts":"2026-01-21T13:42:03+00:00"}
 {"event":"test","stage":5,"result":"PASS","ts":"2026-01-21T13:42:03+00:00"}
+{"event":"tdd_cycle","stage":6,"phase":"RED","notes":"Created test file","ts":"2026-01-21T13:42:34+00:00"}
+{"event":"action","type":"build","command":"./build_metal.sh -b Debug","ts":"2026-01-21T13:43:04+00:00"}
+{"event":"result","type":"build","success":true,"ts":"2026-01-21T13:43:26+00:00"}
+{"event":"hypothesis","id":"H1","description":"Empty stub kernels cause device hang/segfault","confidence":"HIGH","evidence":"Segfault during device program execution with empty kernel stubs","ts":"2026-01-21T13:44:56+00:00"}
+{"event":"tdd_cycle","stage":6,"phase":"GREEN_PARTIAL","result":"INFRASTRUCTURE_READY","notes":"Factory creates kernels, but empty stubs cause device issues. Kernel-writer must implement minimal CB sync.","ts":"2026-01-21T13:44:56+00:00"}
