@@ -248,7 +248,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
 /* ========== Test case for reading varying number of packets and packet sizes (same axis); Test id = 163 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizesSameAxis) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -284,7 +284,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizesSameAxis) {
 /* ========== Test case for writing varying number of packets and packet sizes (same axis); Test id = 164 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizesSameAxis) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
