@@ -210,22 +210,7 @@ ttml::autograd::TensorPtr Llama::operator()(
     }
 
     auto tok_emb_out = (*tok_emb)(x_padded);
-
-    // Unpad after embedding to restore original sequence length
     autograd::TensorPtr out = tok_emb_out;
-    if (padded_seq_len != actual_seq_len) {
-        // Slice back to original sequence length (sequence dimension is now at index 2)
-        // Create a new tensor instead of modifying in-place
-        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> slice_end = {
-            tok_emb_out->get_value().logical_shape()[0],
-            tok_emb_out->get_value().logical_shape()[1],
-            actual_seq_len,
-            tok_emb_out->get_value().logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
-        out = autograd::create_tensor(out_tensor);
-    }
 
     // llama does positional embedding in the attention blocks
 
@@ -252,6 +237,22 @@ ttml::autograd::TensorPtr Llama::operator()(
 
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
+
+    if (padded_seq_len != actual_seq_len && !kv_cache) {
+        // Slice back to original sequence length only for full forward pass
+        // Logits are typically in ROW_MAJOR or can be sliced if aligned or on host
+        auto logits_tensor = logits->get_value();
+        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> slice_end = {
+            logits_tensor.logical_shape()[0],
+            logits_tensor.logical_shape()[1],
+            actual_seq_len,
+            logits_tensor.logical_shape()[3]};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        auto sliced_logits = ttnn::slice(logits_tensor, slice_start, slice_end, step);
+        return autograd::create_tensor(sliced_logits);
+    }
+
     return logits;
 }
 
