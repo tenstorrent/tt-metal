@@ -11,7 +11,7 @@ namespace ttnn::inspector {
 void register_inspector_rpc() {
     static rpc::TtnnInspectorRpcChannel ttnn_inspector_rpc_channel;
 
-    tt::tt_metal::RegisterInspectorRpcChannel(
+    tt::tt_metal::experimental::inspector::RegisterInspectorRpcChannel(
         "TtnnInspector",
         tt::tt_metal::inspector::rpc::InspectorChannel::Client(
             ::kj::Own<rpc::TtnnInspectorRpcChannel>(&ttnn_inspector_rpc_channel, ::kj::NullDisposer::instance)));

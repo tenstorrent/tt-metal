@@ -69,7 +69,7 @@ function(TT_ADD_INSPECTOR_RPC_SUPPORT TARGET_NAME)
     # Link Cap'n Proto libraries privately
     target_link_libraries(
         ${TARGET_NAME}
-        PRIVATE
+        PUBLIC
             capnp
             capnp-rpc
     )

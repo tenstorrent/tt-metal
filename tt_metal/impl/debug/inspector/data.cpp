@@ -171,17 +171,8 @@ void Data::rpc_get_mesh_workloads(rpc::RuntimeInspector::GetMeshWorkloadsResults
     }
 }
 
-void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
-    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
-    for (size_t i = 0; i < runtime_ids.size(); ++i) {
-        auto entry = all_runtime_ids[i];
-        entry.setWorkloadId(runtime_ids[i].workload_id);
-        entry.setRuntimeId(runtime_ids[i].runtime_id);
-    }
-}
-
-void Data::rpc_get_devices_in_use(rpc::RuntimeInspector::GetDevicesInUseResults::Builder& results) {
+void Data::rpc_get_mesh_workloads_runtime_ids(
+    rpc::RuntimeInspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(runtime_ids_mutex);
     auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
     for (size_t i = 0; i < runtime_ids.size(); ++i) {
