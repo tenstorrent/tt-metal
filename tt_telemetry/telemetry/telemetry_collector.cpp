@@ -266,47 +266,40 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster, int watchdo
     // If watchdog is enabled, monitor for continuous failures over the watchdog window
     if (watchdog_timeout_seconds > 0) {
         static std::deque<size_t> failed_metrics_history;
-        static std::deque<size_t> total_metrics_history;
+        static size_t clean_cycles_count = 0;  // O(1) counter for clean cycles in window
         const size_t history_window_size = watchdog_timeout_seconds / MONITOR_INTERVAL_SECONDS.count();
 
-        // Track both failed metrics and total metrics for this cycle
-        size_t total_metrics =
-            bool_metrics_.size() + uint_metrics_.size() + double_metrics_.size() + string_metrics_.size();
+        // Check if this is a clean cycle (no failures)
+        bool is_clean_cycle = (failed_metrics == 0);
 
+        // Update counter for new cycle
+        if (is_clean_cycle) {
+            clean_cycles_count++;
+        }
         failed_metrics_history.push_back(failed_metrics);
-        total_metrics_history.push_back(total_metrics);
 
-        // Maintain sliding window
+        // Maintain sliding window and update counter for removed cycles
         while (failed_metrics_history.size() > history_window_size) {
+            // If the cycle being removed was clean, decrement counter
+            if (failed_metrics_history.front() == 0) {
+                clean_cycles_count--;
+            }
             failed_metrics_history.pop_front();
-            total_metrics_history.pop_front();
         }
 
-        // Check if we have enough history and all cycles had failures
-        if (failed_metrics_history.size() >= history_window_size) {
-            // Check if there wasn't a single "clean" cycle (where all metrics succeeded)
-            bool no_clean_cycles = true;
-            for (size_t i = 0; i < failed_metrics_history.size(); ++i) {
-                // A clean cycle is one where no metrics failed (assuming total_metrics > 0)
-                if (failed_metrics_history[i] == 0 && total_metrics_history[i] > 0) {
-                    no_clean_cycles = false;
-                    break;
-                }
-            }
-
-            if (no_clean_cycles) {
-                // Calculate total failures for logging
-                size_t total_failures =
-                    std::accumulate(failed_metrics_history.begin(), failed_metrics_history.end(), size_t(0));
-                log_fatal(
-                    tt::LogAlways,
-                    "Detected {} consecutive failed metric reads across {} cycles ({}s window). "
-                    "Likely corrupted state after reset. Killing telemetry to allow orchestrator restart.",
-                    total_failures,
-                    history_window_size,
-                    watchdog_timeout_seconds);
-                throw std::runtime_error("Too many consecutive metric read failures - telemetry data likely corrupted");
-            }
+        // O(1) check: if we have full window and no clean cycles, kill telemetry
+        if (failed_metrics_history.size() >= history_window_size && clean_cycles_count == 0) {
+            // Calculate total failures for logging
+            size_t total_failures =
+                std::accumulate(failed_metrics_history.begin(), failed_metrics_history.end(), size_t(0));
+            log_fatal(
+                tt::LogAlways,
+                "Detected {} consecutive failed metric reads across {} cycles ({}s window). "
+                "Likely corrupted state after reset. Killing telemetry to allow orchestrator restart.",
+                total_failures,
+                history_window_size,
+                watchdog_timeout_seconds);
+            throw std::runtime_error("Too many consecutive metric read failures - telemetry data likely corrupted");
         }
     }
 
