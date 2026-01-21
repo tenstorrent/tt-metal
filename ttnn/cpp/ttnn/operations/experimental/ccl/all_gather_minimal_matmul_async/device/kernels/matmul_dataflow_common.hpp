@@ -154,10 +154,6 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
     return (device_iter % 2);
 }
 
-bool is_injector(uint32_t use_backward, bool is_injector_core_backward, bool is_injector_core_forward) {
-    return (is_injector_core_backward && use_backward) || (is_injector_core_forward && !use_backward);
-}
-
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
