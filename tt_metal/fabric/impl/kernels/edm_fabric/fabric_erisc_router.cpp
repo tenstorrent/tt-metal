@@ -1738,8 +1738,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
         // Track newly received packets that need first-level acks
-        // if (pkts_received_since_last_check > 0) {
-        // receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
         receiver_channel_pointers.m.unsent_messages += pkts_received_since_last_check;
         // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         // }
@@ -1866,21 +1864,18 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         // Track newly received packets that need first-level acks
-        // if (pkts_received_since_last_check > 0) {
         receiver_channel_pointers.m.unsent_first_level_acks += pkts_received_since_last_check;
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        // }
 
         // Try to send first-level acks independently
         bool has_unsent_acks = receiver_channel_pointers.m.unsent_first_level_acks > 0;
         bool can_send_ack = has_unsent_acks;
-        // if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-        //     can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
-        // }
+        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+        }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
             invalidate_l1_cache();
-            // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
             uint8_t src_ch_id;
             auto& ack_counter = receiver_channel_pointers.ack_counter();
@@ -1896,9 +1891,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
-            receiver_send_received_ack<true>(  // ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                src_ch_id);
+            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                receiver_channel_response_credit_sender, src_ch_id);
             ack_counter.increment();
             receiver_channel_pointers.m.unsent_first_level_acks--;
         }
