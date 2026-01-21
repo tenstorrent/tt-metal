@@ -344,7 +344,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
 
     // Initialize D2H socket for real-time performance telemetry streaming
-    // This must be done after fabric and dispatch FW are initialized since it uses MeshBuffer
+    // This uses the dispatch core which runs dispatch_subordinate kernel
     mesh_device->init_perf_telemetry_socket();
 
     return mesh_device;
@@ -437,9 +437,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     tt_metal::MetalContext::instance().device_manager()->init_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
 
-    // Initialize D2H socket for real-time performance telemetry streaming
-    // This must be done after fabric and dispatch FW are initialized since it uses MeshBuffer
-    mesh_device->init_perf_telemetry_socket();
+    // Initialize D2H socket for real-time performance telemetry streaming on each submesh
+    // (parent mesh_device is not fully initialized, but each submesh is)
+    for (auto& [device_id, submesh] : result) {
+        submesh->init_perf_telemetry_socket();
+    }
 
     return result;
 }
@@ -1198,20 +1200,41 @@ void MeshDeviceImpl::init_fabric() {
 }
 
 void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+    log_info(
+        tt::LogMetal,
+        "init_perf_telemetry_socket: this={}, mesh_device={}, mesh_device->pimpl_={}",
+        (void*)this,
+        (void*)mesh_device.get(),
+        (void*)mesh_device->pimpl_.get());
+
+    if (perf_telemetry_socket_) {
+        log_debug(tt::LogMetal, "Perf telemetry socket already initialized");
+        return;
+    }
+
     // Configuration for perf telemetry socket
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
     constexpr uint32_t kPerfTelemetryFifoSize = 4096;  // 4KB FIFO for telemetry data
 
-    // Use device (0,0) and core (0,0) as the sender core for telemetry
-    // This can be made configurable in the future if needed
-    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), CoreCoord(0, 0)};
+    // Use the dispatch_s core (program dispatch core for CQ 0) as the sender core for telemetry
+    // This core runs the dispatch_subordinate kernel which will push telemetry data
+    constexpr uint8_t cq_id = 0;
+    CoreCoord dispatch_core = this->virtual_program_dispatch_core(cq_id);
 
-    log_info(tt::LogMetal, "Initializing perf telemetry D2H socket on MeshDevice {}", this->id());
+    // Use device (0,0) in the mesh, with the dispatch core as the sender
+    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), dispatch_core};
+
+    log_info(
+        tt::LogMetal,
+        "Initializing perf telemetry D2H socket on MeshDevice {} using dispatch core ({}, {})",
+        this->id(),
+        dispatch_core.x,
+        dispatch_core.y);
 
     perf_telemetry_socket_ =
         std::make_unique<D2HSocket>(mesh_device, sender_core, BufferType::L1, kPerfTelemetryFifoSize);
 
-    log_debug(
+    log_info(
         tt::LogMetal,
         "Perf telemetry socket initialized with config buffer at address 0x{:x}",
         perf_telemetry_socket_->get_config_buffer_address());
@@ -1316,7 +1339,18 @@ std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
 }
 
 const std::unique_ptr<AllocatorImpl>& MeshDeviceImpl::allocator_impl() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+    log_info(
+        tt::LogMetal,
+        "MeshDeviceImpl::allocator_impl: this={}, sub_device_manager_tracker_={}",
+        (void*)this,
+        (void*)sub_device_manager_tracker_.get());
+    TT_FATAL(
+        sub_device_manager_tracker_ != nullptr, "sub_device_manager_tracker_ is NULL! MeshDeviceImpl not initialized.");
+    auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();
+    log_info(tt::LogMetal, "MeshDeviceImpl::allocator_impl: default_manager={}", (void*)default_manager);
+    const auto& alloc = default_manager->allocator(SubDeviceId{0});
+    log_info(tt::LogMetal, "MeshDeviceImpl::allocator_impl: allocator={}", (void*)alloc.get());
+    return alloc;
 }
 
 const std::unique_ptr<Allocator>& MeshDeviceImpl::allocator() const { return this->allocator_impl()->view(); }

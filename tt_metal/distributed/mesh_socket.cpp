@@ -504,6 +504,9 @@ D2HSocket::D2HSocket(
     fifo_size_(fifo_size),
     page_size_(0) {
     (void)buffer_type;  // Unused for now
+
+    log_info(tt::LogMetal, "D2HSocket: Starting constructor");
+
     const SocketSenderSize_ sender_size;
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
@@ -511,6 +514,7 @@ D2HSocket::D2HSocket(
     sender_devce_range_set.merge(MeshCoordinateRange(sender_core.device_coord));
     auto sender_core_range_set = CoreRangeSet(CoreRange(sender_core.core_coord));
 
+    log_info(tt::LogMetal, "D2HSocket: Creating host buffers");
     data_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(fifo_size_ / sizeof(uint32_t), 0);
     bytes_sent_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
 
@@ -520,16 +524,22 @@ D2HSocket::D2HSocket(
         tt::stl::Span<uint32_t>(bytes_sent_buffer_->data(), bytes_sent_buffer_->size()),
         tt::tt_metal::MemoryPin(bytes_sent_buffer_));
 
+    log_info(tt::LogMetal, "D2HSocket: Creating data pinned memory");
     data_pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, sender_devce_range_set, data_buffer_view, true);
 
+    log_info(tt::LogMetal, "D2HSocket: Creating bytes_sent pinned memory");
     bytes_sent_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
         *mesh_device, sender_devce_range_set, bytes_sent_buffer_view, true);
 
-    const auto& bytes_sent_noc_addr =
-        bytes_sent_pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
-    const auto& data_noc_addr =
-        data_pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+    log_info(tt::LogMetal, "D2HSocket: Getting NOC addresses");
+    auto* device = mesh_device->get_device(sender_core_.device_coord);
+    TT_FATAL(device != nullptr, "D2HSocket: Failed to get device for sender_core");
+    auto device_id = device->id();
+    log_info(tt::LogMetal, "D2HSocket: Device ID = {}", device_id);
+
+    const auto& bytes_sent_noc_addr = bytes_sent_pinned_memory_->get_noc_addr(device_id);
+    const auto& data_noc_addr = data_pinned_memory_->get_noc_addr(device_id);
 
     uint32_t data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
     uint32_t bytes_sent_pcie_xy_enc = bytes_sent_noc_addr.value().pcie_xy_enc;
@@ -560,7 +570,9 @@ D2HSocket::D2HSocket(
     MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = total_config_buffer_size,
     };
+    log_info(tt::LogMetal, "D2HSocket: Creating MeshBuffer for config (size={})", total_config_buffer_size);
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+    log_info(tt::LogMetal, "D2HSocket: MeshBuffer created");
 
     std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
     config_data[0] = 0;
@@ -576,8 +588,10 @@ D2HSocket::D2HSocket(
     config_data[host_addr_offset + 1] = data_addr_hi;
     config_data[host_addr_offset + 2] = bytes_sent_addr_hi;
 
+    log_info(tt::LogMetal, "D2HSocket: Calling WriteShard");
     distributed::WriteShard(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+    log_info(tt::LogMetal, "D2HSocket: Constructor complete");
 }
 
 void D2HSocket::set_page_size(uint32_t page_size) {
