@@ -16,10 +16,135 @@
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
+// #include <algorithm>
+// #include <tt-metalium/buffer_distribution_spec.hpp>
+// #include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
+
+namespace {
+// TODO: get rid of the code duplication with BufferDistributionSpec::squeeze_shape_ranks for the helpfer fcn below
+std::pair<tt::tt_metal::Shape, tt::tt_metal::Shape> squeeze_shapes_for_sharding(
+    const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
+    TT_FATAL(
+        tensor_shape.rank() >= shard_shape.rank(),
+        "Shard rank ({}) cannot exceed tensor rank ({})!",
+        shard_shape.rank(),
+        tensor_shape.rank());
+
+    uint64_t tensor_volume = tensor_shape.volume();
+    uint64_t shard_volume = shard_shape.volume();
+    tt::stl::SmallVector<uint32_t> new_tensor_shape;
+    tt::stl::SmallVector<uint32_t> new_shard_shape;
+
+    bool matching_dims_sequence = false;
+    bool last_dim_divisible = false;
+    uint64_t cur_tensor_volume = 1;
+    uint64_t cur_shard_volume = 1;
+    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
+        auto tensor_size = tensor_shape[dim];
+        auto shard_size = shard_shape[dim];
+
+        bool should_merge_dims = false;
+        if (dim < -1) {
+            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
+        }
+
+        if (should_merge_dims) {
+            new_tensor_shape.back() *= tensor_size;
+            new_shard_shape.back() *= shard_size;
+        } else {
+            new_tensor_shape.push_back(tensor_size);
+            new_shard_shape.push_back(shard_size);
+            matching_dims_sequence = true;
+        }
+        matching_dims_sequence &= tensor_size == shard_size;
+        last_dim_divisible = shard_size != 0 ? tensor_size % shard_size == 0 : false;
+
+        cur_tensor_volume *= tensor_size;
+        cur_shard_volume *= shard_size;
+        if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
+            break;
+        }
+    }
+
+    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
+        new_tensor_shape.back() *= tensor_shape[dim];
+    }
+
+    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
+    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
+    return {tt::tt_metal::Shape(std::move(new_tensor_shape)), tt::tt_metal::Shape(std::move(new_shard_shape))};
+}
+
+bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
+    if (tensor_shape.volume() == 0) {
+        return false;
+    }
+
+    auto [squeezed_tensor_shape, squeezed_shard_shape] = squeeze_shapes_for_sharding(tensor_shape, shard_shape);
+    TT_FATAL(squeezed_tensor_shape.rank() == squeezed_shard_shape.rank(), "Squeezed tensor and shard ranks must match");
+
+    for (size_t i = 0; i < squeezed_shard_shape.rank(); ++i) {
+        TT_FATAL(squeezed_shard_shape[i] != 0, "Shard dimension cannot be zero");
+        if (squeezed_tensor_shape[i] % squeezed_shard_shape[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// bool has_padding_pages_for_nd_shard(const tt::tt_metal::Tensor& tensor, const tt::tt_metal::NdShardSpec& nd_spec) {
+//     const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+//     tt::tt_metal::Shape2D page_shape(tile_shape[0], tile_shape[1]);
+//     auto distribution_spec = BufferDistributionSpec::from_shard_spec(
+//         tensor.padded_shape(),
+//         nd_spec.shard_shape,
+//         page_shape,
+//         nd_spec.grid,
+//         nd_spec.orientation,
+//         nd_spec.shard_distribution_strategy);
+//     const auto page_mapping = distribution_spec.compute_page_mapping();
+
+//     // Compute shard volume in pages to know how many entries per shard to inspect.
+//     auto shard_shape_pages = nd_spec.shard_shape;
+//     if (shard_shape_pages.rank() >= 1) {
+//         shard_shape_pages[-1] = tt::div_up(shard_shape_pages[-1], static_cast<uint32_t>(page_shape.width()));
+//     }
+//     if (shard_shape_pages.rank() >= 2) {
+//         shard_shape_pages[-2] = tt::div_up(shard_shape_pages[-2], static_cast<uint32_t>(page_shape.height()));
+//     }
+//     std::cout<<"shard_shape_pages: "<< shard_shape_pages[0] << ", " << shard_shape_pages[1] << std::endl;
+//     const uint32_t shard_pages = shard_shape_pages.volume();
+
+//     const auto& cores = distribution_spec.cores();
+//     for (size_t core_idx = 0; core_idx < cores.size(); ++core_idx) {
+//         const auto& core_pages = page_mapping.core_host_page_indices[core_idx];
+//         uint32_t num_shards_for_core = distribution_spec.num_shards_per_core(core_idx);
+//         uint32_t pages_to_check = num_shards_for_core * shard_pages;
+//         std::cout<<"pages_to_check BEFORE: "<< pages_to_check << std::endl;
+//         if (pages_to_check > core_pages.size()) {
+//             pages_to_check = core_pages.size();
+//         }
+//         std::cout<<"pages_to_check AFTER: "<< pages_to_check << std::endl;
+//         // std::cout<<"pages_to_check: "<< pages_to_check << std::endl;
+//         if (std::any_of(
+//                 core_pages.begin(),
+//                 core_pages.begin() + pages_to_check,
+//                 [](uint32_t page_idx) {
+//                     // std::cout<<"page_idx: "<< page_idx << std::endl;
+//                     return page_idx == tt::tt_metal::UncompressedBufferPageMapping::PADDING;
+//                 })) {
+//             std::cout<<"true"<< std::endl;
+//             return true;
+//         }
+//     }
+//     std::cout<<"false"<< std::endl;
+//     return false;
+// }
+}  // namespace
 
 uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     auto* device = tensor.device();
@@ -81,7 +206,13 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
 
     // Input must be in valid tile layout
     TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    std::cout << "tensor_width % TILE_WIDTH == 0: " << (tensor_width % TILE_WIDTH == 0) << std::endl;
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    std::cout << "tensor_height % TILE_HEIGHT == 0: " << (tensor_height % TILE_HEIGHT == 0) << std::endl;
+    std::cout << "tensor_width: " << tensor_width << std::endl;
+    std::cout << "tensor_height: " << tensor_height << std::endl;
+    std::cout << "TILE_WIDTH: " << TILE_WIDTH << std::endl;
+    std::cout << "TILE_HEIGHT: " << TILE_HEIGHT << std::endl;
 
     // Special conditions for sub_core_grids special case
     if (operation_attributes.sub_core_grids.has_value()) {
@@ -135,21 +266,34 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
                 input_shard_width = input_shard_shape[1];
                 input_shard_height = input_shard_shape[0];
+                TT_FATAL(
+                    tensor_width % input_shard_width == 0,
+                    "Uneven input shard width {} for tensor width {} not supported for single core implementation",
+                    input_shard_width,
+                    tensor_width);
+                TT_FATAL(
+                    tensor_height % input_shard_height == 0,
+                    "Uneven input shard height {} for tensor height {} not supported for single core implementation",
+                    input_shard_height,
+                    tensor_height);
             } else {
                 const auto& nd_spec = input_tensor_a.nd_shard_spec().value();
-                input_shard_width = nd_spec.shard_shape[-1];
-                input_shard_height = nd_spec.shard_shape[-2];
+                // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+                // auto dist_spec = BufferDistributionSpec::from_shard_spec(
+                //     input_tensor_a.padded_shape(),   // tensor shape in elements
+                //     nd_spec.shard_shape,             // shard shape in elements
+                //     tile_shape,                      // page (tile) shape
+                //     nd_spec.grid,
+                //     nd_spec.orientation,
+                //     nd_spec.shard_distribution_strategy);
+                bool input_is_uneven_sharded = is_uneven_nd_sharding(
+                    input_tensor_a.padded_shape(),
+                    nd_spec
+                        .shard_shape);  // dist_spec.is_uneven();//input_tensor_a.buffer_distribution_spec().value().is_uneven();
+                TT_FATAL(
+                    !input_is_uneven_sharded,
+                    "Uneven ND sharding of input tensor is not supported for single core implementation");
             }
-            TT_FATAL(
-                tensor_width % input_shard_width == 0,
-                "Uneven input shard width {} for tensor width {} not supported for single core implementation",
-                input_shard_width,
-                tensor_width);
-            TT_FATAL(
-                tensor_height % input_shard_height == 0,
-                "Uneven input shard height {} for tensor height {} not supported for single core implementation",
-                input_shard_height,
-                tensor_height);
         }
         // Check for output uneven sharding
         if (output_is_sharded) {
@@ -165,21 +309,34 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                     operation_attributes.output_mem_config.shard_spec().value().shape;
                 output_shard_width = output_shard_shape[1];
                 output_shard_height = output_shard_shape[0];
+                TT_FATAL(
+                    tensor_width % output_shard_width == 0,
+                    "Uneven output shard width {} for tensor width {} not supported for single core implementation",
+                    output_shard_width,
+                    tensor_width);
+                TT_FATAL(
+                    tensor_height % output_shard_height == 0,
+                    "Uneven output shard height {} for tensor height {} not supported for single core implementation",
+                    output_shard_height,
+                    tensor_height);
             } else {
                 const auto& nd_spec = operation_attributes.output_mem_config.nd_shard_spec().value();
-                output_shard_width = nd_spec.shard_shape[-1];
-                output_shard_height = nd_spec.shard_shape[-2];
+                // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+                // auto dist_spec = BufferDistributionSpec::from_shard_spec(
+                //     input_tensor_a.padded_shape(),   // tensor shape in elements
+                //     nd_spec.shard_shape,             // shard shape in elements
+                //     tile_shape,                      // page (tile) shape
+                //     nd_spec.grid,
+                //     nd_spec.orientation,
+                //     nd_spec.shard_distribution_strategy);
+                bool output_is_uneven_sharded = is_uneven_nd_sharding(
+                    input_tensor_a.padded_shape(),
+                    nd_spec.shard_shape);  // dist_spec.is_uneven();//has_padding_pages_for_nd_shard(input_tensor_a,
+                                           // nd_spec);
+                TT_FATAL(
+                    !output_is_uneven_sharded,
+                    "Uneven ND sharding of output tensor is not supported for single core implementation");
             }
-            TT_FATAL(
-                tensor_width % output_shard_width == 0,
-                "Uneven output shard width {} for tensor width {} not supported for single core implementation",
-                output_shard_width,
-                tensor_width);
-            TT_FATAL(
-                tensor_height % output_shard_height == 0,
-                "Uneven output shard height {} for tensor height {} not supported for single core implementation",
-                output_shard_height,
-                tensor_height);
         }
     }
 
@@ -187,6 +344,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     // supported if the input and output memory layouts are identical (i.e. height->height, width->width, block->block)
     // and the input and output shard specs are identical. Otherwise uneven output sharding is not supported.
     if (output_is_sharded) {
+        bool output_is_uneven_sharded = false;
         uint32_t output_shard_width;
         uint32_t output_shard_height;
         TT_FATAL(
@@ -198,15 +356,25 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 operation_attributes.output_mem_config.shard_spec().value().shape;
             output_shard_width = output_shard_shape[1];
             output_shard_height = output_shard_shape[0];
+            output_is_uneven_sharded =
+                (tensor_width % output_shard_width != 0) || (tensor_height % output_shard_height != 0);
         } else {
             const auto& nd_spec = operation_attributes.output_mem_config.nd_shard_spec().value();
-            output_shard_width = nd_spec.shard_shape[-1];
-            output_shard_height = nd_spec.shard_shape[-2];
+            // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+            // auto dist_spec = BufferDistributionSpec::from_shard_spec(
+            //     input_tensor_a.padded_shape(),   // tensor shape in elements
+            //     nd_spec.shard_shape,             // shard shape in elements
+            //     tile_shape,                      // page (tile) shape
+            //     nd_spec.grid,
+            //     nd_spec.orientation,
+            //     nd_spec.shard_distribution_strategy);
+            output_is_uneven_sharded = is_uneven_nd_sharding(
+                input_tensor_a.padded_shape(),
+                nd_spec.shard_shape);  // has_padding_pages_for_nd_shard(input_tensor_a, nd_spec);
+            std::cout << "output_is_uneven_sharded: " << output_is_uneven_sharded << std::endl;
         }
 
-        bool output_is_uneven_sharded_width_wise = tensor_width % output_shard_width != 0;
-        bool output_is_uneven_sharded_height_wise = tensor_height % output_shard_height != 0;
-        if (output_is_uneven_sharded_width_wise || output_is_uneven_sharded_height_wise) {
+        if (output_is_uneven_sharded) {
             TT_FATAL(
                 input_memory_layout == output_memory_layout,
                 "Input and output memory layouts must be identical if output is uneven sharded");
