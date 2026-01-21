@@ -130,39 +130,51 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::COL>(idst)));
+#endif
 }
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::SCALAR>(idst)));
+#endif
 }
 
 /**
  * Shorthand template instantiation of mul_tiles_bcast.
  */
 ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::COL,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::COL>(idst)));
+#endif
 }
 
 /**
@@ -170,13 +182,17 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  */
 ALWI void mul_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::ROW>(idst)));
+#endif
 }
 
 /**
@@ -184,39 +200,52 @@ ALWI void mul_tiles_bcast_rows(
  */
 ALWI void add_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
+#ifndef ARCH_QUASAR
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1)));
+    MATH((llk_math_eltwise_binary<BroadcastType::ROW>(idst)));
+#endif
 }
 
 /**
  * Please refer to documentation for sub_tiles_bcast
  */
 ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::COL,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::COL>(idst)));
+#endif
 }
 
 /**
  * Please refer to documentation for add_tiles_bcast
  */
 ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::SCALAR>(idst)));
+#endif
 }
 
 // clang-format off
@@ -241,6 +270,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
         MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim>()));
     }
 
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
 
@@ -250,6 +280,15 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
+
+    PACK((llk_pack_hw_configure<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(icb0, icb1)));
+#endif
 }
 
 /*
@@ -257,10 +296,15 @@ Internal helper function for all broadcast ops
 */
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(
+#ifndef ARCH_QUASAR
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
     MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<tBcastDim>(idst)));
+    UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1)));
+#endif
 }
 
 // clang-format off
@@ -371,13 +415,17 @@ ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
  * Performs a broadcast-multiply of a tile from icb0[itile0] with a scalar encoded as a tile from icb1[itile1].
  */
 ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_binary<
           ELWMUL,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
-    UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_eltwise_binary<BroadcastType::SCALAR>(idst)));
+#endif
 }
 
 /**

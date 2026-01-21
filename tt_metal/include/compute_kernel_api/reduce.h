@@ -47,9 +47,15 @@ namespace ckernel {
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    PACK((llk_pack_reduce_mask_config<reduce_dim>()));
+#endif
 }
 
 // clang-format off
@@ -69,10 +75,12 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 // clang-format on
 template <bool enforce_fp32_accumulation = false>
 ALWI void reduce_uninit() {
+#ifndef ARCH_QUASAR
     if constexpr (enforce_fp32_accumulation) {
         MATH((tensix_sync()));
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
     }
+#endif
     PACK((llk_pack_reduce_mask_clear()));
 }
 
@@ -113,9 +121,14 @@ ALWI void reduce_uninit() {
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_scaler)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
+    MATH((llk_math_reduce(idst)));
+#endif
 }
 
 // clang-format off
@@ -133,7 +146,11 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, num_faces)));
+#else  // ARCH_QUASAR
+    MATH((llk_math_reduce(idst)));
+#endif
 }
 }  // namespace ckernel

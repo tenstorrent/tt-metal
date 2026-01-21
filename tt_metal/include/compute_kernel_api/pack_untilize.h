@@ -59,6 +59,8 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
+#ifndef ARCH_QUASAR
+
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
@@ -69,6 +71,11 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
+
+#else  // ARCH_QUASAR
+    // Do I need pack hw config here?
+    PACK((llk_pack_untilize_init<full_ct_dim, block_ct_dim, 2 /*c_dim_faces*/>(ocb)));
+#endif
 }
 
 // clang-format off
@@ -105,9 +112,14 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, false /*transpose*/, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
+#endif
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(ocb);
 }
 
@@ -138,6 +150,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
+#ifndef ARCH_QUASAR
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -152,6 +165,19 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
+#else  // ARCH_QUASAR
+    for (uint32_t r = 0; r < block_rt_dim; ++r) {
+        for (uint32_t c = 0; c < block_ct_dim; ++c) {
+            UNPACK((llk_unpack_A<p_unpacr::UNP_A>(icb, c)));
+            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
+        }
+
+        MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
+
+        PACK((llk_pack_untilize(ocb, FACE_R_DIM, 4, block_c_index)));
+        PACK((llk_pack_dest_dvalid_section_done<, DST_ACCUM_MODE>()));
+    }
+#endif
 }
 
 // clang-format off

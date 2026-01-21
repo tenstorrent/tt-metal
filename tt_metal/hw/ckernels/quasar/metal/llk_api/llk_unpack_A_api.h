@@ -49,3 +49,17 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     _llk_unpack_unary_operand_<UNP_SEL>(l1_tile_index);
     WAYPOINT("UPAD");
 }
+
+template <std::uint32_t UNP_SEL>
+inline void llk_unpack_A_block(
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t l1_tile_index = get_local_cb_interface(operand_id).fifo_rd_tile_idx + tile_index;
+
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        WAYPOINT("UPAW");
+        _llk_unpack_unary_operand_<UNP_SEL>(l1_tile_index);
+        l1_tile_index += 1;
+        WAYPOINT("UPAD");
+    }
+}

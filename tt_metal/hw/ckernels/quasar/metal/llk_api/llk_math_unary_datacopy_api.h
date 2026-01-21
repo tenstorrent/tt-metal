@@ -46,3 +46,14 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
 }
+
+inline void llk_math_eltwise_unary_datacopy_block(
+    const std::uint32_t start_dst_index, const std::uint32_t ntiles, const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+
+    for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
+        _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
+    }
+}

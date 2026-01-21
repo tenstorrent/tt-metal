@@ -27,6 +27,7 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
+#ifndef ARCH_QUASAR
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -50,6 +51,17 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_hw_configure(icb)));
+    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, true /*transpose*/, DST_ACCUM_MODE>(icb)));
+
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
+
+    PACK((llk_pack_hw_configure<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+#endif
 }
 
 /**
@@ -57,6 +69,8 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb) {
+#ifndef ARCH_QUASAR
+
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
@@ -71,6 +85,11 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     }
 
+#endif
+
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, true /*transpose*/, DST_ACCUM_MODE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(icb)));
 #endif
 }
 
@@ -93,6 +112,8 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  */
  // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
+#ifndef ARCH_QUASAR
+
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
@@ -107,6 +128,11 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst, icb)));
     }
+#endif
+
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_A<p_unpacr::UNP_A>(icb, itile)));
+    MATH((llk_math_eltwise_unary_datacopy(idst, icb)));
 #endif
 }
 

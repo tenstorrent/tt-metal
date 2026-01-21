@@ -30,7 +30,8 @@ inline void llk_math_reduce_init(const std::uint32_t operandA) {
         .face_c_dim = FACE_C_DIM,
         .narrow_tile = get_operand_narrow_tile(operand_id)};
 
-    _llk_math_reduce_init_<pool_type, reduce_dim, num_fidelity_phases>(tile_shape_A);
+    _llk_math_reduce_init_<pool_type, reduce_dim, static_cast<ckernel::MathFidelity>(num_fidelity_phases)>(
+        tile_shape_A);
 }
 
 /**

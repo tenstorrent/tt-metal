@@ -108,11 +108,8 @@ inline void llk_pack(
  * from the math destination register to the output circular buffer.
  *
  */
-inline void llk_pack_untilize_init(
-    const std::uint32_t pack_output,
-    const std::uint32_t full_ct_dim,
-    const std::uint32_t block_ct_dim,
-    const std::uint32_t c_dim_faces) {
+template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
+inline void llk_pack_untilize_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const TileShape output_tile_shape = {
         .num_faces = get_output_num_faces(output_id),
@@ -120,7 +117,7 @@ inline void llk_pack_untilize_init(
         .face_c_dim = FACE_C_DIM,
         .narrow_tile = get_output_narrow_tile(output_id)};
 
-    _llk_pack_untilize_init_(output_id, output_tile_shape, full_ct_dim, block_ct_dim, c_dim_faces);
+    _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES>(output_id, output_tile_shape);
 }
 
 /**
