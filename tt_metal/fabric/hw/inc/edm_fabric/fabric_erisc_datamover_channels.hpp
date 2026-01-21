@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
+#include "uarch/overlayregisterfile.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -589,12 +590,12 @@ using SenderEthChannelBuffers = std::conditional_t<
 template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
 struct EdmChannelWorkerInterface {
 
-    using connection_live_semaphore_register = std::pair<OverlayRegisterFile::OR0, OverlayRegisterFile::OR1>;
+    using connection_live_semaphore_register = OverlayRegisterFile::OR0;
 
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
-//        connection_live_semaphore(nullptr),
+        connection_live_semaphore_ptr(nullptr),
         sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
 
     EdmChannelWorkerInterface(
@@ -607,11 +608,12 @@ struct EdmChannelWorkerInterface {
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
 //        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+        uint32_t * const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
-//        connection_live_semaphore(connection_live_semaphore),
+        connection_live_semaphore_ptr(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         static_cast<DERIVED*>(this)->reset_counters();
@@ -683,16 +685,24 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE uint32_t get_connection_live_semaphore() const {
-        return OverlayRegisterFile::transform<connection_live_semaphore_register::first_type, connection_live_semaphore_register::second_type>();
+        uint32_t const value = OverlayRegisterFile::load<connection_live_semaphore_register>();
+        if(connection_live_semaphore_ptr != nullptr) {
+            *connection_live_semaphore_ptr = value;
+        }
+        return value;
     }
 
     FORCE_INLINE void set_connection_live_semaphore(uint32_t const value) const {
-        OverlayRegisterFile::store<connection_live_semaphore_register::first_type, connection_live_semaphore_register::second_type>(value);
+        if(connection_live_semaphore_ptr != nullptr) {
+            *connection_live_semaphore_ptr = value;
+        }
+        OverlayRegisterFile::store<connection_live_semaphore_register>(value);
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
 //    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
+    uint32_t * connection_live_semaphore_ptr;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
@@ -715,12 +725,13 @@ struct StaticSizedSenderChannelWorkerInterface
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
 //        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+        uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value,
         uint32_t read_counter_update_src_address = 0) :
         Base(
             worker_location_info_ptr,
-//            connection_live_semaphore,
+            connection_live_semaphore,
             sender_sync_noc_cmd_buf,
             edm_read_counter_initial_value),
         read_counter_update_src_address(read_counter_update_src_address) {}

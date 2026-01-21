@@ -46,7 +46,12 @@ struct OverlayRegisterFile : public RegisterFile {
     // uses variant type to check if T is a valid overlay register type
     //
     template<typename T>
-    using is_overlay_register_type = std::conditional_t< std::contains<overlay_register_t, T>::value, std::true_type, std::false_type>;
+    struct is_overlay_register_type : std::disjunction<
+        std::is_same<T, OR0>,
+        std::is_same<T, OR1>,
+        std::is_same<T, OR2>,
+        std::is_same<T, OR3>
+    > {};
 
     // uses ADDRESS field to check if T is a valid overlay register address
     //
@@ -84,42 +89,6 @@ struct OverlayRegisterFile : public RegisterFile {
         storage.fields.reserved = 0U;
         write_stream_scratch_register<T::ADDRESS>(storage.value);
     }
-
-    // eventually support alternating versions of 24 bit overlay registers
-    // 16+8 then 8+16; can be split by checking if the LowerBitRegister index is even or odd
-    // will need to make more generic by removing "Lower"/"Upper" distinction on templated
-    // types; will also need to make the static compile time checks more generic based on
-    // the inputs
-    //
-    template<typename LowerBitRegister, typename UpperBitRegister>
-    static FORCE_INLINE uint32_t load() {
-        static_assert(OverlayRegisterFile::is_overlay_register_type<LowerBitRegister>::value, "LowerBitRegister must be an Overlay Register");
-        static_assert(OverlayRegisterFile::is_overlay_register_type<UpperBitRegister>::value, "UpperBitRegister must be an Overlay Register");
-        static_assert(LowerBitRegister::index < UpperBitRegister::index, "LowerBitRegister index must be less than UpperBitRegister index");
-        static_assert(UpperBitRegister::index - LowerBitRegister::index == 1U, "LowerBitRegister and UpperBitRegister must be consecutive registers");
-
-        uint32_t const lower_bits = OverlayRegisterFile::load<LowerBitRegister>();
-        uint32_t const upper_bits = OverlayRegisterFile::load<UpperBitRegister>();
-
-        // overlay registers are 24 bits wide, so we need to combine two registers
-        // shift the upper 8 bits into position and combine with lower 16 bits
-        //
-        return ((upper_bits << OverlayRegisterFile::NumLowerBits::value) | lower_bits ) & 0x00FFFFFFU;
-    }
-
-    template<typename LowerBitRegister, typename UpperBitRegister>
-    static FORCE_INLINE void store(uint32_t const value) {
-        static_assert(OverlayRegisterFile::is_overlay_register_type<LowerBitRegister>::value, "LowerBitRegister must be an Overlay Register");
-        static_assert(OverlayRegisterFile::is_overlay_register_type<UpperBitRegister>::value, "UpperBitRegister must be an Overlay Register");
-        static_assert(LowerBitRegister::index < UpperBitRegister::index, "LowerBitRegister index must be less than UpperBitRegister index");
-        static_assert(UpperBitRegister::index - LowerBitRegister::index == 1U, "LowerBitRegister and UpperBitRegister must be consecutive registers");
-
-        storage.value = value;
-        storage.fields.reserved = 0U;
-
-        OverlayRegisterFile::store<LowerBitRegister>(storage.fields.lower_addr);
-        OverlayRegisterFile::store<UpperBitRegister>(storage.fields.upper_addr);
-    }    
 };
 
 #endif // end #define __TT_METAL_FABRIC_UARCH_OVERLAYREGISTERFILE_HPP__

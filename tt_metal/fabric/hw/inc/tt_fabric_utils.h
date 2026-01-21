@@ -57,7 +57,8 @@ FORCE_INLINE void check_worker_connections(
         // 3. closed the connection
         //
         // In such a case like that, we still want to formally teardown the connection to keep things clean
-        uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
+//        uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
+        uint32_t cached = local_sender_channel_worker_interface.get_connection_live_semaphore();
         if (connect_is_requested(cached)) {
             channel_connection_established = true;
 

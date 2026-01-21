@@ -2347,7 +2347,7 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
 //    auto connection_live_semaphore_ptr =
 //        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
-    uint32_t* connection_live_semaphore_ptr =
+    uint32_t* const connection_live_semaphore_ptr =
         reinterpret_cast<uint32_t*>(local_sender_connection_live_semaphore_addresses[I]);
 
     auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
