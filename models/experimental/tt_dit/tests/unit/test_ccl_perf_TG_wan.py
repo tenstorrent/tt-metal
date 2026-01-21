@@ -8,6 +8,7 @@ import subprocess
 
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter
 from loguru import logger
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -273,14 +274,14 @@ def identify_best_worst_configs(results_by_config: dict) -> dict:
     if not results_by_config:
         return {"best": (None, None), "worst": (None, None)}
 
-    # Best: config with lowest MIN duration
-    best_config = min(results_by_config.items(), key=lambda x: x[1]["MIN"])
-    # Worst: config with highest MAX duration
-    worst_config = max(results_by_config.items(), key=lambda x: x[1]["MAX"])
+    # Best: config with lowest AVG duration
+    best_config = min(results_by_config.items(), key=lambda x: x[1]["AVG"])
+    # Worst: config with highest AVG duration
+    worst_config = max(results_by_config.items(), key=lambda x: x[1]["AVG"])
 
     return {
-        "best": (best_config[0], best_config[1]["MIN"]),
-        "worst": (worst_config[0], worst_config[1]["MAX"]),
+        "best": (best_config[0], best_config[1]["AVG"]),
+        "worst": (worst_config[0], worst_config[1]["AVG"]),
     }
 
 
@@ -309,48 +310,42 @@ def generate_perf_chart(
         return None
 
     configs = list(results_by_config.keys())
-    mins = [results_by_config[c]["MIN"] for c in configs]
-    maxs = [results_by_config[c]["MAX"] for c in configs]
+    avgs = [results_by_config[c]["AVG"] for c in configs]
 
-    # Convert to microseconds for readability
-    mins_us = [v / 1000 for v in mins]
-    maxs_us = [v / 1000 for v in maxs]
+    # Determine unit based on magnitude (use microseconds if max >= 1000 ns)
+    # max_val = max(avgs)
+    # if max_val >= 1000:
+    unit = "us"
+    divisor = 1000
+    plot_vals = [v / divisor for v in avgs]
 
     x = list(range(len(configs)))
 
     _fig, ax = plt.subplots(figsize=(max(10, len(configs) * 1.5), 6))
-    ax.plot(x, mins_us, marker="o", linestyle="-", color="green", label="Min", alpha=0.8)
-    ax.plot(x, maxs_us, marker="o", linestyle="-", color="red", label="Max", alpha=0.8)
+    ax.plot(x, plot_vals, marker="o", linestyle="-", color="blue", label="Avg", alpha=0.8)
 
     ax.set_title(f"Test filter: {test_filter}")
     ax.set_xlabel("Hyperparam Configuration")
-    ax.set_ylabel("Device Kernel Duration (us)")
+    ax.set_ylabel(f"Device Kernel Duration ({unit})")
     ax.set_xticks(x)
     ax.set_xticklabels(configs, rotation=45, ha="right")
+    formatter = ScalarFormatter(useOffset=False)
+    formatter.set_scientific(False)
+    ax.yaxis.set_major_formatter(formatter)
     ax.legend()
     ax.grid(True, alpha=0.3)
 
     # Add value labels on data points
-    for i, (min_val, max_val) in enumerate(zip(mins_us, maxs_us)):
+    for i, val in enumerate(plot_vals):
         ax.annotate(
-            f"{min_val:.1f}",
-            xy=(i, min_val),
-            xytext=(0, -12),
-            textcoords="offset points",
-            ha="center",
-            va="top",
-            fontsize=8,
-            color="green",
-        )
-        ax.annotate(
-            f"{max_val:.1f}",
-            xy=(i, max_val),
+            f"{val:.1f}",
+            xy=(i, val),
             xytext=(0, 5),
             textcoords="offset points",
             ha="center",
             va="bottom",
             fontsize=8,
-            color="red",
+            color="blue",
         )
 
     # Add op sequence in annotation
@@ -360,9 +355,7 @@ def generate_perf_chart(
     if best_worst:
         best_cfg, best_val = best_worst["best"]
         worst_cfg, worst_val = best_worst["worst"]
-        annotation_text += (
-            f"\nBest (min): {best_cfg} = {best_val/1000:.1f} us\nWorst (max): {worst_cfg} = {worst_val/1000:.1f} us"
-        )
+        annotation_text += f"\nBest (avg): {best_cfg} = {best_val/divisor:.1f} {unit}\nWorst (avg): {worst_cfg} = {worst_val/divisor:.1f} {unit}"
     ax.text(
         0.02,
         0.98,
@@ -378,27 +371,27 @@ def generate_perf_chart(
     # Save chart
     os.makedirs(output_dir, exist_ok=True)
     chart_path = os.path.join(output_dir, f"{test_filter}_perf.png")
-    plt.savefig(chart_path, dpi=150)
+    plt.savefig(chart_path, dpi=150, bbox_inches="tight")
     plt.close()
 
     logger.info(f"Saved performance chart to: {chart_path}")
     return chart_path
 
 
-def test_all_gather_wan_perf(test_filter: str, num_iters: int):
+def run_perf_test(base_command: str, test_filter: str, test_name: str, num_iters: int):
     """
-    Run AllGather performance test for a specific test filter and analyze results by hyperparam config.
+    Run performance pytest for a specific test filter and analyze results by hyperparam config.
 
     Args:
+        base_command: pytest command to run tests
         test_filter: Test filter for pytest -k (e.g., "spatial_activation", "layernorm_stats")
+        test_name: used for generated dir name and benchmark step name
         num_iters: Number of iterations per test config (between signposts, excluding warmup)
     """
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"all_gather_wan_{test_filter}"
-
-    subdir = f"wan_ccl_perf_{test_filter}"
-    base_command = "pytest tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_wan"
+    step_name = test_name
+    subdir = test_name
 
     # Step 1: Collect test configurations
     logger.info(f"=== Collecting test configs for test filter: {test_filter} ===")
@@ -410,8 +403,6 @@ def test_all_gather_wan_perf(test_filter: str, num_iters: int):
 
     # Step 2: Run the profiler
     logger.info(f"=== Running profiler for test filter: {test_filter} ===")
-    clear_profiler_runtime_artifacts()
-
     command = f"{base_command} -k {test_filter}"
     profiler.start("run")
     profiler.start(step_name)
@@ -447,8 +438,8 @@ def test_all_gather_wan_perf(test_filter: str, num_iters: int):
             f"({stats['NUM_ITERS']} iters x {stats['NUM_DEVICES']} devices x {stats['OPS_PER_ITER']} ops)"
         )
 
-    logger.info(f"\nBest config (lowest MIN): {best_worst['best'][0]} = {best_worst['best'][1]/1000:.2f} us")
-    logger.info(f"Worst config (highest MAX): {best_worst['worst'][0]} = {best_worst['worst'][1]/1000:.2f} us")
+    logger.info(f"\nBest config (lowest AVG): {best_worst['best'][0]} = {best_worst['best'][1]/1000:.2f} us")
+    logger.info(f"Worst config (highest AVG): {best_worst['worst'][0]} = {best_worst['worst'][1]/1000:.2f} us")
 
     # Step 6: Save to JSON
     for cfg, stats in results_by_config.items():
@@ -461,9 +452,9 @@ def test_all_gather_wan_perf(test_filter: str, num_iters: int):
         benchmark_data.add_measurement(profiler, 0, step_name, f"{cfg}-ops_per_iter", stats["OPS_PER_ITER"])
 
     benchmark_data.add_measurement(profiler, 0, step_name, "best_config", 0)  # Placeholder for string
-    benchmark_data.add_measurement(profiler, 0, step_name, "best_min_ns", best_worst["best"][1])
+    benchmark_data.add_measurement(profiler, 0, step_name, "best_avg_ns", best_worst["best"][1])
     benchmark_data.add_measurement(profiler, 0, step_name, "worst_config", 0)  # Placeholder for string
-    benchmark_data.add_measurement(profiler, 0, step_name, "worst_max_ns", best_worst["worst"][1])
+    benchmark_data.add_measurement(profiler, 0, step_name, "worst_avg_ns", best_worst["worst"][1])
 
     benchmark_data.save_partial_run_json(
         profiler,
@@ -479,6 +470,25 @@ def test_all_gather_wan_perf(test_filter: str, num_iters: int):
     return results_by_config, best_worst
 
 
+def test_all_gather_wan_perf():
+    """
+    Sweep hyperparams for AllGather used in Wan2.2 and obtain perf data.
+    """
+    # Delete existing tracy dirs
+    clear_profiler_runtime_artifacts()
+
+    # Run each test filter and collect stats
+    base_command = "pytest tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_wan"
+    test_filters = ["spatial_activation", "layernorm_stats", "rmsnorm_stats_spatial", "rmsnorm_stats_prompt"]
+    num_iters = 75
+    for test_filter in test_filters:
+        run_perf_test(
+            base_command=base_command,
+            test_filter=test_filter,
+            test_name=f"all_gather_wan_{test_filter}",
+            num_iters=num_iters,
+        )
+
+
 if __name__ == "__main__":
-    for test_filter in ["spatial_activation", "layernorm_stats", "rmsnorm_stats_spatial", "rmsnorm_stats_prompt"]:
-        test_all_gather_wan_perf(test_filter=test_filter, num_iters=75)
+    test_all_gather_wan_perf()
