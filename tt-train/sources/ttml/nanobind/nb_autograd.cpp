@@ -210,11 +210,11 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
         py_auto_context.def(
             "add_backward_node",
-            [](AutoContext& self, GradFunction grad_function, nb::object links_obj) {
+            [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
                 // Handle empty list case where nanobind can't infer element type
                 std::vector<NodeId> links;
-                if (!links_obj.is_none() && nb::len(links_obj) > 0) {
-                    links = nb::cast<std::vector<NodeId>>(links_obj);
+                if (links_obj.has_value() && nb::len(*links_obj) > 0) {
+                    links = nb::cast<std::vector<NodeId>>(*links_obj);
                 }
                 return self.add_backward_node(std::move(grad_function), links);
             },
