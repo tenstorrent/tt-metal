@@ -137,8 +137,8 @@ ALWI void matmul_tiles(
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
-#else  // ARCH_QUASAR
-    MATH((llk_math_matmul(idst)));
+#else
+    MATH((llk_math_matmul_tile(idst)));
 #endif
 }
 
