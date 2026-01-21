@@ -1,6 +1,14 @@
 name: "ttnn - Run sweeps"
 
-run-name: "ttnn - Run sweeps (${{ github.event.inputs.sweep_name || 'Scheduled' }})"
+run-name: >-
+  ${{
+    github.event.inputs.sweep_name &&
+    format(
+      'ttnn - Run sweeps ({0})',
+      replace(github.event.inputs.sweep_name, 'ALL SWEEPS ', '')
+    ) ||
+    'ttnn - Run sweeps (Scheduled)'
+  }}
 
 on:
   workflow_dispatch:
