@@ -285,47 +285,71 @@ jobs:
 
           echo "=== Starting CodeChecker analysis ==="
 
-          # Build the command with optional file filter
+          # Build command with optional file filter
           ANALYZE_CMD="CodeChecker analyze \
             /work/.build/clang-static-analyzer/compile_commands.json \
             --output $OUTPUT_DIR \
             --jobs $(nproc) \
             --config /work/.codechecker.json"
 
-          # Add file filter if specified (for fast debugging)
           if [ -n "${{ inputs.debug-file-filter }}" ]; then
             echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
             ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
           fi
 
-          echo "Running: $ANALYZE_CMD"
-
-          # Run analysis, but don't fail on analyzer crashes (common with static analysis)
-          if eval "$ANALYZE_CMD"; then
-            echo "✅ Analysis completed successfully"
-          else
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "⚠️ Some analysis actions failed (exit code: $EXIT_CODE)"
-              echo "This is common with static analyzers and doesn't necessarily indicate a problem."
-            fi
-          fi
+          # Run analysis (don't fail on analyzer crashes - common with static analysis)
+          eval "$ANALYZE_CMD" || echo "⚠️ Analysis completed with warnings"
 
           # Set output for downstream steps
           echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
 
-          # Show what was generated
-          echo "=== Analysis output ==="
-          ls -lah "$OUTPUT_DIR" || echo "No output directory created"
-          find "$OUTPUT_DIR" -name "*.plist" | wc -l | xargs echo "Number of plist files:"
+          # Show summary
+          PLIST_COUNT=$(find "$OUTPUT_DIR" -name "*.plist" 2>/dev/null | wc -l)
+          echo "✅ Generated $PLIST_COUNT plist files"
 
-      - name: Upload raw CodeChecker reports
+      - name: Generate JSON and HTML reports from analysis results
+        run: |
+          set -euo pipefail
+
+          OUTPUT_DIR="${{ steps.codechecker.outputs.analyze-output }}"
+          JSON_OUTPUT="/work/.build/codechecker_issues.json"
+          HTML_OUTPUT="/work/.build/codechecker_html"
+
+          echo "=== Generating JSON report ==="
+          CodeChecker parse "$OUTPUT_DIR" --export json --output "$JSON_OUTPUT" || true
+
+          if [ -f "$JSON_OUTPUT" ] && [ -s "$JSON_OUTPUT" ]; then
+            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" || echo "0")
+            echo "✅ JSON report contains $ISSUE_COUNT issues"
+          else
+            echo "⚠️ No JSON output, creating empty report"
+            echo "[]" > "$JSON_OUTPUT"
+          fi
+
+          echo ""
+          echo "=== Generating HTML report ==="
+          mkdir -p "$HTML_OUTPUT"
+          CodeChecker parse "$OUTPUT_DIR" --export html --output "$HTML_OUTPUT" || true
+
+          if [ -d "$HTML_OUTPUT" ] && [ -n "$(ls -A "$HTML_OUTPUT")" ]; then
+            echo "✅ HTML report generated"
+          else
+            echo "⚠️ HTML report is empty or missing"
+          fi
+
+      - name: Upload JSON report
         uses: actions/upload-artifact@v4
         if: always()
-        timeout-minutes: 10
         with:
-          name: CodeChecker-Raw-Reports
-          path: ${{ steps.codechecker.outputs.analyze-output }}
+          name: CodeChecker-JSON-Report
+          path: /work/.build/codechecker_issues.json
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: CodeChecker-HTML-Report
+          path: /work/.build/codechecker_html
 
   copilot-fix-clangsa-issue:
     name: 🤖 Copilot Fix ClangSA Issue
@@ -342,58 +366,19 @@ jobs:
       pr-url: ${{ steps.create-pr.outputs.pr-url }}
       pr-created: ${{ steps.create-pr.outputs.pr-created }}
     steps:
-      - name: Download CodeChecker raw reports
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download CodeChecker JSON report
         uses: actions/download-artifact@v4
         with:
-          name: CodeChecker-Raw-Reports
-          path: /tmp/reports
-
-      - name: Install CodeChecker
-        run: |
-          pip install codechecker==6.27.1
-
-      - name: Generate JSON from raw reports
-        id: generate-json
-        run: |
-          set -euo pipefail
-
-          if [ ! -d "/tmp/reports" ]; then
-            echo "No CodeChecker reports found"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Generate JSON using CodeChecker parse
-          JSON_OUTPUT="/tmp/codechecker_issues.json"
-          if CodeChecker parse /tmp/reports --export json --output "$JSON_OUTPUT" 2>&1; then
-            # Check if we have any issues
-            if [ ! -s "$JSON_OUTPUT" ]; then
-              echo "Empty JSON output from CodeChecker"
-              echo "has-issues=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            # Parse JSON to count issues
-            ISSUE_COUNT=$(jq 'if type == "array" then length else 0 end' "$JSON_OUTPUT" 2>/dev/null || echo "0")
-
-            if [ "$ISSUE_COUNT" = "0" ]; then
-              echo "No issues found in CodeChecker reports"
-              echo "has-issues=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            echo "Found $ISSUE_COUNT issues"
-            echo "has-issues=true" >> "$GITHUB_OUTPUT"
-            echo "issue-count=$ISSUE_COUNT" >> "$GITHUB_OUTPUT"
-          else
-            echo "Failed to parse CodeChecker reports"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          name: CodeChecker-JSON-Report
+          path: /tmp
 
       - name: Check if issues exist and prepare list
         id: select-issue
-        if: steps.generate-json.outputs.has-issues == 'true'
         run: |
           set -euo pipefail
           if [ ! -f "/tmp/codechecker_issues.json" ]; then
@@ -432,12 +417,13 @@ jobs:
           # Save to file for the next step (avoiding output escaping issues)
           echo "$ISSUE_LIST" > /tmp/issue_list.txt
 
-      - name: Check out repo for Copilot
+      - name: Re-checkout repo for Copilot with full history and token
         if: steps.select-issue.outputs.has-issues == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          clean: true
 
       - name: Setup Node.js
         if: steps.select-issue.outputs.has-issues == 'true'
@@ -1111,7 +1097,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Output no issues summary
-        if: steps.generate-json.outputs.has-issues != 'true'
+        if: steps.select-issue.outputs.has-issues != 'true'
         run: |
           echo "## 🤖 Copilot Coding Agent Task" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -1125,21 +1111,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download CodeChecker raw reports
+      - name: Download CodeChecker HTML report
         uses: actions/download-artifact@v4
         with:
-          name: CodeChecker-Raw-Reports
-          path: /tmp/reports
-
-      - name: Install CodeChecker
-        run: |
-          pip install codechecker==6.27.1
-
-      - name: Generate HTML from raw reports
-        run: |
-          set -euo pipefail
-          mkdir -p site
-          CodeChecker parse /tmp/reports --export html --output site
+          name: CodeChecker-HTML-Report
+          path: site
 
       - name: Add .nojekyll
         run: touch site/.nojekyll
