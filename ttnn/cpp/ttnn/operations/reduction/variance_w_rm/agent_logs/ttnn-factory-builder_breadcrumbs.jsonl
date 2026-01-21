@@ -18,3 +18,4 @@
 {"event":"action","type":"build","command":"./build_metal.sh -b Debug","notes":"Stage 6: kernels created, building","ts":"2026-01-21T16:04:44+00:00"}
 {"event":"result","type":"build","success":true,"ts":"2026-01-21T16:05:05+00:00"}
 {"event":"cb_sync_summary","total_cbs":8,"reader_to_compute":"Wt pages","compute_to_writer":"1 tile","note":"Simple passthrough stub for Stage 6","ts":"2026-01-21T16:06:43+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[4,5,6],"final_commit":"c17b60b8c3","ts":"2026-01-21T16:08:27+00:00"}
