@@ -2,39 +2,58 @@
 
 Scripts for validating Blackhole Galaxy Exabox clusters before running workloads.
 
+## Quick Reference
+
+**Last Known-Good Docker Image:**
+```
+ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
+```
+
 ## Full Hardware Qualification
 
 When bringing up new clusters, operators must ensure that all hardware allocated for the system is stable and usable by software. The workflows outlined in this section are designed to do that.
 
 These workflows also rely on Dockerized Metal Containers, allowing operators to validate the health of the cluster without having to build Metal.
 
-The order matters: physical validation, then dispatch tests, then fabric tests. Physical validation hammers the Ethernet links to make sure they're stable. If links are flaky, fabric tests will just fail with routing errors - you'll waste time debugging software when it's actually a cable. Dispatch tests stress the compute/memory/data-movement blocks to verify chip stability before you try coordinating across the whole cluster.
+**Testing order matters:**
+
+1. **Physical Validation** - Hammers the Ethernet links to ensure they're stable. Run this first to catch bad cables early.
+2. **Dispatch Tests** - Stress the compute/memory/data-movement blocks to verify chip stability.
+3. **Fabric Tests** - Test coordinated workloads across the whole cluster.
+
+If links are flaky, fabric tests will fail with routing errors - you'll waste time debugging software when it's actually a cable. Always validate hardware health before running workloads.
 
 ### Prerequisites
 
 - Clone tt-metal to `/data/<your-username>/` and run all commands from the repo root
-- Passwordless SSH to all hosts
+- Passwordless SSH to all hosts (using `ssh-add` for agent forwarding - see [SSH Setup](#ssh-setup) below)
 - `mpirun` available (Docker-based scripts also need `mpirun-ulfm`)
-- FSD file for your cluster topology (on shared mount, should already exist):
+- FSD file for your cluster topology (must be accessible on a shared filesystem)
+  - **Note**: The paths below are specific to the current BH Exabox setup. Your system may have different descriptors depending on your topology and deployment.
   - 8x16: `/data/local-syseng-manual/5x8x16_fsd.textproto`
   - 4x32: `/data/local-syseng-manual/4x4x32_fsd.textproto`
 
 **SSH Setup**
 
-Start an ssh-agent and add your key:
+On your local host, start an ssh-agent and add your key:
 ```bash
 eval $(ssh-agent)
 ssh-add ~/.ssh/<your-key>
 ```
 
-Verify you can connect without a password:
+Log into an intermediate host (jump host) in the cluster:
 ```bash
-ssh <host> hostname
+ssh -A <jump-host>
+```
+
+From the jump host, verify you can connect to all peer hosts without a password:
+```bash
+ssh <peer-host> hostname
 ```
 
 **MPI Check**
 
-Verify MPI can reach all hosts (`<hosts>` = comma-separated list, e.g. `host1,host2,host3,host4`):
+On the jump host, verify MPI can reach all hosts (`<hosts>` = comma-separated list, e.g. `host1,host2,host3,host4`):
 ```bash
 mpirun --host <hosts> hostname
 ```
@@ -48,10 +67,10 @@ ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:<tag>
 ```
 
 Options for `<tag>`:
-- `latest` - most recent passing build from main
-- A specific version tag (e.g., `v0.66.0-dev20260115-28-g6eccf7061a`) - known-good as of Jan 2026
+- `latest` - most recent passing build from main (Note: Once quad systems are in CI, this will be consistently reliable. For now, use the known-good version below.)
+- `v0.66.0-dev20260115-28-g6eccf7061a` - **Last known-good version** (see [Quick Reference](#quick-reference) at the top)
 
-To build an image from your branch, run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
+To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
 
 ### Physical Validation
 
@@ -62,7 +81,7 @@ Discovers Ethernet connections, compares against expected topology (FSD), resets
 ./tools/scaleout/exabox/run_validation_4x32.sh <hosts> <docker-image>
 ```
 
-Runs 50 loops (reset, discovery, 10 traffic iterations each). Logs go to `validation_output/`.
+Runs 50 loops (reset, discovery, 10 traffic iterations each). Logs go to `validation_output/` in your current directory.
 
 Why 50? Some links only fail after a few resets - they train fine once but can't do it reliably. Running many iterations catches these. It also burns in the hardware a bit, so weak components show themselves early rather than failing in production.
 
@@ -71,7 +90,7 @@ Analyze results with:
 ./tools/scaleout/exabox/analyze_validation_results.sh
 ```
 
-This tells you how many iterations passed vs failed, and breaks down failures by type (timeouts, missing connections, DRAM issues). If the same channel keeps failing, that's a bad cable. If failures are scattered randomly, might just be a flaky reset - try power cycling and running again.
+This tells you how many iterations passed vs failed, and breaks down failures by type (timeouts, missing connections, DRAM issues). If the same channel keeps failing, that's a bad cable. If failures are scattered randomly, it's likely a system with flaky ethernet. In either case, escalate to the systems engineering team.
 
 ### Dispatch Tests
 
@@ -81,14 +100,35 @@ Ensures all chips in the cluster are stable. Stress tests the Compute, Memory, a
 ./tools/scaleout/exabox/run_dispatch_tests.sh <hosts> <docker-image>
 ```
 
+If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
+
 ### Fabric Tests
 
 Stress tests for the TT-Fabric layer. Ensures TT-Fabric SW and FW is compatible with the cluster topology. Also stresses the physical ethernet interconnect, verifying cluster stability. Only run after physical validation passes.
+
+**Topology-Specific Scripts:**
+
+The current BH Exabox has two different cluster topologies (both with 4 Galaxies, 128 chips):
+- **8x16** (16×8 mesh topology) - Located in Aisle C - Used for DeepSeek-R1 implementation, machines in cluster:
+  - `bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08`
+  - `bh-glx-c03u02,bh-glx-c03u08,bh-glx-c04u02,bh-glx-c04u08`
+- **4x32** (32×4 mesh topology) - Located in Aisle B - Used for Wan2.2 implementation, machines in cluster:
+  - `bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08`
+
+The mesh shape affects how workloads are distributed across chips. Choose the script matching your cluster topology:
 
 ```bash
 ./tools/scaleout/exabox/run_fabric_tests_8x16.sh <hosts> <docker-image>
 ./tools/scaleout/exabox/run_fabric_tests_4x32.sh <hosts> <docker-image>
 ```
+
+**Note:** These topology-specific scripts will eventually be replaced with a unified cluster-level descriptor approach.
+
+If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
+
+**Exabox Physical Layout:**
+
+![Exabox Diagram](images/exabox_diagram.png)
 
 ## Quick Health Check (For Developers)
 
@@ -115,11 +155,11 @@ Look for `All Detected Links are healthy` in the output.
 
 **Missing connections** (`Channel/Port Connections found in FSD but missing in GSD`): Check cables are seated, verify you're using the right FSD file.
 
-**Timeouts** (`Timeout (10000 ms) waiting for physical cores`): Power cycle the cluster.
+**Timeouts** (`Timeout (10000 ms) waiting for physical cores`): Usually a transient issue. Issue a cluster-level reset (do NOT power cycle). If the issue persists, contact syseng in the `#exabox-infra` Slack channel. Power cycling should only be done in coordination with cluster managers (infra and cloud teams).
 
-**DRAM Training Failed**: Hardware issue, contact syseng.
+**DRAM Training Failed**: Usually a transient hardware issue that will go away with another cluster reset. If it persists after multiple resets, contact syseng in the `#exabox-infra` Slack channel.
 
-**Tests hanging**: Power cycle.
+**Tests hanging**: Could be a workload issue or cluster issue. First, run validation scripts to ensure the cluster is healthy. If the cluster is unhealthy, contact syseng in the `#exabox-infra` Slack channel. If the cluster is healthy but the workload hangs, this is an application problem - debug the workload. Do NOT power cycle.
 
 **Fabric tests failing**: Make sure physical validation passed first.
 
@@ -144,7 +184,11 @@ Host                Tray  ASIC  Ch   Port ID  Port Type      Unique ID     Retra
 bh-glx-c02u02       4     7     0    13       TRACE          0x7dd4ab9...  0x0         0x2fb9872     0x85ad4           24                Retrain + Uncorrected CW + Data Mismatch64 B        367360 B
 ```
 
-Data Mismatch usually means bad cable or port.
+**About Data Mismatches:**
+
+Non-deterministic data mismatches are currently being debugged by the Systems Engineering team and are seen across all BH Galaxy clusters. These usually go away with a second reset.
+
+A missing cable or bad port/connection will show up as a **consistently missing link** during validation (not as a data mismatch).
 
 ## Scripts Reference
 
