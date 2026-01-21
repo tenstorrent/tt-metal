@@ -227,6 +227,41 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
+bool test_load_multicast_write_risc_binary(
+    const ll_api::memory& mem,
+    tt::ChipId chip_id,
+    const CoreCoord& start_core,
+    const CoreCoord& end_core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx) {
+    TT_ASSERT(
+        tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(start_core, chip_id) and
+        tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(end_core, chip_id));
+
+    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
+                                   .hal()
+                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
+                                   .local_init_addr;
+
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        uint64_t relo_addr =
+            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, false);
+
+        tt::tt_metal::MetalContext::instance().get_cluster().noc_multicast_write(
+            &*mem_ptr, len_words * sizeof(uint32_t), chip_id, start_core, end_core, relo_addr);
+    });
+
+    log_debug(tt::LogLLRuntime, "multicast hex to cores {} - {}", start_core.str().c_str(), end_core.str().c_str());
+
+    if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE")) {
+        log_info(tt::LogLLRuntime, "WARNING: Readback after multicast write is not yet supported");
+    }
+
+    return true;
+}
+
 void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {

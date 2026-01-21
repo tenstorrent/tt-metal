@@ -14,16 +14,14 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPaddingSingleCoreShardedFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const Tensor& input = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const Tensor& input = input_tensor;
+    const Tensor& output = output_tensor;
     auto pad_value = operation_attributes.pad_value;
 
     // Data formats and tile sizes
@@ -167,14 +165,14 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
 
 void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output) {
+    const operation_attributes_t& /*operation_attributes*/,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = output.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     // Reuse core used in create()
     const CoreCoord core = shared_variables.core.start_coord;  // Extract CoreCoord from CoreRange
@@ -187,4 +185,4 @@ void TilizeWithValPaddingSingleCoreShardedFactory::override_runtime_arguments(
     writer_rt_args[0] = dst_buffer->address();
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

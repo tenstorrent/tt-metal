@@ -11,7 +11,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::scatter {
+namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -25,10 +25,9 @@ struct ScatterProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const ScatterParams&, const ScatterInputs&, Tensor&);
 
-    static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(cached_program_t&, const ScatterParams&, const ScatterInputs&, Tensor&);
 };
 
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim

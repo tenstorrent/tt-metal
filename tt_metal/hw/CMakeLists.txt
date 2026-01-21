@@ -519,6 +519,7 @@ target_sources(
             inc/api/dataflow/dataflow_api.h
             inc/api/debug/assert.h
             inc/api/debug/dprint.h
+            inc/api/debug/timing_perturbation.h
             inc/api/debug/dprint_pages.h
             inc/api/debug/dprint_tensix.h
             inc/api/debug/dprint_tile.h
@@ -534,6 +535,14 @@ target_sources(
             inc/api/tensor/shard_pages_address_iterator.h
             inc/api/tensor/pages_address_iterator.h
             inc/api/tensor/page.h
+            # Experimental 2.0 Headers
+            inc/experimental/lock.h
+            inc/experimental/noc.h
+            inc/experimental/circular_buffer.h
+            inc/experimental/noc_semaphore.h
+            inc/experimental/endpoints.h
+            inc/experimental/core_local_mem.h
+            inc/experimental/tensor.h
             # Interface Headers - Host-Device boundary
             inc/hostdev/dev_msgs.h
             inc/hostdev/fabric_telemetry_msgs.h

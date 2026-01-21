@@ -7,7 +7,7 @@
 
 #include <core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -281,7 +281,7 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
-    if (this->target_type_ == TargetDevice::Simulator) {
+    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock) {
         return;
     }
 
@@ -390,10 +390,13 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        uint32_t num_devices = temp_cluster_desc->get_all_chips().size();
-        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
+        auto grouped_chips = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
+        uint32_t max_chips_per_mmio = 0;
+        for (const auto& [mmio_device_id, chips] : grouped_chips) {
+            max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
+        }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
+            .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
             .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
@@ -416,7 +419,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
@@ -870,6 +873,43 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->read_from_device_reg(mem_ptr, target.chip, target_coord, addr, size_in_bytes);
+}
+
+void Cluster::noc_multicast_write(
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const {
+    TT_FATAL(core_start.chip == core_end.chip, "core_start and core_end must be on the same chip");
+    noc_multicast_write(
+        mem_ptr,
+        sz_in_bytes,
+        core_start.chip,
+        tt_xy_pair(core_start.x, core_start.y),
+        tt_xy_pair(core_end.x, core_end.y),
+        addr);
+}
+
+void Cluster::noc_multicast_write(
+    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, CoreCoord core_start, CoreCoord core_end, uint64_t addr)
+    const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    if (rtoptions_.get_watcher_enabled()) {
+        tt::watcher_sanitize_host_noc_multicast_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            {core_start.x, core_start.y},
+            {core_end.x, core_end.y},
+            addr,
+            sz_in_bytes);
+    }
+
+    tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);
+    tt::umd::CoreCoord end_coord = soc_desc.get_coord_at(core_end, CoordSystem::TRANSLATED);
+
+    this->driver_->noc_multicast_write(const_cast<void*>(mem_ptr), sz_in_bytes, chip_id, start_coord, end_coord, addr);
+
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        this->driver_->wait_for_non_mmio_flush(chip_id);
+    }
 }
 
 void Cluster::write_sysmem(

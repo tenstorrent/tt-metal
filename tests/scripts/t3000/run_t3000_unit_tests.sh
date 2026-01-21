@@ -103,7 +103,6 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  ./build/test/ttnn/unit_tests_ttnn_udm
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
@@ -116,6 +115,23 @@ run_t3000_ttnn_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ttnn_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_ttnn_udm_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_ttnn_udm_tests"
+  ./build/test/ttnn/unit_tests_ttnn_udm
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ttnn_udm_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -504,7 +520,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -520,6 +536,14 @@ run_t3000_qwen25_vl_unit_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
+}
+
+run_t3000_deepseek_tests() {
+  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+
+  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 }
 
 run_t3000_ccl_tests() {
@@ -556,6 +580,7 @@ run_t3000_ccl_tests() {
   # p2p: 1 test should be enough
   # trace test with device delay
   pytest -n auto tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
+  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_generic_op.py::test_point_to_point
 
   # all broadcast: row major + tile test
   # both rm and tile test are called here
@@ -622,6 +647,38 @@ run_t3000_tt_dit_tests() {
 
 }
 
+run_t3000_tttv2_fast_unit_tests() {
+  fail=0
+
+  # Run non-module models/common unit tests
+  pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
+
+  # [INFO] HF_MODEL Only used for test_*_1d_vs_reference_from_model_args, which will retire with TTTv1
+  # Run MLP1D fast unit tests (full set is run in t3k_e2e_tests.yaml to match timeout values and frequency of runs)
+  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
+  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.mlp.mlp_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run RMSNorm1D tests
+  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
+  pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_gpt_oss_unit_tests() {
   # Record the start time
   fail=0
@@ -630,7 +687,7 @@ run_t3000_gpt_oss_unit_tests() {
   echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
 
   # Install gpt-oss requirements
-  pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
   HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
@@ -698,6 +755,9 @@ run_t3000_tests() {
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests
+
+  # Run tttv2 fast unit tests
+  run_t3000_tttv2_fast_unit_tests
 
   # Run gpt-oss unit tests
   run_t3000_gpt_oss_unit_tests

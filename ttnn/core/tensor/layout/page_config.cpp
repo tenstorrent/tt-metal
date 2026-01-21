@@ -97,11 +97,11 @@ Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) cons
 
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
-Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
+Alignment TilePageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& /*memory_config*/) const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig&) const {
+void TilePageConfig::validate_alignment(const Alignment& alignment, DataType /*dtype*/, const MemoryConfig&) const {
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
     TT_FATAL(
@@ -120,9 +120,9 @@ void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dty
 }
 
 Shape2D TilePageConfig::get_page_shape(
-    const Shape2D& physical_size,
-    DataType dtype,
-    const MemoryConfig& memory_config,
+    const Shape2D& /*physical_size*/,
+    DataType /*dtype*/,
+    const MemoryConfig& /*memory_config*/,
     const std::optional<Shape2D>&) const {
     return Shape2D(tile_.get_height(), tile_.get_width());
 }
@@ -145,7 +145,7 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
 
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
-Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
+Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});
@@ -158,7 +158,7 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
 }
 
 void RowMajorPageConfig::validate_alignment(
-    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
+    const Alignment& alignment, DataType /*dtype*/, const MemoryConfig& memory_config) const {
     TT_FATAL(!alignment.empty(), "Alignment must contain at least one dimension for Row Major layout.");
     const uint32_t width_alignment = alignment[-1];
 
