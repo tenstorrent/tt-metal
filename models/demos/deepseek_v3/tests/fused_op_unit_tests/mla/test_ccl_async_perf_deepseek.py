@@ -30,11 +30,11 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("mla_linear_wq_kv_a", 10, 12.54),
+        ("mla_linear_wq_kv_a", 10, 28.81),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_linear_tg_llama_perf(
+def test_linear_tg_deepseek_perf(
     step_name,
     warmup_iters,
     perf_target_us,
@@ -43,11 +43,10 @@ def test_linear_tg_llama_perf(
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
 
-    subdir = "llama_ccl_perf"
+    subdir = "deepseek_linear_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_linear_deepseek.py"
     cols = ["DEVICE KERNEL"]
-    op_name = "MeshDeviceOperationAdapter<ttnn::operations::matmul::MatmulDeviceOperation>"
-    warmup_iters = warmup_iters * 32  # 5 iterations per device
+    op_name = "MeshDeviceOperationAdapter<ttnn::prim::MatmulDeviceOperation>"
 
     profiler.start("run")
     profiler.start(step_name)
@@ -71,8 +70,8 @@ def test_linear_tg_llama_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_ops_6U",
-        ml_model_name="llama70b-tg",
+        run_type=f"tg_deepseek_linear",
+        ml_model_name="deepseek-v3-tg",
     )
 
     assert (
