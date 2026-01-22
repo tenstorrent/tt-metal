@@ -32,12 +32,13 @@ void MAIN {
     constexpr uint32_t cb_variance_tiled = tt::CBIndex::c_6;     // Variance tile
     constexpr uint32_t cb_epsilon = tt::CBIndex::c_7;            // Epsilon scalar tile
     constexpr uint32_t cb_rsqrt_tiled = tt::CBIndex::c_8;        // Rsqrt result tile
-    constexpr uint32_t cb_out_tiled = tt::CBIndex::c_16;         // Output tiled (also used for untilize)
+    constexpr uint32_t cb_standardized_tiled = tt::CBIndex::c_9;  // Standardized tiles (Phase 8 output)
+    constexpr uint32_t cb_out_rm = tt::CBIndex::c_16;             // Output RM sticks (Phase 9 untilize output)
 
     // ============================================================
     // Initialize compute kernel hardware
     // ============================================================
-    compute_kernel_hw_startup(cb_in_rm, cb_scaler, cb_out_tiled);
+    compute_kernel_hw_startup(cb_in_rm, cb_scaler, cb_out_rm);
 
     // ============================================================
     // Custom CB policies (per kernel_design.md)
@@ -151,19 +152,21 @@ void MAIN {
         // USE HELPER: compute_kernel_lib::mul<COL, PreloadedPopAtEnd, WaitUpfrontPopAtEnd>()
         // cb_centralized_tiled: centralized tiles (Wt tiles, still present from Phase 4 NO POP)
         // cb_rsqrt_tiled: rsqrt tile (1 tile, Col0 valid)
-        // Output to cb_out_tiled (Wt tiles)
+        // Output to cb_standardized_tiled (Wt tiles)
         // BroadcastDim::COL to replicate rsqrt across columns
         // ========================================================
         compute_kernel_lib::mul<compute_kernel_lib::BroadcastDim::COL, PreloadedPopAtEnd, WaitUpfrontPopAtEnd>(
-            cb_centralized_tiled, cb_rsqrt_tiled, cb_out_tiled, compute_kernel_lib::BinaryTileShape::row(Wt));
+            cb_centralized_tiled, cb_rsqrt_tiled, cb_standardized_tiled, compute_kernel_lib::BinaryTileShape::row(Wt));
 
         // ========================================================
         // Phase 9: Untilize (tiled -> RM sticks)
-        // USE HELPER: compute_kernel_lib::untilize<Wt, cb_out_tiled, cb_out_tiled>()
-        // Note: Using same CB for input tiles and output sticks
+        // USE HELPER: compute_kernel_lib::untilize<Wt, cb_standardized_tiled, cb_out_rm>()
+        // Input: cb_standardized_tiled (c_9) - tiled multiply output
+        // Output: cb_out_rm (c_16) - RM sticks for writer
+        // CRITICAL: These must be DIFFERENT CBs - untilize reads tiles and writes sticks
         // Helper handles: cb_wait_front, pack_untilize, cb_push_back, cb_pop_front
         // ========================================================
-        compute_kernel_lib::untilize<Wt, cb_out_tiled, cb_out_tiled>(1);
+        compute_kernel_lib::untilize<Wt, cb_standardized_tiled, cb_out_rm>(1);
     }
 }
 

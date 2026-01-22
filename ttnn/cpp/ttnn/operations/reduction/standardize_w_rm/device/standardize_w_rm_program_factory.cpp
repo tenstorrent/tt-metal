@@ -135,8 +135,21 @@ StandardizeWRmProgramFactory::cached_program_t StandardizeWRmProgramFactory::cre
     tt::tt_metal::create_cb(
         cb_rsqrt_idx, program, core_range_set, cb_rsqrt_page_size, cb_rsqrt_num_pages, cb_data_format);
 
+    // CB c_9: Standardized tiles (Phase 8 multiply output)
+    // This is separate from CB c_16 because untilize cannot read/write same CB
+    constexpr uint32_t cb_standardized_idx = tt::CBIndex::c_9;
+    const uint32_t cb_standardized_page_size = tile_size;
+    const uint32_t cb_standardized_num_pages = Wt;  // Hold full tile-row
+    tt::tt_metal::create_cb(
+        cb_standardized_idx,
+        program,
+        core_range_set,
+        cb_standardized_page_size,
+        cb_standardized_num_pages,
+        cb_data_format);
+
     // CB c_16: Output RM sticks (double-buffered)
-    // Used for both Phase 8 output (tiled multiply) and Phase 9 (untilize RM output)
+    // Only used for Phase 9 untilize output (NOT for tiled data)
     // Page size = tile_size for untilize sync (helper expects Wt pages)
     // Num pages = 2*Wt for double-buffering one tile-row
     constexpr uint32_t cb_out_rm_idx = tt::CBIndex::c_16;

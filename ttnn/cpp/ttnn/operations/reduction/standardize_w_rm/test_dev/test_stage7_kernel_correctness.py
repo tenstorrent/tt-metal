@@ -6,18 +6,21 @@ against PyTorch reference: (x - mean(x)) / sqrt(var(x) + epsilon)
 
 Standardization normalizes each row to have mean=0 and std=1 (approximately).
 
-Known Issue:
-    The kernel works correctly for structured data patterns (constant rows,
-    alternating patterns) but has numerical precision issues with random data
-    that result in row mixing. This appears to be related to the accumulated
-    precision loss in the chained operations (tilize -> reduce -> subtract ->
-    square -> reduce -> add -> rsqrt -> multiply -> untilize). The tests
-    marked with pytest.mark.xfail document this behavior while the structured
-    tests verify the fundamental algorithm is correct.
+Bug Fix Note:
+    The original implementation had a critical bug: Phase 9 (untilize) used the
+    same CB (c_16) for both input (tiled tiles) and output (RM sticks). This
+    caused the untilize to corrupt the tiles it was reading as it wrote the
+    output, resulting in PCC ~0.09 (random noise).
+
+    The fix added CB c_9 for tiled multiply output (Phase 8), and uses c_16
+    only for RM untilize output (Phase 9). This is the correct pattern:
+    - Phase 8: centralized_tiled * rsqrt -> standardized_tiled (c_9)
+    - Phase 9: standardized_tiled (c_9) -> out_rm (c_16)
 """
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 
 def compute_standardize_reference(input_torch, epsilon=1e-5):
@@ -99,6 +102,7 @@ def test_alternating_pattern(device):
 
     # Check PCC - should be nearly perfect for this structured pattern
     pcc = torch.corrcoef(torch.stack([output_torch.float().flatten(), expected.float().flatten()]))[0, 1].item()
+    logger.info(f"Alternating pattern PCC: {pcc:.6f}")
     assert pcc > 0.99, f"PCC should be > 0.99 for alternating pattern, got {pcc:.4f}"
 
 
@@ -174,23 +178,15 @@ def test_multi_tile_alternating(device):
     assert pcc > 0.99, f"PCC should be > 0.99 for alternating pattern, got {pcc:.4f}"
 
 
-@pytest.mark.xfail(reason="Numerical precision issues with random data - see docstring")
 def test_random_data_pcc(device):
     """Test standardization on random data.
 
-    XFAIL: This test documents a known precision issue. The kernel works correctly
-    for structured patterns but has precision loss with random data that causes
-    effective row mixing. The accumulated error from 9 chained operations
-    (tilize, reduce, subtract, square, reduce, add, rsqrt, multiply, untilize)
-    appears to exceed acceptable tolerances for random data while being fine
-    for structured patterns.
-
-    Investigation needed: The reduce helper's handling of row-wise reduction
-    combined with the broadcast subtraction/multiplication may have subtle
-    precision issues when each row has different statistics.
+    This test verifies that the kernel produces correct results with random data.
+    After the fix (separating Phase 8 output CB from Phase 9 untilize output CB),
+    the PCC should be > 0.95 for random data.
     """
     torch.manual_seed(42)
-    input_torch = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    input_torch = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
     epsilon = 1e-5
     expected = compute_standardize_reference(input_torch.float(), epsilon).bfloat16()
 
