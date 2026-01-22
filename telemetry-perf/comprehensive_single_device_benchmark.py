@@ -308,8 +308,8 @@ def run_single_device_test(config: SingleDeviceTestConfig, phase: str = "full") 
                     metadata={},
                 )
 
-        # Open device
-        device = ttnn.open_device(device_id=0)
+        # Open device using the same API as conftest.py
+        device = ttnn.CreateDevice(device_id=0)
         ops = SingleDeviceOperations(device)
 
         # Get memory config object
