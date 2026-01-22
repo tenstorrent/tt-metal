@@ -112,6 +112,8 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(argidx++);
     size_t out_ready_sem_backward = get_arg_val<uint32_t>(argidx++);
     size_t out_ready_sem_forward = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_core_order_size = get_arg_val<uint32_t>(argidx++);
 
 #ifdef USE_MUX
     // Backward Mux
@@ -465,7 +467,6 @@ void kernel_main() {
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
-
                 if (!is_sink_core) {
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
@@ -486,17 +487,19 @@ void kernel_main() {
                 }
 
 #ifdef USE_MUX
-                if (is_injector_core && n_block_iter == 0) {
+                if (n_block_iter == 0) {
+                    uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / in1_core_order_size;
                     if (use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
                         if (slices_received_backward <= writes_expected_backward) {
                             // If backward, send forward
                             forward_block_to_fabric_neighbor(
-                                m_tile,
+                                m_tile + per_core_fabric_write_m_tiles * in1_core_order_index,
                                 k_block * K_block_tiles,
-                                current_M_block_tiles,
+                                per_core_fabric_write_m_tiles,
                                 K_block_tiles,
                                 num_tiles_to_write_per_packet,
-                                in0_start_address,
+                                in0_start_address + (per_core_fabric_write_m_tiles * in1_core_order_index) *
+                                                        K_block_tiles * in0_tile_size,
                                 padded_K_tiles,
                                 in0_reader,
                                 mux_connection_handle_backward,
@@ -511,12 +514,13 @@ void kernel_main() {
                         if (slices_received_forward <= writes_expected_forward) {
                             // If forward, send backward
                             forward_block_to_fabric_neighbor(
-                                m_tile,
+                                m_tile + per_core_fabric_write_m_tiles * in1_core_order_index,
                                 k_block * K_block_tiles,
-                                current_M_block_tiles,
+                                per_core_fabric_write_m_tiles,
                                 K_block_tiles,
                                 num_tiles_to_write_per_packet,
-                                in0_start_address,
+                                in0_start_address + (per_core_fabric_write_m_tiles * in1_core_order_index) *
+                                                        K_block_tiles * in0_tile_size,
                                 padded_K_tiles,
                                 in0_reader,
                                 mux_connection_handle_forward,
@@ -577,7 +581,6 @@ void kernel_main() {
 #ifdef USE_MUX
     if (mux_connection_valid_backward) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle_backward);
-
         if (is_termination_master_backward) {
             auto* termination_sync_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address_backward);
