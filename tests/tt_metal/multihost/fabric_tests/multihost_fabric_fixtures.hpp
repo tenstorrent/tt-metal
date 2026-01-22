@@ -19,15 +19,14 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
 
-    auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
-        fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
+    // auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
+    // fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
     bool custom_mesh_graph_path_set =
         tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
     std::string custom_mesh_graph_path =
         tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
-        chip_to_eth_coord_mapping);
+        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(), {});
     TT_FATAL(
         !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
@@ -341,5 +340,36 @@ public:
         return num_user_procs == num_meshes * num_procs_per_mesh;
     }
 };
+
+template <typename Fixture>
+class ClosetBoxFabricFixture : public Fixture {
+    std::string get_path_to_mesh_graph_desc() override {
+        return "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
+    }
+
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
+        return {
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+            // get_eth_coords_for_2x4_t3k(),
+        };
+    }
+};
+
+using IntermeshClosetBoxFabricFixture = ClosetBoxFabricFixture<InterMeshRoutingFabric2DFixture>;
+using MeshDeviceClosetBoxFabricFixture = ClosetBoxFabricFixture<MultiMeshDeviceFabricFixture>;
 
 }  // namespace tt::tt_fabric::fabric_router_tests

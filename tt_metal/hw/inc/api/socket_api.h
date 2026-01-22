@@ -283,9 +283,6 @@ void fabric_socket_notify_sender(
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
     fabric_set_unicast_route(fabric_header_addr, socket);
-    DPRINT << "Notify sender at addr: " << socket.upstream_bytes_acked_addr
-           << " with bytes_acked: " << socket.bytes_acked << ENDL();
-    DPRINT << "Sender mesh id: " << socket.upstream_mesh_id << " sender chip id: " << socket.upstream_chip_id << ENDL();
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     fabric_connection.wait_for_empty_write_slot();
@@ -298,9 +295,6 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
     uint64_t upstream_bytes_acked_noc_addr) {
-    DPRINT << "Notify sender at addr: " << upstream_bytes_acked_noc_addr << " with bytes_acked: " << socket.bytes_acked
-           << ENDL();
-
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     fabric_connection.wait_for_empty_write_slot();

@@ -2789,7 +2789,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                     if (dest_port.connection_hash == connection_hash) {
                         auto src_port_id = src_port.port_id;
                         auto dest_port_id = dest_port.port_id;
-                        log_debug(
+                        log_info(
                             tt::LogDistributed,
                             "Connecting Meshes {} {} over Logical Ports {} {}",
                             *src_mesh,
