@@ -855,13 +855,7 @@ def pytest_addoption(parser):
         "--trace-params",
         action="store_true",
         default=False,
-        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files just at python level, please check ttnn/documentation/OperationTracing.md for more details). By default, tensor values are not serialized (only metadata like shape and dtype).",
-    )
-    parser.addoption(
-        "--trace-params-with-values",
-        action="store_true",
-        default=False,
-        help="When used with --trace-params, also serialize tensor values (not just metadata). This will significantly increase file size and serialization time.",
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See ttnn/documentation/operation_tracing/OperationTracing.md for details.",
     )
 
 

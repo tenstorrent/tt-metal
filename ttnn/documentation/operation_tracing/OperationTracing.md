@@ -71,20 +71,18 @@ pytest <test_file> --trace-params
 - If `root_report_path` is not set, defaults to `generated/ttnn/operation_parameters/`
 - Trace files are automatically cleaned up after tests complete
 
-### `--trace-params-with-values`
+### Enabling Tensor Value Serialization
 
-**Purpose**: Enables full tensor value serialization (in addition to metadata)
+To include tensor values (not just metadata), call the enable function in your code:
 
-**Usage**:
-```bash
-pytest <test_file> --trace-params --trace-params-with-values
+```python
+import ttnn.operation_tracer
+
+# Enable tensor value serialization
+ttnn.operation_tracer.enable_tensor_value_serialization(True)
 ```
 
-**Behavior**:
-- Must be used together with `--trace-params`
-- Serializes complete tensor values in addition to metadata
-- **Warning**: This will significantly increase file size and serialization time for large tensors
-- Use only when you need to inspect actual tensor values for debugging
+**Warning**: This will significantly increase file size and serialization time for large tensors. Use only when you need to inspect actual tensor values for debugging.
 
 ## Trace File Format
 
@@ -107,7 +105,7 @@ Where:
 
 ### JSON Structure
 
-Each trace file contains a JSON object with the following structure. Note that the `values` field is only included when `--trace-params-with-values` is used:
+Each trace file contains a JSON object with the following structure. Note that the `values` field is only included when tensor value serialization is enabled:
 
 **Default (metadata only)**:
 ```json
@@ -150,7 +148,7 @@ Each trace file contains a JSON object with the following structure. Note that t
 }
 ```
 
-**With values** (when `--trace-params-with-values` is used):
+**With values** (when tensor value serialization is enabled):
 ```json
 {
   "operation_number": 3,
@@ -208,7 +206,7 @@ Each trace file contains a JSON object with the following structure. Note that t
 
 ### Tensor Serialization
 
-Tensors are serialized with the following fields. **By default, only metadata is included** (shape, dtype, layout, storage_type). The `values` field is only included when `--trace-params-with-values` is used.
+Tensors are serialized with the following fields. **By default, only metadata is included** (shape, dtype, layout, storage_type). The `values` field is only included when tensor value serialization is enabled.
 
 #### `ttnn.Tensor` Objects
 
@@ -225,7 +223,7 @@ Tensors are serialized with the following fields. **By default, only metadata is
 }
 ```
 
-**With values** (when `--trace-params-with-values` is used):
+**With values** (when tensor value serialization is enabled):
 ```json
 {
   "type": "ttnn.Tensor",
@@ -242,7 +240,7 @@ Tensors are serialized with the following fields. **By default, only metadata is
 - **`type`**: Always `"ttnn.Tensor"`
 - **`shape`**: Shape of the tensor as a list
 - **`dtype`**: Data type as a string
-- **`values`**: (Optional) Nested list containing all tensor values - only included when `--trace-params-with-values` is used
+- **`values`**: (Optional) Nested list containing all tensor values - only included when tensor value serialization is enabled
 - **`original_shape`**: Original shape before any conversions (if available)
 - **`original_dtype`**: Original dtype before conversion (if available)
 - **`layout`**: Tensor layout (e.g., `"TILE"`, `"ROW_MAJOR"`) - if available
@@ -259,7 +257,7 @@ Tensors are serialized with the following fields. **By default, only metadata is
 }
 ```
 
-**With values** (when `--trace-params-with-values` is used):
+**With values** (when tensor value serialization is enabled):
 ```json
 {
   "type": "torch.Tensor",
@@ -272,9 +270,7 @@ Tensors are serialized with the following fields. **By default, only metadata is
 - **`type`**: Always `"torch.Tensor"`
 - **`shape`**: Shape of the tensor as a list
 - **`dtype`**: Data type as a string
-- **`values`**: (Optional) Nested list containing all tensor values - only included when `--trace-params-with-values` is used
-
-**Note**: When `--trace-params-with-values` is used, `bfloat16` tensors are automatically converted to `float32` for JSON serialization, as NumPy does not natively support `bfloat16`.
+- **`values`**: (Optional) Nested list containing all tensor values - only included when tensor value serialization is enabled
 
 ## Trace File Location
 
@@ -377,12 +373,11 @@ This will create 2 trace files:
 # Run a specific test with tracing enabled (metadata only - default)
 pytest tests/ttnn/unit_tests/base_functionality/test_python_tracer.py::test_operation_parameter_tracing -s --trace-params
 
-# Run with full tensor value serialization
-pytest tests/ttnn/unit_tests/base_functionality/test_python_tracer.py::test_operation_parameter_tracing -s --trace-params --trace-params-with-values
-
 # Run all tests in a file with tracing
 pytest tests/ttnn/unit_tests/base_functionality/test_python_tracer.py -s --trace-params
 ```
+
+To include tensor values, call `ttnn.operation_tracer.enable_tensor_value_serialization(True)` in your test code.
 
 ## Performance Considerations
 
@@ -400,20 +395,20 @@ pytest tests/ttnn/unit_tests/base_functionality/test_python_tracer.py -s --trace
 
 **Recommendation**:
 - Use `--trace-params` (metadata only) for general debugging and production analysis
-- Use `--trace-params --trace-params-with-values` only when you specifically need to inspect tensor values
+- Call `ttnn.operation_tracer.enable_tensor_value_serialization(True)` only when you specifically need to inspect tensor values
 - Do not enable value serialization in performance-critical paths
 
 ## Limitations
 
-1. **Large Tensors (with values)**: When using `--trace-params-with-values`, very large tensors will create very large JSON files. Consider the disk space implications. The default (metadata only) avoids this issue.
+1. **Large Tensors (with values)**: When `serialize_tensor_values` is enabled, very large tensors will create very large JSON files. Consider the disk space implications. The default (metadata only) avoids this issue.
 
 2. **Data Type Conversions** (with values only):
    - Some precision may be lost when converting `bfloat16` to `float32`
-   - Only relevant when `--trace-params-with-values` is used
+   - Only relevant when `serialize_tensor_values` is enabled
 
 3. **Device Tensors** (with values only):
    - Device tensors are moved to CPU before value serialization, which may change their representation slightly
-   - Only relevant when `--trace-params-with-values` is used
+   - Only relevant when `serialize_tensor_values` is enabled
 
 4. **Memory Configurations**: Memory configuration information is not fully serialized (only basic tensor metadata).
 
@@ -475,12 +470,11 @@ The tracer uses module-level global variables:
 
 ### Integration with Pytest
 
-The `conftest.py` file adds pytest command-line options:
+The `conftest.py` file adds the pytest command-line option:
 - `--trace-params`: Enables tracing (metadata only by default)
-- `--trace-params-with-values`: Enables full tensor value serialization (must be used with `--trace-params`)
 
 When `--trace-params` is used, `pytest_configure()` sets `ttnn.operation_tracer._ENABLE_TRACE = True`.
-When `--trace-params-with-values` is used, tensor values are also serialized.
+To also serialize tensor values, call `ttnn.operation_tracer.enable_tensor_value_serialization(True)` in your code.
 
 ## See Also
 

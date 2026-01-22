@@ -15,6 +15,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
+import torch
 import ttnn
 
 
@@ -34,9 +35,30 @@ _IS_SERIALIZING = False
 # Flag to control whether tensor values are serialized (default False)
 _SERIALIZE_TENSOR_VALUES = False
 
-# Command-line flag constants
+# Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
-_TRACE_PARAMS_WITH_VALUES_FLAG = "--trace-params-with-values"
+
+
+def enable_tensor_value_serialization(enable: bool = True) -> None:
+    """Enable or disable tensor value serialization in trace files.
+
+    By default, only tensor metadata (shape, dtype, layout) is serialized.
+    Call this function with enable=True to also serialize tensor values.
+
+    Args:
+        enable: If True, tensor values will be serialized. If False, only metadata.
+
+    Example:
+        import ttnn.operation_tracer
+
+        # Enable tensor value serialization
+        ttnn.operation_tracer.enable_tensor_value_serialization(True)
+
+        # Disable tensor value serialization
+        ttnn.operation_tracer.enable_tensor_value_serialization(False)
+    """
+    global _SERIALIZE_TENSOR_VALUES
+    _SERIALIZE_TENSOR_VALUES = enable
 
 
 def _is_tracing_enabled() -> bool:
@@ -269,14 +291,8 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
             else:
                 log_dir = pathlib.Path("generated/ttnn/operation_parameters")
 
-            # Determine if tensor values should be serialized
-            # Check config first, then command-line flag, then global flag (default False)
+            # Determine if tensor values should be serialized (default False)
             serialize_values = _SERIALIZE_TENSOR_VALUES
-            if hasattr(ttnn.CONFIG, "serialize_tensor_values"):
-                serialize_values = ttnn.CONFIG.serialize_tensor_values
-            # Check for --trace-params-with-values flag to enable value serialization
-            if _TRACE_PARAMS_WITH_VALUES_FLAG in sys.argv:
-                serialize_values = True
 
             # Serialize parameters and return value after the operation completes
             serialize_operation_parameters(
