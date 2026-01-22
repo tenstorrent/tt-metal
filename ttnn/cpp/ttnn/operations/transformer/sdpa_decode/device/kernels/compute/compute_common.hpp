@@ -83,7 +83,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         in0_cb,
         scale_cb,
         out_cb,
-        compute_kernel_lib::TileShape::grid(rows, cols),
+        compute_kernel_lib::TileGrid::of(rows, cols),
         compute_kernel_lib::TileLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
         [&](uint32_t) {

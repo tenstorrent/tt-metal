@@ -25,7 +25,7 @@ void calc_numeric_stable(
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputMode::PERSISTENT,
         compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
-        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::row(Wt));
+        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -261,13 +261,7 @@ void MAIN {
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-                cb_exps,
-                cb_bcast_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::TileShape::row(Wt),
-                {},
-                {},
-                [](uint32_t) {
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, compute_kernel_lib::TileGrid::row(Wt), {}, {}, [](uint32_t) {
                     recip_tile_init();
                     recip_tile(0);
                 });

@@ -126,7 +126,7 @@ void MAIN {
         cb_in,
         cb_scaler,
         cb_ex_partial2,
-        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
@@ -170,7 +170,7 @@ void MAIN {
         cb_x2,
         cb_scaler,
         cb_ex_partial2,
-        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
     cb_pop_front(cb_x2, num_tiles_per_block);
 

@@ -272,7 +272,7 @@ void MAIN {
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_ydyadd, cb_scaler, cb_dgamma, compute_kernel_lib::TileShape::single());
+                    cb_ydyadd, cb_scaler, cb_dgamma, compute_kernel_lib::TileGrid::single());
             } else {
                 // Just copy
                 tile_regs_acquire();
@@ -297,7 +297,7 @@ void MAIN {
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_dyadd, cb_scaler, cb_dbeta, compute_kernel_lib::TileShape::single());
+                    cb_dyadd, cb_scaler, cb_dbeta, compute_kernel_lib::TileGrid::single());
             } else {
                 // Just copy
                 tile_regs_acquire();

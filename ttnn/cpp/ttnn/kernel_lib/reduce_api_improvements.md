@@ -302,7 +302,7 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 |-------|----------------|--------|
 | Bool template args | Use `ReduceInitMode` enum | ✅ Implemented |
 | `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | ✅ Implemented |
-| TileShape naming | Rename to `TileGrid` | Pending |
+| TileShape naming | Rename to `TileGrid` | ✅ Implemented |
 | ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | Pending |
 | CB arguments | Group into `ReduceCBs` struct | Pending |
 
@@ -409,6 +409,51 @@ reduce<SUM, REDUCE_ROW>(..., shape,
 - `{}` for layout → `TileLayout::contiguous()` or `compute_kernel_lib::TileLayout::contiguous()`
 - `{}` for accum → `NoAccumulation{}` or `compute_kernel_lib::NoAccumulation{}`
 - `{}` for post_reduce_op → `NoOp{}` or omit (uses default)
+
+**Testing:**
+- Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass
+- Ran `pytest tests/ttnn/unit_tests/operations/fused/test_softmax.py` - all tests pass
+
+### Issue 3: Rename TileShape to TileGrid (Implemented)
+
+**Date:** 2026-01-22
+
+**Changes made:**
+1. Renamed struct `TileShape` to `TileGrid` in `reduce_helpers_compute.hpp`
+2. Renamed factory method `grid()` to `of()` for clarity (`TileGrid::of(r, c, b)`)
+3. Added backward compatibility alias: `using TileShape = TileGrid;`
+4. Updated function signature parameter from `TileShape shape` to `TileGrid grid`
+5. Migrated all call sites from `TileShape::*` to `TileGrid::*`
+6. Updated all documentation examples
+
+**Files modified:**
+- `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+- All 40+ kernel files using TileShape (migrated to TileGrid)
+
+**API change:**
+
+Before:
+```cpp
+TileShape::grid(Ht, Wt, NC)  // confusing - sounds like "shape of grid" not "grid of tiles"
+TileShape::single()
+TileShape::row(Wt)
+TileShape::col(Ht)
+```
+
+After:
+```cpp
+TileGrid::of(Ht, Wt, NC)    // clearer - "a TileGrid of these dimensions"
+TileGrid::single()
+TileGrid::row(Wt)
+TileGrid::col(Ht)
+```
+
+**Migration guide:**
+- `TileShape::grid(r, c, b)` → `TileGrid::of(r, c, b)`
+- `TileShape::single()` → `TileGrid::single()`
+- `TileShape::row(c)` → `TileGrid::row(c)`
+- `TileShape::col(r)` → `TileGrid::col(r)`
+- Old code using `TileShape` still works via alias (backward compatible)
 
 **Testing:**
 - Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass

@@ -165,7 +165,7 @@ void reduce_c() {
         reduce_dim,
         compute_kernel_lib::ReduceInputMode::PERSISTENT,
         compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
-        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileGrid::of(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

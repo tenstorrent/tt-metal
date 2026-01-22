@@ -131,8 +131,7 @@ void MAIN {
     }
 
     // Compute cb_y - reduce single pre-accumulated tile to scalar
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-        cb_xpowadd, cb_one, cb_y, compute_kernel_lib::TileShape::single());
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_xpowadd, cb_one, cb_y, compute_kernel_lib::TileGrid::single());
 
     cb_pop_front(cb_decimal, onetile);
     cb_pop_front(cb_one, onetile);

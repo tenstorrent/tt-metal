@@ -4,7 +4,16 @@
       "Bash(pytest:*)",
       "Bash(tee:*)",
       "Bash(find:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git -C /localdev/sjovic/tt-metal log --oneline -5)",
+      "Bash(git -C /localdev/sjovic/tt-metal status)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status:*)",
+      "Bash(xargs sed:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

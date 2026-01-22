@@ -33,11 +33,11 @@ void MAIN {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::single());
+                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::single());
         } else {
             // Phase 1: Reduce Wt-1 tiles
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::row(Wt - 1));
+                cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::row(Wt - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
@@ -46,7 +46,7 @@ void MAIN {
                 cb_tmp,
                 cb_bcast_scaler,
                 cb_max,
-                compute_kernel_lib::TileShape::single(),
+                compute_kernel_lib::TileGrid::single(),
                 compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
@@ -102,7 +102,7 @@ void MAIN {
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::TileShape::single(),
+                compute_kernel_lib::TileGrid::single(),
                 compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {
@@ -116,7 +116,7 @@ void MAIN {
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::TileShape::single(),
+                compute_kernel_lib::TileGrid::single(),
                 compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {

@@ -16,7 +16,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::row(block_w));
+        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::row(block_w));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -208,7 +208,7 @@ void MAIN {
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
-                compute_kernel_lib::TileShape::row(block_w),
+                compute_kernel_lib::TileGrid::row(block_w),
                 {},
                 {},
                 [](uint32_t) {

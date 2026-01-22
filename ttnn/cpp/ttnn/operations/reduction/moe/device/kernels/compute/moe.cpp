@@ -172,7 +172,7 @@ void reduce_c(uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows,
     // Postcondition: out_cb has rows produced
 
     compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-        in_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
+        in_cb, scale_cb, out_cb, compute_kernel_lib::TileGrid::of(rows, cols));
 
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }

@@ -134,7 +134,7 @@ void MAIN {
         }
         // reduce f(x)
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_cal, cb_one, cb_reduce, compute_kernel_lib::TileShape::single());
+            cb_cal, cb_one, cb_reduce, compute_kernel_lib::TileGrid::single());
 
         tile_regs_acquire();
 

@@ -42,7 +42,7 @@ void MAIN {
             tt::CBIndex::c_24,
             tt::CBIndex::c_2,
             is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
-            compute_kernel_lib::TileShape::single(),
+            compute_kernel_lib::TileGrid::single(),
             {},
             compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
     }

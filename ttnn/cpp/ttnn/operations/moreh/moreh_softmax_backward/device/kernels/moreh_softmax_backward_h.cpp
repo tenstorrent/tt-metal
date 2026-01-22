@@ -34,19 +34,19 @@ void MAIN {
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter2, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL>(
-                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::single());
+                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileGrid::single());
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
             compute_kernel_lib::
                 reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::TileShape::col(Ht - 1));
+                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::TileGrid::col(Ht - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Ht - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL>(
-                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::TileShape::single());
+                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::TileGrid::single());
 
             add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
         }
@@ -82,7 +82,7 @@ void MAIN {
         // step 2, compute sum(y * dy)
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
-                cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::col(Ht));
+                cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileGrid::col(Ht));
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {

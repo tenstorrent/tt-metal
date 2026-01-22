@@ -71,7 +71,7 @@ void MAIN {
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
         compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            stats_cb, reduce_scalar_cb, reduce_result_cb, compute_kernel_lib::TileShape::row(stats_tiles_cols));
+            stats_cb, reduce_scalar_cb, reduce_result_cb, compute_kernel_lib::TileGrid::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(mean_squared + eps)

@@ -433,7 +433,7 @@ void reduce_cb(
     uint32_t cb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
     compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
-        cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t),
+        cb_in, cb_scaler, cb_out, compute_kernel_lib::TileGrid::row(cb_length_t),
         compute_kernel_lib::TileLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
         // PostReduceOp: conditionally accumulate with previous result
