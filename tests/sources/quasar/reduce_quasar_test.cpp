@@ -51,6 +51,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     TileShape tile_shape_A = {
         .num_faces = params->num_faces, .face_r_dim = params->TEST_FACE_R_DIM, .face_c_dim = params->TEST_FACE_C_DIM, .narrow_tile = false};
 
+    _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
+    _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
     _llk_unpack_reduce_init_<REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, 1 /*num_tiles_per_pack*/, tile_shape_A);
     for (int i = 0; i < params->TILE_CNT; ++i)
@@ -115,6 +117,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
+    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>();

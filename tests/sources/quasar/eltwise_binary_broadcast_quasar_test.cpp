@@ -48,6 +48,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     td_val_B.buf_desc_id     = buf_desc_id_b;
     td_val_B.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
+    _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
+    _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
     _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(buf_desc_id_a, buf_desc_id_b, num_tiles_per_unpack);
     _llk_unpack_binary_broadcast_operands_(0, 0);
@@ -108,6 +110,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
+    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
     _llk_pack_<p_pacr::PACK0>(0, 0);

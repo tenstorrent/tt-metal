@@ -12,16 +12,13 @@ using namespace ckernel::trisc;
 /**
  * @brief Programs packer l1 info & math destination register format
  * @tparam PACK_SEL: Sets which packer to configure. values = p_pacr::PACK0/PACK1
- * @param tdma_desc: Contains L1 buffer descriptor information & destination register format
+ * @param tdma_desc: Contains destination register format
  */
 
 template <uint32_t PACK_SEL>
 inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
-
-    // Populate the buffer descriptor table
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     // RT: make defines to aggregate the packer input format address, to make the below a single function
     // Program math destination register format

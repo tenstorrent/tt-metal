@@ -51,6 +51,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
     tdma_desc_src_b.reg_data_format         = (uint)formats.unpack_dst;
 
+    _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
+    _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
 
@@ -109,6 +111,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
     tdma_desc_dst.reg_data_format         = static_cast<uint8_t>(formats.pack_src);
 
+    _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
     _llk_pack_matmul_init_<p_pacr::PACK0>(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
 

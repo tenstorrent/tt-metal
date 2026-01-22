@@ -54,6 +54,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     td_val_B.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
     // Configure hardware for binary operations
+    _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
+    _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     // Initialize binary operands unpacker - unpack 1 tile per MOP run
@@ -136,6 +138,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
     // Configure and initialize pack hardware
+    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1);
 

@@ -12,7 +12,7 @@ using namespace ckernel::trisc;
 /**
  * @brief Programs unpacker l1 info & source register format
  * @tparam UNP_SEL: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
- * @param tdma_desc_src: Contains L1 buffer descriptor information & source reg format for Src Reg
+ * @param tdma_desc_src: Contains source reg format
  */
 template <uint32_t UNP_SEL>
 inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
@@ -20,9 +20,6 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST");
-
-    // Populate the buffer descriptor table
-    _configure_buf_desc_table_(tdma_desc_src.buf_desc_id, tdma_desc_src.buf_desc);
 
     // RT: make defines to aggregate the source format address, to make the below a single function
     // Program src formats

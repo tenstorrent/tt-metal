@@ -36,6 +36,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     td_val.buf_desc_id     = buf_desc_id;
     td_val.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
+    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
@@ -108,6 +109,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     constexpr uint32_t C_DIM_FACES = (tile_shape.narrow_tile ? 1 : 2);                    // Tile width in faces
     constexpr uint32_t R_DIM_FACES = (num_faces == 2 && !tile_shape.narrow_tile) ? 1 : 2; // Tile height in faces
 
+    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES>(buf_desc_id, tile_shape);
 
