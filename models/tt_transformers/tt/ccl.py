@@ -87,16 +87,13 @@ def tt_all_reduce(
         return input_tensor
 
     # Ensure dim 0 and 1 are 1
+    # Always reshape to (1, 1, total_rows, dim) to match main branch behavior
+    # and ensure identical floating-point reduction order in reduce_scatter_minimal_async
     original_shape = input_tensor.shape
-    total_rows = original_shape[-4] * original_shape[-3] * original_shape[-2]
-
-    # For batched prefill (batch_size > 1), use different reshape to avoid
-    # floating-point associativity issues in reduce_scatter_minimal_async
-    # See: https://github.com/tenstorrent/tt-metal/pull/35059
-    if batch_size > 1:
-        input_tensor = ttnn.reshape(input_tensor, (1, batch_size, total_rows // batch_size, original_shape[-1]))
-    elif original_shape[0] != 1 or original_shape[1] != 1:
-        input_tensor = ttnn.reshape(input_tensor, (1, 1, total_rows, original_shape[-1]))
+    if original_shape[0] != 1 or original_shape[1] != 1:
+        input_tensor = ttnn.reshape(
+            input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        )
 
     # N300 and T3K: reduce_scatter
     if 1 in list(mesh_device.shape):
