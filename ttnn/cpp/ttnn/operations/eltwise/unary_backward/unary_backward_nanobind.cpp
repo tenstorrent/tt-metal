@@ -51,17 +51,15 @@ void bind_unary_backward_two_float(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -118,17 +116,15 @@ void bind_unary_backward_op(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - {4}
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -182,17 +178,15 @@ void bind_unary_backward_rsqrt(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -246,17 +240,15 @@ void bind_unary_backward_op_reciprocal(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -318,17 +310,15 @@ void bind_unary_backward_op_overload_abs(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -393,17 +383,15 @@ void bind_unary_backward_float(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -466,17 +454,15 @@ void bind_unary_backward_two_float_with_default(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {9}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -539,17 +525,15 @@ void bind_unary_backward_float_with_default(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -611,17 +595,15 @@ void bind_unary_backward_optional_float_params_with_default(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {9}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -703,17 +685,15 @@ void bind_unary_backward_rdiv(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
             {9}
@@ -776,17 +756,15 @@ void bind_unary_backward_unary_optional_float(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -844,17 +822,15 @@ void bind_unary_backward_shape(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -909,17 +885,15 @@ void bind_unary_backward_optional(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
                  - {4}
-                 - 2, 3, 4
 
             {5}
         )doc",
@@ -972,17 +946,15 @@ void bind_unary_backward_neg(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -1030,17 +1002,15 @@ void bind_unary_backward_prod_bw(nb::module_& mod, const unary_backward_operatio
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 4
+                 - TILE, ROW_MAJOR
 
             For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
         )doc",
@@ -1093,17 +1063,15 @@ void bind_unary_backward_gelu(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
