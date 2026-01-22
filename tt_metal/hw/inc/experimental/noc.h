@@ -115,10 +115,10 @@ public:
         uint32_t trid = INVALID_TXN_ID) const {
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             noc_async_read_set_trid(trid, noc_id_);
-        } 
-
-        while (noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-
+            while (noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2)) {
+                // Busy-wait until sufficient transactions are available for the configured transaction ID.
+            }
+        }
         noc_async_read<max_page_size, enable_noc_tracing>(
             get_src_ptr<AddressType::NOC>(src, src_args),
             get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
