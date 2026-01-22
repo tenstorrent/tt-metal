@@ -91,6 +91,33 @@ def prefill_forward(
     tt_k_pre_cast.deallocate(True)
     tt_v_pre_cast.deallocate(True)
 
+    if debug_layer_id == 0:
+        if debug_user_id == 0 or debug_user_id == 2 or debug_user_id == 96:
+            suffix = f"user_id{debug_user_id}"
+            torch.save(
+                ttnn.to_torch(
+                    tt_k,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+                )[0],
+                f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_k_{suffix}.pt",
+            )
+            torch.save(
+                ttnn.to_torch(
+                    tt_v,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+                )[0],
+                f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_v_{suffix}.pt",
+            )
+            # Note: page_table is replicated across columns (not sharded), so we use dims=(0, None)
+            # to avoid concatenating 8 identical copies. Using dims=(0, 1) would create 8x duplicates.
+            torch.save(
+                ttnn.to_torch(
+                    page_table,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, None), mesh_shape=mesh_device.shape),
+                ),
+                f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_page_table_{suffix}.pt",
+            )
+
     if page_table is not None:
         block_size = k_cache.shape[2]
         page_len = page_table.shape[1] * block_size

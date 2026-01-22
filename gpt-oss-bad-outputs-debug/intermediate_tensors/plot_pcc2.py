@@ -2,8 +2,21 @@ import torch
 from models.common.utility_functions import comp_pcc
 import matplotlib.pyplot as plt
 
-iter_to_compare = 7
+iter_to_compare = 0
 positions_to_compare = [0, 2]
+
+prefill_tt_k0 = torch.load(
+    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_k_user_id{positions_to_compare[0]}.pt"
+).squeeze()
+prefill_tt_k1 = torch.load(
+    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_k_user_id{positions_to_compare[1]}.pt"
+).squeeze()
+prefill_tt_v0 = torch.load(
+    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_v_user_id{positions_to_compare[0]}.pt"
+).squeeze()
+prefill_tt_v1 = torch.load(
+    f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_v_user_id{positions_to_compare[1]}.pt"
+).squeeze()
 
 prefill_k_cache0 = torch.load(
     f"gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_k_cache_user_id{positions_to_compare[0]}.pt"
@@ -139,7 +152,25 @@ passed, pcc = comp_pcc(decode_post_sdpa[positions_to_compare[0]], decode_post_sd
 print(f"Decode post sdpa: {passed}, {pcc}")
 
 
-kv_cache_blocks_to_compare = 1
+kv_cache_blocks_to_compare = 64
+
+plt.clf()
+plt.plot(prefill_tt_k0.flatten().to(torch.float))
+plt.plot(prefill_tt_k1.flatten().to(torch.float))
+plt.legend([f"User {positions_to_compare[0]}", f"User {positions_to_compare[1]}"])
+plt.show()
+plt.savefig("gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_k.png")
+passed, pcc = comp_pcc(prefill_tt_k0, prefill_tt_k1)
+print(f"Prefill tt k: {passed}, {pcc}")
+
+plt.clf()
+plt.plot(prefill_tt_v0.flatten().to(torch.float))
+plt.plot(prefill_tt_v1.flatten().to(torch.float))
+plt.legend([f"User {positions_to_compare[0]}", f"User {positions_to_compare[1]}"])
+plt.show()
+plt.savefig("gpt-oss-bad-outputs-debug/intermediate_tensors/prefill_tt_v.png")
+passed, pcc = comp_pcc(prefill_tt_v0, prefill_tt_v1)
+print(f"Prefill tt v: {passed}, {pcc}")
 
 plt.clf()
 fig, ax = plt.subplots(3)
