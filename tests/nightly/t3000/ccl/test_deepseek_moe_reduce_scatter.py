@@ -134,7 +134,7 @@ def run_deepseek_moe_reduce_scatter_impl(
         eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
         logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED ag: {output}"
+        assert eq, f"{i} FAILED: {output}"
 
     mesh_device.reset_sub_device_stall_group()
 
