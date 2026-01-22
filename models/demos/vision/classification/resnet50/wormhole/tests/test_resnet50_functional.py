@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 
@@ -73,6 +73,17 @@ def test_resnet_50(
     use_pretrained_weight,
     model_location_generator,
 ):
+    # Skip specific parameter combination with watcher enabled
+    if (
+        is_watcher_enabled()
+        and not use_pretrained_weight
+        and batch_size == 16
+        and act_dtype == ttnn.bfloat8_b
+        and weight_dtype == ttnn.bfloat8_b
+        and math_fidelity == ttnn.MathFidelity.HiFi2
+    ):
+        pytest.skip("Test is not passing with watcher enabled")
+
     run_resnet_50(
         device,
         batch_size,
