@@ -18,37 +18,27 @@ from typing import Any
 
 __all__ = [
     "MaskFormerSwinBackbone",
-    "SwinBackboneConfig",
     "MaskFormerPixelDecoder",
     "PixelDecoderConfig",
     "MaskFormerTransformerDecoder",
     "TransformerDecoderConfig",
     "MaskFormerHeads",
     "MaskFormerHeadsConfig",
-    "MaskFormerFallbackPipeline",
-    "parity",
 ]
 
 
 _LAZY_IMPORTS = {
     "MaskFormerSwinBackbone": ".tt.backbone_swin",
-    "SwinBackboneConfig": ".tt.backbone_swin",
     "MaskFormerPixelDecoder": ".tt.pixel_decoder",
     "PixelDecoderConfig": ".tt.pixel_decoder",
     "MaskFormerTransformerDecoder": ".tt.transformer_decoder",
     "TransformerDecoderConfig": ".tt.transformer_decoder",
     "MaskFormerHeads": ".tt.heads",
     "MaskFormerHeadsConfig": ".tt.heads",
-    "MaskFormerFallbackPipeline": ".tt.fallback",
 }
 
 
 def __getattr__(name: str) -> Any:  # pragma: no cover - exercised implicitly via imports
-    if name == "parity":
-        module = import_module(".tt.parity", __name__)
-        globals()[name] = module
-        return module
-
     module_path = _LAZY_IMPORTS.get(name)
     if module_path is None:
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
