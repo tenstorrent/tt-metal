@@ -150,7 +150,7 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 static void validate_latency_test_config(const ParsedTestConfig& test_config) {
-    // Special case for sequential high level patterns, which are allowed 
+    // Special case for sequential high level patterns, which are allowed
     if(test_config.patterns.has_value()){
         auto iterator = std::find_if_not(test_config.patterns.value().begin(), test_config.patterns.value().end(), [](const auto& config) { return config.is_sequential; });
         TT_FATAL(
@@ -1404,9 +1404,9 @@ void TestConfigBuilder::expand_patterns_into_test(
             expand_neighbor_exchange(test, defaults);
         } else if (pattern.type == "sequential_all_to_all") {
             expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
-        } else if (pattern.type == "sequential_neighbor_exchange"){ 
+        } else if (pattern.type == "sequential_neighbor_exchange") {
             expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
-        }else {
+        } else {
             TT_THROW("Unsupported pattern type: {}", pattern.type);
         }
     }
