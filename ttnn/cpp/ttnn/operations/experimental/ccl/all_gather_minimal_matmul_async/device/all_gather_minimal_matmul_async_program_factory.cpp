@@ -487,10 +487,7 @@ all_gather_minimal_matmul_async_factory_helper(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
-    auto mux_cores =
-        transpose_core_grid
-            ? CoreRange(CoreCoord(full_grid_size.x - 1, 0), CoreCoord(full_grid_size.x - 1, num_mux_cores - 1))
-            : CoreRange(CoreCoord(0, full_grid_size.y - 1), CoreCoord(num_mux_cores - 1, full_grid_size.y - 1));
+    auto mux_cores = CoreRange(CoreCoord(0, full_grid_size.y - 1), CoreCoord(num_mux_cores - 1, full_grid_size.y - 1));
 
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -785,8 +782,7 @@ all_gather_minimal_matmul_async_factory_helper(
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id >= num_mux_cores_per_direction;
         if (mux_connection_valid(dir)) {
-            auto mux_logical_core =
-                transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_id) : CoreCoord(mux_id, full_grid_size.y - 1);
+            auto mux_logical_core = CoreCoord(mux_id, full_grid_size.y - 1);
             uint32_t link = mux_id % num_mux_cores_per_direction;
 
             std::vector<uint32_t> mux_rt_args = {};
@@ -888,16 +884,18 @@ all_gather_minimal_matmul_async_factory_helper(
             semaphore.at(1).address(),
             in0_core_order_index,
             in0_core_order.size()};
-        uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
+        // uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
+        uint32_t worker_idx = in1_core_order_index % num_workers_per_link;
+        auto first_in0_core = in0_core_order.front();
         auto termination_master_logical_core =
-            transpose_core_grid ? CoreCoord(core.x - worker_idx, 0) : CoreCoord(0, core.y - worker_idx);
+            transpose_core_grid ? CoreCoord(in1_core_order.at(in1_core_order_index - worker_idx).x, first_in0_core.y)
+                                : CoreCoord(first_in0_core.x, in1_core_order.at(in1_core_order_index - worker_idx).y);
         CoreCoord termination_master_virtual_core =
             device->worker_core_from_logical_core(termination_master_logical_core);
 
         // in0 backward sender
         uint32_t mux_core_index_backward = in1_core_order_index / num_workers_per_link;
-        auto mux_logical_core_backward = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index_backward)
-                                                             : CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+        auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
         fabric_mux_connection_rt_args(
             mux_connection_valid(0),
@@ -913,8 +911,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
         // in0 forward sender
         uint32_t mux_core_index_forward = num_links + in1_core_order_index / num_workers_per_link;
-        auto mux_logical_core_forward = transpose_core_grid ? CoreCoord(full_grid_size.x - 1, mux_core_index_forward)
-                                                            : CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+        auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
         fabric_mux_connection_rt_args(
             mux_connection_valid(1),
