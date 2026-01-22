@@ -156,31 +156,54 @@ Op2DSliceConfig determine_slice_config(
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
     uint32_t current_num_slices = 1;
-    log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-    const uint32_t output_sliced_dim =
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     if (auto_slice_type) {
         // Start with width slicing as it is more memory efficient.
         return_slice_config.slice_type = best_guess_slice_type(input_shape[1], input_shape[2], output_layout);
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Input shape %ux%u, Output shape %ux%u, Layout %s, Available L1: %lu "
+            "bytes\n",
+            (uint32_t)input_shape[1],
+            (uint32_t)input_shape[2],
+            output_height,
+            output_width,
+            output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
+            L1_stats.total_free_bytes);
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Auto-selected slice direction = %s\n",
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     } else {
         return_slice_config.slice_type = slice_config_.value().slice_type;
+        printf(
+            "[Pool2D Automatic DRAM Slicing] User-specified slice direction = %s, determining num_slices...\n",
+            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     }
+
+    log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    const uint32_t output_sliced_dim =
+        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+
     while (current_num_slices <= ((output_sliced_dim + 1) / 2)) {
         return_slice_config.num_slices = current_num_slices;
         uint32_t l1_usage = compute_L1_usage_for_slice_config(
             input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
-        log_debug(
-            tt::LogOp,
-            "DRAM Auto slice for {} op with {} slices requires {} L1 memory",
-            op_slice_attr->name(),
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Trying %u slices - requires %u bytes L1 (available: %lu bytes) - %s\n",
             current_num_slices,
-            l1_usage);
+            l1_usage,
+            L1_stats.total_free_bytes,
+            L1_stats.total_free_bytes >= l1_usage ? "FITS!" : "Too large");
         if (L1_stats.total_free_bytes >= l1_usage) {
             break;
         }
         current_num_slices++;
     }
+
+    printf(
+        "[Pool2D Automatic DRAM Slicing] SELECTED %u slices along %s dimension\n",
+        return_slice_config.num_slices,
+        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
+
     if (output_layout == tt::tt_metal::Layout::TILE &&
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
         // The rounding up of the slice size to tile height can result in the slice_config having a larger num_slices
@@ -194,10 +217,9 @@ Op2DSliceConfig determine_slice_config(
         // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
         // TILE_HEIGHT constraint.
         //  In this case, we switch to height slicing and try again.
-        log_debug(
-            tt::LogOp,
-            "DRAM Auto slice could not find suitable number of slices with width slicing, switching to height "
-            "slicing");
+        printf(
+            "[Pool2D Automatic DRAM Slicing] Could not find suitable number of slices with WIDTH slicing for TILE "
+            "layout, switching to HEIGHT slicing\n");
         return determine_slice_config(
             op_slice_attr,
             input_shape,
