@@ -350,6 +350,395 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
 }
 
 // ============================================================================
+// Sparse Multicast Dispatch Algorithm
+// ============================================================================
+// Collects all unique target devices for a token's selected experts, then sends
+// the token to all of them via sparse multicast (single packet with multiple destinations).
+//
+// Pros: Only sends to devices that need the token (based on expert selection)
+//       Efficient for cases where tokens select experts on few devices
+// Cons: Requires building destination list per token
+//       May have higher latency than point-to-point for single destinations
+//
+// Template parameters:
+//   LinearizedSrcMeshCoord - Source device's linearized mesh coordinate
+//   Topology - Fabric topology (Ring1D, etc.)
+//   MeshRows, MeshCols - Mesh dimensions
+//   Axis - Dispatch axis (ROWS or COLS)
+//   FabricMaxPacketSize - Maximum fabric packet size in bytes
+//   NumDevices - Total number of devices
+//   SelectedExpertsK - Number of experts selected per token
+//   OutputAddrGenT - Type of the output address generator (TensorAccessor)
+// ============================================================================
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t FabricMaxPacketSize,
+    uint32_t NumDevices,
+    uint32_t SelectedExpertsK,
+    typename OutputAddrGenT>
+FORCE_INLINE bool dispatch_token_sparse_multicast(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* unicast_packet_header,
+    const OutputAddrGenT& output_addr_gen,
+    const uint16_t* expert_mapping,
+    uint8_t* send_preparation_buffer,
+    const uint16_t* token_indices,
+    uint32_t input_token_read_addr,
+    uint64_t output_token_write_addr,
+    uint32_t output_page_size,
+    uint32_t global_token,
+    uint32_t local_token,
+    uint32_t token_start_idx,
+    uint32_t alignment) {
+    using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d;
+    using ttnn::operations::ccl::common::is_configured_target;
+
+    bool needs_barrier = false;
+
+    // Collect all unique remote destinations for this token
+    uint32_t remote_token_destinations[NumDevices];
+    uint32_t num_remote_token_destinations = 0;
+
+    for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+        uint16_t expert_chosen = token_indices[k];
+        // Direct lookup: get target device from expert mapping
+        uint16_t target_device = expert_mapping[expert_chosen];
+
+        // Check if we've already processed this device for this token
+        if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
+            send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
+
+            if (target_device == LinearizedSrcMeshCoord) {
+                // If the expert lives on the current device, dispatch locally
+                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                needs_barrier = true;
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+                // Add to remote destinations list
+                remote_token_destinations[num_remote_token_destinations++] = target_device;
+            }
+        }
+    }
+
+    // If there are any remote destinations, send via sparse multicast
+    if (num_remote_token_destinations > 0) {
+        fabric_send_chip_sparse_multicast_noc_unicast_1d<
+            LinearizedSrcMeshCoord,
+            Topology,
+            MeshRows,
+            MeshCols,
+            NumDevices,
+            FabricMaxPacketSize>(
+            output_addr_gen,
+            fabric_connections,
+            unicast_packet_header,
+            remote_token_destinations,
+            num_remote_token_destinations,
+            input_token_read_addr,
+            global_token,
+            (int)output_page_size,
+            alignment);
+    }
+
+    return needs_barrier;
+}
+
+// ============================================================================
+// Bidirectional Sparse Multicast Dispatch Algorithm (Shortest Path)
+// ============================================================================
+// Builds hop masks for both directions using bit manipulation, then sends
+// sparse multicast packets in both directions based on shortest path routing.
+// For antipodal ties (equal distance both ways), direction alternates based on token index.
+//
+// Uses OR-based deduplication: if the same device is selected multiple times,
+// the bit is already set so OR-ing again is a no-op.
+//
+// Pros: Only sends to devices that need the token
+//       Uses shortest path for each destination (optimal hop count)
+//       Balances antipodal traffic across both directions
+//       Fast bit manipulation without send_preparation_buffer
+// Cons: May send two packets per token (one in each direction)
+//       Requires two packet headers
+//
+// Template parameters:
+//   LinearizedSrcMeshCoord - Source device's linearized mesh coordinate
+//   Topology - Fabric topology (Ring1D, etc.)
+//   MeshRows, MeshCols - Mesh dimensions
+//   Axis - Dispatch axis (ROWS or COLS)
+//   FabricMaxPacketSize - Maximum fabric packet size in bytes
+//   NumDevices - Total number of devices
+//   SelectedExpertsK - Number of experts selected per token
+//   OutputAddrGenT - Type of the output address generator (TensorAccessor)
+// ============================================================================
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t FabricMaxPacketSize,
+    uint32_t NumDevices,
+    uint32_t SelectedExpertsK,
+    typename OutputAddrGenT>
+FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    const OutputAddrGenT& output_addr_gen,
+    const uint16_t* expert_mapping,
+    const uint16_t* token_indices,
+    uint32_t input_token_read_addr,
+    uint64_t output_token_write_addr,
+    uint32_t output_page_size,
+    uint32_t global_token,
+    ttnn::operations::ccl::common::Polarity antipodal_polarity,  // Direction for antipodal tie-breaking
+    uint32_t alignment) {
+    using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
+    using ttnn::operations::ccl::common::is_configured_target;
+    using ttnn::operations::ccl::common::Polarity;
+
+    bool needs_barrier = false;
+
+    // Build hop masks for both directions directly via bit manipulation
+    // OR handles deduplication: same bit set twice is still just set once
+    uint16_t pos_hop_mask = 0;  // EAST (positive direction)
+    uint16_t neg_hop_mask = 0;  // WEST (negative direction)
+    bool sent_local = false;
+
+    for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+        uint16_t expert_chosen = token_indices[k];
+        uint16_t target_device = expert_mapping[expert_chosen];
+
+        if (target_device == LinearizedSrcMeshCoord) {
+            // Local device - dispatch once
+            if (!sent_local) {
+                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, output_page_size);
+                needs_barrier = true;
+                sent_local = true;
+            }
+        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+            // Remote device on our axis - calculate distance in both directions
+            // pos_distance: going EAST/SOUTH (ascending, with wrap)
+            // neg_distance: going WEST/NORTH (descending, with wrap)
+            uint32_t pos_distance = (target_device - LinearizedSrcMeshCoord + NumDevices) % NumDevices;
+            uint32_t neg_distance = (LinearizedSrcMeshCoord - target_device + NumDevices) % NumDevices;
+
+            // Determine shortest path direction
+            if (pos_distance < neg_distance) {
+                // Shorter via positive direction (EAST/SOUTH)
+                pos_hop_mask |= (1 << (pos_distance - 1));
+            } else if (neg_distance < pos_distance) {
+                // Shorter via negative direction (WEST/NORTH)
+                neg_hop_mask |= (1 << (neg_distance - 1));
+            } else {
+                // Antipodal tie - use provided polarity
+                if (antipodal_polarity == Polarity::POSITIVE) {
+                    pos_hop_mask |= (1 << (pos_distance - 1));
+                } else {
+                    neg_hop_mask |= (1 << (neg_distance - 1));
+                }
+            }
+        }
+        // else: target_device is on a different axis - skip (handled by another dispatch on that axis)
+    }
+
+    // Derive direction constants from Axis template parameter
+    // ROWS axis (or 1xN mesh): EAST/WEST, COLS axis (or Nx1 mesh): SOUTH/NORTH
+    /*
+        constexpr uint32_t positive_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;*/
+    constexpr bool is_row_axis = (Axis == ttnn::operations::ccl::common::ReplicateGroup::ROWS) ||
+                                 (Axis == ttnn::operations::ccl::common::ReplicateGroup::NONE && MeshRows == 1);
+    constexpr uint32_t pos_direction = is_row_axis ? eth_chan_directions::EAST : eth_chan_directions::SOUTH;
+    constexpr uint32_t neg_direction = is_row_axis ? eth_chan_directions::WEST : eth_chan_directions::NORTH;
+
+    // Send in positive direction if any destinations
+    if (pos_hop_mask != 0) {
+        fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+            output_addr_gen,
+            fabric_connections,
+            packet_header_pos,
+            pos_hop_mask,
+            pos_direction,
+            input_token_read_addr,
+            global_token,
+            (int)output_page_size,
+            alignment);
+    }
+
+    // Send in negative direction if any destinations
+    if (neg_hop_mask != 0) {
+        fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+            output_addr_gen,
+            fabric_connections,
+            packet_header_neg,
+            neg_hop_mask,
+            neg_direction,
+            input_token_read_addr,
+            global_token,
+            (int)output_page_size,
+            alignment);
+    }
+
+    return needs_barrier;
+}
+
+// ============================================================================
+// Split-Bandwidth Sparse Multicast Dispatch Algorithm
+// ============================================================================
+// Splits the token DATA in half and sends each half in opposite directions to
+// only the devices that need the token. This balances bandwidth usage across
+// both ring directions while still being selective about destinations.
+//
+// For token 0 (POSITIVE polarity): first half → positive dir, second half → negative dir
+// For token 1 (NEGATIVE polarity): first half → negative dir, second half → positive dir
+// This alternates to avoid systematic bias.
+//
+// Both halves go to the SAME set of destinations - just via different directions.
+// Each destination receives both halves of the token.
+//
+// Pros: Guaranteed 50/50 bandwidth split for every token
+//       Only sends to devices that need the token (selective)
+// Cons: Each destination receives data via both directions
+//
+// Template parameters:
+//   LinearizedSrcMeshCoord - Source device's linearized mesh coordinate
+//   MeshRows, MeshCols - Mesh dimensions
+//   Axis - Dispatch axis (ROWS or COLS)
+//   FabricMaxPacketSize - Maximum fabric packet size in bytes
+//   NumDevices - Total number of devices
+//   SelectedExpertsK - Number of experts selected per token
+//   OutputAddrGenT - Type of the output address generator (TensorAccessor)
+// ============================================================================
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    uint32_t FabricMaxPacketSize,
+    uint32_t NumDevices,
+    uint32_t SelectedExpertsK,
+    typename OutputAddrGenT>
+FORCE_INLINE bool dispatch_token_split_bandwidth(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    const OutputAddrGenT& output_addr_gen,
+    const uint16_t* expert_mapping,
+    const uint16_t* token_indices,
+    uint32_t input_token_read_addr,
+    uint64_t output_token_write_addr,
+    uint32_t input_page_size,
+    uint32_t global_token,
+    ttnn::operations::ccl::common::Polarity first_half_polarity,
+    uint32_t alignment) {
+    using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
+    using ttnn::operations::ccl::common::is_configured_target;
+    using ttnn::operations::ccl::common::Polarity;
+
+    bool needs_barrier = false;
+
+    // Derive direction constants from Axis template parameter
+    constexpr bool is_row_axis = (Axis == ttnn::operations::ccl::common::ReplicateGroup::ROWS) ||
+                                 (Axis == ttnn::operations::ccl::common::ReplicateGroup::NONE && MeshRows == 1);
+    constexpr uint32_t pos_direction = is_row_axis ? eth_chan_directions::EAST : eth_chan_directions::SOUTH;
+    constexpr uint32_t neg_direction = is_row_axis ? eth_chan_directions::WEST : eth_chan_directions::NORTH;
+
+    // Build hop masks for both directions - same destinations, different routes
+    // pos_hop_mask: bits set for hops needed to reach each destination going positive
+    // neg_hop_mask: bits set for hops needed to reach each destination going negative
+    // OR handles deduplication: setting a bit that's already 1 to 1 is a no-op
+    uint16_t pos_hop_mask = 0;
+    uint16_t neg_hop_mask = 0;
+    bool sent_local = false;
+
+    for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+        uint16_t expert_chosen = token_indices[k];
+        uint16_t target_device = expert_mapping[expert_chosen];
+
+        if (target_device == LinearizedSrcMeshCoord) {
+            // Local device - dispatch once
+            if (!sent_local) {
+                dispatch_input_local_device_flushed(input_token_read_addr, output_token_write_addr, input_page_size);
+                needs_barrier = true;
+                sent_local = true;
+            }
+        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+            // Remote device on our axis - add to BOTH masks (same dest, different directions)
+            // OR handles dedup: if bit already set, setting again is harmless
+
+            // Calculate distance in positive direction (e.g., EAST/SOUTH)
+            uint32_t pos_distance = (target_device - LinearizedSrcMeshCoord + NumDevices) % NumDevices;
+            // Calculate distance in negative direction (e.g., WEST/NORTH)
+            uint32_t neg_distance = (LinearizedSrcMeshCoord - target_device + NumDevices) % NumDevices;
+
+            // Add to both masks - each destination reachable from both directions
+            pos_hop_mask |= (1 << (pos_distance - 1));
+            neg_hop_mask |= (1 << (neg_distance - 1));
+        }
+        // else: target_device is on a different axis - skip (handled by another dispatch)
+    }
+
+    // If no remote destinations, we're done
+    if (pos_hop_mask == 0 && neg_hop_mask == 0) {
+        return needs_barrier;
+    }
+
+    // Split token in half
+    uint32_t half_size = input_page_size / 2;
+    uint32_t first_half_addr = input_token_read_addr;
+    uint32_t second_half_addr = input_token_read_addr + half_size;
+
+    // Determine which half goes which direction based on polarity
+    uint32_t pos_addr, neg_addr;
+    uint32_t pos_offset, neg_offset;
+    if (first_half_polarity == Polarity::POSITIVE) {
+        pos_addr = first_half_addr;   // First half goes positive
+        neg_addr = second_half_addr;  // Second half goes negative
+        pos_offset = 0;
+        neg_offset = half_size;
+    } else {
+        pos_addr = second_half_addr;  // Second half goes positive
+        neg_addr = first_half_addr;   // First half goes negative
+        pos_offset = half_size;
+        neg_offset = 0;
+    }
+
+    // Send one half in positive direction to all destinations
+    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+        output_addr_gen,
+        fabric_connections,
+        packet_header_pos,
+        pos_hop_mask,
+        pos_direction,
+        pos_addr,
+        global_token,
+        (int)half_size,
+        alignment,
+        pos_offset);
+
+    // Send other half in negative direction to all destinations
+    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+        output_addr_gen,
+        fabric_connections,
+        packet_header_neg,
+        neg_hop_mask,
+        neg_direction,
+        neg_addr,
+        global_token,
+        (int)half_size,
+        alignment,
+        neg_offset);
+
+    return needs_barrier;
+}
+
+// ============================================================================
 // Bidirectional Multicast Dispatch Algorithm (Broadcast All)
 // ============================================================================
 // Dispatches all tokens to all devices via bidirectional multicast in a ring topology.
@@ -556,13 +945,15 @@ void kernel_main() {
     // USE_POINT_TO_POINT_UNICAST: Sends tokens only to devices that need them based on
     //   expert selection. More selective/sparse, but in ring topology may send same token
     //   over same links multiple times (e.g., device 0 -> device 2 doesn't pass device 1).
-    //
-    // TODO: Implement sparse multicast that collects target devices and sends optimally
-    //   through the ring (e.g., device 0 sends to device 1 which forwards to device 2).
     // ============================================================================
-    constexpr bool USE_BIDIRECTIONAL_MULTICAST = false;
-    constexpr bool USE_POINT_TO_POINT_UNICAST = false;
-    constexpr bool USE_SPARSE_MULTICAST = true;
+    enum class DispatchAlgorithm {
+        BROADCAST,                   // Broadcast all tokens to ALL devices (bidirectional multicast)
+        SPARSE_UNICAST,              // Send to each target device individually (point-to-point)
+        SPARSE_MCAST_LINEAR,         // Sparse multicast in single direction
+        SPARSE_MCAST_SHORTEST_PATH,  // Sparse multicast with bidirectional shortest path routing
+        SPARSE_MCAST_SPLIT_BW        // Sparse multicast, split token data 50/50 between directions
+    };
+    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SPLIT_BW;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
@@ -576,7 +967,7 @@ void kernel_main() {
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
 
-        if constexpr (USE_BIDIRECTIONAL_MULTICAST) {
+        if constexpr (dispatch_algorithm == DispatchAlgorithm::BROADCAST) {
             // Broadcast token to all devices via bidirectional multicast
             detail::dispatch_token_bidirectional_multicast<
                 fabric_max_packet_size,
@@ -591,7 +982,7 @@ void kernel_main() {
                 output_token_write_addr,
                 input_page_size,
                 alignment);
-        } else if constexpr (USE_POINT_TO_POINT_UNICAST) {
+        } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_UNICAST) {
             // Send token only to devices that need it based on expert selection
             needs_barrier |= detail::dispatch_token_point_to_point_unicast<
                 linearized_mesh_coord,
@@ -615,49 +1006,79 @@ void kernel_main() {
                 local_token,
                 token_start_idx,
                 alignment);
-        } else if constexpr (USE_SPARSE_MULTICAST) {
-            // Assume that num_experts <= num_devices
-            // Assume that num_devices <= 16
-            uint32_t remote_token_destinations[num_devices];
-            uint32_t num_remote_token_destinations = 0;
-            for (uint32_t k = 0; k < selected_experts_k; k++) {
-                uint16_t expert_chosen = token_indices[k];
-                // Direct lookup: get target device from expert mapping
-                uint16_t target_device = expert_mapping[expert_chosen];
-                if (send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] == 0) {
-                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + target_device] = 1;
-                    if (target_device == linearized_mesh_coord) {
-                        // if the expert lives on the current device, we dispatch the input token to it
-                        detail::dispatch_input_local_device_flushed(
-                            input_token_read_addr, output_token_write_addr, output_page_size);
-                        needs_barrier = true;
-                    } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(target_device)) {
-                        // if the expert lives on a remote device, we dispatch the input token to it
-                        // Add the destination to the list of destinations
-                        remote_token_destinations[num_remote_token_destinations++] = target_device;
-                    }
-                }
-            }
-            // If there are any remote destinations, send the input token to them in a single multicast packet
-            if (num_remote_token_destinations > 0) {
-                fabric_send_chip_sparse_multicast_noc_unicast_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols,
-                    num_devices,
-                    fabric_max_packet_size>(
-                    output_addr_gen,
-                    fabric_connections,
-                    unicast_packet_header_neg,
-                    remote_token_destinations,
-                    num_remote_token_destinations,
-                    input_token_read_addr,
-                    global_token,
-                    (int)output_page_size,
-                    alignment);
-                // noc_async_writes_flushed();
-            }
+        } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_LINEAR) {
+            // Collect unique destinations and send via sparse multicast (single direction)
+            needs_barrier |= detail::dispatch_token_sparse_multicast<
+                linearized_mesh_coord,
+                topology,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                fabric_max_packet_size,
+                num_devices,
+                selected_experts_k>(
+                fabric_connections,
+                unicast_packet_header_neg,
+                output_addr_gen,
+                expert_mapping,
+                send_preparation_buffer,
+                token_indices,
+                input_token_read_addr,
+                output_token_write_addr,
+                output_page_size,
+                global_token,
+                local_token,
+                token_start_idx,
+                alignment);
+        } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH) {
+            // Collect unique destinations and send via bidirectional sparse multicast
+            // Uses shortest path routing with antipodal tie-breaking
+            needs_barrier |= detail::dispatch_token_sparse_multicast_bidirectional<
+                linearized_mesh_coord,
+                topology,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                fabric_max_packet_size,
+                num_devices,
+                selected_experts_k>(
+                fabric_connections,
+                unicast_packet_header_pos,
+                unicast_packet_header_neg,
+                output_addr_gen,
+                expert_mapping,
+                token_indices,
+                input_token_read_addr,
+                output_token_write_addr,
+                output_page_size,
+                global_token,
+                static_cast<ttnn::operations::ccl::common::Polarity>(local_token % 2),
+                alignment);
+        } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_SPLIT_BW) {
+            // Split token data in half: first half one direction, second half other direction
+            // Both halves go to same destinations, just via different directions
+            // Token 0: first half → positive dir, second half → negative dir
+            // Token 1: first half → negative dir, second half → positive dir
+            needs_barrier |= detail::dispatch_token_split_bandwidth<
+                linearized_mesh_coord,
+                mesh_rows,
+                mesh_cols,
+                axis,
+                fabric_max_packet_size,
+                num_devices,
+                selected_experts_k>(
+                fabric_connections,
+                unicast_packet_header_pos,
+                unicast_packet_header_neg,
+                output_addr_gen,
+                expert_mapping,
+                token_indices,
+                input_token_read_addr,
+                output_token_write_addr,
+                input_page_size,
+                global_token,
+                static_cast<ttnn::operations::ccl::common::Polarity>(local_token % 2),
+                alignment);
         }
 
         cb_pop_front(indices_tensor_cb_id, 1);
