@@ -339,28 +339,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
-inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
-    uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, uint32_t num_times_to_write) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, num_times_to_write);
-        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_times_to_write);
-    }
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | NOC_CMD_RESP_MARKED;
-
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_nonposted_writes_num_issued[noc] += num_times_to_write;
-        noc_nonposted_writes_acked[noc] += num_times_to_write;
-    }
-}
-
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
