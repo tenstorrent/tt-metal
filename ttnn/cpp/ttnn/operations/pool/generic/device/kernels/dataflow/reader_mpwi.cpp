@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 1
 
@@ -12,75 +13,6 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #endif
-
-#define ALWI inline __attribute__((always_inline))
-
-#define TILE_HEIGHT 32
-#define TILE_WIDTH 32
-#define FACE_WIDTH 16
-#define FACE_HEIGHT 16
-#define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
-#define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
-
-// Zero out a single page (where wr ptr points) for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_page() {
-    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
-
-// Fill an L1 buffer with the given val
-// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-// WARNING: This function assumes n is even
-ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
-    // simplest impl:
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    uint32_t value = val | (val << 16);
-    if (ptr[0] != value || unconditionally) {
-        for (uint32_t i = 0; i < n / 2; ++i) {
-            ptr[i] = (value);
-        }
-    }
-
-    return true;
-}
-
-template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles() {
-    constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
-    const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
-    uint64_t write_addr = get_noc_addr(get_write_ptr(cb_id));
-
-    for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
-        noc_async_read(clear_value_addr, write_addr, tile_size);
-        write_addr += tile_size;
-    }
-    noc_async_read_barrier();
-}
-
-template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(uint32_t core_index) {
-    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
-    // cores in the row.
-    constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
-    uint64_t src_noc_addr = get_noc_addr(core_index, config_accessor);
-
-    noc_async_read(src_noc_addr, get_write_ptr(cb_reader_index), config_page_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_reader_index, 1);
-}
 
 // Initialize indices and increment tiles for return_indices functionality
 template <
