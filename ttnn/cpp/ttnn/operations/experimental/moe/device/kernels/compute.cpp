@@ -8,6 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -103,6 +104,7 @@ void MAIN {
     // Expert loop
     //-------------------------------------------------------------------------
     uint32_t in0_offset_per_expert = 0;
+    uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
@@ -132,12 +134,14 @@ void MAIN {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            // TODO: Eltwise multiply output of SILU in dst0 with dst1 and store in dst2
             silu_tile_init();
             silu_tile(0);
 
             mul_binary_tile_init();
             mul_binary_tile(0, 1, 0);
+
+            // fill_tile_init();
+            // fill_tile(0, float(1.0/256.0f));
             tile_regs_commit();
 
             tile_regs_wait();
@@ -152,6 +156,7 @@ void MAIN {
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 2)
         //---------------------------------------------------------------------
+        uint32_t out_tile_index = out_offset_per_expert;
         for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -194,19 +199,15 @@ void MAIN {
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
+            // fill_tile_init();
+            // fill_tile(0, 1.0f + ring_core_id);
+            // fill_tile(1, 2.0f + ring_core_id);
             tile_regs_commit();
 
             tile_regs_wait();
-
-            // TODO(nsoraba): Pack two and ship it out for dm1 to write
-            // Alternatively, Pack this to a local sharded buffer
-            // pack_tile(0, cb_c2w_out, /*output_tile_index=*/0);
-            // pack_tile(1, cb_c2w_out, /*output_tile_index=*/1);
-
-            // Signal to DM1 that we finished using this in2
-            // Also serves to signal that we have packed 2 output tiles
-            cb_reserve_back(cb_c2w_rdy, 1);
-            cb_push_back(cb_c2w_rdy, 1);
+            // Pack this in-place for now.
+            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(1, cb_s2c_in, /*output_tile_index=*/out_tile_index++);
             tile_regs_release();
         }
 
@@ -216,11 +217,10 @@ void MAIN {
                 cb_wait_front(cb_w2c_rdy, 1);
                 cb_pop_front(cb_w2c_rdy, 1);
             }
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
         }
 
         in0_offset_per_expert += num_w0_w1_tiles_h;
+        out_offset_per_expert += num_w0_w1_tiles_h;
     }  // end for (expert_id)
 
     // Drain the pipeline - the last txn in flight

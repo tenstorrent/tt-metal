@@ -27,12 +27,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     const auto dram_bank2core_coords =
         tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
             tt::tt_metal::NOC::RISCV_0_default);
-    const uint32_t num_cores = dram_bank2core_coords.size();
 
-    for (size_t dram_bank = 0; dram_bank < num_cores; ++dram_bank) {
-        auto core_coord = dram_bank2core_coords[dram_bank];
-        log_info(tt::LogOp, "DRAM {} mapped to core {}", dram_bank, core_coord.str());
-    }
+    const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
     // Create CBs for the program
@@ -216,6 +212,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
+
+        log_info(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
     return cached_program_t{
