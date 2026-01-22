@@ -62,7 +62,7 @@ def test_decoder_inference(
     submesh_device = create_submeshes(mesh_device, 4)
     mesh_device = submesh_device[0]
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    generation_length = 1
+    generation_length = 10
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()

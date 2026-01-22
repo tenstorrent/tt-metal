@@ -453,7 +453,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -486,22 +486,23 @@ class Attention(LightweightModule):
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
-            xqkv_fused = ttnn.matmul(
+            xqkv_fused_sharded = ttnn.matmul(
                 self.slice_mat,
-                xqkv_fused,
+                xqkv_fused_sharded,
                 dtype=ttnn.bfloat16,
                 memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             )
-        else:
+        #else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+            #xqkv_fused = xqkv_fused_sharded
+            #xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
 
-        ttnn.deallocate(xqkv_fused_sharded)
+        #ttnn.deallocate(xqkv_fused_sharded)
 
         # Reshape such that true unpadded batch is tracked in shape
-        fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(
-            xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
+        fqkv_shape = xqkv_fused_sharded.shape
+        xqkv_fused_sharded = ttnn.reshape(
+            xqkv_fused_sharded, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
         ###
@@ -512,7 +513,7 @@ class Attention(LightweightModule):
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
         ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_fused,
+            xqkv_fused_sharded,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
@@ -521,7 +522,7 @@ class Attention(LightweightModule):
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
 
-        ttnn.deallocate(xqkv_fused)
+        ttnn.deallocate(xqkv_fused_sharded)
 
         # Q, K Rotary Embeddings
         if self.args.use_qk_fused:

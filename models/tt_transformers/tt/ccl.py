@@ -109,8 +109,8 @@ def tt_all_reduce(
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=10,  #["MAX", 320, 160, 80, 40, 20, 10]
+            num_workers_per_link=1,
             num_buffers_per_channel=2,
         )
         input_tensor.deallocate(True)
