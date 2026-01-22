@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/split/device/split_device_operation.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
 namespace detail {
 
@@ -76,11 +76,11 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 }
 }  // namespace detail
 
-std::vector<ttnn::Tensor> SplitOperation::invoke(
+std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& split_sizes,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    int64_t dim,
+    const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     TT_FATAL(
@@ -100,9 +100,9 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
-            input_tensor_4d = squeeze_from_ND_to_4D(input_tensor);
+            input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
         } else if (input_shape.rank() < detail::RANK_FOUR) {
-            input_tensor_4d = core::unsqueeze_to_4D(input_tensor);
+            input_tensor_4d = unsqueeze_to_4D(input_tensor);
         } else {
             input_tensor_4d = input_tensor;
         }
@@ -119,18 +119,18 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
 }
 
-std::vector<ttnn::Tensor> SplitOperation::invoke(
+std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
-    const int64_t split_size,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    int64_t split_size,
+    int64_t dim,
+    const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     const auto num_chunks =
         std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
-    return SplitOperation::invoke(input_tensor, split_sizes, dim, memory_config);
+    return ttnn::split(input_tensor, split_sizes, dim, memory_config);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn
