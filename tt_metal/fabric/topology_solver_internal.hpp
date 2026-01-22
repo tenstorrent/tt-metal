@@ -5,9 +5,24 @@
 #pragma once
 
 #include <map>
+#include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-logger/tt-logger.hpp>
+
+// Forward declarations to break circular dependency
+namespace tt::tt_fabric {
+template <typename NodeId>
+class AdjacencyGraph;
+
+template <typename TargetNode, typename GlobalNode>
+class MappingConstraints;
+
+enum class ConnectionValidationMode;
+
+template <typename TargetNode, typename GlobalNode>
+struct MappingResult;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric::detail {
 
@@ -50,6 +65,22 @@ struct GraphIndexData {
      */
     GraphIndexData(
         const AdjacencyGraph<TargetNode>& target_graph, const AdjacencyGraph<GlobalNode>& global_graph);
+
+    /**
+     * @brief Print node degrees for debugging
+     *
+     * Prints the degree of each node in both target and global graphs.
+     * Useful for understanding graph structure during mapping.
+     */
+    void print_node_degrees() const;
+
+    /**
+     * @brief Print adjacency maps for debugging
+     *
+     * Prints the adjacency structure of both target and global graphs.
+     * Useful for debugging mapping failures.
+     */
+    void print_adjacency_maps() const;
 };
 
 /**
@@ -274,11 +305,167 @@ struct ConsistencyChecker {
 template <typename TargetNode, typename GlobalNode>
 struct PathGraphDetector;
 
+/**
+ * @brief DFS search engine for topology mapping
+ *
+ * Implements backtracking search with memoization and consistency checking.
+ * Uses SearchHeuristic for node selection and candidate generation.
+ *
+ * **Important**: Even if the search fails to find a complete valid mapping, the
+ * `SearchState::mapping` will contain the best/closest partial mapping found.
+ * This allows users to see what progress was made and diagnose why the search failed.
+ * The MappingValidator will save this partial mapping in the result even if validation fails.
+ */
 template <typename TargetNode, typename GlobalNode>
-class DFSSearchEngine;
+class DFSSearchEngine {
+public:
+    /**
+     * @brief Search state tracking mapping progress and statistics
+     *
+     * **Note**: The `mapping` vector always contains the best mapping found so far,
+     * even if the search fails. This allows users to inspect partial mappings for debugging.
+     */
+    struct SearchState {
+        std::vector<int> mapping;                    // mapping[target_idx] = global_idx or -1 (best found so far)
+        std::vector<bool> used;                      // used[global_idx] = true if assigned
+        std::unordered_set<uint64_t> failed_states;  // Memoization cache of failed states
+        size_t dfs_calls = 0;                        // Number of DFS calls made
+        size_t backtrack_count = 0;                  // Number of backtracks performed
+        std::string error_message;                   // Error message if search fails
+    };
 
+    /**
+     * @brief Start DFS search
+     *
+     * **Note**: Even if this returns false (search failed), the internal state's mapping will contain
+     * the best partial mapping found, which will be saved by MappingValidator for debugging.
+     *
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param constraints Mapping constraints (for pre-assignment)
+     * @param validation_mode Connection validation mode
+     * @return true if complete valid mapping found, false otherwise (but state still has best found)
+     */
+    bool search(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        const MappingConstraints<TargetNode, GlobalNode>& constraints,
+        ConnectionValidationMode validation_mode);
+
+    /**
+     * @brief Get the current search state
+     *
+     * @return const reference to the internal search state
+     */
+    const SearchState& get_state() const { return state_; }
+
+private:
+    SearchState state_;  // Internal state for the search
+    /**
+     * @brief Hash state for memoization (FNV-1a hash)
+     *
+     * @param mapping Current partial mapping
+     * @return Hash value for the state
+     */
+    uint64_t hash_state(const std::vector<int>& mapping) const;
+
+    /**
+     * @brief Recursive DFS search
+     *
+     * @param pos Current position (number of assigned nodes)
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param validation_mode Connection validation mode
+     * @return true if mapping found, false otherwise
+     */
+    bool dfs_recursive(
+        size_t pos,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode);
+};
+
+/**
+ * @brief Validates mappings and builds MappingResult
+ *
+ * Validates complete mappings, checks connection counts according to validation mode,
+ * and builds MappingResult with detailed error messages and warnings.
+ */
 template <typename TargetNode, typename GlobalNode>
-struct MappingValidator;
+struct MappingValidator {
+    /**
+     * @brief Validate a complete mapping
+     *
+     * Checks that all edges exist and validates connection counts according to validation_mode.
+     * In STRICT mode: fails if channel counts insufficient.
+     * In RELAXED mode: collects warnings for insufficient channel counts but doesn't fail.
+     * In NONE mode: skips channel count validation.
+     *
+     * @param mapping Complete mapping (mapping[i] = global_idx)
+     * @param graph_data Indexed graph data
+     * @param validation_mode Connection validation mode
+     * @param warnings Optional vector to collect warnings
+     * @return true if mapping is valid, false otherwise
+     */
+    static bool validate_mapping(
+        const std::vector<int>& mapping,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        ConnectionValidationMode validation_mode,
+        std::vector<std::string>* warnings = nullptr);
+
+    /**
+     * @brief Validate connection counts for all edges
+     *
+     * Checks channel counts and collects detailed warnings/errors according to validation_mode.
+     *
+     * @param mapping Complete mapping
+     * @param graph_data Indexed graph data
+     * @param validation_mode Connection validation mode
+     * @param warnings Vector to collect warnings (must not be nullptr)
+     */
+    static void validate_connection_counts(
+        const std::vector<int>& mapping,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        ConnectionValidationMode validation_mode,
+        std::vector<std::string>* warnings);
+
+    /**
+     * @brief Print mapping for debugging
+     *
+     * Prints the current mapping showing which target nodes map to which global nodes.
+     * Useful for debugging mapping failures.
+     *
+     * @param mapping Mapping vector (mapping[i] = global_idx or -1)
+     * @param graph_data Indexed graph data
+     */
+    static void print_mapping(
+        const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data);
+
+    /**
+     * @brief Build MappingResult from search state and mapping
+     *
+     * Converts internal mapping representation to MappingResult, computes constraint
+     * statistics, and collects warnings. Provides detailed error messages when validation fails.
+     *
+     * **Important**: Even if validation fails, the closest/best mapping found is still saved
+     * in the result. This allows users to see what progress was made and diagnose issues.
+     * The `success` field indicates whether the mapping is valid, but `target_to_global`
+     * and `global_to_target` will always contain the best mapping found (if any).
+     *
+     * @param mapping Complete mapping (may be incomplete if search failed)
+     * @param graph_data Indexed graph data
+     * @param state Search state (for statistics and error messages)
+     * @param constraints Mapping constraints (for computing constraint stats)
+     * @param validation_mode Connection validation mode
+     * @return MappingResult with success status, mappings (always saved even if invalid), warnings, and statistics
+     */
+    static MappingResult<TargetNode, GlobalNode> build_result(
+        const std::vector<int>& mapping,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
+        const MappingConstraints<TargetNode, GlobalNode>& constraints,
+        ConnectionValidationMode validation_mode);
+};
 
 }  // namespace tt::tt_fabric::detail
 
