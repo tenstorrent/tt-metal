@@ -117,7 +117,7 @@ public:
             noc_async_read_set_trid(trid, noc_id_);
         } 
 
-        while(noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
+        while (noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
 
         noc_async_read<max_page_size, enable_noc_tracing>(
             get_src_ptr<AddressType::NOC>(src, src_args),
