@@ -81,46 +81,27 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           return attemptB - attemptA; // Prefer higher attempt number
         });
 
-      // Scan newest→older to find failing runs for log/annotation processing.
-      // We collect the latest failing run (targetRun) for fetching new annotations,
-      // and also track the 2nd most recent CONSECUTIVE failing run (previousFailingRun)
-      // to support job-level regression detection in "stayed_failing" pipelines.
-      //
-      // Logic:
-      // - Skip skipped/cancelled runs
-      // - If we find a success BEFORE any failure, no logs needed (workflow is passing)
-      // - If we find a failure, that's our targetRun
-      // - If we find a success AFTER targetRun, stop - the workflow recovered, so any
-      //   subsequent failures are new regressions (not job-level regressions)
-      // - If we find another failure before a success, that's previousFailingRun
+      // Scan newest→older, skipping skipped/cancelled runs until either:
+      // A) we find a success (stop; no logs), or
+      // B) we find a failing run (download logs), or
+      // C) we run out of runs (stop; no logs).
       let targetRun = undefined;
-      let previousFailingRun = undefined;
       for (const run of branchRuns) {
         const conc = run && run.conclusion;
         if (conc === 'skipped' || conc === 'cancelled') {
           continue; // ignore skipped/cancelled and check next older
         }
         if (conc === 'success') {
-          // Found a success - stop scanning
-          // If we don't have a targetRun yet, workflow is passing (no logs needed)
-          // If we do have a targetRun, the workflow recovered before the current failure,
-          // so we don't look for previousFailingRun (all current failures are new regressions)
+          targetRun = undefined; // found a success → do not fetch logs for this workflow
           break;
         }
         // Any other conclusion at this point is considered failing for log fetching purposes
-        if (!targetRun) {
-          targetRun = run;
-        } else {
-          previousFailingRun = run;
-          break; // We have both consecutive failing runs we need
-        }
+        targetRun = run;
+        break;
       }
 
-      // Remove old annotations/logs for this workflow (keep the 2 most recent failing runs
-      // to support job-level regression detection in stayed_failing pipelines)
-      const runsToKeep = new Set();
-      if (targetRun) runsToKeep.add(String(targetRun.id));
-      if (previousFailingRun) runsToKeep.add(String(previousFailingRun.id));
+      // Remove old annotations/logs for this workflow (only keep the latest failing run)
+      const runsToKeep = targetRun ? new Set([String(targetRun.id)]) : new Set();
       let removedAnnotations = 0;
       let removedGtestLogs = 0;
       let removedOtherLogs = 0;
@@ -207,9 +188,9 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
       let sawGtestFailure = false;
       let sawAnyFailureAnnotations = false;
       let annotationsFetchFailed = false;
-      const gtestJobsMap = new Map(); // Map<jobName, jobUrl> for gtest jobs
+      const gtestJobNames = new Set();
       try {
-        // List jobs and extract check_run_ids along with job URLs
+        // List jobs and extract check_run_ids
         const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
         const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
         const checkRunIds = [];
@@ -218,13 +199,13 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           if (typeof cru === 'string' && cru.includes('/check-runs/')) {
             const idStr = cru.split('/check-runs/')[1];
             const id = idStr ? parseInt(idStr, 10) : NaN;
-            if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name, job_url: j.html_url || '' });
+            if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name });
           }
         }
         const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
         if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
         const allAnnotations = [];
-        for (const { id: checkRunId, job_name, job_url } of checkRunIds) {
+        for (const { id: checkRunId, job_name } of checkRunIds) {
           let page = 1;
           const budget = 500; // safety cap per run
           while (allAnnotations.length < budget) {
@@ -235,7 +216,6 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
             for (const a of arr) {
               allAnnotations.push({
                 job_name,
-                job_url,
                 path: a.path,
                 start_line: a.start_line,
                 end_line: a.end_line,
@@ -255,16 +235,12 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
                   sawAnyFailureAnnotations = true;
                   if (isUnknownFileLead) {
                     sawGtestFailure = true;
-                    if (job_name && !gtestJobsMap.has(String(job_name))) {
-                      gtestJobsMap.set(String(job_name), job_url || '');
-                    }
+                    if (job_name) gtestJobNames.add(String(job_name));
                   }
                   // Keep legacy job-name heuristic as a secondary signal
                   else if ((/gtest/i.test(String(job_name || '')) || /gtests/i.test(String(job_name || '')))) {
                     sawGtestFailure = true;
-                    if (job_name && !gtestJobsMap.has(String(job_name))) {
-                      gtestJobsMap.set(String(job_name), job_url || '');
-                    }
+                    if (job_name) gtestJobNames.add(String(job_name));
                   }
                 }
               } catch (_) { /* ignore */ }
@@ -302,13 +278,13 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
           const wanted = new Map();
           // Add any job names discovered via 'unknown file' annotations (gtest jobs)
-          for (const [jn, jUrl] of gtestJobsMap.entries()) {
+          for (const jn of Array.from(gtestJobNames.values())) {
             const key = sanitize(jn);
-            if (!wanted.has(key)) wanted.set(key, { name: jn, url: jUrl, files: [] });
+            if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
           }
           if (wanted.size === 0) {
             // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
-            wanted.set('gtest', { name: 'gtest', url: '', files: [] });
+            wanted.set('gtest', { name: 'gtest', files: [] });
           }
           // Walk extracted tree and record .txt files that match wanted keys
           const stack = [extractDir];
@@ -349,9 +325,8 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           // Extract quietly to avoid ENOBUFS
           execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-          // Fetch all failing jobs from GitHub API with pagination (separate fetch to ensure all jobs are captured)
-          // Store job names and URLs for linking in Slack messages
-          const failingJobsMap = new Map(); // Map<jobName, jobUrl>
+          // Fetch all failing job names from GitHub API with pagination (separate fetch to ensure all jobs are captured)
+          const failingJobNames = new Set();
           try {
             // Get jobs for this run - filter for failed jobs, handle pagination
             let page = 1;
@@ -364,7 +339,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
                 const conclusion = (job.conclusion || '').toLowerCase();
                 if (conclusion === 'failure' || conclusion === 'cancelled') {
                   if (job.name) {
-                    failingJobsMap.set(String(job.name), job.html_url || '');
+                    failingJobNames.add(String(job.name));
                   }
                 }
               }
@@ -392,18 +367,15 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
               }
             }
           }
-          // Store file list, job names, and job URLs from GitHub API
+          // Store both file list and actual job names from GitHub API
           const logsListPath = path.join(runDir, 'logs-list.json');
-          // Convert Map to array of {name, url} objects for JSON serialization
-          const failingJobsArray = Array.from(failingJobsMap.entries()).map(([name, url]) => ({ name, url }));
           fs.writeFileSync(logsListPath, JSON.stringify({
             files: logFiles,
-            job_names: Array.from(failingJobsMap.keys()), // Keep for backward compatibility
-            failing_jobs: failingJobsArray // New format with URLs
+            job_names: Array.from(failingJobNames)
           }));
           const relativeRunDir = path.relative(workspace, runDir) || runDir;
           otherLogsIndex[String(targetRun.id)] = relativeRunDir;
-          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s), ${failingJobsMap.size} failing job(s)`);
+          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s), ${failingJobNames.size} failing job(s)`);
         }
       } catch (e) {
         core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
