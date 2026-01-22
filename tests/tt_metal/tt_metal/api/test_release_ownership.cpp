@@ -15,6 +15,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 
 using namespace tt::tt_metal;
 
@@ -22,12 +24,11 @@ namespace tt::tt_metal {
 
 // Helper function to create and close a device
 static void open_and_close_device() {
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices == 0) {
-        GTEST_SKIP() << "No devices available";
+    std::vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+        ids.push_back(id);
     }
-    
-    std::vector<ChipId> ids = {0};
+    ASSERT_GT(ids.size(), 0);
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     
     auto devices = distributed::MeshDevice::create_unit_meshes(
