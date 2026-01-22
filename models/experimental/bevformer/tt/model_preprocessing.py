@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+BEVFormer model parameter preprocessing utilities for TTNN.
+"""
+
 import torch
 import ttnn
 from typing import Optional
@@ -29,7 +33,9 @@ except AttributeError:
 
 
 def convert_parameterdict_to_object(param_dict):
-    """Convert ParameterDict to object with attribute access"""
+    """
+    Convert parameter dictionary to object with dot-notation attribute access.
+    """
     params_obj = type("Params", (), {})()
 
     for layer_name, layer_params in param_dict.items():
@@ -144,6 +150,9 @@ def _manage_cache_save(parameters, cache_file_name, device, cache_type=""):
 
 # Local preprocessing functions to avoid import issues
 def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
+    """
+    Preprocess linear layer weight for TTNN (transpose and convert).
+    """
     if dtype is None:
         dtype = DEFAULT_DTYPE
     if layout is None:
@@ -156,6 +165,9 @@ def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_ma
 
 
 def preprocess_linear_bias(bias, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
+    """
+    Preprocess linear layer bias for TTNN (reshape and convert).
+    """
     if dtype is None:
         dtype = DEFAULT_DTYPE
     if layout is None:
@@ -473,7 +485,9 @@ def create_temporal_self_attention_parameters(
 
 
 def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=None, weights_mesh_mapper=None):
-    """Process LayerNorm parameters for TTNN."""
+    """
+    Process LayerNorm parameters for TTNN.
+    """
     if dtype is None:
         dtype = DEFAULT_DTYPE
     if layout is None:

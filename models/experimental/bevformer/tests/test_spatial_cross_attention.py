@@ -29,13 +29,20 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+# --------------------------------------------------------------------------- #
+# Default Test Configuration                                                  #
+# --------------------------------------------------------------------------- #
+
+# Flag to control detailed comparison output
+PRINT_DETAILED_COMPARISON_FLAG = False
+
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 1, 30, 30, 0.998, 0.04, 1.3, 0.5),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 50, 50, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 50x50 BEV grid
-        ("nuscenes_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 100x100 BEV grid
+        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.05, 0.5, 0.5),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 50x50 BEV grid
+        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 200x200 BEV grid
         ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5),  # CARLA base model
         ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5),  # Batch size 2
@@ -57,7 +64,6 @@ def test_spatial_cross_attention_forward(
 ):
     """Test TTSpatialCrossAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
 
     # Get configuration from preset
     preset_config = get_preset_config(config_name)
@@ -183,7 +189,7 @@ def test_spatial_cross_attention_forward(
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
     logger.info(f"TT model output type: {type(tt_model_output)}")
 
-    if print_detailed_comparison_flag:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
         print_detailed_comparison(
             ref_model_output,

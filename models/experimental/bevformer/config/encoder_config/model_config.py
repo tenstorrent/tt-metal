@@ -262,17 +262,17 @@ class EncoderConfig:
             return f"EncoderConfig(dataset='{self.dataset_name}', model='{self.model_variant}', not loaded)"
 
         return f"""EncoderConfig Summary:
-Dataset: {self.dataset_name}
-Model Variant: {self.model_variant}
-Description: {self.dataset_config.description}
-PC Range: {self.dataset_config.pc_range}
-Cameras: {self.dataset_config.num_cams}
-Input Size: {self.dataset_config.input_size}
-Spatial Shapes: {self.dataset_config.spatial_shapes}
-Model Layers: {self.model_config.num_layers}
-Embed Dims: {self.model_config.embed_dims}
-Attention Heads: {self.model_config.num_heads}
-Parameters: ~{self._estimate_parameters():.1f}M"""
+            Dataset: {self.dataset_name}
+            Model Variant: {self.model_variant}
+            Description: {self.dataset_config.description}
+            PC Range: {self.dataset_config.pc_range}
+            Cameras: {self.dataset_config.num_cams}
+            Input Size: {self.dataset_config.input_size}
+            Spatial Shapes: {self.dataset_config.spatial_shapes}
+            Model Layers: {self.model_config.num_layers}
+            Embed Dims: {self.model_config.embed_dims}
+            Attention Heads: {self.model_config.num_heads}
+            Parameters: ~{self._estimate_parameters():.1f}M"""
 
     def _estimate_parameters(self) -> float:
         """Estimate model parameters in millions."""

@@ -132,7 +132,6 @@ class TTBEVFormerLayer:
         spatial_shapes=None,
         bev_shape=None,
         level_start_index=None,
-        valid_ratios=None,
         prev_bev=None,
         shift=None,
         reference_points_3d=None,
@@ -151,7 +150,6 @@ class TTBEVFormerLayer:
             spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
             bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
             level_start_index: Start index of each level [num_levels]
-            valid_ratios: Valid ratios for each level [B, num_levels, 2]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
             reference_points_3d: 3D reference points [B, num_queries, D, 3]
@@ -410,7 +408,6 @@ class TTBEVFormerEncoder:
         bev_pos=None,
         spatial_shapes=None,
         level_start_index=None,
-        valid_ratios=None,
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
@@ -428,7 +425,6 @@ class TTBEVFormerEncoder:
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Multi-scale feature shapes [num_levels, 2]
             level_start_index: Start indices for each level [num_levels]
-            valid_ratios: Valid ratios for each level [B, num_levels, 2]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
             img_metas: Camera metadata for point sampling
@@ -453,39 +449,52 @@ class TTBEVFormerEncoder:
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Generation Start")
 
-        # Generate reference points for spatial cross-attention
+        # Generate 3D reference points and project them to camera coordinates
+        # These reference points define where each BEV query will sample features from camera views
         reference_points_cam = None
         bev_mask = None
 
         if img_metas is not None:
+            # Generate 3D reference points in world coordinates
+            # Creates a 3D grid in BEV space with multiple depth levels (pillar sampling)
+            # Shape: [bev_h*bev_w, num_points_in_pillar, 3] representing (x, y, z) coordinates
+            # TODO: Move to init as it's done once in torch
             reference_points_3d = generate_reference_points(
                 bev_h=bev_h,
                 bev_w=bev_w,
                 z_cfg=self.z_cfg,
                 batch_size=bs,
-                device="cpu",  # Generate on CPU first
                 dtype=torch.float32,
             )
 
-            # Extract lidar2img matrices from img_metas
+            # Extract camera transformation matrices from metadata
+            # These matrices transform 3D world coordinates to 2D camera pixel coordinates
             if "lidar2img" in img_metas[0]:
-                # Create lidar2img tensor from metadata
+                # Extract precomputed transformation matrices from dataset metadata
+                # lidar2img transforms points from lidar/world coordinates to camera image pixels
                 lidar2img_list = []
                 for meta in img_metas:
                     if isinstance(meta["lidar2img"], torch.Tensor):
                         lidar2img_list.append(meta["lidar2img"])
                     else:
+                        # Convert numpy arrays or lists to tensors
                         lidar2img_list.append(torch.tensor(meta["lidar2img"], dtype=torch.float32))
 
                 lidar2img = torch.stack(lidar2img_list)
-                # Shape: [batch, num_cams, 4, 4] - keep batch dimension for compatibility
+                # Shape: [batch, num_cams, 4, 4] - homogeneous transformation matrices
                 lidar2img = lidar2img.cpu()
             else:
-                # Construct lidar2img from intrinsics and extrinsics if available
+                # Fallback: construct transformation from separate intrinsic and extrinsic matrices
+                # Intrinsic: camera parameters (focal length, principal point)
+                # Extrinsic: camera pose in world coordinates (rotation + translation)
                 camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
                 camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
+                # Combined transformation: world -> camera -> image
                 lidar2img = camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
-            # Project to camera coordinates using PyTorch function (more stable)
+            # Project 3D reference points to 2D camera coordinates
+            # This determines where each BEV query will sample from in each camera view
+            # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
+            #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
             reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
                 reference_points=reference_points_3d,
                 pc_range=self.pc_range,
@@ -513,7 +522,6 @@ class TTBEVFormerEncoder:
                 spatial_shapes=spatial_shapes,
                 bev_shape=bev_shape,
                 level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
                 prev_bev=prev_bev,
                 shift=shift,
                 reference_points_3d=reference_points_3d,

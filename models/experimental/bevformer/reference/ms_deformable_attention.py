@@ -1,6 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+PyTorch reference implementation of Multi-Scale Deformable Attention for BEVFormer.
+
+This module provides the reference PyTorch implementation of multi-scale deformable attention
+used for validating and comparing against the TTNN implementation. It follows the standard
+PyTorch patterns and serves as the ground truth for correctness verification.
+
+Key components:
+- multi_scale_deformable_attn: Core attention computation function
+- MSDeformableAttention: PyTorch attention module class
+
+Based on the original BEVFormer and MMCV implementations.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -73,6 +87,22 @@ class MSDeformableAttention(nn.Module):
     """
 
     def __init__(self, config: DeformableAttentionConfig, device=None):
+        """
+        Initialize PyTorch Multi-Scale Deformable Attention module.
+
+        Args:
+            config (DeformableAttentionConfig): Configuration object containing:
+                - embed_dims (int): Feature embedding dimensions
+                - num_heads (int): Number of attention heads
+                - num_levels (int): Number of feature pyramid levels
+                - num_points (int): Number of sampling points per head
+                - batch_first (bool): Whether batch dimension comes first
+                - im2col_step (int): Step size for im2col operation
+            device: PyTorch device for computations (optional)
+
+        Raises:
+            ValueError: If embed_dims is not divisible by num_heads
+        """
         # Validate configuration
         if config.embed_dims % config.num_heads != 0:
             raise ValueError(f"embed_dims ({config.embed_dims}) must be divisible by num_heads ({config.num_heads})")
@@ -94,7 +124,15 @@ class MSDeformableAttention(nn.Module):
         self._setup_layers()
 
     def _setup_layers(self):
-        """Setup the linear projection layers following MMCV approach"""
+        """
+        Setup the linear projection layers following MMCV approach.
+
+        Creates the following layers:
+        - value_proj: Projects input features to values
+        - sampling_offsets: Generates sampling offset coordinates
+        - attention_weights: Computes attention weights for sampling points
+        - output_proj: Final output projection
+        """
         # Value projection
         self.value_proj = nn.Linear(self.embed_dims, self.embed_dims)
 
