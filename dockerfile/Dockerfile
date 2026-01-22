@@ -227,6 +227,8 @@ RUN uv pip install $WHEEL_FILENAME
 
 FROM base AS release-models
 
+ARG PYTHON_VERSION
+
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
