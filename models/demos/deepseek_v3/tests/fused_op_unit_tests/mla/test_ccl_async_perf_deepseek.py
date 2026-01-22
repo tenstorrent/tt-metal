@@ -144,7 +144,8 @@ def test_fast_reduce_wq_kv_a_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("mla_allgather_wq_kv_a", 10, 106),  # Target based on typical all-gather performance
+        ("wq_kv_a_ag_decode", 10, 106),  # Target based on typical all-gather performance
+        ("wo_ag_decode", 10, 118),  # Target based on typical all-gather performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -158,7 +159,7 @@ def test_ag_tg_deepseek_allgather_perf(
     benchmark_data = BenchmarkData()
 
     subdir = "deepseek_ccl_perf"
-    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_allgather_deepseek.py"
+    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_allgather_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherAsync"  # CCL operation name for all-gather
     warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
