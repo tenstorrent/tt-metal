@@ -500,3 +500,66 @@ def test_ag_matmul_tg_llama_perf(
     assert (
         measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+
+
+# =============================================================================
+# T3K Fused CCL Ops Tests
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "warmup_iters, perf_target_us",
+    [
+        (5, 25),  # Target TBD based on actual T3K performance
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_matmul_rs_t3k_perf(
+    warmup_iters,
+    perf_target_us,
+):
+    """
+    T3K performance test for Matmul + ReduceScatter fused operation.
+
+    Tests the matmul_reduce_scatter_async op on T3K (8 devices) with
+    tensor dimensions matching the Llama 70B MLP ff1/ff3 path.
+    """
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = "matmul_reduce_scatter_t3k"
+
+    subdir = "llama_ccl_perf"
+    command = (
+        "pytest tests/ttnn/unit_tests/operations/ccl/test_fused_ccl_t3k.py::test_matmul_reduce_scatter_t3k -k perf"
+    )
+    cols = ["DEVICE KERNEL"]
+    op_name = "MatmulReduceScatterAsync"
+    warmup_iters = warmup_iters * 8  # 5 iterations per device (T3K has 8 devices)
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-t3k-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-t3k-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-t3k-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-t3k-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="t3k_llama_ops",
+        ml_model_name="llama70b-t3k",
+    )
+
+    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
