@@ -119,19 +119,20 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 }
 
 // Since we unicast to local, we must omit the packet header
-// This function only does reads, and within scope there are no modifications to the packet header
+// This function reads header fields from cache and uses L1 address for payload DMA
 __attribute__((optimize("jump-tables")))
 #ifndef FABRIC_2D
 FORCE_INLINE
 #endif
     void
     execute_chip_unicast_to_local_chip(
-        tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+        PACKET_HEADER_TYPE* const packet_header_cached,                // Cached header for reading fields
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_start_l1,  // L1 address for payload DMA
         uint16_t payload_size_bytes,
         uint32_t transaction_id,
         uint8_t rx_channel_id) {
-    const auto& header = *packet_start;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
+    const auto& header = *packet_header_cached;  // Read from cache
+    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start_l1) + sizeof(PACKET_HEADER_TYPE);
 
     constexpr bool update_counter = false;
 
@@ -266,7 +267,7 @@ FORCE_INLINE
 template <typename LocalRelayInterfaceT>
 __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     LocalRelayInterfaceT& local_relay_interface,
-    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
     uint8_t rx_channel_id) {

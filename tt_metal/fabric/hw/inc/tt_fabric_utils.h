@@ -23,7 +23,8 @@ FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::Termin
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
-    router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+    router_invalidate_l1_cache<true>();
+    // router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     return (*termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) ||
@@ -74,7 +75,8 @@ template <bool RISC_CPU_DATA_CACHE_ENABLED>
 inline void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
     while (*poll_addr != value) {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        router_invalidate_l1_cache<true>();
+        // router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         // context switch while waiting to allow slow dispatch traffic to go through
         run_routing();
     }

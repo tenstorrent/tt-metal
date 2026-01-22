@@ -811,8 +811,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, typename DownstreamSenderT>
 FORCE_INLINE void receiver_forward_packet(
-    // TODO: have a separate cached copy of the packet header to save some additional L1 loads
-    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    PACKET_HEADER_TYPE* packet_header_cached,                // Cached header for reading packet fields
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_start_l1,  // L1 address for DMA operations
     ROUTING_FIELDS_TYPE cached_routing_fields,
     DownstreamSenderT& downstream_edm_interface,
     uint8_t transaction_id) {
@@ -822,37 +822,64 @@ FORCE_INLINE void receiver_forward_packet(
 #else
         false;
 #endif
-    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
+    // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
             (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
             tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
-        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        uint16_t payload_size_bytes = packet_header_cached->payload_size_bytes;  // Read from cached header
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                packet_start_l1,
+                payload_size_bytes,
+                cached_routing_fields,
+                downstream_edm_interface,
+                transaction_id);  // Use L1 address for DMA
         }
         if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip(
+                packet_header_cached,
+                packet_start_l1,
+                payload_size_bytes,
+                transaction_id,
+                rx_channel_id);  // Use L1 address for DMA
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
-        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        uint16_t payload_size_bytes = packet_header_cached->payload_size_bytes;  // Read from cached header
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip(
+                    packet_header_cached,
+                    packet_start_l1,
+                    payload_size_bytes,
+                    transaction_id,
+                    rx_channel_id);  // Use L1 address for DMA
                 break;
             case LowLatencyFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                    packet_start_l1,
+                    payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface,
+                    transaction_id);  // Use L1 address for DMA
                 break;
             case LowLatencyFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
-                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                    packet_start_l1,
+                    payload_size_bytes,
+                    cached_routing_fields,
+                    downstream_edm_interface,
+                    transaction_id);  // Use L1 address for DMA
+                execute_chip_unicast_to_local_chip(
+                    packet_header_cached,
+                    packet_start_l1,
+                    payload_size_bytes,
+                    transaction_id,
+                    rx_channel_id);  // Use L1 address for DMA
                 break;
             default: {
                 ASSERT(false);
@@ -870,14 +897,16 @@ FORCE_INLINE void receiver_forward_packet(
 template <uint8_t rx_channel_id, typename LocalRelayInterfaceT>
 FORCE_INLINE void forward_to_local_destination(
     LocalRelayInterfaceT& local_relay_interface,
-    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+    PACKET_HEADER_TYPE* packet_header_cached,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_start_l1,
     uint16_t payload_size_bytes,
     uint8_t transaction_id) {
     if constexpr (udm_mode) {
         execute_chip_unicast_to_relay(
-            local_relay_interface, packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id, rx_channel_id);
     } else {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        execute_chip_unicast_to_local_chip(
+            packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id, rx_channel_id);
     }
 }
 
@@ -888,13 +917,14 @@ FORCE_INLINE
 #endif
     __attribute__((optimize("jump-tables"))) void
     receiver_forward_packet(
-        tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
+        PACKET_HEADER_TYPE* packet_header_cached,                // Cached header for reading packet fields
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_start_l1,  // L1 address for DMA operations
         ROUTING_FIELDS_TYPE cached_routing_fields,
         std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
         LocalRelayInterfaceT& local_relay_interface,
         uint8_t transaction_id,
         uint32_t hop_cmd) {
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    uint16_t payload_size_bytes = packet_header_cached->payload_size_bytes;  // Read from cached header
 
     using eth_chan_directions::EAST;
     using eth_chan_directions::NORTH;
@@ -907,11 +937,15 @@ FORCE_INLINE
             if constexpr (z_router_enabled) {
                 if constexpr (my_direction == Z) {
                     forward_to_local_destination<rx_channel_id>(
-                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                        local_relay_interface,
+                        packet_header_cached,
+                        packet_start_l1,
+                        payload_size_bytes,
+                        transaction_id);
                 } else {
                     constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
                     forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                        packet_start,
+                        packet_start_l1,
                         payload_size_bytes,
                         cached_routing_fields,
                         downstream_edm_interfaces[edm_index],
@@ -922,7 +956,7 @@ FORCE_INLINE
         case MeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == EAST) {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -936,7 +970,7 @@ FORCE_INLINE
         case MeshRoutingFields::FORWARD_WEST:
             if constexpr (my_direction == WEST) {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -966,12 +1000,12 @@ FORCE_INLINE
                     transaction_id);
             }
             forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                local_relay_interface, packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id);
             break;
         case MeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == NORTH) {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -985,7 +1019,7 @@ FORCE_INLINE
         case MeshRoutingFields::FORWARD_SOUTH:
             if constexpr (my_direction == SOUTH) {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -1015,7 +1049,7 @@ FORCE_INLINE
                     transaction_id);
             }
             forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                local_relay_interface, packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
@@ -1063,7 +1097,7 @@ FORCE_INLINE
                     transaction_id);
             }
             forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                local_relay_interface, packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
@@ -1099,7 +1133,7 @@ FORCE_INLINE
                     transaction_id);
             }
             forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                local_relay_interface, packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
@@ -1135,7 +1169,7 @@ FORCE_INLINE
                     transaction_id);
             }
             forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                local_relay_interface, packet_header_cached, packet_start_l1, payload_size_bytes, transaction_id);
             break;
         case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
             if constexpr (my_direction == SOUTH) {
@@ -1151,7 +1185,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
@@ -1192,7 +1226,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
@@ -1233,7 +1267,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
@@ -1262,7 +1296,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
@@ -1291,7 +1325,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
@@ -1320,7 +1354,7 @@ FORCE_INLINE
                     transaction_id);
             } else {
                 forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
+                    local_relay_interface, packet_start_l1, payload_size_bytes, transaction_id);
             }
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
@@ -1514,8 +1548,7 @@ FORCE_INLINE void send_credits_to_upstream_workers(
 }
 
 template <typename LocalTelemetryT>
-FORCE_INLINE void update_bw_counters(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, LocalTelemetryT& local_fabric_telemetry) {
+FORCE_INLINE void update_bw_counters(PACKET_HEADER_TYPE* packet_header, LocalTelemetryT& local_fabric_telemetry) {
     if constexpr ((NUM_ACTIVE_ERISCS == 1) || (MY_ERISC_ID == 0)) {
         size_t packet_bytes = packet_header->get_payload_size_including_header();
         local_fabric_telemetry.dynamic_info.tx_bandwidth.num_packets_sent++;
@@ -1709,6 +1742,96 @@ FORCE_INLINE
     return false;
 }
 
+// ============================================================================
+// Packet Header Cache Infrastructure
+// ============================================================================
+
+// Global packet header cache - sized for 2 headers
+// Maximum header size across all packet types: 128 bytes = 32 words
+constexpr size_t MAX_PACKET_HEADER_SIZE_WORDS = 32;
+alignas(16) uint32_t g_receiver_packet_header_cache[2][MAX_PACKET_HEADER_SIZE_WORDS];
+
+/*
+ * Per-receiver-channel cache state
+ * Tracks which packet headers are cached and manages cache slots
+ */
+struct ReceiverChannelHeaderCache {
+    uint8_t current_slot;  // 0 or 1 - which cache slot holds the current packet
+    bool has_current;      // true if current slot is valid
+    bool has_next;         // true if next slot (1-current_slot) is valid
+
+    FORCE_INLINE void init() {
+        current_slot = 0;
+        has_current = false;
+        has_next = false;
+    }
+
+    FORCE_INLINE uint8_t get_current_cache_slot() const { return current_slot; }
+
+    FORCE_INLINE uint8_t get_next_cache_slot() const { return 1 - current_slot; }
+
+    FORCE_INLINE void advance_to_next() {
+        // Move to next packet: what was "next" becomes "current"
+        current_slot = 1 - current_slot;
+        has_current = has_next;
+        has_next = false;
+    }
+};
+
+/*
+ * Helper to manually unroll packet header copy at compile time
+ * Generates exactly N load/store pairs based on header size
+ */
+template <uint32_t N>
+struct UnrollCopy {
+    FORCE_INLINE static void copy(volatile uint32_t* src, uint32_t* dst) {
+        dst[N - 1] = src[N - 1];
+        UnrollCopy<N - 1>::copy(src, dst);
+    }
+};
+
+template <>
+struct UnrollCopy<0> {
+    FORCE_INLINE static void copy(volatile uint32_t* src, uint32_t* dst) {}
+};
+
+/*
+ * Read packet header from L1 buffer into local cache using raw 4B word reads
+ * Manually unrolled at compile time for optimal performance
+ *
+ * @param l1_packet_header Pointer to packet header in L1 memory
+ * @param cache_slot Cache slot to fill (0 or 1)
+ */
+template <typename PacketHeaderType>
+FORCE_INLINE void fill_packet_header_cache(volatile PacketHeaderType* l1_packet_header, uint8_t cache_slot) {
+    router_invalidate_l1_cache<true>();
+
+    constexpr uint32_t header_size_words = sizeof(PacketHeaderType) / sizeof(uint32_t);
+    static_assert(header_size_words <= MAX_PACKET_HEADER_SIZE_WORDS, "Packet header too large for cache");
+
+    ASSERT(cache_slot < 2);
+
+    volatile uint32_t* src = reinterpret_cast<volatile uint32_t*>(l1_packet_header);
+    uint32_t* dst = g_receiver_packet_header_cache[cache_slot];
+
+    // Manually unrolled copy - generates exactly header_size_words load/store pairs
+    UnrollCopy<header_size_words>::copy(src, dst);
+}
+
+/*
+ * Get pointer to cached packet header
+ *
+ * @param cache_slot Cache slot (0 or 1)
+ * @return Pointer to cached header cast to appropriate type
+ */
+template <typename PacketHeaderType>
+FORCE_INLINE PacketHeaderType* get_cached_packet_header(uint8_t cache_slot) {
+    ASSERT(cache_slot < 2);
+    return reinterpret_cast<PacketHeaderType*>(g_receiver_packet_header_cache[cache_slot]);
+}
+
+// ============================================================================
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1729,10 +1852,39 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
-    LocalTelemetryT& local_fabric_telemetry) {
+    LocalTelemetryT& local_fabric_telemetry,
+    ReceiverChannelHeaderCache& header_cache) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+
+    // Prefetch packet headers into cache if available
+    if (pkts_received_since_last_check > 0) {
+        // If we don't have current packet cached, fill it
+        if (!header_cache.has_current) {
+            auto prefetch_buffer_index = wr_sent_counter.get_buffer_index();
+            volatile PACKET_HEADER_TYPE* l1_header =
+                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(prefetch_buffer_index);
+
+            uint8_t cache_slot = header_cache.get_current_cache_slot();
+            fill_packet_header_cache(l1_header, cache_slot);
+            header_cache.has_current = true;
+        }
+        // If we have current but not next, and there's another packet, prefetch next
+        else if (!header_cache.has_next && pkts_received_since_last_check > 1) {
+            // Calculate next buffer index by advancing counter temporarily
+            auto next_wr_sent_counter = wr_sent_counter;
+            next_wr_sent_counter.increment();
+            auto next_buffer_index = next_wr_sent_counter.get_buffer_index();
+
+            volatile PACKET_HEADER_TYPE* l1_header =
+                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(next_buffer_index);
+
+            uint8_t cache_slot = header_cache.get_next_cache_slot();
+            fill_packet_header_cache(l1_header, cache_slot);
+            header_cache.has_next = true;
+        }
+    }
 
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1744,7 +1896,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
             uint8_t src_ch_id;
@@ -1754,8 +1906,23 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
                 auto receiver_buffer_index = ack_counter.get_buffer_index();
-                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+
+                // Use cached packet header (should always be in current slot due to sequential processing)
+                PACKET_HEADER_TYPE* packet_header;
+                // if (header_cache.has_current) {
+                packet_header = get_cached_packet_header<PACKET_HEADER_TYPE>(header_cache.get_current_cache_slot());
+                // } else {
+                //     // Fallback: cache miss (shouldn't happen in normal operation)
+                //     volatile PACKET_HEADER_TYPE* l1_header =
+                //         local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
+
+                //     uint8_t cache_slot = header_cache.get_current_cache_slot();
+                //     fill_packet_header_cache(l1_header, cache_slot);
+                //     header_cache.has_current = true;
+
+                //     packet_header = get_cached_packet_header<PACKET_HEADER_TYPE>(cache_slot);
+                // }
+
                 receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
@@ -1776,10 +1943,28 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     receiver_forward_timer.open();
 
     if (unwritten_packets) {
-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
-        tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+
+        // Use cached packet header (should always be in current slot due to sequential processing)
+        PACKET_HEADER_TYPE* packet_header;
+        // if (header_cache.has_current) {
+        packet_header = get_cached_packet_header<PACKET_HEADER_TYPE>(header_cache.get_current_cache_slot());
+        // } else {
+        //     // Fallback: cache miss (shouldn't happen in normal operation)
+        //     volatile PACKET_HEADER_TYPE* l1_header =
+        //         local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
+
+        //     uint8_t cache_slot = header_cache.get_current_cache_slot();
+        //     fill_packet_header_cache(l1_header, cache_slot);
+        //     header_cache.has_current = true;
+
+        //     packet_header = get_cached_packet_header<PACKET_HEADER_TYPE>(cache_slot);
+        // }
+
+        // Get L1 address early for functions that may modify the packet header
+        volatile PACKET_HEADER_TYPE* l1_packet_header =
+            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
 
         ROUTING_FIELDS_TYPE cached_routing_fields;
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
@@ -1807,7 +1992,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             //  mcast)
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
+            // Pass cached header for reading, L1 header for modifications
+            hop_cmd = get_cmd_with_mesh_boundary_adjustment(
+                packet_header, const_cast<PACKET_HEADER_TYPE*>(l1_packet_header), cached_routing_fields, routing_table);
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
                     hop_cmd, downstream_edm_interfaces, local_relay_interface);
@@ -1835,6 +2022,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
                 receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
                     packet_header,
+                    l1_packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces,
                     local_relay_interface,
@@ -1844,10 +2032,39 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             } else {
 #ifndef FABRIC_2D
                 receiver_forward_packet<receiver_channel>(
-                    packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
+                    packet_header, l1_packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
 #endif
             }
             wr_sent_counter.increment();
+
+            // Advance cache: what was "next" becomes "current"
+            header_cache.advance_to_next();
+
+            // Prefetch next packet if available and not already cached
+            // if (!header_cache.has_next) {
+            auto next_buffer_index = wr_sent_counter.get_buffer_index();
+
+            // Check if there are more packets to prefetch
+            bool has_more_packets = false;
+            if constexpr (enable_first_level_ack) {
+                auto& ack_counter = receiver_channel_pointers.ack_counter;
+                has_more_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+            } else {
+                // For !enable_first_level_ack, check if stream register has more packets
+                auto remaining_pkts = get_ptr_val<to_receiver_pkts_sent_id>();
+                has_more_packets = remaining_pkts > 0;
+            }
+
+            if (has_more_packets) {
+                volatile PACKET_HEADER_TYPE* l1_header =
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(next_buffer_index);
+
+                uint8_t cache_slot = header_cache.get_next_cache_slot();
+                fill_packet_header_cache(l1_header, cache_slot);
+                header_cache.has_next = true;
+            }
+            // }
+
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
@@ -1932,7 +2149,11 @@ FORCE_INLINE bool run_receiver_channel_step(
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        // Initialize cache per invocation (assuming single receiver channel)
+        ReceiverChannelHeaderCache header_cache;
+        header_cache.init();
+
+        // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
@@ -1951,7 +2172,8 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel],
             routing_table,
-            local_fabric_telemetry);
+            local_fabric_telemetry,
+            header_cache);  // NEW: Pass cache
     }
     return false;
 }
@@ -2079,7 +2301,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
@@ -2308,7 +2530,8 @@ void
             return;
         }
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            router_invalidate_l1_cache<true>();
+            // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
@@ -2426,13 +2649,15 @@ void wait_for_other_local_erisc() {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_step2_value) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            router_invalidate_l1_cache<true>();
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_start_value) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+            router_invalidate_l1_cache<true>();
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
@@ -2559,7 +2784,11 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
-    set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    if constexpr (is_receiver_channel_serviced[0]) {
+        set_l1_data_cache<true>();
+    } else {
+        set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    }
 
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
