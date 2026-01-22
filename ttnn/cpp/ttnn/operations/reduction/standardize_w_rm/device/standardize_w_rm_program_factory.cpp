@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 
 namespace ttnn::operations::reduction::standardize_w_rm::program {
@@ -37,11 +38,11 @@ StandardizeWRmProgramFactory::cached_program_t StandardizeWRmProgramFactory::cre
     const uint32_t tile_size = tt::tile_size(cb_data_format);
 
     // Tensor dimensions (ROW_MAJOR layout)
-    const uint32_t W = input.logical_shape()[-1];                                         // Width in elements
-    const uint32_t Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;  // Width in tiles
-
-    // Suppress unused variable warnings (epsilon, Ht will be used in Stage 6)
-    (void)operation_attributes.epsilon;
+    // Use padded_shape for actual memory layout
+    const uint32_t W = input.padded_shape()[-1];         // Width in elements (padded)
+    const uint32_t H = input.padded_shape()[-2];         // Height in elements (padded)
+    const uint32_t Wt = W / tt::constants::TILE_WIDTH;   // Width in tiles
+    const uint32_t Ht = H / tt::constants::TILE_HEIGHT;  // Height in tiles
 
     // Stick sizes (ROW_MAJOR)
     const uint32_t input_stick_size = W * input.element_size();
@@ -65,10 +66,12 @@ StandardizeWRmProgramFactory::cached_program_t StandardizeWRmProgramFactory::cre
     // 4. Create circular buffers (10 CBs total)
     // ============================================================
 
-    // CB c_0: Input RM sticks (double-buffered)
+    // CB c_0: Input RM sticks
+    // Page size = tile_size for tilize sync (helper expects Wt pages)
+    // Num pages = 2*Wt for double-buffering one tile-row
     constexpr uint32_t cb_in_rm_idx = tt::CBIndex::c_0;
-    const uint32_t cb_in_rm_page_size = input_stick_size_aligned;
-    const uint32_t cb_in_rm_num_pages = buffering_factor * tt::constants::TILE_HEIGHT;  // 2 * 32 = 64 sticks
+    const uint32_t cb_in_rm_page_size = tile_size;
+    const uint32_t cb_in_rm_num_pages = buffering_factor * Wt;
     tt::tt_metal::create_cb(
         cb_in_rm_idx, program, core_range_set, cb_in_rm_page_size, cb_in_rm_num_pages, cb_data_format);
 
@@ -133,34 +136,51 @@ StandardizeWRmProgramFactory::cached_program_t StandardizeWRmProgramFactory::cre
         cb_rsqrt_idx, program, core_range_set, cb_rsqrt_page_size, cb_rsqrt_num_pages, cb_data_format);
 
     // CB c_16: Output RM sticks (double-buffered)
+    // Used for both Phase 8 output (tiled multiply) and Phase 9 (untilize RM output)
+    // Page size = tile_size for untilize sync (helper expects Wt pages)
+    // Num pages = 2*Wt for double-buffering one tile-row
     constexpr uint32_t cb_out_rm_idx = tt::CBIndex::c_16;
-    const uint32_t cb_out_rm_page_size = output_stick_size_aligned;
-    const uint32_t cb_out_rm_num_pages = buffering_factor * tt::constants::TILE_HEIGHT;  // 2 * 32 = 64 sticks
+    const uint32_t cb_out_rm_page_size = tile_size;
+    const uint32_t cb_out_rm_num_pages = buffering_factor * Wt;
     tt::tt_metal::create_cb(
         cb_out_rm_idx, program, core_range_set, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // ============================================================
-    // 5. Create kernels (empty stubs for Stage 6)
+    // 5. Create kernels with proper compile-time args
     // ============================================================
 
-    // Reader kernel (empty stub)
-    const std::vector<uint32_t> reader_compile_args = {};
+    // Calculate scaler value: 1/W for mean calculation
+    const float scaler_value = 1.0f / static_cast<float>(W);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler_value);
+    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+
+    // Pack epsilon value for numerical stability in rsqrt
+    bfloat16 bfloat_epsilon_value = bfloat16::truncate(operation_attributes.epsilon);
+    const uint32_t packed_epsilon_value = pack_two_bfloat16_into_uint32({bfloat_epsilon_value, bfloat_epsilon_value});
+
+    // Reader compile-time args: input_stick_size, packed_scaler, packed_epsilon, Ht, Wt, TensorAccessorArgs
+    std::vector<uint32_t> reader_compile_args = {
+        input_stick_size_aligned, packed_scaler_value, packed_epsilon_value, Ht, Wt};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_args);
+
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/standardize_w_rm/device/kernels/dataflow/reader_standardize_w_rm.cpp",
         core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
-    // Compute kernel (empty stub)
-    const std::vector<uint32_t> compute_compile_args = {};
+    // Compute compile-time args: Ht, Wt
+    const std::vector<uint32_t> compute_compile_args = {Ht, Wt};
     const auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/standardize_w_rm/device/kernels/compute/standardize_w_rm_compute.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_args});
 
-    // Writer kernel (empty stub)
-    const std::vector<uint32_t> writer_compile_args = {};
+    // Writer compile-time args: output_stick_size, Ht, Wt, TensorAccessorArgs
+    std::vector<uint32_t> writer_compile_args = {output_stick_size_aligned, Ht, Wt};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_args);
+
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/standardize_w_rm/device/kernels/dataflow/writer_standardize_w_rm.cpp",
@@ -168,12 +188,14 @@ StandardizeWRmProgramFactory::cached_program_t StandardizeWRmProgramFactory::cre
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
     // ============================================================
-    // 6. Set runtime args (empty for stub kernels)
+    // 6. Set runtime args
     // ============================================================
     const uint32_t input_addr = src_buffer->address();
     const uint32_t output_addr = dst_buffer->address();
 
+    // Reader: buffer address
     SetRuntimeArgs(program, reader_kernel_id, core, {input_addr});
+    // Writer: buffer address
     SetRuntimeArgs(program, writer_kernel_id, core, {output_addr});
 
     // ============================================================
