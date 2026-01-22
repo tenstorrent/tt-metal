@@ -136,7 +136,7 @@ def run_test_linear_impl(
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=topology,
             cluster_axis=cluster_axis,
-            num_workers_per_link=2,
+            num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
             mm_cores_y=core_grid.y,
             mm_block_ht=8,
