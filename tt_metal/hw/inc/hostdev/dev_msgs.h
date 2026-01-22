@@ -83,7 +83,7 @@ struct profiler_msg_t {
 // Placed before profiler_msg_t in mailboxes_t, using space freed from profiler control_vector reduction
 struct perf_telemetry_config_t {
     volatile uint32_t config_buffer_addr;  // Address of D2H socket config buffer in L1
-    volatile uint32_t trisc_terminate;     // Flag to signal dispatch TRISC to terminate (moved from profiler)
+    volatile uint32_t telemtery_state;     // Signal telemetry state
     volatile uint32_t reserved[2];         // Reserved for future use, maintains 16-byte size
 };
 

@@ -37,8 +37,8 @@ void MAIN {
     volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_config =
         reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 
-    // Main loop: runs until dispatch_s BRISC signals terminate
-    while (perf_telemetry_config->trisc_terminate == 0) {
+    // Main loop: runs until dispatch_s signals terminate
+    while (perf_telemetry_config->telemtery_state == 0) {
         // Loop over all streams we're monitoring
         for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
             uint32_t stream_id = first_stream_index + i;

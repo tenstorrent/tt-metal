@@ -54,7 +54,7 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
 
-// Pointer to perf telemetry config in mailbox (for setting trisc_terminate flag)
+// Pointer to perf telemetry config in mailbox (for setting terminate flag)
 volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
     reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 static uint32_t num_pages_acquired = 0;
@@ -378,8 +378,7 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
-                // Signal dispatch TRISC to terminate
-                perf_telemetry_mailbox->trisc_terminate = 1;
+                perf_telemetry_mailbox->telemtery_state = 1;
                 done = true;
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
