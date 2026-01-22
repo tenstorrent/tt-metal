@@ -106,6 +106,12 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
 
     fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        // Special case the that NW corner needs to be pinned to asic 1 1
+        // if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0}) {
+        //    fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1,
+        //    1}}); continue;
+        //}
+
         fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
     }
 
