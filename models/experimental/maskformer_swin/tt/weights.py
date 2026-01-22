@@ -17,10 +17,9 @@ Responsibilities include:
 
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Optional
 
 import torch
 
@@ -109,14 +108,6 @@ def convert_state_dict_to_tt(
     return converter.convert(state_dict)
 
 
-def iter_backbone_parameters(tt_state_dict: Dict[str, object]) -> Iterable[tuple[str, object]]:
-    """Yield backbone-specific parameters from the TT-formatted state dict."""
-
-    for name, tensor in tt_state_dict.items():
-        if name.startswith("model.pixel_level_module.encoder.model."):
-            yield name, tensor
-
-
 def extract_backbone_state(tt_state_dict: Dict[str, object]) -> Dict[str, object]:
     """Return a HuggingFace-compatible Swin backbone state dict."""
 
@@ -125,21 +116,6 @@ def extract_backbone_state(tt_state_dict: Dict[str, object]) -> Dict[str, object
     for name, tensor in tt_state_dict.items():
         if name.startswith(prefix):
             extracted[name[len(prefix) :]] = tensor
-    return extracted
-
-
-def extract_patch_embed_state(tt_state_dict: Dict[str, object]) -> Dict[str, object]:
-    """Return weights for the patch embed + norm layers."""
-
-    keys = (
-        "model.pixel_level_module.encoder.model.embeddings.patch_embeddings.projection.weight",
-        "model.pixel_level_module.encoder.model.embeddings.patch_embeddings.projection.bias",
-        "model.pixel_level_module.encoder.model.embeddings.norm.weight",
-        "model.pixel_level_module.encoder.model.embeddings.norm.bias",
-    )
-    extracted = {}
-    for key in keys:
-        extracted[key.split(".")[-2] + "." + key.split(".")[-1]] = tt_state_dict[key]
     return extracted
 
 
@@ -173,19 +149,6 @@ def extract_heads_state(tt_state_dict: Dict[str, object]) -> Dict[str, object]:
         elif name.startswith("mask_embedder"):
             state[name] = tensor
     return state
-
-
-def debug_summarize_weights(ref: ReferenceWeights, config: WeightConversionConfig) -> Dict[str, Tuple[int, int]]:
-    """
-    Partition the raw HuggingFace state dict and return counts per section.
-
-    This helper is useful when extending conversion rules; it avoids raising on
-    leftovers so developers can inspect missing prefixes.
-    """
-
-    converter = _WeightConverter(config)
-    partitions = converter._partition_state_dict(ref.state_dict, strict=False)  # type: ignore[attr-defined]
-    return _summarize_partitions(partitions)
 
 
 # ---------------------------------------------------------------------------
@@ -369,19 +332,6 @@ def _load_model_config(checkpoint_path: Path) -> Dict[str, object]:
     return payload
 
 
-def _summarize_partitions(partitions: Dict[str, Dict[str, object]]) -> Dict[str, Tuple[int, int]]:
-    """Return {section: (count, num_parameters)} summary for debugging."""
-
-    summary: Dict[str, Tuple[int, int]] = {}
-    for section, params in partitions.items():
-        total = 0
-        for tensor in params.values():
-            if isinstance(tensor, torch.Tensor):
-                total += tensor.numel()
-        summary[section] = (len(params), total)
-    return summary
-
-
 def resolve_cli_dtype(name: str) -> object:
     key = name.replace("-", "").replace("_", "").lower()
     mapping = {
@@ -397,33 +347,3 @@ def resolve_cli_dtype(name: str) -> object:
     if dtype is None:
         print(f"[weights] Warning: dtype '{name}' not available; proceeding with torch.float32.", flush=True)
     return dtype
-
-
-def _cli() -> None:
-    parser = argparse.ArgumentParser(description="MaskFormer weight loader debug utility")
-    parser.add_argument(
-        "--weights",
-        type=str,
-        default="facebook/maskformer-swin-base-coco",
-        help="HuggingFace repo id or local checkpoint directory.",
-    )
-    parser.add_argument("--dtype", type=str, default="auto", help="Preferred dtype (bf16/fp16/fp32/auto).")
-    parser.add_argument("--show-config", action="store_true", help="Print backbone config payload.")
-    args = parser.parse_args()
-
-    cfg = WeightConversionConfig(pretrained_model_name=args.weights, dtype=resolve_cli_dtype(args.dtype))
-    ref = download_reference_weights(cfg)
-    print(f"[weights] checkpoint: {ref.checkpoint_path}")
-    if args.show_config:
-        backbone_cfg = ref.config.get("backbone_config", {}) if isinstance(ref.config, dict) else {}
-        print("[weights] backbone_config:", backbone_cfg)
-    converter = _WeightConverter(cfg)
-    partitions = converter._partition_state_dict(ref.state_dict)  # type: ignore[attr-defined]
-    summary = _summarize_partitions(partitions)
-    print("[weights] parameter summary (count tensors, num parameters):")
-    for section, (count, numel) in summary.items():
-        print(f"  {section:<20} {count:5d} tensors ({numel:,} params)")
-
-
-if __name__ == "__main__":
-    _cli()
