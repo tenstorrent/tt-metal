@@ -14,21 +14,21 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearLLama
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
+import transformers
+
+assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
+
 
 def get_attention_mappings():
-    try:
-        from transformers.integrations import use_kernelized_func
-        from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention as OriginalGlm4MoeAttention
-        from transformers.models.glm4_moe.modeling_glm4_moe import apply_rotary_pos_emb
-    except Exception as e:
-        return {}
+    from transformers.integrations import use_kernelized_func
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention as OriginalGlm4MoeAttention
+    from transformers.models.glm4_moe.modeling_glm4_moe import apply_rotary_pos_emb
 
     @use_kernelized_func(apply_rotary_pos_emb)
     class Glm4MoeAttention(nn.Module):
@@ -114,13 +114,10 @@ def get_attention_mappings():
 
 
 def get_router_mapping():
-    try:
-        from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeTopkRouter
-        from ttnn.model_preprocessing import preprocess_linear_weight
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeTopkRouter
+    from ttnn.model_preprocessing import preprocess_linear_weight
 
-        from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
-    except Exception as e:
-        return {}
+    from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
 
     class TTNNGlm4MoeTopkRouter(TTNNModule):
         def preprocess_weights_impl(self):
@@ -153,187 +150,11 @@ def get_router_mapping():
             tt_output = ttnn.reshape(tt_output, [-1] + [tt_output.shape[-1]])
             return tt_output
 
-    class RewrittenGlm4MoeTopkRouter(nn.Module):
-        def __init__(self, old_layer: Glm4MoeTopkRouter):
-            super().__init__()
-            self.config = old_layer.config
-            self.top_k = old_layer.top_k
-            self.n_routed_experts = old_layer.n_routed_experts
-            self.routed_scaling_factor = old_layer.routed_scaling_factor
-            self.n_group = old_layer.n_group
-            self.topk_group = old_layer.topk_group
-            self.norm_topk_prob = old_layer.norm_topk_prob
-            self.linear = TTNNGlm4MoeTopkRouter.from_torch(old_layer)
-            self.linear.preprocess_weights()
-            self.e_score_correction_bias = old_layer.e_score_correction_bias
-
-        @classmethod
-        def from_torch(cls, router_layer: Glm4MoeTopkRouter) -> "RewrittenGlm4MoeTopkRouter":
-            """Create TTNNGlm4MoeTopkRouter from PyTorch Glm4MoeTopkRouter layer."""
-            new_router = cls(router_layer)
-            return new_router
-
-        @torch.no_grad()
-        def get_topk_indices(self, scores):
-            scores_for_choice = scores.view(-1, self.n_routed_experts) + self.e_score_correction_bias.unsqueeze(0)
-            group_scores = (
-                scores_for_choice.view(-1, self.n_group, self.n_routed_experts // self.n_group)
-                .topk(2, dim=-1)[0]
-                .sum(dim=-1)
-            )
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]
-            group_mask = torch.zeros_like(group_scores)
-            group_mask.scatter_(1, group_idx, 1)
-            score_mask = (
-                group_mask.unsqueeze(-1)
-                .expand(-1, self.n_group, self.n_routed_experts // self.n_group)
-                .reshape(-1, self.n_routed_experts)
-            )
-            scores_for_choice = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)
-            topk_indices = torch.topk(scores_for_choice, k=self.top_k, dim=-1, sorted=False)[1]
-            return topk_indices
-
-        def forward(self, hidden_states):
-            router_logits = self.linear(hidden_states)
-            scores = router_logits.sigmoid()
-            topk_indices = self.get_topk_indices(scores)
-            topk_weights = scores.gather(1, topk_indices)
-            if self.norm_topk_prob:
-                denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
-                topk_weights /= denominator
-            topk_weights = topk_weights * self.routed_scaling_factor
-            return topk_indices, topk_weights
-
-    return {Glm4MoeTopkRouter: RewrittenGlm4MoeTopkRouter}
+    return {Glm4MoeTopkRouter: TTNNGlm4MoeTopkRouter}
 
 
 def get_naive_moe_mapping():
-    try:
-        from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeNaiveMoe as OriginalGlm4MoeNaiveMoe
-
-        from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
-        from models.experimental.tt_symbiote.core.module import TTNNModule
-    except Exception as e:
-        return {}
     return {}
-
-    class TorchMoeLinear(torch.nn.Module):
-        def __init__(self, act_fn):
-            super().__init__()
-            self.act_fn = act_fn
-
-        def forward(self, current_state, gate_up_proj, down_proj, top_k_weights):
-            gate, up = nn.functional.linear(current_state, gate_up_proj.permute(1, 0)).chunk(2, dim=-1)
-            current_hidden_states = self.act_fn(gate) * up
-            current_hidden_states = nn.functional.linear(current_hidden_states, down_proj.permute(1, 0))
-            current_hidden_states = current_hidden_states * top_k_weights
-            return current_hidden_states
-
-    class TTNNMoeLinear(TTNNModule):
-        def __init__(self, act_fn):
-            super().__init__()
-            self.act_fn = act_fn
-            self._fallback_torch_layer = TorchMoeLinear(act_fn)
-
-        def forward(
-            self,
-            current_state: ttnn.Tensor,
-            gate_up_proj: ttnn.Tensor,
-            down_proj: ttnn.Tensor,
-            top_k_weights: ttnn.Tensor,
-        ) -> ttnn.Tensor:
-            """Forward pass through linear layer."""
-            if current_state.layout != ttnn.TILE_LAYOUT:
-                current_state = ttnn.to_layout(current_state, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if gate_up_proj.layout != ttnn.TILE_LAYOUT:
-                gate_up_proj = ttnn.to_layout(gate_up_proj, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if down_proj.layout != ttnn.TILE_LAYOUT:
-                down_proj = ttnn.to_layout(down_proj, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            pc1 = matmul_2d_config(
-                m=32,
-                k=current_state.shape[1],
-                n=gate_up_proj.shape[1] // 2,
-                overwrite_per_core_k=4,
-                grid=ttnn.CoreGrid(y=1, x=8),
-                is_fp32_accumulate=True,
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-                act=ttnn.UnaryOpType.SILU,
-            )
-            pc2 = matmul_2d_config(
-                m=32,
-                k=current_state.shape[1],
-                n=gate_up_proj.shape[1] // 2,
-                overwrite_per_core_k=4,
-                grid=ttnn.CoreGrid(y=1, x=8),
-                is_fp32_accumulate=True,
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-                act=None,
-            )
-            gate = ttnn.linear(current_state, gate_up_proj[:, : gate_up_proj.shape[1] // 2], program_config=pc1)
-            up = ttnn.linear(current_state, gate_up_proj[:, gate_up_proj.shape[1] // 2 :], program_config=pc2)
-            ttnn.deallocate(gate_up_proj)
-            current_hidden_states = gate * up
-            current_hidden_states = ttnn.linear(current_hidden_states, down_proj)
-            ttnn.deallocate(down_proj)
-            current_hidden_states = current_hidden_states * top_k_weights
-            return current_hidden_states
-
-    class Glm4MoeNaiveMoe(torch.nn.Module):
-        """Collection of expert weights stored as 3D tensors."""
-
-        def __init__(self, MOE_Layer):
-            super().__init__()
-            self.num_experts = MOE_Layer.num_experts
-            self.hidden_dim = MOE_Layer.hidden_dim
-            self.intermediate_dim = MOE_Layer.intermediate_dim
-            self._gate_up_proj = TorchTTNNTensor(MOE_Layer.gate_up_proj.permute(0, 2, 1))
-            self._gate_up_proj.ttnn_tensor = ttnn.to_layout(
-                self._gate_up_proj.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-
-            self._down_proj = TorchTTNNTensor(MOE_Layer.down_proj.permute(0, 2, 1))
-            self._down_proj.ttnn_tensor = ttnn.to_layout(
-                self._down_proj.to_ttnn, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            self.act_fn = MOE_Layer.act_fn
-            self.ttnn_moe_linear_module = TTNNMoeLinear(self.act_fn)
-
-        @classmethod
-        def from_torch(cls, MOE_layer: OriginalGlm4MoeNaiveMoe) -> "Glm4MoeNaiveMoe":
-            """Create TTNNBottleneck from PyTorch Bottleneck layer."""
-            new_router = cls(MOE_layer)
-            return new_router
-
-        def forward(
-            self,
-            hidden_states: torch.Tensor,
-            top_k_index: torch.Tensor,
-            top_k_weights: torch.Tensor,
-        ) -> torch.Tensor:
-            final_hidden_states = torch.zeros_like(hidden_states)
-            with torch.no_grad():
-                expert_mask = torch.nn.functional.one_hot(top_k_index, num_classes=self.num_experts)
-                expert_mask = expert_mask.permute(2, 1, 0)
-                expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-            for expert_idx in expert_hit:
-                expert_idx = expert_idx[0]
-                if expert_idx == self.num_experts:
-                    continue
-                top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
-                current_state = hidden_states[token_idx]
-                current_hidden_states = self.ttnn_moe_linear_module(
-                    current_state,
-                    TorchTTNNTensor(self._gate_up_proj.ttnn_tensor[expert_idx.item()]),
-                    TorchTTNNTensor(self._down_proj.ttnn_tensor[expert_idx.item()]),
-                    top_k_weights[token_idx, top_k_pos, None],
-                ).to_torch
-                final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
-
-            return final_hidden_states
-
-    return {OriginalGlm4MoeNaiveMoe: Glm4MoeNaiveMoe}
 
 
 @pytest.mark.parametrize(
@@ -365,6 +186,12 @@ def test_glm(mesh_device):
         nn.Linear: TTNNLinearLLama,
         nn.SiLU: TTNNSilu,
     }
+    nn_to_ttnn_2 = {
+        nn.Linear: TTNNLinear,
+    }
+    nn_to_ttnn_attention = get_attention_mappings()
+    nn_to_ttnn_router = get_router_mapping()
+    nn_to_ttnn_naive_moe = get_naive_moe_mapping()
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.5-Air")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.5-Air")
@@ -384,144 +211,204 @@ def test_glm(mesh_device):
     exclude_list = set(
         [
             "lm_head",
-            "model.layers.12.self_attn.o_proj",
-            "model.layers.13.self_attn.o_proj",
-            "model.layers.16.self_attn.o_proj",
-            "model.layers.0.self_attn.q_proj",
-            "model.layers.20.self_attn.o_proj",
-            "model.layers.10.self_attn.o_proj",
-            "model.layers.15.self_attn.o_proj",
-            "model.layers.22.self_attn.o_proj",
-            "model.layers.14.self_attn.o_proj",
-            "model.layers.17.self_attn.o_proj",
-            "model.layers.29.self_attn.o_proj",
-            "model.layers.9.self_attn.o_proj",
-            "model.layers.11.self_attn.o_proj",
-            "model.layers.19.self_attn.o_proj",
-            "model.layers.28.self_attn.o_proj",
-            "model.layers.23.self_attn.o_proj",
-            "model.layers.24.self_attn.o_proj",
-            "model.layers.16.self_attn.q_proj",
-            "model.layers.31.self_attn.o_proj",
-            "model.layers.31.self_attn.q_proj",
-            "model.layers.41.self_attn.o_proj",
-            "model.layers.15.self_attn.q_proj",
-            "model.layers.13.self_attn.q_proj",
-            "model.layers.33.self_attn.o_proj",
-            "model.layers.38.self_attn.o_proj",
-            "model.layers.32.self_attn.o_proj",
-            "model.layers.44.self_attn.o_proj",
-            "model.layers.40.self_attn.o_proj",
-            "model.layers.12.self_attn.q_proj",
-            "model.layers.39.self_attn.o_proj",
-            "model.layers.45.self_attn.o_proj",
-            "model.layers.36.self_attn.o_proj",
-            "model.layers.45.self_attn.q_proj",
-            "model.layers.30.self_attn.o_proj",
-            "model.layers.37.self_attn.o_proj",
-            "model.layers.35.self_attn.o_proj",
-            "model.layers.30.self_attn.q_proj",
-            "model.layers.27.self_attn.o_proj",
-            "model.layers.43.self_attn.q_proj",
-            "model.layers.37.self_attn.q_proj",
-            "model.layers.18.self_attn.o_proj",
-            "model.layers.11.self_attn.q_proj",
-            "model.layers.21.self_attn.o_proj",
+            "model.layers.23.self_attn.q_proj",
             "model.layers.18.self_attn.q_proj",
-            "model.layers.25.self_attn.o_proj",
-            "model.layers.38.self_attn.q_proj",
-            "model.layers.10.self_attn.q_proj",
-            "model.layers.9.self_attn.q_proj",
-            "model.layers.29.self_attn.q_proj",
-            "model.layers.14.self_attn.q_proj",
-            "model.layers.17.self_attn.q_proj",
-            "model.layers.43.self_attn.o_proj",
-            "model.layers.41.self_attn.q_proj",
-            "model.layers.42.self_attn.q_proj",
-            "model.layers.42.self_attn.o_proj",
-            "model.layers.36.self_attn.q_proj",
-            "model.layers.39.self_attn.q_proj",
-            "model.layers.8.self_attn.o_proj",
+            "model.layers.27.self_attn.q_proj",
+            "model.layers.44.self_attn.q_proj",
             "model.layers.40.self_attn.q_proj",
             "model.layers.19.self_attn.q_proj",
-            "model.layers.32.self_attn.q_proj",
-            "model.layers.26.self_attn.o_proj",
-            "model.layers.44.self_attn.q_proj",
-            "model.layers.34.self_attn.q_proj",
-            "model.layers.1.self_attn.q_proj",
-            "model.layers.34.self_attn.o_proj",
-            "model.layers.33.self_attn.q_proj",
-            "model.layers.6.self_attn.o_proj",
-            "model.layers.23.self_attn.q_proj",
-            "model.layers.24.self_attn.q_proj",
-            "model.layers.20.self_attn.q_proj",
-            "model.layers.35.self_attn.q_proj",
-            "model.layers.22.self_attn.q_proj",
-            "model.layers.3.self_attn.o_proj",
-            "model.layers.5.self_attn.o_proj",
-            "model.layers.21.self_attn.q_proj",
             "model.layers.28.self_attn.q_proj",
-            "model.layers.1.self_attn.o_proj",
+            "model.layers.34.self_attn.q_proj",
+            "model.layers.42.self_attn.q_proj",
+            "model.layers.32.self_attn.q_proj",
+            "model.layers.29.self_attn.q_proj",
+            "model.layers.38.self_attn.q_proj",
+            "model.layers.11.self_attn.q_proj",
+            "model.layers.24.self_attn.q_proj",
+            "model.layers.35.self_attn.q_proj",
+            "model.layers.37.self_attn.q_proj",
+            "model.layers.14.self_attn.q_proj",
             "model.layers.26.self_attn.q_proj",
-            "model.layers.3.self_attn.q_proj",
+            "model.layers.36.self_attn.q_proj",
+            "model.layers.22.self_attn.q_proj",
+            "model.layers.30.self_attn.q_proj",
+            "model.layers.20.self_attn.q_proj",
+            "model.layers.39.self_attn.q_proj",
+            "model.layers.33.self_attn.q_proj",
+            "model.layers.21.self_attn.q_proj",
+            "model.layers.9.self_attn.q_proj",
+            "model.layers.13.self_attn.q_proj",
+            "model.layers.12.self_attn.q_proj",
+            "model.layers.45.self_attn.q_proj",
+            "model.layers.31.self_attn.q_proj",
+            "model.layers.17.self_attn.q_proj",
             "model.layers.25.self_attn.q_proj",
-            "model.layers.7.self_attn.o_proj",
-            "model.layers.4.self_attn.o_proj",
-            "model.layers.2.self_attn.q_proj",
-            "model.layers.4.self_attn.q_proj",
-            "model.layers.6.self_attn.q_proj",
-            "model.layers.8.self_attn.q_proj",
-            "model.layers.27.self_attn.q_proj",
-            "model.layers.2.self_attn.o_proj",
+            "model.layers.16.self_attn.q_proj",
+            "model.layers.41.self_attn.q_proj",
+            "model.layers.43.self_attn.q_proj",
+            "model.layers.15.self_attn.q_proj",
+            "model.layers.10.self_attn.q_proj",
+            "model.layers.33.self_attn.o_proj",
+            "model.layers.38.self_attn.o_proj",
+            "model.layers.3.self_attn.q_proj",
+            "model.layers.41.self_attn.o_proj",
+            "model.layers.43.self_attn.o_proj",
+            "model.layers.8.self_attn.o_proj",
+            "model.layers.30.self_attn.o_proj",
+            "model.layers.13.self_attn.o_proj",
+            "model.layers.16.self_attn.o_proj",
             "model.layers.7.self_attn.q_proj",
+            "model.layers.18.self_attn.o_proj",
+            "model.layers.6.self_attn.q_proj",
+            "model.layers.10.self_attn.o_proj",
+            "model.layers.27.self_attn.o_proj",
+            "model.layers.8.self_attn.q_proj",
+            "model.layers.44.self_attn.o_proj",
+            "model.layers.25.self_attn.o_proj",
+            "model.layers.39.self_attn.o_proj",
+            "model.layers.20.self_attn.o_proj",
             "model.layers.5.self_attn.q_proj",
+            "model.layers.19.self_attn.o_proj",
+            "model.layers.17.self_attn.o_proj",
+            "model.layers.14.self_attn.o_proj",
+            "model.layers.12.self_attn.o_proj",
+            "model.layers.32.self_attn.o_proj",
+            "model.layers.4.self_attn.q_proj",
+            "model.layers.26.self_attn.o_proj",
+            "model.layers.37.self_attn.o_proj",
+            "model.layers.34.self_attn.o_proj",
+            "model.layers.31.self_attn.o_proj",
+            "model.layers.24.self_attn.o_proj",
+            "model.layers.11.self_attn.o_proj",
+            "model.layers.0.self_attn.q_proj",
+            "model.layers.29.self_attn.o_proj",
+            "model.layers.36.self_attn.o_proj",
+            "model.layers.23.self_attn.o_proj",
+            "model.layers.22.self_attn.o_proj",
+            "model.layers.7.self_attn.o_proj",
+            "model.layers.35.self_attn.o_proj",
+            "model.layers.42.self_attn.o_proj",
+            "model.layers.9.self_attn.o_proj",
+            "model.layers.28.self_attn.o_proj",
+            "model.layers.45.self_attn.o_proj",
+            "model.layers.21.self_attn.o_proj",
+            "model.layers.1.self_attn.o_proj",
+            "model.layers.40.self_attn.o_proj",
+            "model.layers.15.self_attn.o_proj",
+            "model.layers.3.self_attn.o_proj",
+            "model.layers.6.self_attn.o_proj",
+            "model.layers.2.self_attn.o_proj",
+            "model.layers.2.self_attn.q_proj",
+            "model.layers.5.self_attn.o_proj",
+            "model.layers.1.self_attn.q_proj",
             "model.layers.0.self_attn.o_proj",
+            "model.layers.4.self_attn.o_proj",
             "model.layers.0.mlp.down_proj",
             "model.layers.0.mlp.up_proj",
             "model.layers.0.mlp.gate_proj",
-            "model.layers.1.mlp.shared_experts.gate_proj",
-            "model.layers.1.mlp.shared_experts.up_proj",
-            "model.layers.34.mlp.shared_experts.down_proj",
-            "model.layers.36.mlp.shared_experts.gate_proj",
-            "model.layers.22.mlp.shared_experts.gate_proj",
-            "model.layers.38.mlp.shared_experts.down_proj",
-            "model.layers.39.mlp.shared_experts.gate_proj",
-            "model.layers.31.mlp.shared_experts.gate_proj",
-            "model.layers.19.mlp.shared_experts.gate_proj",
-            "model.layers.8.mlp.shared_experts.down_proj",
-            "model.layers.17.mlp.shared_experts.gate_proj",
-            "model.layers.32.mlp.shared_experts.gate_proj",
-            "model.layers.20.mlp.shared_experts.gate_proj",
-            "model.layers.5.mlp.shared_experts.down_proj",
-            "model.layers.10.mlp.shared_experts.gate_proj",
-            "model.layers.3.mlp.shared_experts.gate_proj",
-            "model.layers.3.mlp.shared_experts.down_proj",
-            "model.layers.24.mlp.shared_experts.gate_proj",
-            "model.layers.45.mlp.shared_experts.down_proj",
-            "model.layers.37.mlp.shared_experts.down_proj",
-            "model.layers.41.mlp.shared_experts.down_proj",
-            "model.layers.31.mlp.shared_experts.down_proj",
-            "model.layers.42.mlp.shared_experts.down_proj",
-            "model.layers.20.mlp.shared_experts.up_proj",
-            "model.layers.4.mlp.shared_experts.down_proj",
-            "model.layers.38.mlp.shared_experts.gate_proj",
-            "model.layers.23.mlp.shared_experts.up_proj",
+            "model.layers.19.self_attn.k_proj",
+            "model.layers.43.self_attn.k_proj",
+            "model.layers.45.self_attn.k_proj",
+            "model.layers.9.self_attn.k_proj",
+            "model.layers.24.self_attn.v_proj",
+            "model.layers.20.self_attn.v_proj",
+            "model.layers.4.self_attn.k_proj",
+            "model.layers.7.self_attn.k_proj",
+            "model.layers.17.self_attn.k_proj",
+            "model.layers.11.self_attn.k_proj",
+            "model.layers.16.self_attn.k_proj",
+            "model.layers.38.self_attn.k_proj",
+            "model.layers.23.self_attn.k_proj",
+            "model.layers.24.self_attn.k_proj",
+            "model.layers.15.self_attn.k_proj",
+            "model.layers.12.self_attn.k_proj",
+            "model.layers.10.self_attn.k_proj",
+            "model.layers.14.self_attn.k_proj",
+            "model.layers.26.self_attn.k_proj",
+            "model.layers.20.self_attn.k_proj",
+            "model.layers.12.self_attn.v_proj",
+            "model.layers.13.self_attn.k_proj",
+            "model.layers.27.self_attn.k_proj",
+            "model.layers.18.self_attn.k_proj",
+            "model.layers.30.self_attn.k_proj",
+            "model.layers.28.self_attn.k_proj",
+            "model.layers.25.self_attn.k_proj",
+            "model.layers.22.self_attn.k_proj",
+            "model.layers.34.self_attn.k_proj",
+            "model.layers.19.self_attn.v_proj",
+            "model.layers.32.self_attn.k_proj",
+            "model.layers.11.self_attn.v_proj",
+            "model.layers.33.self_attn.k_proj",
+            "model.layers.29.self_attn.k_proj",
+            "model.layers.35.self_attn.k_proj",
+            "model.layers.21.self_attn.k_proj",
+            "model.layers.34.self_attn.v_proj",
+            "model.layers.17.self_attn.v_proj",
+            "model.layers.35.self_attn.v_proj",
+            "model.layers.37.self_attn.k_proj",
+            "model.layers.8.self_attn.k_proj",
+            "model.layers.28.self_attn.v_proj",
+            "model.layers.25.self_attn.v_proj",
+            "model.layers.36.self_attn.k_proj",
+            "model.layers.21.self_attn.v_proj",
+            "model.layers.42.self_attn.k_proj",
+            "model.layers.15.self_attn.v_proj",
+            "model.layers.39.self_attn.k_proj",
+            "model.layers.23.self_attn.v_proj",
+            "model.layers.16.self_attn.v_proj",
+            "model.layers.18.self_attn.v_proj",
+            "model.layers.26.self_attn.v_proj",
+            "model.layers.31.self_attn.k_proj",
+            "model.layers.13.self_attn.v_proj",
+            "model.layers.40.self_attn.k_proj",
+            "model.layers.27.self_attn.v_proj",
+            "model.layers.41.self_attn.k_proj",
+            "model.layers.31.self_attn.v_proj",
+            "model.layers.38.self_attn.v_proj",
+            "model.layers.10.self_attn.v_proj",
+            "model.layers.22.self_attn.v_proj",
+            "model.layers.36.self_attn.v_proj",
+            "model.layers.14.self_attn.v_proj",
+            "model.layers.37.self_attn.v_proj",
+            "model.layers.33.self_attn.v_proj",
+            "model.layers.29.self_attn.v_proj",
+            "model.layers.30.self_attn.v_proj",
+            "model.layers.32.self_attn.v_proj",
+            "model.layers.44.self_attn.k_proj",
+            "model.layers.5.self_attn.k_proj",
+            "model.layers.8.self_attn.v_proj",
+            "model.layers.40.self_attn.v_proj",
+            "model.layers.7.self_attn.v_proj",
+            "model.layers.2.self_attn.v_proj",
+            "model.layers.6.self_attn.k_proj",
+            "model.layers.4.self_attn.v_proj",
+            "model.layers.2.self_attn.k_proj",
+            "model.layers.9.self_attn.v_proj",
+            "model.layers.3.self_attn.k_proj",
+            "model.layers.45.self_attn.v_proj",
+            "model.layers.0.self_attn.v_proj",
+            "model.layers.0.self_attn.k_proj",
+            "model.layers.43.self_attn.v_proj",
+            "model.layers.42.self_attn.v_proj",
+            "model.layers.1.self_attn.k_proj",
+            "model.layers.39.self_attn.v_proj",
+            "model.layers.41.self_attn.v_proj",
+            "model.layers.5.self_attn.v_proj",
+            "model.layers.44.self_attn.v_proj",
+            "model.layers.1.self_attn.v_proj",
+            "model.layers.6.self_attn.v_proj",
+            "model.layers.3.self_attn.v_proj",
         ]
     )
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None, exclude_replacement=exclude_list)
-    nn_to_ttnn = {
-        nn.Linear: TTNNLinear,
-    }
-    modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    nn_to_ttnn_attention = get_attention_mappings()
+    modules2 = register_module_replacement_dict(model, nn_to_ttnn_2, model_config=None)
     modules3 = {}
     if nn_to_ttnn_attention:
         modules3 = register_module_replacement_dict(model, nn_to_ttnn_attention, model_config=None)
-    nn_to_ttnn_router = get_router_mapping()
+
     modules4 = {}
     if nn_to_ttnn_router:
         modules4 = register_module_replacement_dict(model, nn_to_ttnn_router, model_config=None)
-    nn_to_ttnn_naive_moe = get_naive_moe_mapping()
     modules5 = {}
     if nn_to_ttnn_naive_moe:
         modules5 = register_module_replacement_dict(model, nn_to_ttnn_naive_moe, model_config=None)
@@ -535,6 +422,7 @@ def test_glm(mesh_device):
     print("Running inference...")
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
+    DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
     print(f"GLM OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
     DispatchManager.save_stats_to_file("glm_timing_stats.csv")
