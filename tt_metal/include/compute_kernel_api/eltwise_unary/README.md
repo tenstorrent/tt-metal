@@ -27,7 +27,7 @@ namespace ckernel {
     // Compute function for max
     template <bool fast_and_approx = true>
     ALWI void max_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL(max, RC, fast_and_approx, idst));
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_max, RC, fast_and_approx, idst));
     }
 }
 ```
@@ -45,7 +45,7 @@ namespace ckernel {
     }
     template <bool fast_and_approx = true>
     ALWI void negative_tile(uint32_t idst) {
-        MATH(SFPU_UNARY_NO_PARAM_KERNEL(negative, RC, fast_and_approx, idst));
+        MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_negative, RC, fast_and_approx, idst));
     }
 }
 ```
