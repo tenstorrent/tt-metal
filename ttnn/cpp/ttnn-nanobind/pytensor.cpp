@@ -110,61 +110,6 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
     return shp;
 }
 
-template <typename T>
-Tensor create_typed_tt_tensor_from_py_data(
-    const nb::ndarray<nb::array_api>& py_ndarray,
-    const Shape& py_data_shape,
-    const TensorLayout& tensor_layout,
-    MeshDevice* device,
-    const tt::tt_metal::MemoryPin& pydata_pin,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const distributed::TensorToMesh* mesh_mapper) {
-    TT_FATAL(
-        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
-            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
-
-    TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
-    TT_FATAL(
-        py_ndarray.size() == py_data_shape.volume(),
-        "create_typed_tt_tensor_from_py_data: array size ({}) shape volume ({}) mismatch!",
-        py_ndarray.size(),
-        py_data_shape.volume());
-
-    // Shard pydata across mesh and apply `tensor_layout` at each shard.
-    // Shapes of multi device shards will be derived automatically.
-    if (mesh_mapper != nullptr) {
-        return ttnn::distributed::create_distributed_tensor(
-            pydata_span,
-            py_data_shape,
-            pydata_pin,
-            tensor_layout,
-            *mesh_mapper,
-            device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
-            cq_id,
-            static_cast<T>(pad_value));
-    }
-
-    // Otherwise, create a single tt tensor from the pydata.
-    const TensorSpec tensor_spec(py_data_shape, tensor_layout);
-    if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-                                       tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                       tensor_spec.data_type() == convert_to_data_type<T>();
-        pydata_borrowable) {
-        auto output =
-            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
-        if (device != nullptr) {
-            output = output.to_device(device, tensor_spec.memory_config(), cq_id);
-        }
-        return output;
-    }
-    return Tensor::from_span(
-        tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
-}
-
 // Preprocess the python tensor, optionally performing dtype conversion.
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
