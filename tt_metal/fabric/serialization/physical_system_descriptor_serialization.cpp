@@ -199,6 +199,21 @@ void physical_system_descriptor_to_proto(
     proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
     proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
     proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
+
+    // Convert pcie_devices_per_tray map
+    for (const auto& [host_name, tray_map] : descriptor.get_pcie_devices_per_tray()) {
+        auto* proto_host_pcie_map = proto_desc->add_pcie_devices_per_tray();
+        proto_host_pcie_map->set_host_name(host_name);
+
+        for (const auto& [tray_id, pcie_device_set] : tray_map) {
+            auto* proto_pcie_per_tray = proto_host_pcie_map->add_pcie_devices_per_tray();
+            proto_pcie_per_tray->set_tray_id(tray_id);
+
+            for (const auto& pcie_device_id : pcie_device_set) {
+                proto_pcie_per_tray->add_pcie_device_ids(pcie_device_id);
+            }
+        }
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -271,6 +286,22 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
     descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
     descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
+    // Convert pcie_devices_per_tray map
+    auto& pcie_devices_per_tray = descriptor->get_pcie_devices_per_tray();
+    for (const auto& proto_host_pcie_map : proto_desc.pcie_devices_per_tray()) {
+        const std::string& host_name = proto_host_pcie_map.host_name();
+        auto& tray_map = pcie_devices_per_tray[host_name];
+
+        for (const auto& proto_pcie_per_tray : proto_host_pcie_map.pcie_devices_per_tray()) {
+            uint32_t tray_id = proto_pcie_per_tray.tray_id();
+            auto& pcie_device_set = tray_map[tray_id];
+
+            for (const auto& pcie_device_id : proto_pcie_per_tray.pcie_device_ids()) {
+                pcie_device_set.insert(pcie_device_id);
+            }
+        }
+    }
 
     return descriptor;
 }

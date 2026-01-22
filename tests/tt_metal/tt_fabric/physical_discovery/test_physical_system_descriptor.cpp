@@ -152,21 +152,26 @@ TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
-    const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
+    if (*distributed_context->rank() == 0) {
+        const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
 
-    // Generate a YAML File with the tray to pcie device mapping
-    YAML::Node tray_to_pcie_device_mapping;
-    YAML::Node device_mapping;  // Create a separate node for the device mapping
-    for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray) {
-        // Convert unordered_set to vector for YAML serialization
-        std::vector<uint32_t> pcie_devices_vec(pcie_devices.begin(), pcie_devices.end());
-        device_mapping[tray_id] = pcie_devices_vec;
+        // Generate a YAML File with the tray to pcie device mapping for the current host
+        YAML::Node tray_to_pcie_device_mapping;
+        YAML::Node device_mapping;  // Create a separate node for the device mapping
+        for (const auto& hostname : physical_system_desc.get_all_hostnames()) {
+            device_mapping[hostname] = YAML::Node();
+            for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(hostname)) {
+                // Convert unordered_set to vector for YAML serialization
+                std::vector<uint32_t> pcie_devices_vec(pcie_devices.begin(), pcie_devices.end());
+                device_mapping[hostname][tray_id] = pcie_devices_vec;
+            }
+        }
+        tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
+        tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
+        std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
+        outfile << tray_to_pcie_device_mapping;
+        outfile.close();
     }
-    tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
-    tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
-    std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
-    outfile << tray_to_pcie_device_mapping;
-    outfile.close();
 }
 
 }  // namespace tt::tt_fabric::physical_discovery

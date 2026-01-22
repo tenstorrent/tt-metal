@@ -266,7 +266,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
             "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] = get_asic_position(
-            cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, pcie_devices_per_tray_);
+            cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, pcie_devices_per_tray_[hostname]);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -359,6 +359,9 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
+    }
+    for (auto& [host_name, tray_map] : other.get_pcie_devices_per_tray()) {
+        pcie_devices_per_tray_[host_name] = std::move(tray_map);
     }
 
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
