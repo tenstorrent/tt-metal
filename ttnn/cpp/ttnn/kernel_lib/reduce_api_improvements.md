@@ -1,0 +1,325 @@
+# Reduce Helpers API Improvements
+
+Analysis and recommendations for making the reduce helpers API cleaner and easier to use.
+
+## Current API
+
+```cpp
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostReduceOp = NoOp>
+ALWI void reduce(
+    uint32_t icb,
+    uint32_t icb_scaler,
+    uint32_t ocb,
+    TileShape shape,
+    TileLayout layout = {},
+    AccumT accum = {},
+    PostReduceOp post_reduce_op = {});
+```
+
+---
+
+## Issue 1: Bool template parameters (`init`, `uninit`)
+
+### Problem
+
+At call sites this looks like:
+```cpp
+reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
+       ReduceDataFormatReconfig::BOTH,
+       true, false>(...);  // What do true, false mean?
+```
+
+### Options
+
+**A. Enum with lifecycle states (recommended):**
+```cpp
+enum class ReduceLifecycle {
+    FULL,        // init + uninit (default)
+    INIT_ONLY,   // only init, caller handles uninit
+    UNINIT_ONLY, // only uninit, caller handled init
+    MANUAL       // neither - caller manages both
+};
+```
+
+Call site becomes:
+```cpp
+reduce<SUM, REDUCE_ROW, ..., ReduceLifecycle::INIT_ONLY>(...)
+```
+
+**B. Config struct** - group `init`, `uninit`, and `reconfig` together since they're all "plumbing":
+```cpp
+struct ReduceConfig {
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH;
+    bool init = true;
+    bool uninit = true;
+
+    static constexpr ReduceConfig defaults() { return {}; }
+    static constexpr ReduceConfig no_init() { return {.init = false}; }
+    static constexpr ReduceConfig no_uninit() { return {.uninit = false}; }
+};
+```
+
+This moves them from template params to a function param, but the template param approach gives compile-time elimination. Could keep as template param but use a struct type.
+
+---
+
+## Issue 2: Avoiding `{}, {}` for accum and post_reduce_op
+
+### Problem
+
+Current signature forces you to pass `layout` and `accum` just to specify `post_reduce_op`:
+```cpp
+reduce<...>(cb_in, cb_scaler, cb_out, shape, {}, {}, my_lambda);  // What are {}, {}?
+```
+
+### Solution
+
+Make default constructors `explicit` to enforce named types at call sites:
+
+```cpp
+struct NoAccumulation {
+    explicit NoAccumulation() = default;
+};
+
+struct NoOp {
+    explicit NoOp() = default;
+    ALWI void operator()(uint32_t = 0) const {}
+};
+
+struct TileLayout {
+    uint32_t row_stride = 0;
+    uint32_t batch_stride = 0;
+
+    explicit TileLayout() = default;
+
+    static constexpr TileLayout contiguous() { return TileLayout(); }
+    static constexpr TileLayout with_row_stride(uint32_t s) { return {s, 0}; }
+};
+```
+
+With `explicit` default constructors:
+- `func({})` fails (copy-list-initialization blocked)
+- `func(NoAccumulation{})` works (direct-list-initialization allowed)
+
+Call sites become self-documenting:
+```cpp
+reduce<...>(cb_in, cb_scaler, cb_out, shape,
+    TileLayout::contiguous(),
+    NoAccumulation{},
+    [](uint32_t dst) { ... });
+```
+
+Apply this to `NoAccumulation`, `NoOp`, and `TileLayout`.
+
+---
+
+## Issue 3: TileShape naming
+
+### Problem
+
+"TileShape" sounds like "shape of one tile" (32x32 elements), but it's actually "grid dimensions in tiles".
+
+### Better names
+
+- **`TileGrid`** - Clear that it's a grid of tiles (rows × cols × batches)
+- **`GridExtent`** - Emphasizes it's about extent/dimensions
+- **`InputGrid`** - Specific to input dimensions
+
+### Recommendation
+
+Rename to **`TileGrid`** - matches the factory method `TileGrid::grid(r, c, b)` nicely.
+
+Also rename the factory methods for consistency:
+```cpp
+struct TileGrid {
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t batches;
+
+    static constexpr TileGrid of(uint32_t r, uint32_t c, uint32_t b = 1);
+    static constexpr TileGrid single();
+    static constexpr TileGrid row(uint32_t c, uint32_t b = 1);
+    static constexpr TileGrid col(uint32_t r, uint32_t b = 1);
+};
+```
+
+---
+
+## Issue 4: Replace `ReduceInputMode` enum with policy structs
+
+### Problem
+
+The `ReduceInputMode` enum conflates multiple orthogonal behaviors:
+```cpp
+enum class ReduceInputMode { STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT };
+```
+
+Each mode implicitly encodes: when to wait, whether to pop, and access pattern. This makes it hard to understand what each mode does and prevents custom combinations.
+
+| Mode | Wait | Pop | Access |
+|------|------|-----|--------|
+| STREAMING | per-tile | yes | sequential |
+| STREAMING_BATCHED | per-batch | yes | indexed |
+| PRELOADED | none | no | indexed |
+| PERSISTENT | upfront | no | indexed |
+
+### Solution
+
+Use policy structs with enum members (inspired by `normalization/kernel_util/compute/policies.h`):
+
+```cpp
+namespace compute_kernel_lib::policies {
+
+/**
+ * @brief When to synchronize on input tiles
+ */
+enum class WaitMode {
+    PER_TILE,   // wait/process/pop one tile at a time
+    PER_BATCH,  // wait for batch, process all, pop batch
+    UPFRONT,    // wait for everything upfront
+    NONE        // caller manages synchronization
+};
+
+/**
+ * @brief Whether to pop tiles after processing
+ */
+enum class PopMode {
+    POP,        // pop tiles after processing
+    NO_POP      // leave tiles in CB (for reuse)
+};
+
+// =============================================================================
+// Input synchronization policies
+// =============================================================================
+
+struct StreamingPolicy {
+    static constexpr WaitMode wait = WaitMode::PER_TILE;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+struct StreamingBatchedPolicy {
+    static constexpr WaitMode wait = WaitMode::PER_BATCH;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+struct PreloadedPolicy {
+    static constexpr WaitMode wait = WaitMode::NONE;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+struct PersistentPolicy {
+    static constexpr WaitMode wait = WaitMode::UPFRONT;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+}  // namespace compute_kernel_lib::policies
+```
+
+Function signature changes from enum to policy type:
+```cpp
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    typename InputPolicy = policies::StreamingPolicy,  // policy struct
+    ...>
+ALWI void reduce(...);
+```
+
+Implementation uses policy members:
+```cpp
+// Wait logic
+if constexpr (InputPolicy::wait == WaitMode::UPFRONT) {
+    cb_wait_front(icb, total_tiles);
+}
+if constexpr (InputPolicy::wait == WaitMode::PER_BATCH) {
+    cb_wait_front(icb, tiles_per_batch);
+}
+if constexpr (InputPolicy::wait == WaitMode::PER_TILE) {
+    cb_wait_front(icb, onetile);
+}
+
+// Access - indexed unless per-tile streaming
+constexpr bool indexed = (InputPolicy::wait != WaitMode::PER_TILE);
+
+// Pop logic
+if constexpr (InputPolicy::pop == PopMode::POP) {
+    // pop based on wait granularity
+}
+```
+
+**Benefits:**
+- Self-documenting: reading `PersistentPolicy` shows exactly what it does
+- No invalid states: enums prevent conflicting bool combinations
+- Extensible: users can define custom policy structs
+- Same compile-time elimination via `if constexpr`
+
+---
+
+## Additional Suggestions
+
+### A. Group the CBs
+
+```cpp
+struct ReduceCBs {
+    uint32_t input;
+    uint32_t scaler;
+    uint32_t output;
+};
+```
+
+Call site becomes:
+```cpp
+reduce<SUM, REDUCE_SCALAR>(
+    ReduceCBs{cb_in, cb_scaler, cb_out},
+    TileGrid::of(Ht, Wt, NC));
+```
+
+This prevents argument swapping bugs and is self-documenting.
+
+### B. Simplify ReduceDataFormatReconfig naming
+
+```cpp
+enum class Reconfig { NONE, INPUT, OUTPUT, BOTH };  // shorter
+```
+
+Or make it a struct with flags for compile-time composition:
+```cpp
+struct Reconfig {
+    static constexpr auto NONE = ...;
+    static constexpr auto INPUT = ...;
+    static constexpr auto OUTPUT = ...;
+    static constexpr auto BOTH = INPUT | OUTPUT;
+};
+```
+
+### C. Consider flipping template param order
+
+Currently the rarely-changed params (`reconfig`, `init`, `uninit`) come before the often-changed type params. If grouped into a struct, the signature becomes:
+```cpp
+template <PoolType reduce_type, ReduceDim reduce_dim,
+          ReduceInputMode input_mode = STREAMING,
+          typename AccumT = NoAccumulation,
+          typename PostReduceOp = NoOp>
+void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
+```
+
+---
+
+## Summary
+
+| Issue | Recommendation |
+|-------|----------------|
+| Bool template args | Use `ReduceLifecycle` enum |
+| `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` |
+| TileShape naming | Rename to `TileGrid` |
+| ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums |
+| CB arguments | Group into `ReduceCBs` struct |
+| Reconfig naming | Shorten to `Reconfig` |
