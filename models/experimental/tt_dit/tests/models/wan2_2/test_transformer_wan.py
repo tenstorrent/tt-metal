@@ -22,33 +22,25 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq_len"),
+    ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        (1, 31, 40, 80, 118),  # 5B-720p
-        (1, 21, 60, 104, 118),  # 14B-480p
-        (1, 21, 90, 160, 118),  # 14B-720p
+        pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
+        pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
+        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
     ],
-    ids=["5b-720p", "14b-480p", "14b-720p"],
 )
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
@@ -203,40 +195,36 @@ def test_wan_transformer_block(
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True],
-        [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp0tp1",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq_len"),
+    ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        (1, 8, 40, 50, 118),  # small input
-        (1, 31, 40, 80, 118),  # 5B-720p
-        (1, 21, 60, 104, 118),  # 14B-480p
-        (1, 21, 90, 160, 118),  # 14B-720p
+        pytest.param(1, 8, 40, 50, 118, id="short_seq"),
+        pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
+        pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
+        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
     ],
-    ids=["short_seq", "5b-720p", "14b-480p", "14b-720p"],
 )
-@pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
+@pytest.mark.parametrize(
+    "load_cache",
+    [
+        pytest.param(True, id="yes_load_cache"),
+        pytest.param(False, id="no_load_cache"),
+    ],
+)
 def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],
@@ -375,24 +363,24 @@ def test_wan_transformer_model(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        [(2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
+        pytest.param((2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
         # WH (ring) on 4x8
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
+        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (linear) on 4x8
-        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("subfolder", ["transformer", "transformer_2"], ids=["transformer_1", "transformer_2"])
+@pytest.mark.parametrize(
+    "subfolder",
+    [
+        pytest.param("transformer", id="transformer_1"),
+        pytest.param("transformer_2", id="transformer_2"),
+    ],
+)
 def test_wan_transformer_model_caching(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,

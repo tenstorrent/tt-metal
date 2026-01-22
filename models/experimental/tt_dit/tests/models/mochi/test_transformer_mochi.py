@@ -2,22 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 import os
+import time
+
 import pytest
 import torch
 import ttnn
-from loguru import logger
-
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ....utils.check import assert_quality
-from ....models.transformers.transformer_mochi import MochiTransformerBlock, MochiTransformer3DModel
-from ....parallel.manager import CCLManager
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....utils.padding import pad_vision_seq_parallel
-from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
 from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
+from loguru import logger
 from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+from ....models.transformers.transformer_mochi import MochiTransformer3DModel, MochiTransformerBlock
+from ....parallel.config import DiTParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
+from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cache_dict, save_cache_dict
+from ....utils.check import assert_quality
+from ....utils.padding import pad_vision_seq_parallel
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
 def stack_cos_sin(cos, sin):
@@ -27,49 +28,45 @@ def stack_cos_sin(cos, sin):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links",
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links"),
     [
-        [(1, 1), (1, 1), 0, 1, 1],
-        [(1, 2), (1, 2), 0, 1, 1],
-        [(1, 2), (1, 2), 1, 0, 1],
-        [(2, 1), (2, 1), 0, 1, 1],
-        [(2, 1), (2, 1), 1, 0, 1],
-        [(2, 2), (2, 2), 0, 1, 1],
-        [(2, 2), (2, 2), 1, 0, 1],
-        [(2, 4), (2, 4), 0, 1, 1],
-        [(2, 4), (2, 4), 1, 0, 1],
-        [(1, 8), (1, 8), 1, 0, 1],
-        [(4, 8), (2, 8), 1, 0, 4],
-        [(4, 8), (4, 8), 0, 1, 4],
-        [(4, 8), (4, 8), 1, 0, 4],
-    ],
-    ids=[
-        "1x1sp0tp1",
-        "1x2sp0tp1",
-        "1x2sp1tp0",
-        "2x1sp0tp1",
-        "2x1sp1tp0",
-        "2x2sp0tp1",
-        "2x2sp1tp0",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "1x8sp1tp0",
-        "2x8sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        pytest.param((1, 1), (1, 1), 0, 1, 1, id="1x1sp0tp1"),
+        pytest.param((1, 2), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
+        pytest.param((1, 2), (1, 2), 1, 0, 1, id="1x2sp1tp0"),
+        pytest.param((2, 1), (2, 1), 0, 1, 1, id="2x1sp0tp1"),
+        pytest.param((2, 1), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
+        pytest.param((2, 2), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        pytest.param((2, 2), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        pytest.param((1, 8), (1, 8), 1, 0, 1, id="1x8sp1tp0"),
+        pytest.param((4, 8), (2, 8), 1, 0, 4, id="2x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 0, 1, 4, id="4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    ("B, spatial_seq_len, prompt_seq_len"),
+    ("B", "spatial_seq_len", "prompt_seq_len"),
     [
-        (1, 4000, 118),  # Similar to SD3.5 config
-        (1, 44520, 118),  # Similar to SD3.5 config
+        pytest.param(1, 4000, 118, id="short_seq"),  # Similar to SD3.5 config
+        pytest.param(1, 44520, 118, id="long_seq"),  # Similar to SD3.5 config
     ],
-    ids=["short_seq", "long_seq"],
 )
-@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
-@pytest.mark.parametrize("context_pre_only", [True, False], ids=["yes_context_pre", "no_context_pre"])
+@pytest.mark.parametrize(
+    "is_fsdp",
+    [
+        pytest.param(True, id="yes_fsdp"),
+        pytest.param(False, id="no_fsdp"),
+    ],
+)
+@pytest.mark.parametrize(
+    "context_pre_only",
+    [
+        pytest.param(True, id="yes_context_pre"),
+        pytest.param(False, id="no_context_pre"),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_block(
     mesh_device: ttnn.MeshDevice,
@@ -140,7 +137,7 @@ def test_mochi_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Initialize weights randomly for testing
     torch.manual_seed(0)
@@ -240,38 +237,39 @@ def test_mochi_transformer_block(
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        [(2, 2), 0, 1, 1],
-        [(2, 2), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
-        [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x2sp1tp0",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq"),
+    ("B", "T", "H", "W", "prompt_seq"),
     [
-        (1, 8, 40, 50, 118),  # small input
-        (1, 16, 40, 100, 118),  # medium input
-        (1, 28, 60, 106, 118),  # large input
+        pytest.param(1, 8, 40, 50, 118, id="short_seq"),
+        pytest.param(1, 16, 40, 100, 118, id="medium_seq"),
+        pytest.param(1, 28, 60, 106, 118, id="long_seq"),
     ],
-    ids=["short_seq", "medium_seq", "long_seq"],
 )
 @pytest.mark.parametrize(
-    "test_attention_mask", [True, False], ids=["yes_test_attention_mask", "no_test_attention_mask"]
+    "test_attention_mask",
+    [
+        pytest.param(True, id="yes_test_attention_mask"),
+        pytest.param(False, id="no_test_attention_mask"),
+    ],
 )
-@pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
+@pytest.mark.parametrize(
+    "load_cache",
+    [
+        pytest.param(True, id="yes_load_cache"),
+        pytest.param(False, id="no_load_cache"),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model(
     mesh_device: ttnn.MeshDevice,
@@ -363,9 +361,9 @@ def test_mochi_transformer_model(
             mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
-        assert os.path.exists(
-            cache_path
-        ), "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+        assert os.path.exists(cache_path), (
+            "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+        )
         start = time.time()
         cache_dict = load_cache_dict(cache_path)
         tt_model.from_cached_state_dict(cache_dict)
@@ -404,27 +402,20 @@ def test_mochi_transformer_model(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        [(1, 8), 1, 0, 1],
-        [(2, 4), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(4, 8), 1, 0, 4],
-    ],
-    ids=[
-        "1x8sp1tp0",
-        "2x4sp1tp0",
-        "2x4sp0tp1",
-        "4x8sp1tp0",
+        pytest.param((1, 8), 1, 0, 1, id="1x8sp1tp0"),
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq"),
+    ("B", "T", "H", "W", "prompt_seq"),
     [
-        (1, 8, 40, 50, 118),
+        pytest.param(1, 8, 40, 50, 118, id="short_seq"),
     ],
-    ids=["short_seq"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model_caching(
