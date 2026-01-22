@@ -22,36 +22,19 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim, std
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
         *mesh_device, /* cluster_axis */ cluster_axis);
 
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        return ttnn::experimental::all_gather_async(
-            tensor,
-            dim,
-            cluster_axis.value(),
-            *mesh_device,
-            ttnn::ccl::Topology::Linear,
-            ccl_resources.get_all_gather_semaphore(),
-            /* persistent_output_tensor */ std::nullopt,
-            /* memory_config */ std::nullopt,
-            std::optional<size_t>(num_links),
-            /* subdevice_id */ std::nullopt,
-            /* use_optimal_ccl_for_llama */ false,
-            /* barrier_semaphore */ ccl_resources.get_barrier_semaphore(),
-            /* reverse_order */ false,
-            /* sub_core_grid */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh or when cluster_axis is not specified
-        return ttnn::experimental::all_gather_async(
-            tensor,
-            dim,
-            ccl_resources.get_all_gather_semaphore(),
-            num_links,
-            /* memory_config */ std::nullopt,
-            ttnn::ccl::Topology::Linear,
-            /* subdevice_id */ std::nullopt,
-            /* use_optimal_ccl_for_llama */ false,
-            /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
-    }
+    // Use cluster_axis overload for 2D mesh
+    return ttnn::experimental::all_gather_async(
+        tensor,
+        /* persistent_output_buffer */ std::nullopt,
+        dim,
+        ccl_resources.get_all_gather_semaphore(),
+        num_links,
+        /* memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        /* subdevice_id */ std::nullopt,
+        cluster_axis,
+        /* use_optimal_ccl_for_llama */ false,
+        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis) {
@@ -74,33 +57,19 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, std::optiona
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
         *mesh_device, /* cluster_axis */ cluster_axis);
 
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            cluster_axis,
-            *mesh_device,
-            /* barrier_semaphores */ std::nullopt,
-            /* rs_global_semaphores */ std::nullopt,
-            /* ag_global_semaphores */ std::nullopt,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            ttnn::ccl::Topology::Linear,
-            std::optional<size_t>(num_links),
-            /* worker_subdevice_id_opt */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            num_devices,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            ttnn::operations::reduction::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            /* topology */ ttnn::ccl::Topology::Linear,
-            /* num_preferred_links */ num_links);
-    }
+    // Use cluster_axis overload for 2D mesh
+    return ttnn::experimental::all_reduce_async(
+        tensor,
+        cluster_axis,
+        *mesh_device,
+        /* barrier_semaphores */ std::nullopt,
+        /* rs_global_semaphores */ std::nullopt,
+        /* ag_global_semaphores */ std::nullopt,
+        ttnn::operations::reduction::ReduceType::Sum,
+        /* memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        std::optional<size_t>(num_links),
+        /* worker_subdevice_id_opt */ std::nullopt);
 }
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis) {
