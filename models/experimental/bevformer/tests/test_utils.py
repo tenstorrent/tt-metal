@@ -12,6 +12,101 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Module-level constants to replace magic numbers
+ZERO_THRESHOLD_DEFAULT = 1e-8
+DIVISION_SAFETY_THRESHOLD = 1e-12
+SPARSITY_DENSE_THRESHOLD = 0.1
+SPARSITY_MODERATE_THRESHOLD = 0.5
+SPARSITY_SPARSE_THRESHOLD = 0.9
+
+
+def _categorize_sparsity(sparsity_ratio: float, include_icon: bool = True) -> Tuple[str, str]:
+    """
+    Central sparsity categorization logic.
+
+    Args:
+        sparsity_ratio: Sparsity ratio (0.0 to 1.0)
+        include_icon: Whether to include emoji icons
+
+    Returns:
+        (category_name, icon) tuple
+    """
+    if sparsity_ratio < SPARSITY_DENSE_THRESHOLD:
+        category = "Dense"
+        icon = "🟦" if include_icon else ""
+    elif sparsity_ratio < SPARSITY_MODERATE_THRESHOLD:
+        category = "Moderately Sparse"
+        icon = "🟨" if include_icon else ""
+    elif sparsity_ratio < SPARSITY_SPARSE_THRESHOLD:
+        category = "Sparse"
+        icon = "🟧" if include_icon else ""
+    else:
+        category = "Extremely Sparse"
+        icon = "🟥" if include_icon else ""
+
+    return category, icon
+
+
+def _preprocess_tensor_pair(
+    torch_tensor: torch.Tensor, ttnn_tensor, tensor_name: str
+) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+    """
+    Standard tensor preprocessing: convert, validate shapes, flatten.
+
+    Args:
+        torch_tensor: Reference PyTorch tensor
+        ttnn_tensor: ttnn tensor to compare
+        tensor_name: Name for logging
+
+    Returns:
+        (torch_flat, ttnn_flat, shapes_match) tuple
+    """
+    # Convert ttnn tensor to torch
+    ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)
+
+    # Check shapes match
+    torch_shape = torch_tensor.shape
+    ttnn_shape = ttnn_as_torch.shape
+    shapes_match = torch_shape == ttnn_shape
+
+    if not shapes_match:
+        logger.info(f"{tensor_name} shape comparison:")
+        logger.info(f"  PyTorch shape: {torch_shape}")
+        logger.info(f"  ttnn shape:    {ttnn_shape}")
+        logger.info(f"  Match: {shapes_match}")
+
+    # Flatten tensors for comparison
+    torch_flat = torch_tensor.float().flatten()
+    ttnn_flat = ttnn_as_torch.float().flatten()
+
+    return torch_flat, ttnn_flat, shapes_match
+
+
+def _compute_error_tensors(torch_flat: torch.Tensor, ttnn_flat: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """
+    Compute absolute and relative error tensors with consistent logic.
+
+    Args:
+        torch_flat: Flattened reference tensor
+        ttnn_flat: Flattened comparison tensor
+
+    Returns:
+        Dictionary with error tensors: {"abs_error", "rel_error", "torch_abs"}
+    """
+    # Absolute error
+    abs_error = torch.abs(torch_flat - ttnn_flat)
+
+    # Relative error (avoid division by zero)
+    torch_abs = torch.abs(torch_flat)
+    rel_error = torch.where(
+        torch_abs > DIVISION_SAFETY_THRESHOLD,  # Avoid division by very small numbers
+        abs_error / torch_abs,
+        abs_error,  # Use absolute error when reference is near zero
+    )
+
+    return {"abs_error": abs_error, "rel_error": rel_error, "torch_abs": torch_abs}
+
+
 def convert_ttnn_to_torch(ttnn_tensor) -> torch.Tensor:
     """Convert ttnn tensor to PyTorch tensor for comparison."""
     if isinstance(ttnn_tensor, torch.Tensor):
@@ -371,18 +466,7 @@ def print_sparsity_analysis(
 
     # Sparsity categorization
     sparsity_level = stats["sparsity_ratio"]
-    if sparsity_level < 0.1:
-        sparsity_category = "Dense"
-        icon = "🟦"
-    elif sparsity_level < 0.5:
-        sparsity_category = "Moderately Sparse"
-        icon = "🟨"
-    elif sparsity_level < 0.9:
-        sparsity_category = "Sparse"
-        icon = "🟧"
-    else:
-        sparsity_category = "Extremely Sparse"
-        icon = "🟥"
+    sparsity_category, icon = _categorize_sparsity(sparsity_level)
 
     print(f"  Category: {icon} {sparsity_category}")
 
@@ -475,26 +559,21 @@ def compute_error_statistics(torch_tensor: torch.Tensor, ttnn_tensor, tensor_nam
     Returns:
         Dictionary containing error statistics
     """
+    # Convert ttnn tensor (needed for stats later)
     ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)
 
-    # Ensure tensors have same shape
-    if torch_tensor.shape != ttnn_as_torch.shape:
+    # Preprocess tensors (validate shapes, flatten)
+    torch_flat, ttnn_flat, shapes_match = _preprocess_tensor_pair(torch_tensor, ttnn_tensor, tensor_name)
+
+    # Ensure tensors have same shape (preserve original exception behavior)
+    if not shapes_match:
         raise ValueError(f"Shape mismatch: torch={torch_tensor.shape}, ttnn={ttnn_as_torch.shape}")
 
-    # Convert to float32 for precision in calculations
-    torch_flat = torch_tensor.float().flatten()
-    ttnn_flat = ttnn_as_torch.float().flatten()
-
-    # Absolute error
-    abs_error = torch.abs(torch_flat - ttnn_flat)
-
-    # Relative error (avoid division by zero)
-    torch_abs = torch.abs(torch_flat)
-    rel_error = torch.where(
-        torch_abs > 1e-12,  # Avoid division by very small numbers
-        abs_error / torch_abs,
-        abs_error,  # Use absolute error when reference is near zero
-    )
+    # Compute error tensors
+    error_data = _compute_error_tensors(torch_flat, ttnn_flat)
+    abs_error = error_data["abs_error"]
+    rel_error = error_data["rel_error"]
+    torch_abs = error_data["torch_abs"]
 
     # Pearson Correlation Coefficient
     pcc = torch.corrcoef(torch.stack([torch_flat, ttnn_flat]))[0, 1].item()
@@ -625,14 +704,8 @@ def print_detailed_comparison(
 
             # Categorize sparsity level
             avg_sparsity = (stats["torch_sparsity_ratio"] + stats["ttnn_sparsity_ratio"]) / 2
-            if avg_sparsity < 0.1:
-                sparsity_category = "🟦 Dense"
-            elif avg_sparsity < 0.5:
-                sparsity_category = "🟨 Moderately Sparse"
-            elif avg_sparsity < 0.9:
-                sparsity_category = "🟧 Sparse"
-            else:
-                sparsity_category = "🟥 Extremely Sparse"
+            category_name, icon = _categorize_sparsity(avg_sparsity)
+            sparsity_category = f"{icon} {category_name}"
             print(f"  Overall category: {sparsity_category}")
 
         print(f"\n🎯 CORRELATION:")
@@ -714,10 +787,12 @@ def print_error_histograms(
         bins: Number of histogram bins
     """
     try:
-        ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)
+        torch_flat, ttnn_flat, shapes_match = _preprocess_tensor_pair(torch_tensor, ttnn_tensor, tensor_name)
 
-        torch_flat = torch_tensor.float().flatten()
-        ttnn_flat = ttnn_as_torch.float().flatten()
+        if not shapes_match:
+            print(f"❌ Error creating histogram: Shape mismatch")
+            return
+
         abs_error = torch.abs(torch_flat - ttnn_flat).numpy()
 
         # Create histogram
@@ -795,10 +870,9 @@ def check_with_tolerances(
         rel_error_pass = stats["rel_error_mean"] <= rel_error_threshold
 
         # High error element ratio check
-        ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)
-        torch_flat = torch_tensor.float().flatten()
-        ttnn_flat = ttnn_as_torch.float().flatten()
-        abs_error = torch.abs(torch_flat - ttnn_flat)
+        torch_flat, ttnn_flat, _ = _preprocess_tensor_pair(torch_tensor, ttnn_tensor, tensor_name)
+        error_data = _compute_error_tensors(torch_flat, ttnn_flat)
+        abs_error = error_data["abs_error"]
         high_error_elements = (abs_error > abs_error_threshold).sum().item()
         high_error_ratio = high_error_elements / torch_flat.numel()
         error_ratio_pass = high_error_ratio <= max_error_ratio
@@ -931,9 +1005,10 @@ def check_with_pcc(torch_tensor: torch.Tensor, ttnn_tensor, pcc: float = 0.99) -
         (passed, message)
     """
     try:
-        ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)
+        torch_flat, ttnn_flat, shapes_match = _preprocess_tensor_pair(torch_tensor, ttnn_tensor, "pcc_check")
 
-        if torch_tensor.shape != ttnn_as_torch.shape:
+        if not shapes_match:
+            ttnn_as_torch = convert_ttnn_to_torch(ttnn_tensor)  # For error message
             return False, f"Shape mismatch: {torch_tensor.shape} vs {ttnn_as_torch.shape}"
 
         stats = compute_error_statistics(torch_tensor, ttnn_tensor)
@@ -965,14 +1040,8 @@ def print_sparsity_summary(tensor: torch.Tensor, tensor_name: str = "tensor", ze
 
     # Categorize sparsity
     sparsity_ratio = stats["sparsity_ratio"]
-    if sparsity_ratio < 0.1:
-        category = "🟦 Dense"
-    elif sparsity_ratio < 0.5:
-        category = "🟨 Moderately Sparse"
-    elif sparsity_ratio < 0.9:
-        category = "🟧 Sparse"
-    else:
-        category = "🟥 Extremely Sparse"
+    category_name, icon = _categorize_sparsity(sparsity_ratio)
+    category = f"{icon} {category_name}"
 
     print(
         f"🕳️  {tensor_name}: {category} ({sparsity_ratio:.1%} sparse, {stats['num_zeros']:,}/{stats['total_elements']:,} zeros)"
