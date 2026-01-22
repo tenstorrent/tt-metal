@@ -26,6 +26,15 @@ TT run (requires a TT device):
 python -m models.experimental.dpt_large.demo.runner --image path/to/image.jpg --tt-run --device wormhole_n300
 ```
 
+TT run with perf reporting (writes a perf JSON and an adjacent header JSON):
+
+```sh
+python -m models.experimental.dpt_large.demo.runner \
+  --image path/to/image.jpg \
+  --tt-run --device wormhole_n300 \
+  --dump-perf generated/dpt_large_perf.json
+```
+
 ## Tests
 
 CPU-only smoke test:
