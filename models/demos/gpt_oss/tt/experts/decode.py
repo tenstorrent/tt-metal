@@ -35,10 +35,13 @@ def decode_forward(
         program_config: Model-specific program configs
 
     Returns:
-        Expert output [batch, 1, hidden_size]
+        Expert output [1, batch, 1, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
-    batch_size, seq_len = hidden_states.shape[0], hidden_states.shape[1]
+    batch_dim = 1
+    seq_dim = 2
+    batch_size = hidden_states.shape[batch_dim]
+    seq_len = hidden_states.shape[seq_dim]
 
     # ✅ Use exceptions instead of assertions
     if seq_len != 1:
@@ -50,7 +53,7 @@ def decode_forward(
     mode_config = mesh_config.get_config(Mode.DECODE)
     ep, tp = mode_config.ep, mode_config.tp
     # Prepare inputs for sparse matmul
-    hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
+    # hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
     sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
 
     # EP-specific routing remap for sparsity
@@ -63,40 +66,42 @@ def decode_forward(
 
     # Gate projection
     gate = ttnn.sparse_matmul(
-        hidden_states_4D,
+        hidden_states,
         weights.gate_proj,
         sparsity=sparsity,
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states_4D.shape[2], weights.gate_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.gate_proj.shape[3]),
         dtype=activation_dtype,
     )
+    # Note: reshape/transpose operations return views - do not deallocate originals
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     gate = ttnn.transpose(gate, 1, 2)
-
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
 
     # Up projection
     up = ttnn.sparse_matmul(
-        hidden_states_4D,
+        hidden_states,
         weights.up_proj,
         sparsity=sparsity,
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states_4D.shape[2], weights.up_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.up_proj.shape[3]),
         dtype=activation_dtype,
     )
-    hidden_states_4D.deallocate(True)
+    hidden_states.deallocate(True)
+    # Note: reshape/transpose operations return views - do not deallocate originals
     up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     up = ttnn.transpose(up, 1, 2)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
     up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
 
-    # Apply SwiGLU activation
+    # Apply SwiGLU activation (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
+    # Note: transpose/reshape operations return views - do not deallocate originals
     down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
     # Down projection
@@ -115,7 +120,9 @@ def decode_forward(
     down_input.deallocate(True)
     sparsity.deallocate(True)
     # Apply bias and routing weights
-    next_states = ttnn.reshape(ttnn.permute(down, (0, 2, 1, 3)), (batch_size, config.num_experts, config.hidden_size))
+    # Note: permute/reshape operations return views - do not deallocate originals
+    next_states = ttnn.permute(down, (0, 2, 1, 3))
+    next_states = ttnn.reshape(next_states, (batch_size, config.num_experts, config.hidden_size))
     next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
@@ -124,24 +131,30 @@ def decode_forward(
     routing_weights.deallocate(True)
 
     # Reduce across experts
-    next_states = ttnn.unsqueeze_to_4D(ttnn.sum(next_states, dim=1))
+    next_states = ttnn.sum(next_states, dim=1)
+    # Note: unsqueeze_to_4D typically returns a view, so we don't deallocate the sum result
+    next_states = ttnn.unsqueeze_to_4D(next_states)
 
     # Expert parallel communication
     if ep > 1:
         next_states = apply_expert_parallel_allreduce(next_states, mesh_config, ccl_manager)
 
+    # Note: unsqueeze_to_4D typically returns a view
     next_states = ttnn.unsqueeze_to_4D(next_states)
+
     # Tensor parallel communication
     if tp > 1:
+        # Note: apply_tensor_parallel_allreduce already handles deallocating the input tensor
         next_states = apply_tensor_parallel_allreduce(
             next_states, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp
         )
 
     # Final reshape
+    # Note: reshape typically returns a view, so we don't deallocate the original
     next_states = ttnn.reshape(
         next_states,
-        (batch_size, seq_len, config.hidden_size),
-        (batch_size, max(32, seq_len), config.hidden_size),
+        (1, batch_size, seq_len, config.hidden_size),
+        (1, batch_size, max(32, seq_len), config.hidden_size),
     )
 
     return next_states

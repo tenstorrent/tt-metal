@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 
 import pytest
@@ -16,3 +17,10 @@ def state_dict():
         return None
     else:
         return ModelArgs.load_state_dict(model_path, dummy_weights=False)
+
+
+@pytest.fixture
+def test_thresholds(request):
+    with open("models/demos/gpt_oss/unit_test_thresholds.json", "r") as f:
+        thresholds = json.load(f)
+    return thresholds
