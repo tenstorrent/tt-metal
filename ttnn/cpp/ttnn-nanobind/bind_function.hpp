@@ -22,7 +22,7 @@ struct overload_t {
     Func func;
     std::tuple<Args...> args;
 
-    constexpr overload_t(Func f, const Args&... a) : func(f), args(std::make_tuple(a...)) {}
+    constexpr overload_t(Func f, Args... a) : func(f), args(std::make_tuple(a...)) {}
 };
 
 // Deduction guide

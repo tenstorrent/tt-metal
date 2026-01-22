@@ -15,13 +15,13 @@ namespace ttnn {
 std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& split_sizes,
-    int64_t dim = 0,
+    int64_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
 std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
     int64_t split_size,
-    int64_t dim = 0,
+    int64_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn
