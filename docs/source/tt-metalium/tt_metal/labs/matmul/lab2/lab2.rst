@@ -435,54 +435,6 @@ The overall approach can be summarized by the following pseudo-code:
        }
    }
 
-Blocked Matrix Multiplication in TT-Metalium
-============================================
-
-Most of the code needed for blocked matrix multiplication is similar to the basic multi-core
-implementation from Exercise 1.
-The key new addition is the introduction of an intermediate circular buffer (CB) to hold partial results.
-As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used
-as temporary storage for partial results. Since CBs behave as FIFO queues, they are not typically used
-as raw memory storage. Instead, they are used as a stream of tiles that carry partial results between
-phases of the computation.
-In the context of blocked matrix multiplication, this results in the following pattern:
-
-* The compute kernel produces a block of partial results into an intermediate
-  CB using ``cb_reserve_back``, ``pack_tile`` and ``cb_push_back``.
-* On the next K-block, the same compute kernel reloads these partial results from the CB so it can
-  accumulate the next K-block's contribution.
-  It calls ``cb_wait_front`` to ensure the partial tiles are available, reads them
-  and then uses ``cb_pop_front`` to indicate they have been consumed.
-* The kernel computes another K-block's contribution and adds it to the partial result
-* If this is not the last K-block, write the updated partial results back to the intermediate CB
-  (again via ``reserve_back`` / ``pack_tile`` / ``push_back``) to be used in the next iteration.
-* If this is the last K-block, it writes the fully accumulated tiles into a separate output CB
-  (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for writer kernel to consume.
-
-So the CB holding partials is never treated as random L1 memory; it is still a FIFO queue.
-What changes is who consumes and produces that queue over time: the compute kernel both produces
-and later consumes tiles from the same CB index, using the standard reserve/push/wait/pop protocol
-to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
-final outputs.
-
-
-we cannot use them as
-unrestricted 
-
-
-
-There are two distinct ways in which Tenstorrent architecture allows storing partial results in on-chip memory:
-
-* Using a **circular buffer** in on-chip SRAM.
-  As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used as
-  temporary storage for partial results.
-* Using **destination registers** in Tensix cores.
-  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-  While previously we only used a single tile in the destination register array, the TT-Metalium
-  programming model exposes the array holding up to 8 tiles of data.
-  In blocked matrix multiplication, we will use the destination register array to hold
-  a subset of partial results.
-
 Visualizing the Data Reuse Opportunity
 ======================================
 
@@ -535,7 +487,97 @@ for a 4x4 output tile matrix with K=4 inner dimension tiles::
     6. Write final results only once
 
 This blocking strategy reduces DRAM traffic by reusing input tiles across multiple
-output tiles computed by the same core.
+output tiles computed by the same core. Note that data is not reused across cores.
+As an example, in the diagram above, both core 0 and core 1 read rows 0 and 1 of matrix ``A``.
+
+
+Blocked Matrix Multiplication in TT-Metalium
+============================================
+
+Most of the code needed for blocked matrix multiplication is similar to the basic multi-core
+implementation from Exercise 1.
+The key new addition is the introduction of an intermediate circular buffer (CB) to hold partial results.
+As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used
+as temporary storage for partial results. Since CBs behave as FIFO queues, they are not typically used
+as raw memory storage. Instead, they are used as a stream of tiles that carry partial results between
+phases of the computation.
+In the context of blocked matrix multiplication, this results in the following pattern:
+
+* The compute kernel produces a block of partial results into an intermediate
+  CB using ``cb_reserve_back``, ``pack_tile`` and ``cb_push_back``.
+* On the next K-block, the same compute kernel reloads these partial results from the CB so it can
+  accumulate the next K-block's contribution.
+  It calls ``cb_wait_front`` to ensure the partial tiles are available, reads them
+  and then uses ``cb_pop_front`` to indicate they have been consumed.
+* The kernel computes another K-block's contribution and adds it to the partial result
+* If this is not the last K-block, write the updated partial results back to the intermediate CB
+  (again via ``reserve_back`` / ``pack_tile`` / ``push_back``) to be used in the next iteration.
+* If this is the last K-block, it writes the fully accumulated tiles into a separate output CB
+  (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for writer kernel to consume.
+
+So the CB holding partials is never treated as random L1 memory; it is still a FIFO queue.
+What changes is who consumes and produces that queue over time: the compute kernel both produces
+and later consumes tiles from the same CB index, using the standard reserve/push/wait/pop protocol
+to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
+final outputs.
+
+
+Exercise 2: Multi Core Matrix Multiplication with Data Reuse
+============================================================
+
+In this exercise, you will implement a blocked multi-core matrix multiplication that
+implements data reuse on the device, based on the blocking and intermediate-buffer ideas described above.
+You will use a gird of 8x8 cores and compare performance to the multi-core implementation with equivalent
+core grid size from Exercise 1.
+
+Steps
+-----
+
+#. **Create a new program for data reuse**
+   Starting from your multi-core matrix multiplication program from Exercise 1, extend it to add
+   blocking variables and an intermediate circular buffer.
+
+#. Set fixed value for ``K_block_tiles`` 
+   Define ``K_block_tiles`` to be a parameter and start by setting it to 2. This ensures that
+   all the data fits into on-chip SRAM.
+
+#. Determine appropriate values for other blocking variables, based on the core grid size (``8x8``)
+   and the matrix sizes (``640x320`` by ``320x640``). Use predefined variables ``TILE_HEIGHT``
+   and ``TILE_WIDTH`` to compute the number of tiles. As before, you can assume that
+   ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``, and ``K`` are divisible by ``TILE_HEIGHT``.
+   
+#. Size circular buffers based on the blocking variables, keeping in mind the following:
+   - Input buffers need to store ``A_slab`` and ``B_slab`` and should use double buffering.
+   - Output buffers need to store ``C_block``, and should use double buffering.
+   - Intermediate buffer needs to store the partial results, whose size is the same as ``C_block``.
+     Since the same kernel will both produce and consume the partial results, no double buffering
+     is needed.
+
+#. Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
+
+#. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
+   Remember that ``tile_regs_acquire`` sets all the tiles in the destination register array to 0.
+
+#. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels.
+   Note that in this case it is not required to use the ``split_work_to_cores`` function,
+   because we are making a simplifying assumption that number of tiles divides evenly into the
+   number of cores in the appropriate dimension.
+
+There are two distinct ways in which Tenstorrent architecture allows storing partial results in on-chip memory:
+
+* Using a **circular buffer** in on-chip SRAM.
+  As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used as
+  temporary storage for partial results.
+* Using **destination registers** in Tensix cores.
+  As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
+  While previously we only used a single tile in the destination register array, the TT-Metalium
+  programming model exposes the array holding up to 8 tiles of data.
+  In blocked matrix multiplication, we will use the destination register array to hold
+  a subset of partial results.
+
+
+
+
 
 An optimized multi-core matmul can reduce this overhead by:
 
