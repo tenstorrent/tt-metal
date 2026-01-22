@@ -807,7 +807,7 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    print_to_file = os.environ.get("SAVE_OUTPUT_TO_FILE", "0") == "1"  # Set SAVE_OUTPUT_TO_FILE=1 to save outputs
+    print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -894,8 +894,7 @@ def test_demo_text(
         output_directory = "models/tt_transformers/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
-        output_filename = os.environ.get("OUTPUT_FILE", f"{output_directory}/llama_text_demo_output_{timestamp}.txt")
-        logger.info(f"Saving outputs to: {output_filename}")
+        output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
 
     # Start profiler
     logger.info(f"Start profiler")
