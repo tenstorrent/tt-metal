@@ -267,8 +267,11 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     }
     float mean_error = sum_error / static_cast<float>(cpu_master_weights.size());
 
-    EXPECT_LT(mean_error, 1e-7f);
-    EXPECT_LT(max_error, 1e-6f);
+    const float mean_error_tolerance = 1e-7f;
+    const float max_error_tolerance = 1e-6f;
+
+    EXPECT_LT(mean_error, mean_error_tolerance);
+    EXPECT_LT(max_error, max_error_tolerance);
 
     autograd::ctx().close_device();
 }

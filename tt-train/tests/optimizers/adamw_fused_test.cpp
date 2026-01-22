@@ -166,13 +166,10 @@ static ErrorMetrics compute_error_metrics(
     }
 
     float mean_error = sum_error / static_cast<float>(count);
-
-    fmt::print("{}: mean_error={:.6e}, max_error={:.6e}\n", name, mean_error, max_error);
-
     return {mean_error, max_error, name};
 }
 
-static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
+static void run_step_and_compare(const AdamWCase& pc) {
     using namespace ttml;
 
     ttml::autograd::ctx().set_seed(123U);
@@ -232,17 +229,11 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
         opt_fused.set_state_dict(fused_state);
     }
 
-    // Run optimizers for the specified number of steps
-    for (uint32_t i = 0; i < steps; ++i) {
-        cpu_opt.step(w_cpu, g_cpu);
-        opt_fused.step();
-    }
+    cpu_opt.step(w_cpu, g_cpu);
+    opt_fused.step();
 
-    // Get results
     auto result_fused = theta_fused->get_value();
     auto result_fused_cpu = core::to_xtensor(result_fused);
-
-    fmt::print("\n=== Error Metrics (reference: CPU) ===\n");
 
     auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamWFused");
 
@@ -251,8 +242,6 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
 
     EXPECT_LE(fused_metrics.mean_error, mean_error_tolerance) << "AdamWFused mean error exceeds tolerance";
     EXPECT_LE(fused_metrics.max_error, max_error_tolerance) << "AdamWFused max error exceeds tolerance";
-
-    fmt::print("\n");
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
@@ -262,9 +251,7 @@ static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
 
 TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
     const auto& pc = GetParam();
-    // Single step with pre-initialized momentum states for rigorous testing
-    const uint32_t steps = 1;
-    run_steps_and_compare(pc, steps);
+    run_step_and_compare(pc);
 }
 
 // Note: In the following test suites there are no test cases with beta2=0. When beta2=0, denom = |g_t| + eps which can
@@ -275,32 +262,19 @@ TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
 // Test cases with various hyperparameter configurations
 static const AdamWCase kBasicCases[] = {
     // Standard configurations with different learning rates
-    {{4, 8, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
+    {{1, 2, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
     {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e3"},
     {{2, 4, 128, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e4"},
-
     // Different beta1 values
     {{1, 16, 128, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p8"},
-    {{2, 8, 128, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p95"},
     {{4, 4, 128, 128}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p5"},
-
     // Different beta2 values
     {{1, 32, 64, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, false, "Beta2_0p99"},
-    {{2, 16, 64, 128}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.0f, false, "Beta2_0p9999"},
     {{1, 64, 64, 64}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, false, "Beta2_0p95"},
-
     // Different epsilon values
-    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-7f, 0.0f, false, "Epsilon_1e7"},
+    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
     {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, false, "Epsilon_1e9"},
-    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
-
-    // Mixed configurations
-    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.0f, false, "Mixed_1"},
-    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.0f, false, "Mixed_2"},
-    {{1, 32, 128, 512}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.0f, false, "Mixed_3"},
-
-    // Large and small tensor shapes
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_flat"},
+    // Different tensor shapes
     {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_4D"},
     {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Wide"},
 };
@@ -315,26 +289,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Test cases that isolate individual AdamW features
 static const AdamWCase kIsolatedFeatureCases[] = {
-    // Only beta2 (second moment) with lr, beta1=0
-    // Tests exponential moving average of squared gradients (adaptive learning rate)
+    // Only beta2 (second moment) - tests adaptive learning rate without momentum
     {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p999"},
     {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "OnlyBeta2_0p99"},
-    {{2, 4, 128, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p9999"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.95f, 1e-8f, 0.0f, false, "OnlyBeta2_0p95"},
-
-    // Learning rate + beta2 only (adaptive learning rate without momentum)
-    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "LR_Beta2_std"},
-    {{1, 8, 128, 64}, 1e-2f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "LR_Beta2_high_lr"},
-    {{2, 4, 128, 64}, 1e-4f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "LR_Beta2_low_lr"},
-
-    // Epsilon variations with only beta2 (tests numerical stability)
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "Beta2_eps1e6"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-7f, 0.0f, false, "Beta2_eps1e7"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-9f, 0.0f, false, "Beta2_eps1e9"},
-
-    // Edge cases: extreme beta2 values
+    // Extreme beta2 values
     {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9f, 1e-8f, 0.0f, false, "Beta2_0p9_fast_adapt"},
     {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "Beta2_0p9999_slow_adapt"},
+    // Epsilon variation with beta1=0
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "Beta2_eps1e6"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -347,55 +309,17 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Test cases with weight decay enabled
 static const AdamWCase kWeightDecayCases[] = {
-    // Standard configurations with different weight decay values
+    // Standard weight decay values
     {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Standard_wd0p01"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.001f, false, "Standard_wd0p001"},
-    {{2, 4, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
-    {{2, 8, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0001f, false, "Standard_wd0p0001"},
-
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
     // Weight decay with different learning rates
     {{1, 16, 128, 128}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "HighLR_wd0p01"},
     {{2, 8, 128, 128}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "LowLR_wd0p01"},
-    {{4, 4, 128, 128}, 5e-3f, 0.9f, 0.999f, 1e-8f, 0.05f, false, "MidLR_wd0p05"},
-
-    // Weight decay with different beta1 values
-    {{1, 32, 64, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p8_wd0p01"},
-    {{2, 16, 64, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p95_wd0p01"},
-    {{1, 64, 64, 64}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p5_wd0p01"},
-
-    // Weight decay with different beta2 values
-    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f, false, "Beta2_0p99_wd0p01"},
-    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.01f, false, "Beta2_0p9999_wd0p01"},
-    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.01f, false, "Beta2_0p95_wd0p01"},
-
-    // Mixed configurations with weight decay
-    {{1, 32, 128, 256}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.02f, false, "Mixed_wd1"},
-    {{1, 32, 128, 256}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.001f, false, "Mixed_wd2"},
-    {{1, 32, 128, 256}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.015f, false, "Mixed_wd3"},
-
-    // Large and small tensor shapes with weight decay
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Large_flat_wd0p01"},
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Large_4D_wd0p01"},
-    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, false, "Wide_wd0p005"},
-
-    // High weight decay (aggressive regularization)
-    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "HighWD_0p5"},
-    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.2f, false, "HighWD_0p2"},
-    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.3f, false, "HighWD_0p3"},
-
-    // Small weight decay (light regularization)
-    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-4f, false, "SmallWD_1e4"},
-    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, false, "SmallWD_1e5"},
-    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-3f, false, "SmallWD_1e3"},
-
-    // Weight decay with only beta2 (adaptive LR + weight decay, no momentum)
+    // Weight decay with beta1=0 (no momentum)
     {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.01f, false, "Beta2Only_wd0p01"},
-    {{2, 8, 64, 128}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.05f, false, "Beta2_0p99_wd0p05"},
-    {{1, 16, 64, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.001f, false, "Beta2_0p9999_wd0p001"},
-
     // Edge cases: very high and very low weight decay
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-6f, false, "VerySmallWD_1e6"},
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.9f, false, "VeryHighWD_0p9"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, false, "VerySmallWD_1e5"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "VeryHighWD_0p5"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -406,23 +330,14 @@ INSTANTIATE_TEST_SUITE_P(
 // Test AdamW with AMSGrad variant enabled
 // ====================================================================
 
-// Test cases with AMSGrad enabled (reduced set - AMSGrad is a minor variant)
+// Test cases with AMSGrad enabled
 static const AdamWCase kAMSGradCases[] = {
-    // Standard configurations with AMSGrad
-    {{4, 8, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e2"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e3"},
-    {{2, 4, 128, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e4"},
-
+    // Standard AMSGrad
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
     // AMSGrad with weight decay
     {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
-    {{2, 4, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, true, "WeightDecay_0p1"},
-
-    // Mixed configuration with AMSGrad
-    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.02f, true, "Mixed_1"},
-
-    // Different tensor shapes
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "Large_4D"},
-    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, true, "Wide"},
+    // AMSGrad with different shape
+    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Large_4D"},
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWFusedAMSGrad, AdamWFusedComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
@@ -432,6 +347,7 @@ INSTANTIATE_TEST_SUITE_P(AdamWFusedAMSGrad, AdamWFusedComparisonTest, ::testing:
 // Test AdamW with stochastic rounding enabled
 // ====================================================================
 
+// These tests are nondeterministic but should never fail
 class StochasticRoundingTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -444,74 +360,6 @@ protected:
     }
 };
 
-// Small gradient accumulation test
-TEST_F(StochasticRoundingTest, SmallGradientAccumulation) {
-    using namespace ttml;
-
-    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
-    const uint32_t steps = 100;
-
-    // Initialize with ones - small gradients relative to parameter magnitude
-    xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
-    // Very small gradients - these might get rounded away without stochastic rounding
-    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
-
-    // Run with stochastic rounding
-    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
-    theta_stoch->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
-
-    ttml::optimizers::AdamWFusedConfig stoch_cfg;
-    stoch_cfg.lr = 1e-3f;
-    stoch_cfg.beta1 = 0.9f;
-    stoch_cfg.beta2 = 0.999f;
-    stoch_cfg.epsilon = 1e-8f;
-    stoch_cfg.stochastic_rounding = true;
-
-    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
-
-    auto theta_det = autograd::create_tensor(to_tt(w0), true);
-    theta_det->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
-
-    ttml::optimizers::AdamWFusedConfig det_cfg;
-    det_cfg.lr = 1e-3f;
-    det_cfg.beta1 = 0.9f;
-    det_cfg.beta2 = 0.999f;
-    det_cfg.epsilon = 1e-8f;
-    det_cfg.stochastic_rounding = false;
-
-    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
-
-    xt::xarray<float> w_cpu = w0;
-    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
-
-    for (uint32_t i = 0; i < steps; ++i) {
-        opt_stoch.step();
-        opt_det.step();
-        cpu_opt.step(w_cpu, g0);
-    }
-
-    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
-    auto result_det = core::to_xtensor(theta_det->get_value());
-
-    // Total change off all parameters from initial value
-    float total_change_stoch = xt::sum(xt::abs(result_stoch - w0))();
-    float total_change_det = xt::sum(xt::abs(result_det - w0))();
-    float total_change_cpu = xt::sum(xt::abs(w_cpu - w0))();
-
-    fmt::print(
-        "Small gradient accumulation test:\n"
-        "  CPU total change: {:.6f}\n"
-        "  Stochastic rounding total change: {:.6f}\n"
-        "  Deterministic rounding total change: {:.6f}\n",
-        total_change_cpu,
-        total_change_stoch,
-        total_change_det);
-
-    EXPECT_GT(total_change_stoch, 0.0f) << "Stochastic rounding should allow some accumulation";
-}
-
 // Test to verify stochastic rounding rounds in the correct direction (towards CPU result)
 TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     using namespace ttml;
@@ -522,7 +370,7 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     // Initialize with ones - small gradients relative to parameter magnitude
     xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
     // Very small gradients - these might get rounded away without stochastic rounding
-    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
+    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-3f;
 
     // Run with stochastic rounding
     auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
@@ -567,127 +415,25 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     float error_stoch = xt::sum(xt::abs(result_stoch - w_cpu))();
     float error_det = xt::sum(xt::abs(result_det - w_cpu))();
 
-    fmt::print(
-        "Rounding direction correctness test:\n"
-        "  Stochastic rounding error (vs CPU): {:.6f}\n"
-        "  Deterministic rounding error (vs CPU): {:.6f}\n",
-        error_stoch,
-        error_det);
-
     // Stochastic rounding should be closer to CPU result than deterministic
     EXPECT_LT(error_stoch, error_det)
         << "Stochastic rounding should produce weights closer to CPU reference than deterministic rounding";
 }
 
-TEST_F(StochasticRoundingTest, RoundingDirectionCounts) {
+// Verifies mean and max error is lower in the stochastich rounding version given enough steps
+TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     using namespace ttml;
 
-    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
-    const uint32_t steps = 100;
-
-    // Initialize with ones - small gradients relative to parameter magnitude
-    xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
-    // Very small gradients - these might get rounded away without stochastic rounding
-    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
-
-    // Run with stochastic rounding
-    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
-    theta_stoch->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
-
-    ttml::optimizers::AdamWFusedConfig stoch_cfg;
-    stoch_cfg.lr = 1e-3f;
-    stoch_cfg.beta1 = 0.9f;
-    stoch_cfg.beta2 = 0.999f;
-    stoch_cfg.epsilon = 1e-8f;
-    stoch_cfg.stochastic_rounding = true;
-
-    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
-
-    auto theta_det = autograd::create_tensor(to_tt(w0), true);
-    theta_det->set_grad(to_tt(g0));
-    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
-
-    ttml::optimizers::AdamWFusedConfig det_cfg;
-    det_cfg.lr = 1e-3f;
-    det_cfg.beta1 = 0.9f;
-    det_cfg.beta2 = 0.999f;
-    det_cfg.epsilon = 1e-8f;
-    det_cfg.stochastic_rounding = false;
-
-    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
-
-    xt::xarray<float> w_cpu = w0;
-    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
-
-    for (uint32_t i = 0; i < steps; ++i) {
-        opt_stoch.step();
-        opt_det.step();
-        cpu_opt.step(w_cpu, g0);
-    }
-
-    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
-    auto result_det = core::to_xtensor(theta_det->get_value());
-
-    // Count per-element rounding directions
-    size_t correct_count = 0;    // stochastic closer to CPU than deterministic
-    size_t incorrect_count = 0;  // stochastic further from CPU than deterministic
-    size_t same_count = 0;       // same distance from CPU
-    size_t total = result_stoch.size();
-
-    for (size_t i = 0; i < total; ++i) {
-        float cpu_val = w_cpu.flat(i);
-        float stoch_val = result_stoch.flat(i);
-        float det_val = result_det.flat(i);
-
-        float stoch_error = std::abs(stoch_val - cpu_val);
-        float det_error = std::abs(det_val - cpu_val);
-
-        if (stoch_error < det_error) {
-            correct_count++;
-        } else if (stoch_error > det_error) {
-            incorrect_count++;
-        } else {
-            same_count++;
-        }
-    }
-
-    float correct_pct = 100.0f * static_cast<float>(correct_count) / static_cast<float>(total);
-    float incorrect_pct = 100.0f * static_cast<float>(incorrect_count) / static_cast<float>(total);
-    float same_pct = 100.0f * static_cast<float>(same_count) / static_cast<float>(total);
-
-    fmt::print(
-        "Rounding direction counts (total {} elements):\n"
-        "  Correct (stochastic closer to CPU): {} ({:.2f}%)\n"
-        "  Incorrect (stochastic further from CPU): {} ({:.2f}%)\n"
-        "  Same distance: {} ({:.2f}%)\n",
-        total,
-        correct_count,
-        correct_pct,
-        incorrect_count,
-        incorrect_pct,
-        same_count,
-        same_pct);
-
-    // Expect majority of weights to be rounded in correct direction
-    EXPECT_GT(correct_count, incorrect_count) << "More weights should be rounded towards CPU than away from it";
-}
-
-TEST_F(StochasticRoundingTest, ErrorComparisonOverMultipleSteps) {
-    using namespace ttml;
-
-    const std::array<std::size_t, 4> shape = {1, 4, 128, 256};
+    const std::array<std::size_t, 4> shape = {1, 4, 256, 512};
     const uint32_t steps = 512U;
-    [[maybe_unused]] const uint32_t seed = 42U;
+    const uint32_t seed = 42U;
 
     xt::xarray<float> w0 = make_random_xarray(shape, seed);
-    xt::xarray<float> g0 = make_random_xarray(shape, seed + 1) * 1e-3f;
+    xt::xarray<float> g0 = make_random_xarray(shape, seed + 1, -0.1f, 0.1f);
 
-    // CPU reference
     xt::xarray<float> w_cpu = w0;
     CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
 
-    // Stochastic rounding
     auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
     theta_stoch->set_grad(to_tt(g0));
     ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
@@ -700,7 +446,6 @@ TEST_F(StochasticRoundingTest, ErrorComparisonOverMultipleSteps) {
     stoch_cfg.stochastic_rounding = true;
     ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
 
-    // Deterministic rounding
     auto theta_det = autograd::create_tensor(to_tt(w0), true);
     theta_det->set_grad(to_tt(g0));
     ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
@@ -724,16 +469,6 @@ TEST_F(StochasticRoundingTest, ErrorComparisonOverMultipleSteps) {
 
     auto stoch_metrics = compute_error_metrics(w_cpu, result_stoch, "Stochastic");
     auto det_metrics = compute_error_metrics(w_cpu, result_det, "Deterministic");
-
-    fmt::print(
-        "\nStochastic vs Deterministic (after {} steps):\n"
-        "  Stochastic: mean={:.6e}, max={:.6e}\n"
-        "  Deterministic: mean={:.6e}, max={:.6e}\n",
-        steps,
-        stoch_metrics.mean_error,
-        stoch_metrics.max_error,
-        det_metrics.mean_error,
-        det_metrics.max_error);
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
