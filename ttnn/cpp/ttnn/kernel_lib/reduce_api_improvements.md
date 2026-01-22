@@ -304,7 +304,7 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 | `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | ✅ Implemented |
 | TileShape naming | Rename to `TileGrid` | ✅ Implemented |
 | ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | ✅ Implemented |
-| CB arguments | Group into `ReduceCBs` struct | Pending |
+| CB arguments | Group into `ReduceCBs` struct | ✅ Implemented |
 
 ---
 
@@ -515,6 +515,58 @@ struct PersistentPolicy {       // wait: UPFRONT, pop: NO_POP
 - Existing `ReduceInputMode::STREAMING_BATCHED` → `policies::StreamingBatchedPolicy`
 - Existing `ReduceInputMode::PRELOADED` → `policies::PreloadedPolicy`
 - Existing `ReduceInputMode::PERSISTENT` → `policies::PersistentPolicy`
+
+**Testing:**
+- Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass
+- Backward compatibility preserved - existing code unchanged
+
+### Additional A: ReduceCBs struct (Implemented)
+
+**Date:** 2026-01-22
+
+**Changes made:**
+1. Added `ReduceCBs` struct to group input, scaler, and output CB arguments
+2. Added `ReduceCBs::of(in, scaler, out)` factory method for inline construction
+3. Added function overload accepting `ReduceCBs` instead of three separate arguments
+4. Original three-argument signature preserved for backward compatibility
+
+**Files modified:**
+- `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+
+**New API:**
+
+```cpp
+struct ReduceCBs {
+    uint32_t input;   // Input CB containing tiles to reduce
+    uint32_t scaler;  // CB containing scaler tile
+    uint32_t output;  // Output CB for reduced tiles
+
+    static constexpr ReduceCBs of(uint32_t in, uint32_t scaler, uint32_t out) { return {in, scaler, out}; }
+};
+
+// New overload accepting ReduceCBs
+template <PoolType reduce_type, ReduceDim reduce_dim, ...>
+void reduce(ReduceCBs cbs, TileGrid grid, ...);
+```
+
+**Usage example:**
+
+```cpp
+// Before (still works):
+compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+    cb_in, cb_scaler, cb_out,
+    TileGrid::of(Ht, Wt, NC));
+
+// After (new option):
+compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+    ReduceCBs::of(cb_in, cb_scaler, cb_out),
+    TileGrid::of(Ht, Wt, NC));
+```
+
+**Benefits:**
+- Prevents argument-swapping bugs (clear which CB is input vs scaler vs output)
+- Self-documenting at call sites
+- Backward compatible - original three-argument signature still works
 
 **Testing:**
 - Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass

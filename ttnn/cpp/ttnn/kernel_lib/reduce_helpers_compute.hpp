@@ -204,6 +204,21 @@ enum class ReduceDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, BOTH = 3 
 enum class ReduceInitMode { BOTH, INIT_ONLY, UNINIT_ONLY, NONE };
 
 /**
+ * @brief Circular buffer specification for reduce operations
+ *
+ * Groups the three CB arguments (input, scaler, output) into a single struct
+ * for self-documenting code and preventing argument-swapping bugs.
+ */
+struct ReduceCBs {
+    uint32_t input;   // Input CB containing tiles to reduce
+    uint32_t scaler;  // CB containing scaler tile
+    uint32_t output;  // Output CB for reduced tiles
+
+    // Factory method for convenient inline construction
+    static constexpr ReduceCBs of(uint32_t in, uint32_t scaler, uint32_t out) { return {in, scaler, out}; }
+};
+
+/**
  * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
  *
  * Specifies the stride pattern for accessing tiles in non-contiguous memory layouts.
@@ -871,6 +886,41 @@ ALWI void reduce(
     if constexpr (init_mode == ReduceInitMode::BOTH || init_mode == ReduceInitMode::UNINIT_ONLY) {
         reduce_uninit<enforce_fp32_accumulation>();
     }
+}
+
+/**
+ * @brief Overload accepting ReduceCBs struct for self-documenting code
+ *
+ * This overload groups the three CB arguments into a single struct, making the code
+ * more readable and preventing argument-swapping bugs.
+ *
+ * @param cbs Circular buffer specification (input, scaler, output)
+ * @param grid Tile grid dimensions (rows x cols x batches)
+ * @param layout Tile memory layout specification for PRELOADED/PERSISTENT modes
+ * @param accum Accumulation configuration (NoAccumulation or Accumulate)
+ * @param post_reduce_op Optional callback after each reduction
+ *
+ * @example
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+ *       compute_kernel_lib::ReduceCBs::of(cb_in, cb_scaler, cb_out),
+ *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
+ */
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
+    ReduceInitMode init_mode = ReduceInitMode::BOTH,
+    typename AccumT = NoAccumulation,
+    typename PostReduceOp = NoOp>
+ALWI void reduce(
+    ReduceCBs cbs,
+    TileGrid grid,
+    TileLayout layout = TileLayout::contiguous(),
+    AccumT accum = AccumT{},
+    PostReduceOp post_reduce_op = PostReduceOp{}) {
+    reduce<reduce_type, reduce_dim, input_mode, reconfig, init_mode, AccumT, PostReduceOp>(
+        cbs.input, cbs.scaler, cbs.output, grid, layout, accum, post_reduce_op);
 }
 
 }  // namespace compute_kernel_lib
