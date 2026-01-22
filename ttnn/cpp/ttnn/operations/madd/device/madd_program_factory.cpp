@@ -22,13 +22,16 @@
 
 namespace ttnn::prim {
 
+static inline auto get_tile_shape(const Tensor& x) {
+    const auto tile = x.tensor_spec().tile();
+    return std::make_pair(tile.get_height(), tile.get_width());
+}
+
 static inline auto get_tile_count(const Tensor& x) {
     const uint32_t input_tensor_width = x.padded_shape()[-1];
     const uint32_t input_tensor_height = x.physical_volume() / input_tensor_width;
 
-    const auto& tile_shape = x.tensor_spec().tile().get_tile_shape();
-    const uint32_t tile_height = tile_shape[0];
-    const uint32_t tile_width = tile_shape[1];
+    const auto [tile_height, tile_width] = get_tile_shape(x);
 
     const uint32_t num_input_tiles_in_row = input_tensor_width / tile_width;
     const uint32_t num_input_tiles_in_col = input_tensor_height / tile_height;
@@ -48,13 +51,11 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
 
     // const ttnn::DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    // Output dimensions
-    // const tt::tt_metal::Shape& output_shape = output.padded_shape();
-
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     // TODO: Verify that all inputs have the same data format
 
-    // const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // Output dimensions
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     tt::tt_metal::IDevice* const device = output.device();
 
@@ -66,7 +67,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
     uint32_t input_cb_required_pages;
     uint32_t aligned_input_unit_size;  // Size used for CB creation
 
-    // uint32_t output_unit_size;
+    uint32_t output_unit_size;
 
     uint32_t work_units_to_split;
 
@@ -76,7 +77,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         input_unit_size = tt::tile_size(input_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
-        // output_unit_size = tt::tile_size(output_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
 
         const auto [num_input_tiles_in_row, num_input_tiles_in_col] = get_tile_count(a);
 
@@ -114,15 +115,13 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
 
     // Separate output CB for tiled
-    // const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
-    // const auto [cb_output_index, cb_output] =
-    //     create_cb(next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb,
-    //     output_cb_data_format);
+    const uint32_t num_pages_in_output_cb = num_pages_in_input_cb;  // double buffered if needed
+    const auto [cb_output_index, cb_output] =
+        create_cb(next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
 
     auto* const a_buffer = a.buffer();
     auto* const b_buffer = b.buffer();
     auto* const c_buffer = c.buffer();
-    // auto* const dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)cb_srcA_index,
@@ -142,6 +141,21 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    // Writer compile time arguments
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)cb_output_index, (std::uint32_t)output_unit_size, (std::uint32_t)input_cb_required_pages};
+
+    auto* const output_buffer = output.buffer();
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+
+    const std::map<std::string, std::string> kernel_defines;
+    const tt::tt_metal::KernelHandle writer_kernel = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/madd/device/kernels/dataflow/writer_madd_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
+
     // Set up runtime arguments
     std::vector<uint32_t> reader_rt_arguments{
         a_buffer->address(),
@@ -149,6 +163,12 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         c_buffer->address(),
         0,  // set in loop, num of units on core
         0   // set in loop, start_id of unit in core
+    };
+
+    std::vector<uint32_t> writer_rt_arguments{
+        output_buffer->address(),
+        0,  // set in loop, num of units on core
+        0   // set in loop, start_id of unit on core
     };
 
     for (uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
@@ -165,7 +185,11 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         reader_rt_arguments[3] = blocks_per_core * input_cb_required_pages;   // reader goes page by page
         reader_rt_arguments[4] = blocks_processed * input_cb_required_pages;  // offset in pages
 
+        writer_rt_arguments[1] = blocks_per_core * input_cb_required_pages;
+        writer_rt_arguments[2] = blocks_processed * input_cb_required_pages;
+
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_arguments);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_arguments);
 
         blocks_processed += blocks_per_core;
     }
@@ -174,7 +198,7 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         std::move(program),
         shared_variables_t{
             .reader_kernel = reader_kernel,
-            // .writer_kernel = writer_kernel,
+            .writer_kernel = writer_kernel,
             .num_cores = num_cores,
             .num_cores_y = num_cores_y}};
 }
@@ -186,14 +210,14 @@ void MAddProgramFactory::override_runtime_arguments(
     [[maybe_unused]] Tensor& output_tensor) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel;
-    // const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel;
     const auto& num_cores = cached_program.shared_variables.num_cores;
     const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
     auto* const a_buffer = tensor_args.a.buffer();
     auto* const b_buffer = tensor_args.b.buffer();
     auto* const c_buffer = tensor_args.c.buffer();
-    // auto* const dst_buffer = output_tensor.buffer();
+    auto* const output_buffer = output_tensor.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -203,10 +227,10 @@ void MAddProgramFactory::override_runtime_arguments(
             runtime_args[1] = b_buffer->address();
             runtime_args[2] = c_buffer->address();
         }
-        // {
-        //     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        //     runtime_args[0] = dst_buffer->address();
-        // }
+        {
+            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = output_buffer->address();
+        }
     }
 }
 
