@@ -486,6 +486,38 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
+
+    m_device.def(
+        "get_optimal_dram_bank_to_logical_worker_assignment",
+        [](MeshDevice* device, tt::tt_metal::NOC noc) {
+            return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+        },
+        nb::arg("device"),
+        nb::arg("noc"),
+        R"doc(
+            [EXPERIMENTAL] Returns the optimal DRAM bank to logical worker core assignment.
+
+            This function returns an ordered list of logical worker core coordinates that are optimally
+            placed to interface with DRAM banks. Placing DRAM reader or writer kernels on these worker
+            cores will minimize NOC congestion and the number of NOC hops required to complete a DRAM
+            read or write.
+
+            Args:
+                device (ttnn.Device): The TT device to query.
+                noc (ttnn.NOC): The Network-on-Chip to use (NOC_0 or NOC_1, or RISCV_0_default/RISCV_1_default).
+
+            Returns:
+                List[ttnn.CoreCoord]: A list of logical worker core coordinates, where index i corresponds
+                to the optimal worker core for DRAM bank i.
+
+            Example:
+                >>> import ttnn
+                >>> device = ttnn.open_device(device_id=0)
+                >>> cores = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(
+                ...     device, ttnn.NOC.RISCV_0_default
+                ... )
+                >>> print(f"DRAM bank 0 maps to core: {cores[0]}")
+        )doc");
 }
 
 void py_device_module(nb::module_& mod) {
