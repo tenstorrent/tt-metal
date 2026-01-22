@@ -120,21 +120,12 @@ target_sources(
         deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
         deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
-<<<<<<< HEAD
-<<<<<<< HEAD
         deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
         deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
-=======
-        deepseek_reduce_scatter/deepseek_reduce_scatter.cpp
-        deepseek_reduce_scatter/device/deepseek_reduce_scatter_device_operation.cpp
-        deepseek_reduce_scatter/device/deepseek_reduce_scatter_program_factory.cpp
->>>>>>> c7b71a68db (Everything compiling, time to start gutting)
-=======
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
->>>>>>> d0b016e788 (update old name usage)
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
