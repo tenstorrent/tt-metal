@@ -719,7 +719,6 @@ static std::vector<Tensor> pool2d_DRAM(
                     BufferType::DRAM,
                 })),
         input_tensor_on_device.device());
-    printf("[Pool2D DRAM] Created output tensor: %ux%ux%ux%u\n", batch_size, output_height, output_width, channels);
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
     // Currently return_indices is not supported for DRAM Max Pooling.
     Tensor dram_output_indices_tensor;
@@ -762,12 +761,9 @@ static std::vector<Tensor> pool2d_DRAM(
 
     // Determine slice configuration (automatic if not provided or num_slices==0)
     Op2DSliceConfig dram_slice_config;
-    printf("[Pool2D DRAM] About to determine slice config: has_value=%d\n", dram_slice_config_.has_value());
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
-        printf("[Pool2D DRAM] Using manual config: num_slices=%u\n", dram_slice_config_.value().num_slices);
         dram_slice_config = dram_slice_config_.value();
     } else {
-        printf("[Pool2D DRAM] Calling determine_slice_config()...\n");
         dram_slice_config = op_slicing::determine_slice_config(
             &pool_slice_attr,
             ttnn::Shape{batch_size, input_h, input_w, channels},
@@ -775,15 +771,10 @@ static std::vector<Tensor> pool2d_DRAM(
             dram_slice_config_,
             output_layout,
             input_tensor_on_device.device());
-        printf(
-            "[Pool2D] Auto determined DRAM Slice Config as num_slices=%u, slice_type=%s\n",
-            dram_slice_config.num_slices,
-            dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "HEIGHT" : "WIDTH");
     }
 
     // If automatic determination resulted in num_slices=1, use L1 path for efficiency
     if (dram_slice_config.num_slices == 1) {
-        printf("[Pool2D DRAM] num_slices=1, falling back to L1 path for efficiency\n");
         if (deallocate_input) {
             input_tensor_on_device.deallocate(true);
         }
@@ -813,7 +804,6 @@ static std::vector<Tensor> pool2d_DRAM(
             config_tensor_in_dram);
     }
 
-    printf("[Pool2D DRAM] About to run sliced op with num_slices=%u\n", dram_slice_config.num_slices);
     TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than zero for DRAM slicing.");
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, output_tensors, &pool_slice_attr, dram_slice_config);
@@ -876,11 +866,6 @@ static std::vector<Tensor> pool2d(
     const Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false) {
     auto exec_path = determine_pool2d_execution_path(input_tensor, dram_slice_config);
-    printf(
-        "[Pool2D] Execution path: %s (input in DRAM=%d, slice_config.has_value=%d)\n",
-        exec_path == Pool2dExecutionPath::L1 ? "L1" : "DRAM",
-        input_tensor.memory_config().is_dram(),
-        dram_slice_config.has_value());
     if (exec_path == Pool2dExecutionPath::L1) {
         return pool2d_L1(
             input_tensor,

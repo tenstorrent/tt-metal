@@ -574,10 +574,6 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
     uint32_t halo_output_size = precise_halo_output_size * input_datum_size;
 
-    // Calculate CB usage for pool operation using existing function
-    // Create output memory config (same sharding as input for pool)
-    auto output_memory_config = input_memory_config;
-
     uint32_t pool_cb_usage = calculate_L1_usage(
         dtype,
         sliding_window_config.channels,
@@ -592,7 +588,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         slice_output_height,
         slice_output_width,
         input_memory_config,
-        output_memory_config,
+        input_memory_config,
         pool_type,
         count_include_pad,
         divisor_override,
@@ -602,7 +598,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     // Calculate output tensor allocation size
     // Output is allocated per core, similar to input
-    auto output_shard_shape = output_memory_config.shard_spec().value().shape;
+    auto output_shard_shape = input_memory_config.shard_spec().value().shape;
     uint32_t output_datum_size = input_datum_size;  // Pool output has same dtype as input
     uint32_t output_tensor_size = output_shard_shape[0] * output_shard_shape[1] * output_datum_size;
 
