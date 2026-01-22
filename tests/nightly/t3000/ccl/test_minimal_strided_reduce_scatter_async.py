@@ -32,6 +32,7 @@ class ReduceScatterTestConfig:
     use_strided: bool
     verify_output_shape: bool
     verify_output_pcc: bool
+    small_random_ints: bool
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -54,6 +55,7 @@ def run_reduce_scatter_impl(
     num_iters=1,
     enable_trace=True,
     ones_tensor=False,
+    small_random_ints=False,
     mem_config_intermediate=None,
     cluster_axis=None,
     use_barrier=False,
@@ -148,6 +150,9 @@ def run_reduce_scatter_impl(
         rs_global_input_shape[dim] *= num_devices
         if ones_tensor:
             rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
+        elif small_random_ints:
+            # Random integers from {0, 1, 2, 3} for easier debugging
+            rs_input_tensor = torch.randint(0, 4, rs_global_input_shape).bfloat16()
         else:
             rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
@@ -279,6 +284,11 @@ def run_reduce_scatter_impl(
                 tt_output_tensor = tt_output_chunks[device_id]
                 torch_output_tensor = torch_rs_out_tensor[device_id]
 
+                # print(f"iteration {i}, device {device_id}")
+                # print(f"tt_output_tensor: {tt_output_tensor}")
+                # print(f"torch_output_tensor: {torch_output_tensor}")
+                # print(f"--------------------------------")
+
                 eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
                 logger.info(f"{output}, device {device_id}, iteration {i}")
 
@@ -312,6 +322,7 @@ def run_reduce_scatter_impl(
                 use_strided=False,
                 verify_output_shape=True,
                 verify_output_pcc=True,
+                small_random_ints=False,
             ),
             id="new_standard_implementation",
         ),
@@ -329,6 +340,7 @@ def run_reduce_scatter_impl(
                 use_strided=False,
                 verify_output_shape=True,
                 verify_output_pcc=True,
+                small_random_ints=False,
             ),
             id="experimental_standard_implementation",
         ),
@@ -366,23 +378,24 @@ def run_reduce_scatter_impl(
         #     ),
         #     id="experimental_strided_minimal_shape_check",
         # ),
-        pytest.param(
-            ReduceScatterTestConfig(
-                rs_input_shape=[1, 1, 64, 512],
-                dim=3,
-                layout=ttnn.TILE_LAYOUT,
-                rs_input_dtype=ttnn.bfloat16,
-                use_new=False,
-                enable_trace=False,
-                num_iters=1,
-                use_barrier=True,
-                use_persistent_buffers=True,
-                use_strided=True,
-                verify_output_shape=True,
-                verify_output_pcc=False,
-            ),
-            id="experimental_strided_minimal_shape_check_1",
-        ),
+        # pytest.param(
+        #     ReduceScatterTestConfig(
+        #         rs_input_shape=[1, 1, 64, 512],
+        #         dim=3,
+        #         layout=ttnn.TILE_LAYOUT,
+        #         rs_input_dtype=ttnn.bfloat16,
+        #         use_new=False,
+        #         enable_trace=False,
+        #         num_iters=1,
+        #         use_barrier=True,
+        #         use_persistent_buffers=True,
+        #         use_strided=True,
+        #         verify_output_shape=True,
+        #         verify_output_pcc=False,
+        #         small_random_ints=False,
+        #     ),
+        #     id="experimental_strided_minimal_shape_check_1",
+        # ),
         pytest.param(
             ReduceScatterTestConfig(
                 rs_input_shape=[1, 1, 64, 512],
@@ -397,9 +410,28 @@ def run_reduce_scatter_impl(
                 use_strided=True,
                 verify_output_shape=True,
                 verify_output_pcc=True,
+                small_random_ints=False,
             ),
             id="experimental_strided_minimal_correctness_check_1",
         ),
+        # pytest.param(
+        #     ReduceScatterTestConfig(
+        #         rs_input_shape=[8, 1, 64, 512],
+        #         dim=3,
+        #         layout=ttnn.TILE_LAYOUT,
+        #         rs_input_dtype=ttnn.bfloat16,
+        #         use_new=False,
+        #         enable_trace=False,
+        #         num_iters=1,
+        #         use_barrier=True,
+        #         use_persistent_buffers=True,
+        #         use_strided=True,
+        #         verify_output_shape=True,
+        #         verify_output_pcc=False,
+        #         small_random_ints=False,
+        #     ),
+        #     id="experimental_strided_minimal_shape_check_2",
+        # ),
         pytest.param(
             ReduceScatterTestConfig(
                 rs_input_shape=[8, 1, 64, 512],
@@ -413,9 +445,10 @@ def run_reduce_scatter_impl(
                 use_persistent_buffers=True,
                 use_strided=True,
                 verify_output_shape=True,
-                verify_output_pcc=False,
+                verify_output_pcc=True,
+                small_random_ints=True,
             ),
-            id="experimental_strided_minimal_shape_check_2",
+            id="experimental_strided_minimal_correctness_check_2",
         ),
     ],
 )
@@ -466,6 +499,7 @@ def test_strided_reduce_scatter_async(
         use_strided,
         verify_output_shape,
         verify_output_pcc,
+        small_random_ints,
     ) = astuple(test_config)
 
     run_reduce_scatter_impl(
@@ -482,6 +516,7 @@ def test_strided_reduce_scatter_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
+        small_random_ints=small_random_ints,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
         use_new=use_new,
