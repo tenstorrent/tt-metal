@@ -841,13 +841,10 @@ def test_run_max_pool_low_rank(rank, device):
 
     # Create input tensor based on rank
     if rank == 4:
-        test_shape = [1, 112, 112, 1]
         torch_test_input = torch_input_nhwc
     elif rank == 3:
-        test_shape = [112, 112, 1]
         torch_test_input = torch_input_nhwc.squeeze(0)  # Remove batch dim
     else:  # rank == 2
-        test_shape = [112, 112]
         torch_test_input = torch_input_nhwc.squeeze(0).squeeze(-1)  # Remove batch and channel dims
 
     # Convert to ttnn tensor
