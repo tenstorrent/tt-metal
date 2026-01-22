@@ -214,7 +214,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    // DeviceZoneScopedN("GO");
+    DeviceZoneScopedN("GO");
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -364,9 +364,17 @@ void kernel_main() {
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
-        // DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         {
-            // DeviceZoneScopedN("GET_CMD");
+            DeviceZoneScopedN("SET-telem-push");
+            if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
+                uint64_t telemetry_terminate_addr = get_noc_addr_helper(
+                    perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
+                dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, TELEMETRY_STATE_PUSH, my_noc_index);
+            }
+        }
+        {
+            DeviceZoneScopedN("GET_CMD");
             cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
         }
 
@@ -379,12 +387,12 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
                 // Signal local TRISC to terminate
-                perf_telemetry_mailbox->telemtery_state = 1;
+                perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_TERMINATE;
                 // Signal remote telemetry core to terminate (if configured)
                 if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
                     uint64_t telemetry_terminate_addr = get_noc_addr_helper(
                         perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
-                    dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, 1, my_noc_index);
+                    dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, TELEMETRY_STATE_TERMINATE, my_noc_index);
                 }
                 done = true;
                 break;

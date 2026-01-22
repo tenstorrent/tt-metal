@@ -117,9 +117,27 @@ __attribute__((noinline)) bool perf_telemetry_push() {
 }
 
 void kernel_main() {
-    perf_telemetry_mailbox->telemtery_state = 0;
-    // Run telemetry push loop until terminate signal is received
-    while (perf_telemetry_mailbox->telemtery_state == 0) {
-        perf_telemetry_push();
+    // Initialize to idle state - wait for external trigger to push
+    perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_IDLE;
+
+    // Main telemetry loop - service different states
+    while (true) {
+        TelemetryState state = static_cast<TelemetryState>(perf_telemetry_mailbox->telemetry_state);
+
+        switch (state) {
+            case TELEMETRY_STATE_IDLE:
+                // Wait for initialization - skip this iteration
+                continue;
+
+            case TELEMETRY_STATE_PUSH:
+                // Push telemetry data, then go back to idle
+                perf_telemetry_push();
+                perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_IDLE;
+                break;
+
+            case TELEMETRY_STATE_TERMINATE:
+                // Exit the kernel
+                return;
+        }
     }
 }

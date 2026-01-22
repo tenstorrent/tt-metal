@@ -1320,12 +1320,12 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         uint32_t telemetry_mailbox_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
             dev_msgs::perf_telemetry_config_t::Field::telemetry_mailbox_addr);
 
-        // Calculate mailbox address for telemtery_state field on telemetry core
-        uint32_t telemtery_state_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
-            dev_msgs::perf_telemetry_config_t::Field::telemtery_state);
+        // Calculate mailbox address for telemetry_state field on telemetry core
+        uint32_t telemetry_state_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
+            dev_msgs::perf_telemetry_config_t::Field::telemetry_state);
         uint32_t telemetry_core_state_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset +
-            telemtery_state_offset;
+            telemetry_state_offset;
 
         // Write to dispatch_s core's mailbox
         uint32_t dispatch_s_mailbox_base =

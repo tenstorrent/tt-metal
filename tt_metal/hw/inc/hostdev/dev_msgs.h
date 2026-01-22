@@ -79,11 +79,18 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
+// Telemetry state enum for D2H socket streaming kernel
+enum TelemetryState : uint32_t {
+    TELEMETRY_STATE_IDLE = 0,       // Waiting for initialization, skip iteration
+    TELEMETRY_STATE_PUSH = 1,       // Actively pushing telemetry data
+    TELEMETRY_STATE_TERMINATE = 2,  // Signal to terminate the kernel
+};
+
 // Perf telemetry configuration for D2H socket streaming
 // Placed before profiler_msg_t in mailboxes_t, using space freed from profiler control_vector reduction
 struct perf_telemetry_config_t {
     volatile uint32_t config_buffer_addr;      // Address of D2H socket config buffer in L1
-    volatile uint32_t telemtery_state;         // Signal telemetry state (0=run, 1=terminate)
+    volatile uint32_t telemetry_state;         // Current telemetry state (TelemetryState enum)
     volatile uint32_t telemetry_core_noc_xy;   // NOC XY encoding of telemetry core (for remote terminate)
     volatile uint32_t telemetry_mailbox_addr;  // Mailbox address on telemetry core (for remote terminate)
 };
