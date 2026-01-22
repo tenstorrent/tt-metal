@@ -192,7 +192,7 @@ def run_deepseek_moe_reduce_scatter_impl(
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
-@pytest.mark.parametrize("enable_trace, num_iters", [(True, 5)])
+@pytest.mark.parametrize("enable_trace, num_iters", [(True, 10)])
 def test_deepseek_moe_reduce_scatter(
     mesh_device,
     dtype,

@@ -102,7 +102,18 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
                 ttnn.BufferType.L1,
                 ttnn.NdShardSpec(
                     ttnn.Shape([1, 1, 32, 128]),
-                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))]),
+                    ttnn.CoreRangeSet(
+                        [
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 0)),
+                            # ttnn.CoreRange(ttnn.CoreCoord(7, 5), ttnn.CoreCoord(7, 5)), # hypothetical final core
+                        ]
+                    ),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
                 ),
@@ -129,7 +140,7 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
-@pytest.mark.parametrize("enable_trace, num_iters", [(True, 5)])
+@pytest.mark.parametrize("enable_trace, num_iters", [(True, 10)])
 def test_deepseek_moe_reduce_scatter_async(
     mesh_device,
     dtype,

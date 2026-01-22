@@ -25,7 +25,28 @@ using ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::
 
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
-CoreCoord choose_additional_core(MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected) {
+CoreCoord choose_additional_core(
+    MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected, uint32_t clamped_num_links) {
+    /*
+     * - optimal core to use as the additional core (when necessary), so that each used link has both a forward and
+     * backward worker
+     * - respective core is only optimal when the optimal shard grid is used for the input tensors
+     */
+    constexpr std::array optimal_supplemental_core_per_link = {
+        CoreCoord(2, 5),
+        CoreCoord(3, 5),
+        CoreCoord(6, 5),
+        CoreCoord(7, 5),
+    };
+
+    // try optimal core first
+    CoreCoord optimal_supplemental_core = optimal_supplemental_core_per_link.at(clamped_num_links - 1);
+    if (std::find(cores_already_selected.begin(), cores_already_selected.end(), optimal_supplemental_core) ==
+        cores_already_selected.end()) {
+        return optimal_supplemental_core;
+    }
+
+    // try to find any other available core
     auto available_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, mesh_device->get_sub_device_ids().at(0));
     for (const auto& cr : available_cores.ranges()) {
@@ -43,14 +64,6 @@ CoreCoord choose_additional_core(MeshDevice* mesh_device, const std::vector<Core
     }
 
     TT_FATAL(false, "deepseek_moe_reduce_scatter requires an even number of worker cores");
-
-    // TODO: (GR) pick optimal cores for the different cases (which link the core is getting added to)
-    // const std::vector<CoreCoord> supplemental_cores = {
-    //     CoreCoord(7, 0),
-    //     CoreCoord(7, 0),
-    //     CoreCoord(7, 0),
-    //     CoreCoord(7, 0),
-    // };
 }
 
 std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
@@ -69,7 +82,7 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     // always need a forward and backward core for each link being used (for in op synchronization), even if the forward
     // worker isn't being used for data transfer due to an odd number of shards
     if (num_shards % 2 != 0) {
-        worker_cores.emplace_back(choose_additional_core(mesh_device, worker_cores));
+        worker_cores.emplace_back(choose_additional_core(mesh_device, worker_cores, clamped_num_links));
     }
 
     std::vector<CoreRange> worker_core_ranges;

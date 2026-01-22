@@ -140,8 +140,6 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{pre_op_barrier_semaphore_noc_address, 1, false},
         unicast_num_hops);
 
-    // TODO: (GR) no_flush causing bad pcc on 3+ links for some reason, investigate after packet fusion
-
     // set state for op semaphore
     uint64_t op_semaphore_noc_address = safe_get_noc_addr(op_semaphore_noc0_x, op_semaphore_noc0_y, op_semaphore, 0);
     fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::All>(
