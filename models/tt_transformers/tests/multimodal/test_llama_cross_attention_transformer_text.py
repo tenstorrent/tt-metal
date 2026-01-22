@@ -8,7 +8,7 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForVision2Seq
-from transformers.models.mllama.modeling_mllama import MllamaTextModel
+from transformers.models.mllama.modeling_mllama import MllamaForCausalLM
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
@@ -107,8 +107,8 @@ def test_cross_attention_transformer_text_inference(
     config._attn_implementation = "sdpa"
     config.text_config._attn_implementation = "sdpa"
     config.text_config.num_hidden_layers = 2
-    config.text_config.cross_attention_layers = [1]  # [3,8]
-    reference_model = MllamaTextModel(config)
+    config.text_config.cross_attention_layers = [0]  # [3,8]
+    reference_model = MllamaForCausalLM.from_pretrained(model_repo_name, torch_dtype="auto", config=config)  # (config)
     reference_model.to(torch.bfloat16)
     reference_model.eval()
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
@@ -127,12 +127,23 @@ def test_cross_attention_transformer_text_inference(
     weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
     # partial_state_dict = weights_remover(partial_state_dict,"vision_model")
     # partial_state_dict = weights_remover(partial_state_dict,"multi_modal_projector")
-    # import re
-    # for k in partial_state_dict.keys():
-    #     found = re.search(r"\d+",k)
-    #     if found:
-    #         if int(k[found.start():found.end()])>config.text_config.num_hidden_layers-1:
-    #             partial_state_dict = weights_remover(partial_state_dict,k[found.start():found.end()])
+    import re
+
+    for k in partial_state_dict.keys():
+        found = re.search(r"\d+", k)
+        if found:
+            if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
+                partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
+
+    rename = lambda k: (
+        k.replace(".layers.0.", ".layers.1.")
+        if ".layers.0." in k
+        else k.replace(".layers.3.", ".layers.0.")
+        if ".layers.3." in k
+        else k
+    )
+
+    partial_state_dict = {rename(k): v for k, v in partial_state_dict.items()}
 
     reference_model.load_state_dict(partial_state_dict, strict=False)
     torch.manual_seed(41)
@@ -159,34 +170,34 @@ def test_cross_attention_transformer_text_inference(
     """
     Test compute_xattn_kv_cache
     """
-    # xattn_caches = torch.stack(
-    #     [layer.compute_xattn_kv_cache(vision_tokens) for layer in reference_model.cross_attention_layers]
-    # )
-    with torch.no_grad():
-        T = reference_model.forward(
-            torch.ones((batch, text_seq_len), dtype=torch.long),
-            attention_mask=None,
-            cross_attention_states=vision_tokens.to(torch.bfloat16),
-            cross_attention_mask=None,
-            full_text_row_masked_out_mask=None,
-            use_cache=True,  # to also get past_key_values
-            output_hidden_states=False,
-            output_attentions=False,
-            return_dict=True,
-        )
+    xattn_caches = torch.stack(
+        [layer.compute_xattn_kv_cache(vision_tokens) for layer in reference_model_meta.cross_attention_layers]
+    )
+    # with torch.no_grad():
+    #     T = reference_model.forward(
+    #         torch.ones((batch, text_seq_len), dtype=torch.long),
+    #         attention_mask=None,
+    #         cross_attention_states=vision_tokens.to(torch.bfloat16),
+    #         cross_attention_mask=None,
+    #         full_text_row_masked_out_mask=None,
+    #         use_cache=True,  # to also get past_key_values
+    #         output_hidden_states=False,
+    #         output_attentions=False,
+    #         return_dict=True,
+    #     )
     # unstack layers
-    # pt_xattn_cache_chunks = torch.chunk(xattn_caches, len(reference_model.cross_attention_layers), dim=0)
-    # # unstack k/v
-    # pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
-    # pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
-    # pt_xattn_cache_chunks = [
-    #     x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
-    # ]
+    pt_xattn_cache_chunks = torch.chunk(xattn_caches, len(reference_model_meta.cross_attention_layers), dim=0)
+    # unstack k/v
+    pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
+    pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
     pt_xattn_cache_chunks = [
-        kv
-        for i in reference_model.model.cross_attention_layers
-        for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
     ]
+    # pt_xattn_cache_chunks = [
+    #     kv
+    #     for i in reference_model.model.cross_attention_layers
+    #     for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
+    # ]
     # Iterate over batch
     # Preallocate K and V caches
     tt_xattn_cache = tt_model.setup_cache(max_batch_size=batch)
@@ -240,37 +251,59 @@ def test_cross_attention_transformer_text_inference(
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        # h = reference_model.get_partially_trainable_embedding(tokens[:, position_ids])
+        h = reference_model_meta.get_partially_trainable_embedding(tokens[:, position_ids])
         Emb = reference_model.get_input_embeddings()
-        h = Emb(tokens[:, position_ids])
+        hh = Emb(tokens[:, position_ids])
 
         TEXT_ONLY = False
-
-        # logits = get_ref_model_logits(
-        #     i,
-        #     position_ids,
-        #     h,
-        #     xattn_mask,
-        #     full_text_mask,
-        #     xattn_caches,
-        #     text_only_inference=TEXT_ONLY,
-        # )
-        with torch.no_grad():
-            T1 = reference_model.forward(
+        # cache_position = torch.arange(seq_len, device=device) # prefill
+        # cache_position = torch.tensor([past_key_values[0][0].shape[-2]], device=device)
+        logits = get_ref_model_logits(
+            i,
+            position_ids,
+            h,
+            xattn_mask,
+            full_text_mask,
+            xattn_caches,
+            text_only_inference=TEXT_ONLY,
+        )
+        if mode == "prefill":
+            T = reference_model.forward(
                 # input_ids=tokens[:, position_ids],
                 attention_mask=None,
-                # position_ids = position_ids.unsqueeze(0).expand(batch, -1),
-                cross_attention_states=None,  # vision_tokens.to(torch.bfloat16),
+                position_ids=position_ids.unsqueeze(0).expand(batch, -1),
+                cross_attention_states=vision_tokens.to(torch.bfloat16),
                 cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
                 full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
-                past_key_values=T.past_key_values,
-                inputs_embeds=h,
-                # use_cache=True,          # to also get past_key_values
+                inputs_embeds=hh,
+                use_cache=True,  # to also get past_key_values
+                cache_position=torch.arange(seq_len),  # torch.tensor([T.past_key_values[0][0].shape[-2]]),
                 output_hidden_states=False,
                 output_attentions=False,
                 return_dict=True,
             )
-        logits = T1.logits
+            pt_xattn_cache_chunks = [
+                kv
+                for i in reference_model.model.cross_attention_layers
+                for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
+            ]
+        else:
+            T = reference_model.forward(
+                # input_ids=tokens[:, position_ids],
+                attention_mask=None,
+                position_ids=position_ids.unsqueeze(0).expand(batch, -1),
+                # cross_attention_states= vision_tokens.to(torch.bfloat16),
+                cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
+                full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
+                inputs_embeds=hh,
+                past_key_values=T.past_key_values,
+                use_cache=True,  # to also get past_key_values
+                cache_position=torch.tensor([T.past_key_values[0][0].shape[-2]]),
+                output_hidden_states=False,
+                output_attentions=False,
+                return_dict=True,
+            )
+        logits = T.logits
         # Prepare TT inputs
         if mode == "prefill":
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
@@ -428,9 +461,10 @@ def test_cross_attention_transformer_text_inference(
             pcc_required = decode_pcc_required
 
         passing, pcc_message = comp_pcc(logits, tt_out, pcc_required)
+        pcc_message = torch.corrcoef(torch.stack([logits.flatten(), tt_out.flatten()]))
         logger.info(comp_allclose(logits, tt_out))
         logger.info(f"PCC: {pcc_message}")
-        # assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
+        assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
         prev_pos = cur_pos
 
         if mode == "prefill":
