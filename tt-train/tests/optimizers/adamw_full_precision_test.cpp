@@ -189,31 +189,6 @@ private:
     xt::xarray<float> m_max_second_moment;  // amsgrad
 };
 
-struct ErrorMetrics {
-    float mean_error;
-    float max_error;
-    std::string name;
-};
-
-static ErrorMetrics compute_error_metrics(
-    const xt::xarray<float>& reference, const xt::xarray<float>& actual, const std::string& name) {
-    float sum_error = 0.0f;
-    float max_error = 0.0f;
-    size_t count = reference.size();
-
-    for (size_t i = 0; i < count; ++i) {
-        float error = std::abs(reference(i) - actual(i));
-        sum_error += error;
-        max_error = std::max(max_error, error);
-    }
-
-    float mean_error = sum_error / static_cast<float>(count);
-
-    fmt::print("{}: mean_error={:.6e}, max_error={:.6e}\n", name, mean_error, max_error);
-
-    return {mean_error, max_error, name};
-}
-
 static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t steps) {
     using namespace ttml;
 
@@ -283,12 +258,17 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     auto master_weights_tensor = device_master_weights.at("theta")->get_value(autograd::PreferredPrecision::FULL);
     auto device_master_weights_cpu = core::to_xtensor(master_weights_tensor);
 
-    auto metrics = compute_error_metrics(cpu_master_weights, device_master_weights_cpu, pc.name);
+    float sum_error = 0.0f;
+    float max_error = 0.0f;
+    for (size_t i = 0; i < cpu_master_weights.size(); ++i) {
+        float error = std::abs(cpu_master_weights.flat(i) - device_master_weights_cpu.flat(i));
+        sum_error += error;
+        max_error = std::max(max_error, error);
+    }
+    float mean_error = sum_error / static_cast<float>(cpu_master_weights.size());
 
-    EXPECT_LT(metrics.mean_error, 1e-7f)
-        << "AdamWFullPrecision master weights mean error should be small compared to CPU reference";
-    EXPECT_LT(metrics.max_error, 1e-6f)
-        << "AdamWFullPrecision master weights max error should be small compared to CPU reference";
+    EXPECT_LT(mean_error, 1e-7f);
+    EXPECT_LT(max_error, 1e-6f);
 
     autograd::ctx().close_device();
 }
