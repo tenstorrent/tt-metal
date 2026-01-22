@@ -58,11 +58,15 @@ inline void custom_mm_configure_mop(
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face = false) {
+    // Select MOV instruction based on output tile height (in0_tile_r_dim)
+    // For m=1: MOV_1_ROW, for m=4: MOV_4_ROWS
+    const bool use_mov_4_rows = (in0_tile_r_dim == 4);
+
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         14,
         // Lambda function to load reply buffer
-        [] {
+        [use_mov_4_rows] {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
@@ -71,10 +75,17 @@ inline void custom_mm_configure_mop(
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
-            TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
-            TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
-            TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 32);
-            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 48);
+            if (use_mov_4_rows) {
+                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
+                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
+                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
+                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
+            } else {
+                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
+                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
+                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 32);
+                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 48);
+            }
             TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
             TTI_ELWADD(3, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
         });
