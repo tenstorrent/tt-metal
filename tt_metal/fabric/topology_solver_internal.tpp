@@ -635,6 +635,8 @@ bool ConsistencyChecker::check_forward_consistency(
         }
 
         // Check if neighbor has at least one viable candidate among unused neighbors of global_idx
+        // Create temporary mapping once per neighbor (outside candidate loop) to avoid O(n) copies per candidate
+        std::vector<int> temp_mapping = mapping;
         bool has_viable_candidate = false;
 
         for (size_t candidate_global : graph_data.global_adj_idx[global_idx]) {
@@ -649,8 +651,7 @@ bool ConsistencyChecker::check_forward_consistency(
             }
 
             // Check local consistency for neighbor -> candidate_global
-            // Create temporary mapping to check (mapping parameter is const)
-            std::vector<int> temp_mapping = mapping;
+            // Modify the temporary mapping in place (restored on next iteration)
             temp_mapping[neighbor] = static_cast<int>(candidate_global);
 
             if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {

@@ -595,14 +595,12 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
-    // multi-host machines should be limited via rank bindings so should be ok
-    // FIXME: Change this
     const bool is_1d =
         this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
     const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
+    // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
     if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
         fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
     } else if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::T3K && total_num_chips % 8 == 0 && !is_1d) {
