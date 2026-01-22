@@ -6,6 +6,7 @@
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -38,8 +39,13 @@ void on_dispatch_timeout_detected();
 
 namespace {
 
+// Helper to check if running on mock device
+inline bool is_mock_device() {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+}
+
 bool wrap_ge(uint32_t a, uint32_t b) {
-    // SIgned Diff uses 2's Complement to handle wrap
+    // Signed Diff uses 2's Complement to handle wrap
     // Works as long as a and b are 2^31 apart
     int32_t diff = a - b;
     return diff >= 0;
@@ -47,30 +53,53 @@ bool wrap_ge(uint32_t a, uint32_t b) {
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
-template <typename FuncBody, typename FuncWait, typename OnTimeout>
+// GetProgress is optional - if provided, timeout only triggers if BOTH wait_condition is true AND no progress made
+template <typename FuncBody, typename FuncWait, typename OnTimeout, typename GetProgress>
 void loop_and_wait_with_timeout(
     const FuncBody& func_body,
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
-    std::chrono::duration<float> timeout_duration) {
+    std::chrono::duration<float> timeout_duration,
+    const GetProgress& get_progress) {
     if (timeout_duration.count() > 0.0f) {
-        auto start_time = std::chrono::high_resolution_clock::now();
+        auto last_progress_time = std::chrono::high_resolution_clock::now();
+        uint32_t last_progress_value = 0;
+        // We won't read progress value initially as most of the waits are expected to be shorter than progress update
+        // interval. Only long running operations will read progress value updates.
+        auto last_progress_update_time = std::chrono::high_resolution_clock::now();
+        auto progress_update_interval = std::chrono::milliseconds(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
-        do {
+        while (true) {
             func_body();
-            if (wait_condition()) {
-                // If somehow finished up the operation, we don't need to yield
-                std::this_thread::yield();
+
+            // Check if operation is finished
+            if (!wait_condition()) {
+                break;
+            }
+
+            // Check if progress should be updated
+            if (std::chrono::high_resolution_clock::now() - last_progress_update_time >= progress_update_interval) {
+                uint32_t current_progress = get_progress();
+
+                last_progress_update_time = std::chrono::high_resolution_clock::now();
+                if (current_progress != last_progress_value) {
+                    last_progress_value = current_progress;
+                    last_progress_time = std::chrono::high_resolution_clock::now();
+                }
             }
 
             auto current_time = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
+            auto elapsed = std::chrono::duration<float>(current_time - last_progress_time).count();
 
             if (elapsed >= timeout_duration.count()) {
                 on_timeout();
                 break;
             }
-        } while (wait_condition());
+
+            // Sleep briefly to avoid busy-waiting
+            std::this_thread::yield();
+        }
     } else {
         do {
             func_body();
@@ -79,19 +108,34 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) : device_id(device_id) {
-    this->completion_byte_addrs.resize(num_hw_cqs);
-    this->prefetcher_cores.resize(num_hw_cqs);
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+    device_id(device_id),
+    completion_byte_addrs(num_hw_cqs),
+    cq_to_event_locks(num_hw_cqs),
+    prefetcher_cores(num_hw_cqs),
+    prefetch_q_dev_ptrs(num_hw_cqs),
+    prefetch_q_dev_fences(num_hw_cqs) {
     this->prefetch_q_writers.reserve(num_hw_cqs);
     this->completion_q_writers.reserve(num_hw_cqs);
-    this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
-    this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
-    // Split hugepage into however many pieces as there are CQs
+    if (is_mock_device()) {
+        this->cq_size = 65536;
+        this->cq_sysmem_start = nullptr;
+        this->channel_offset = 0;
+        this->cq_to_event.resize(num_hw_cqs, 0);
+        this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0);
+        }
+        log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with stubs for mock device");
+        return;
+    }
+
+    // Real hardware initialization below
     ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-    char* hugepage_start =
-        (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+    char* hugepage_start = static_cast<char*>(
+        tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel));
     hugepage_start += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     this->cq_sysmem_start = hugepage_start;
 
@@ -174,11 +218,12 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
             prefetch_q_base + MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
                                   sizeof(DispatchSettings::prefetch_q_entry_type);
     }
-    std::vector<std::mutex> temp_mutexes(num_hw_cqs);
-    cq_to_event_locks.swap(temp_mutexes);
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return ++this->cq_to_event[cq_id];
+    }
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
 
@@ -202,18 +247,30 @@ void SystemMemoryManager::set_current_and_last_completed_event(
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        this->cq_to_event[cq_id] = 0;
+        return;
+    }
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] = 0;
     cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t val) {
+    if (is_mock_device()) {
+        this->cq_to_event[cq_id] += val;
+        return;
+    }
     cq_to_event_locks[cq_id].lock();
     this->cq_to_event[cq_id] += val;
     cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
+    if (is_mock_device()) {
+        this->cq_to_last_completed_event[cq_id] = event_id;
+        return;
+    }
     TT_ASSERT(
         wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
@@ -235,6 +292,9 @@ uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
 }
 
 uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return this->cq_to_last_completed_event[cq_id];
+    }
     cq_to_event_locks[cq_id].lock();
     uint32_t last_completed_event = this->cq_to_last_completed_event[cq_id];
     cq_to_event_locks[cq_id].unlock();
@@ -242,6 +302,10 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
     cq_interface.issue_fifo_wr_toggle = false;
@@ -250,6 +314,10 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_size = (issue_queue_size >> 4);
     cq_interface.issue_fifo_limit = (cq_interface.cq_start + cq_interface.offset + issue_queue_size) >> 4;
@@ -268,30 +336,47 @@ bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; 
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 65536;
+    }
     return this->cq_interfaces[cq_id].issue_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_limit(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 65536;
+    }
     return this->cq_interfaces[cq_id].issue_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_size(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 65536;
+    }
     return this->cq_interfaces[cq_id].completion_fifo_size << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 65536;
+    }
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
 
 uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;
+    }
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
-    } else {
-        return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
     }
+    return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;
+    }
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 
@@ -304,17 +389,29 @@ void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return 0;
+    }
     return this->cq_interfaces[cq_id].completion_fifo_rd_toggle;
 }
 
-uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
+uint32_t SystemMemoryManager::get_cq_size() const {
+    if (is_mock_device()) {
+        return 65536;
+    }
+    return this->cq_size;
+}
 
 ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
-    TT_ASSERT(cmd_size_B > 0, "Command size must be greater than 0");
+    if (is_mock_device()) {
+        thread_local std::array<char, 65536> dummy_buffer{};
+        return dummy_buffer.data();
+    }
+
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -349,6 +446,10 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
 }
 
 void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) {
+    if (is_mock_device()) {
+        return;
+    }
+
     // Currently read / write pointers on host and device assumes contiguous ranges for each channel
     // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
     // queue
@@ -369,7 +470,10 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
 // TODO: RENAME issue_queue_stride ?
 void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
-    TT_ASSERT(push_size_B > 0, "Push size must be greater than 0");
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
@@ -406,6 +510,10 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
 }
 
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {
+    if (is_mock_device()) {
+        return;
+    }
+
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
@@ -427,6 +535,10 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
 }
 
 void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         return;
     }
@@ -460,10 +572,14 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
+        // Get dispatch progress for timeout detection
+        auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
+
         auto timeout_duration =
             tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
 
-        loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
+        loop_and_wait_with_timeout(
+            fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
     };
 
     wait_for_fetch_q_space();
@@ -480,23 +596,20 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
+    if (is_mock_device()) {
+        return 0;
+    }
+
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     // Body of the operation to be timed out
-    auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
+    auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-
-        if (exit_condition.load()) {
-            return write_ptr_and_toggle;
-        }
-
-        return write_ptr_and_toggle;
     };
 
     // Condition to check if the operation should continue
@@ -514,16 +627,26 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
+    // Get dispatch progress for timeout detection
+    auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
+        return get_cq_dispatch_progress(this->device_id, cq_id);
+    };
+
     loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
+        get_dispatch_progress);
 
     return write_ptr_and_toggle;
 }
 
 void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return;
+    }
+
     if (this->bypass_enable) {
         return;
     }
@@ -533,12 +656,20 @@ void SystemMemoryManager::wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
 }
 
 void SystemMemoryManager::wrap_completion_queue_rd_ptr(const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return;
+    }
+
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
 }
 
 void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, const uint8_t cq_id) {
+    if (is_mock_device()) {
+        return;
+    }
+
     uint32_t data_read_B = num_pages_read * DispatchSettings::TRANSFER_PAGE_SIZE;
     uint32_t data_read_16B = data_read_B >> 4;
 
@@ -554,6 +685,10 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
 }
 
 void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
+    if (is_mock_device()) {
+        return;
+    }
+
     uint32_t max_command_size_B = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,

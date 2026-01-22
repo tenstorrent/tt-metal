@@ -97,14 +97,14 @@ void get_max_page_size_and_num_pages(
     uint32_t& num_pages,
     uint32_t& num_pages_w_per_receiver) {
     uint64_t half_row_bytes = static_cast<uint64_t>(num_tiles_w / 2) * tile_size;
-    TT_ASSERT(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
+    TT_FATAL(num_tiles_w % 2 == 0, "num_tiles_w {} must be divisible by 2", num_tiles_w);
 
     page_size = (8192 / tile_size) * tile_size;
     // Each receiver core receives half the data, so each receiver cores's block size is half of the total block size
     while (half_row_bytes % page_size != 0 && page_size > tile_size) {
         page_size -= tile_size;
     }
-    TT_ASSERT(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
+    TT_FATAL(page_size % tile_size == 0, "page_size must be a multiple of tile_size!");
     num_pages = num_tiles_w * num_tiles_h * tile_size / page_size;
     num_pages_w_per_receiver = half_row_bytes / page_size;
 }
@@ -112,11 +112,11 @@ void get_max_page_size_and_num_pages(
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& all_dram_reader_cores,
-    const CoreRangeSet& all_l1_receiver_cores,
+    const CoreRangeSet& /*all_l1_receiver_cores*/,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
-    uint32_t num_tiles_cb,
-    uint32_t num_tiles_per_core,
+    uint32_t /*num_tiles_cb*/,
+    uint32_t /*num_tiles_per_core*/,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
@@ -272,7 +272,7 @@ bool validation(
     std::vector<uint32_t>& input_vec,
     uint32_t num_cores,
     std::vector<CoreCoord>& all_cores,
-    uint32_t num_tiles_per_core,
+    uint32_t /*num_tiles_per_core*/,
     uint32_t cb_addr,
     uint32_t single_tile_size,
     uint32_t num_tiles_cb,
@@ -378,14 +378,13 @@ void get_optimal_dram_bank_to_reader_assignment(
 void get_l1_writer_core_coords_wormhole_b0(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // Place writers horizontally next to DRAM readers in logical space (no column harvesting for WH)
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
@@ -394,28 +393,26 @@ void get_l1_writer_core_coords_blackhole(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // Place writers horizontally next to DRAM readers in logical space (column harvesting enabled for BH incrementing
     // in logical space can lead to physical physical columns being skipped when placing writers next to readers)
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
 
 void get_l1_writer_core_coords_grayskull(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x, dram_reader_core.y + 1));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y + 1));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
@@ -473,7 +470,7 @@ int main(int argc, char** argv) {
         test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
 
         if (use_device_profiler) {

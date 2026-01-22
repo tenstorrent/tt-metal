@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_decode_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
@@ -12,11 +13,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_decode {
+namespace ttnn::prim {
 
 SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::SdpaDecodeProgramFactory{};
+    return SdpaDecodeProgramFactory{};
 }
 
 void SdpaDecodeDeviceOperation::validate_on_program_cache_hit(
@@ -281,8 +282,8 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             D);
 
         // Check valid seqlen
-        for (int i = 0; i < operation_attributes.cur_pos.size(); i++) {
-            TT_FATAL(operation_attributes.cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
+            TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
         }
     }
 
@@ -335,7 +336,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
+TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
@@ -352,7 +353,7 @@ spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t SdpaDecodeDeviceOperation::create_output_tensors(
+Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
@@ -383,11 +384,7 @@ tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         tensor_args.attention_sink);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_decode
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_return_value_t sdpa_decode(
+Tensor sdpa_decode(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,
@@ -407,7 +404,7 @@ ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_re
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v) {
-    using OperationType = ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation;
+    using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
         .paged_attention = paged_attention,

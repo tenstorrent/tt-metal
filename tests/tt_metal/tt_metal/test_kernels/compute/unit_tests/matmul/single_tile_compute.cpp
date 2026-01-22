@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -20,15 +21,20 @@ void MAIN {
     const uint32_t out_tile_index = 0;
     const bool transpose = false;
     mm_init(in0_cb, in1_cb, out_cb);
-    cb_reserve_back(out_cb, num_out_tiles);
+
+    experimental::CircularBuffer cb0(in0_cb);
+    experimental::CircularBuffer cb1(in1_cb);
+    experimental::CircularBuffer cb_out(out_cb);
+
+    cb_out.reserve_back(num_out_tiles);
     acquire_dst();
-    cb_wait_front(in0_cb, num_in0_tiles);
-    cb_wait_front(in1_cb, num_in1_tiles);
+    cb0.wait_front(num_in0_tiles);
+    cb1.wait_front(num_in1_tiles);
     matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
     pack_tile(0, out_cb);
-    cb_pop_front(in0_cb, num_in0_tiles);
-    cb_pop_front(in1_cb, num_in1_tiles);
+    cb0.pop_front(num_in0_tiles);
+    cb1.pop_front(num_in1_tiles);
     release_dst();
-    cb_push_back(out_cb, num_out_tiles);
+    cb_out.push_back(num_out_tiles);
 }
 }  // namespace NAMESPACE

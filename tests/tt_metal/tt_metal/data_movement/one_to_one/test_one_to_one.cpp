@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +39,7 @@ struct OneToOneConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToOneConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
 
     /* ================ SETUP ================ */
 
@@ -148,18 +149,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
         device, test_config.subordinate_core_coord, l1_base_address, bytes_per_transaction, packed_output);
 
     // Compare output with golden vector
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
-    return pcc;
+    return is_equal;
 }
 
 void directed_ideal_test(
@@ -246,7 +246,7 @@ void packet_sizes_test(
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},
     bool use_2_0_api = false) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);

@@ -51,6 +51,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -68,8 +69,7 @@ struct CBConfig {
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -126,10 +126,10 @@ void verify_cb_config(
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
-            if (!mesh_device->is_local(coord)) {
+            if (!mesh_device->impl().is_local(coord)) {
                 continue;
             }
-            auto* device = mesh_device->get_device(coord);
+            auto* device = mesh_device->impl().get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
                 for (const auto& core_coord : core_range) {
@@ -141,10 +141,10 @@ void verify_cb_config(
                         cb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
-                    for (uint32_t i = 0; i < golden_cb_config.size(); i++) {
-                        const uint32_t index = golden_cb_config[i].cb_id * sizeof(uint32_t);
-                        const uint32_t cb_num_pages = golden_cb_config[i].num_pages;
-                        const uint32_t cb_size = cb_num_pages * golden_cb_config[i].page_size;
+                    for (const auto& config : golden_cb_config) {
+                        const uint32_t index = config.cb_id * sizeof(uint32_t);
+                        const uint32_t cb_num_pages = config.num_pages;
+                        const uint32_t cb_size = cb_num_pages * config.page_size;
                         const bool addr_match = cb_config_vector.at(index) == cb_addr;
                         const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                         const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -257,8 +257,8 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
-            if (mesh_device_->is_local(device_coord)) {
-                IDevice* device = mesh_device_->get_device(device_coord);
+            if (mesh_device_->impl().is_local(device_coord)) {
+                IDevice* device = mesh_device_->impl().get_device(device_coord);
                 auto programs = utils::create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
@@ -558,12 +558,12 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
                 if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 5);
                     }
                 } else {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 6);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 6);
                     }
                 }
             }
@@ -768,18 +768,18 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     Finish(mesh_device_->mesh_command_queue());
 
     for (const auto& device_coord : devices_0) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_0);
     }
 
     for (const auto& device_coord : devices_1) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto* device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
 }

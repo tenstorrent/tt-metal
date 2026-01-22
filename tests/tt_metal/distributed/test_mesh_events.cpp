@@ -193,12 +193,12 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                         device_coord);
                     if (device_coord[0] <= (num_rows_in_workload - 1)) {
-                        for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (2 * iter + 5));
+                        for (auto val : dst_vec) {
+                            EXPECT_EQ(static_cast<float>(val), (2 * iter + 5));
                         }
                     } else {
-                        for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (iter + 2) * (iter + 3));
+                        for (auto val : dst_vec) {
+                            EXPECT_EQ(static_cast<float>(val), (iter + 2) * (iter + 3));
                         }
                     }
                 }
@@ -279,7 +279,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     auto buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
     // Initialize containers to store input and output data
     std::vector<std::vector<uint32_t>> input_shard_data = {};
-    std::vector<std::vector<MeshCommandQueue::ShardDataTransfer>> read_shards = {};
+    std::vector<std::vector<distributed::ShardDataTransfer>> read_shards = {};
     std::vector<std::vector<uint32_t>> output_shard_data = {};
 
     for (int i = 0; i < NUM_ITERS; i++) {
@@ -291,10 +291,8 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         read_shards.push_back({});
         for (const auto& device_coord : devices_0) {
             output_shard_data.push_back(std::vector<uint32_t>(input_shard_data.back().size()));
-            read_shards.back().push_back(MeshCommandQueue::ShardDataTransfer{
-                .shard_coord = device_coord,
-                .host_data = output_shard_data.back().data(),
-            });
+            read_shards.back().push_back(
+                distributed::ShardDataTransfer{device_coord}.host_data(output_shard_data.back().data()));
         }
     }
 

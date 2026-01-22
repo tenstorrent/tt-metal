@@ -80,7 +80,7 @@ struct CreateTensorParams {
 
 }  // namespace
 
-class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
+class CreateTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<CreateTensorTest>,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
@@ -105,7 +105,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 
 using CombinationInputParams =
     std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
-class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
+class EmptyTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<EmptyTensorTest>,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
 TEST_P(EmptyTensorTest, Combinations) {
@@ -129,7 +129,9 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
-    auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
+    auto tensor = tt::tt_metal::create_device_tensor(
+        ttnn::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
+        device_);
     EXPECT_EQ(tensor.logical_shape(), shape);
 
     test_utils::test_tensor_on_device(shape, tensor_layout, device_);

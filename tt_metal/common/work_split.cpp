@@ -39,7 +39,7 @@ std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
             num_cores = i;
         }
     }
-    if (request_even) {
+    if (request_even && num_cores > 1) {
         num_cores = num_cores - num_cores % 2;
     }
     uint32_t per_core_tiles_dim = num_tiles / num_cores;

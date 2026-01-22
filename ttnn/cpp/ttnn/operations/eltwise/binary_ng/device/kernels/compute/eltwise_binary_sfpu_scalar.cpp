@@ -15,14 +15,14 @@
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
+#include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -82,4 +82,3 @@ void MAIN {
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE

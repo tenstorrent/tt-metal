@@ -48,8 +48,7 @@ TUTORIALS_DATA_PATHS = {
 EXCLUDED_TUTORIALS = [
     "train_and_export_mlp.py",
     "train_and_export_cnn.py",
-    "ttnn_tracer_model.ipynb",  # GH issue: #34947
-    "ttnn_tracer_model.py",  # GH issue: #34947
+    "ttnn_tracer_model.py"
     # NOTE: Add tutorial file names here that should be excluded from tests
 ]
 

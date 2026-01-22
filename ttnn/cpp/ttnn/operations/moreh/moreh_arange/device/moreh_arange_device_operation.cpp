@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_arange_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -44,7 +45,7 @@ void MorehArangeOperation::validate_inputs(
 }
 
 MorehArangeOperation::program_factory_t MorehArangeOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 }
 

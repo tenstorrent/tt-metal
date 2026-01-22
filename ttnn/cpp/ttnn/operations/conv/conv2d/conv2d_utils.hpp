@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -16,7 +16,12 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::conv {
-using namespace conv2d;
+using ttnn::prim::Conv2dBlockConfig;
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dInputs;
+using ttnn::prim::Conv2dParallelizationConfig;
+using ttnn::prim::Conv2dParams;
+using ttnn::prim::Conv2dSliceConfig;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
@@ -169,7 +174,10 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
-    std::optional<uint32_t> act_block_h_override = std::nullopt);
+    std::optional<uint32_t> act_block_h_override = std::nullopt,
+    bool enable_channels_padding = true,
+    bool is_shard_height_tile_multiple = true,
+    bool is_shard_width_tile_multiple = true);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype);

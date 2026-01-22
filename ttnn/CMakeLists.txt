@@ -2,6 +2,8 @@
 # Build TTNN and TTNNCPP
 ####################################################################################################
 
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
+
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>")
 
@@ -83,9 +85,7 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
-        core/old_infra_device_operation.cpp
         core/reports.cpp
-        core/run_operation.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
@@ -214,8 +214,10 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
@@ -245,6 +247,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
@@ -307,6 +311,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
@@ -497,11 +502,9 @@ target_sources(
             api/ttnn/graph/levelized_graph.hpp
             api/ttnn/mesh_device_operation_adapter.hpp
             api/ttnn/mesh_device_operation_utils.hpp
-            api/ttnn/old_infra_device_operation.hpp
             api/ttnn/operation.hpp
             api/ttnn/operation_concepts.hpp
             api/ttnn/reports.hpp
-            api/ttnn/run_operation.hpp
             api/ttnn/tensor/host_buffer/functions.hpp
             api/ttnn/tensor/layout/alignment.hpp
             api/ttnn/tensor/layout/layout.hpp
@@ -514,6 +517,7 @@ target_sources(
             api/ttnn/tensor/tensor.hpp
             api/ttnn/tensor/tensor_attributes.hpp
             api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_ops.hpp
             api/ttnn/tensor/tensor_spec.hpp
             api/ttnn/tensor/tensor_utils.hpp
             api/ttnn/tensor/to_string.hpp
@@ -542,6 +546,7 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
+        cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
@@ -550,6 +555,7 @@ target_sources(
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/typecast.cpp
 )
@@ -596,6 +602,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
@@ -837,6 +844,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
+add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)

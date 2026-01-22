@@ -55,6 +55,18 @@ on:
         required: false
         type: boolean
         default: true
+      nightly-multi-card-model:
+        description: 'Select model to test (for multi-card demo tests only)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3.1-8b
+          - llama3.3-70b
+          - qwen3-32b
+          - flux.1-dev
+          - wan2.2-t2v-a14b
   workflow_call:
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
@@ -108,9 +120,8 @@ jobs:
           all_systems='[
             {"name": "Quietbox (4xP150) tests", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
             {"name": "DeskBox (2xP150) tests", "runner-label": "BH-DeskBox", "extra-tag": "pipeline-functional", "num_devices": 2, "key": "deskbox"},
-            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-perf", "num_devices": 8, "key": "loudbox"},
-            {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"},
-            {"name": "QuietBox 2 (2xP300) tests", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
+            {"name": "LoudBox (8xP150) tests", "runner-label": "BH-LoudBox", "extra-tag": "pipeline-functional", "num_devices": 8, "key": "loudbox"},
+            {"name": "P300 (1xP300) tests", "runner-label": "P300-viommu", "extra-tag": "pipeline-yyz2-lfc", "num_devices": 2, "key": "p300"}
           ]'
 
           # If schedule, include all systems
@@ -156,6 +167,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
+      model: ${{ inputs.nightly-multi-card-model || 'all' }}
   blackhole-multi-card-unit-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_unit_tests }}
     needs: [build-artifact, blackhole-multi-card-tests-matrix]
