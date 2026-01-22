@@ -85,7 +85,7 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
     num_devices = 0
     for tray in tray_to_pcie_device_mapping["device_mapping"]:
         num_devices += len(tray_to_pcie_device_mapping["device_mapping"][tray])
-    if tray_to_pcie_device_mapping["arch"] != "WORMHOLE_B0" or num_devices != 32:
+    if num_devices != 32:
         logger.error(
             "Customized splitting of PCIe devices across processes is currently supported only for WORMHOLE Galaxies"
         )
@@ -95,14 +95,14 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
 def generate_supported_rank_bindings():
     # Process Rank ID To Tray ID Mapping when spawning 2 processes on a WH Galaxy
     WH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
-        0: [1, 2],
-        1: [3, 4],
+        0: [1, 3],
+        1: [2, 4],
     }
     # Process Rank ID To Tray ID Mapping when spawning 4 processes on a WH Galaxy
     WH_GLX_QUAD_RANK_TO_TRAY_MAPPING = {
         0: [1],
-        1: [2],
-        2: [3],
+        1: [3],
+        2: [2],
         3: [4],
     }
     # Process Rank ID To Tray ID Mapping for 2x4 cyclic mesh configuration
