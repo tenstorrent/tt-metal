@@ -44,7 +44,9 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-struct overlayregister {};
+struct overlayregister {
+    static constexpr uint32_t REGISTER = 0U;
+};
 
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
@@ -598,7 +600,7 @@ struct EdmChannelWorkerInterface {
         connection_live_semaphore(),
         sender_sync_noc_cmd_buf(write_at_cmd_buf) {
             if constexpr(std::is_same_v<ConnectionSemaphorePtrType, overlayregister>) {
-                connection_live_semaphore = overlayregister{}; //0U;
+                write_stream_scratch_register(overlayregister::REGISTER, 0U);
             }
             else {
                 connection_live_semaphore = nullptr;
@@ -701,7 +703,7 @@ struct EdmChannelWorkerInterface {
 
     FORCE_INLINE uint32_t get_connection_live_semaphore() const {
         if constexpr (std::is_same_v<ConnectionSemaphorePtrType, overlayregister>) {
-            return read_stream_scratch_register(0U);
+            return read_stream_scratch_register(overlayregister::REGISTER);
         }
         else {
             return *connection_live_semaphore;
@@ -710,7 +712,7 @@ struct EdmChannelWorkerInterface {
 
     FORCE_INLINE void set_connection_live_semaphore(uint32_t const value) const {
         if constexpr (std::is_same_v<ConnectionSemaphorePtrType, overlayregister>) {
-            write_stream_scratch_register(0U, value);
+            write_stream_scratch_register(overlayregister::REGISTER, value);
         }
     }
 

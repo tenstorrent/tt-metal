@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "internal/ethernet/tunneling.h"
-//#include "api/debug/ring_buffer.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
@@ -2085,7 +2084,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            WATCHER_RING_BUFFER_PUSH(0UL);
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
@@ -2096,7 +2094,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
-            WATCHER_RING_BUFFER_PUSH(1UL);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
             // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
             // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
@@ -2668,10 +2665,11 @@ void kernel_main() {
     // Common runtime args:
     ///////////////////////
     // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
+
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
-    local_sender_channel_connection_semaphore_addrs[0U] = get_arg_val<uint32_t>(arg_idx++);
-//    local_sender_channel_connection_semaphore_addrs[0U] = 0U;
-//    arg_idx++;
+//    local_sender_channel_connection_semaphore_addrs[0U] = get_arg_val<uint32_t>(arg_idx++);
+    local_sender_channel_connection_semaphore_addrs[0U] = 0U;
+    arg_idx++;
     for (size_t i = 1UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
