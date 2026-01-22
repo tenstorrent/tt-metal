@@ -1799,6 +1799,10 @@ struct UnrollCopy<0> {
  * Read packet header from L1 buffer into local cache using raw 4B word reads
  * Manually unrolled at compile time for optimal performance
  *
+ * For line fabric with LowLatencyPacketHeaderT<0>:
+ * Caches only: routing fields, payload size, noc_send_type, src_ch_id (8B)
+ * Command fields are NOT cached - they are read directly from L1 when needed
+ *
  * @param l1_packet_header Pointer to packet header in L1 memory
  * @param cache_slot Cache slot to fill (0 or 1)
  */
@@ -1806,16 +1810,33 @@ template <typename PacketHeaderType>
 FORCE_INLINE void fill_packet_header_cache(volatile PacketHeaderType* l1_packet_header, uint8_t cache_slot) {
     router_invalidate_l1_cache<true>();
 
+    ASSERT(cache_slot < 2);
+
+#if defined(FABRIC_1D) || defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS)
+    // Selective caching for line fabric - only basic fields
+    volatile uint32_t* src = reinterpret_cast<volatile uint32_t*>(l1_packet_header);
+    uint32_t* dst = g_receiver_packet_header_cache[cache_slot];
+
+    // Always cache basic fields only
+    // Cache word at offset 40: contains payload_size_bytes(2B) + noc_send_type(1B) + src_ch_id(1B)
+    dst[10] = src[10];
+
+    // Cache word at offset 44: contains routing_fields.value(4B)
+    dst[11] = src[11];
+
+    // Note: command_fields are NOT cached - they are read directly from L1
+    // in execute_chip_unicast_to_local_chip() when needed
+#else
+    // Full caching for other fabric types
     constexpr uint32_t header_size_words = sizeof(PacketHeaderType) / sizeof(uint32_t);
     static_assert(header_size_words <= MAX_PACKET_HEADER_SIZE_WORDS, "Packet header too large for cache");
-
-    ASSERT(cache_slot < 2);
 
     volatile uint32_t* src = reinterpret_cast<volatile uint32_t*>(l1_packet_header);
     uint32_t* dst = g_receiver_packet_header_cache[cache_slot];
 
     // Manually unrolled copy - generates exactly header_size_words load/store pairs
     UnrollCopy<header_size_words>::copy(src, dst);
+#endif
 }
 
 /*

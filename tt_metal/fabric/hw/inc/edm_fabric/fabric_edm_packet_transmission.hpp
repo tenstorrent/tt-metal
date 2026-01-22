@@ -120,6 +120,7 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 
 // Since we unicast to local, we must omit the packet header
 // This function reads header fields from cache and uses L1 address for payload DMA
+// For line fabric: noc_send_type/payload/routing from cache, command_fields read directly from L1
 __attribute__((optimize("jump-tables")))
 #ifndef FABRIC_2D
 FORCE_INLINE
@@ -137,12 +138,23 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+
+#if defined(FABRIC_1D) || defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS)
+    // For line fabric: Always read command_fields directly from L1 (not cached)
+    const tt::tt_fabric::NocCommandFields& command_fields_ref =
+        *const_cast<const tt::tt_fabric::NocCommandFields*>(&packet_start_l1->command_fields);
+
+#define GET_COMMAND_FIELDS() command_fields_ref
+#else
+// For other fabric types: command_fields are fully cached
+#define GET_COMMAND_FIELDS() header.command_fields
+#endif
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            const auto dest_address = header.command_fields.unicast_write.noc_address;
+            const auto dest_address = GET_COMMAND_FIELDS().unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
@@ -154,9 +166,9 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
-            const auto increment = header.command_fields.unicast_seminc.val;
-            if (header.command_fields.unicast_seminc.flush) {
+            const uint64_t dest_address = GET_COMMAND_FIELDS().unicast_seminc.noc_address;
+            const auto increment = GET_COMMAND_FIELDS().unicast_seminc.val;
+            if (GET_COMMAND_FIELDS().unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
             noc_semaphore_inc<true>(
@@ -168,8 +180,8 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
-            const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
-            const auto value = header.command_fields.unicast_inline_write.value;
+            const auto dest_address = GET_COMMAND_FIELDS().unicast_inline_write.noc_address;
+            const auto value = GET_COMMAND_FIELDS().unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
@@ -179,7 +191,7 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
-            const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            const auto dest_address = GET_COMMAND_FIELDS().unicast_seminc_fused.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
@@ -189,9 +201,9 @@ FORCE_INLINE
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
 
-            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
-            const auto increment = header.command_fields.unicast_seminc_fused.val;
-            if (header.command_fields.unicast_seminc_fused.flush) {
+            const uint64_t semaphore_dest_address = GET_COMMAND_FIELDS().unicast_seminc_fused.semaphore_noc_address;
+            const auto increment = GET_COMMAND_FIELDS().unicast_seminc_fused.val;
+            if (GET_COMMAND_FIELDS().unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
             noc_semaphore_inc<true>(
@@ -202,7 +214,7 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
-            const auto& scatter = header.command_fields.unicast_scatter_write;
+            const auto& scatter = GET_COMMAND_FIELDS().unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
 
             // NOTE: when chunk_count < 4, chunk_size[n-2] can be used without calculating final_chunk_size.
@@ -257,6 +269,10 @@ FORCE_INLINE
             ASSERT(false);
         } break;
     };
+
+#if defined(FABRIC_1D) || defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS)
+#undef GET_COMMAND_FIELDS
+#endif
 }
 
 // Forward packet to local relay in UDM mode
