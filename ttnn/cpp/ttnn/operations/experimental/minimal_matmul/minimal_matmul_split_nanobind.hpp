@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <nanobind/nanobind.h>
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul::detail {
+namespace ttnn::operations::experimental::minimal_matmul_split::detail {
+namespace nb = nanobind;
+void bind_minimal_matmul_split(nb::module_& mod);
 
-void bind_minimal_matmul_split(nanobind::module_& mod);
-
-}  // namespace ttnn::operations::experimental::minimal_matmul::detail
+}  // namespace ttnn::operations::experimental::minimal_matmul_split::detail

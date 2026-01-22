@@ -16,9 +16,7 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::minimal_matmul::detail {
-
-namespace nb = nanobind;
+namespace ttnn::operations::experimental::minimal_matmul_split::detail {
 
 void bind_minimal_matmul_split(nb::module_& mod) {
     bind_registered_operation(
@@ -119,4 +117,4 @@ void bind_minimal_matmul_split(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()});
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::detail
+}  // namespace ttnn::operations::experimental::minimal_matmul_split::detail
