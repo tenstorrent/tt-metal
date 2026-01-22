@@ -34,7 +34,7 @@ void bind_create_qkv_heads_from_separate_tensors_template(nb::module_& mod, cons
                const std::optional<uint32_t> num_kv_heads,
                const bool transpose_k_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+               const std::optional<std::array<Tensor, 3>>& optional_output_tensors) {
                 return self(
                     input_tensor_q,
                     input_tensor_kv,
