@@ -413,7 +413,10 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
 TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
     for (const auto& mesh_device : devices_) {
         for (bool use_assembly : {true, false}) {
-            for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
+            // Test with 64-bit masks (low 32 bits, high 32 bits)
+            // mask_high is only used on Blackhole (64 CBs); Wormhole only has 32 CBs so mask_high is ignored
+            for (auto [mask_low, mask_high] :
+                 {std::make_pair(0xffffffffu, 0xffffffffu), std::make_pair(0xaaaaaaaau, 0xaaaaaaaau)}) {
                 CoreCoord core{0, 0};
                 distributed::MeshWorkload workload;
                 auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -434,7 +437,7 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
                         .defines = defines,
                         .opt_level = KernelBuildOptLevel::O2});
                 uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-                std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
+                std::vector<uint32_t> runtime_args{mask_low, mask_high, l1_unreserved_base};
                 SetRuntimeArgs(program, kernel, core, runtime_args);
                 workload.add_program(device_range, std::move(program));
                 this->RunProgram(mesh_device, workload);

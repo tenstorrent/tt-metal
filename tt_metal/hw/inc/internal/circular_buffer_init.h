@@ -176,6 +176,11 @@ inline void setup_remote_cb_interfaces(
     for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
         uint32_t config_addr = circular_buffer_config_addr[0];
         uint32_t page_size = circular_buffer_config_addr[1];
+        circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+        // Skip unconfigured remote CBs - config_addr will be 0 if no remote CB was configured at this index
+        if (config_addr == 0) {
+            continue;
+        }
         volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
         const bool is_sender = l1_remote_cb_config_addr[0];
@@ -209,7 +214,6 @@ inline void setup_remote_cb_interfaces(
             // Using posted semaphore inc
             resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc, nm, posted, cmd_buf);
         }
-        circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
     }
 }
 
