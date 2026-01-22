@@ -8,9 +8,6 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
-
 // ============================================================================
 // Persistent multicast sender helpers (from deepseek mcast.hpp)
 // ============================================================================

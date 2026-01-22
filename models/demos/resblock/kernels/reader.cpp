@@ -8,16 +8,12 @@
 
 #include <tools/profiler/kernel_profiler.hpp>
 
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
-
 template <uint32_t CbOut, uint32_t NumTiles>
 FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr) {
     DeviceZoneScopedN("mcast_reader_wait_for_mcast");
     cb_reserve_back(CbOut, NumTiles);
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
     cb_push_back(CbOut, NumTiles);
-    // tt::data_movement::common::print_bf16_pages(get_read_ptr(CbOut), get_tile_size(CbOut), NumTiles, 0);
     noc_semaphore_set(mcast_sender_semaphore_addr_ptr, 0);
 }
 
@@ -31,8 +27,6 @@ template <
 void gather(uint32_t receiver_data_addr, uint32_t offset) {
     DeviceZoneScopedN("gather");
     cb_wait_front(CbIn, NumTiles);
-
-    // tt::data_movement::common::print_bf16_pages(get_read_ptr(CbIn), get_tile_size(CbIn), NumTiles, 0);
 
     // Gather to receiver core (write and then signal using semaphore)
     const uint64_t mcast_receiver_noc_coord = get_noc_addr(MCastReceiverNocX, MCastReceiverNocY, 0);
@@ -78,10 +72,6 @@ void kernel_main() {
     cb_reserve_back(mm1_full_cb, num_tiles_k);
     cb_push_back(mm1_full_cb, num_tiles_k);
 
-    // DPRINT << "residual before first matmul:" << ENDL();
-    // tt::data_movement::common::print_bf16_pages(get_read_ptr(mm1_full_cb), get_tile_size(mm1_full_cb), num_tiles_k,
-    // 0);
-
     // Push full stacked weights for all layers: num_tiles_k * num_layers
     // Each layer will pop num_tiles_k tiles as it processes
     constexpr uint32_t total_weight_tiles = num_tiles_k * num_layers;
@@ -108,9 +98,6 @@ void kernel_main() {
                 mcast_receiver_semaphore_id>(mcast_receiver_base_address, gather_destination_tile_offset_bytes);
             // Wait for mcast to complete and then push back to mm2_full_cb which will start the second matmul
             wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
-            // DPRINT << "mm1_full_cb after gather:" << ENDL();
-            // tt::data_movement::common::print_bf16_pages(
-            // get_read_ptr(mm1_full_cb), get_tile_size(mm1_full_cb), num_tiles_k, 0);
         }
         {
             DeviceZoneScopedN("layer_gather_and_mcast_2");
