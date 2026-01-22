@@ -38,7 +38,7 @@ void MAIN {
 
     // Config for re-tilizing accumulated rows back to tile format for output
     using RetilizeAccumulatedRows =
-        TilizeConfig<InputCB<cb_intermed2>, OutputCB<out_cb_id>, PreviousCB<cb_in1>, TilizeFlags::DT_RECONFIG>;
+        TilizeConfig<InputCB<cb_intermed2>, OutputCB<out_cb_id>, TilizeFlags::DT_RECONFIG, PreviousCB<cb_in1>>;
 
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
@@ -78,7 +78,7 @@ void MAIN {
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
                 // Re-tilize accumulated rows to tile format for output
-                compute_kernel_lib::tilize<RetilizeAccumulatedRows>(onetile, 1, 1, 0, 0);
+                compute_kernel_lib::tilize<RetilizeAccumulatedRows>(onetile, 1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);

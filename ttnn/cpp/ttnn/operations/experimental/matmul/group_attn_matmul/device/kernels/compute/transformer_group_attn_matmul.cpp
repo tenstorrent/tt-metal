@@ -58,7 +58,7 @@ void MAIN {
 
     // Config for re-tilizing accumulated rows back to tile format for output
     using RetilizeAccumulatedRows = TilizeConfig<
-        InputCB<cb_intermed1>, OutputCB<out_cb_id>, PreviousCB<cb_in1>, TilizeFlags::DT_RECONFIG>;
+        InputCB<cb_intermed1>, OutputCB<out_cb_id>, TilizeFlags::DT_RECONFIG, PreviousCB<cb_in1>>;
 
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
@@ -163,7 +163,7 @@ void MAIN {
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
 
             // Re-tilize accumulated rows to tile format for output
-            compute_kernel_lib::tilize<RetilizeAccumulatedRows>(out_num_tiles, 1, 1, 0, 0);
+            compute_kernel_lib::tilize<RetilizeAccumulatedRows>(out_num_tiles, 1);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

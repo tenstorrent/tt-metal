@@ -18,6 +18,6 @@ void MAIN {
     compute_kernel_hw_startup(cb_id_in0, cb_id_out0);
     // Process the block in chunks to fit within L1 memory limits
     compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_id_in0>, OutputCB<cb_id_out0>>>(
-        tiles_per_chunk, per_core_block_cnt * num_chunks, 1, 0, 0);
+        tiles_per_chunk, per_core_block_cnt * num_chunks);
 }
 }  // namespace NAMESPACE

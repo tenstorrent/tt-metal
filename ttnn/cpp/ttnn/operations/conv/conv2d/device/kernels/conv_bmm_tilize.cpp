@@ -19,30 +19,22 @@
 
 #define DEBUG_PRINT 0
 
+// Helper for conv tilize operations using config-based API
+// CB indices are template parameters, flags computed from init/uninit bools
 #ifdef SPLIT_READER
-template <bool init_tilize = true, bool uninit_tilize = true>
-__attribute__((noinline)) void tilize_in(
+template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
+__attribute__((noinline)) void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
 #else
-template <bool init_tilize = true, bool uninit_tilize = true>
-void tilize_in(
+template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
+void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
 #endif
-    uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    // Uses fast tilize with DT variant (FAST | DT_RECONFIG)
-    // SKIP_INIT/SKIP_UNINIT are conditionally set based on template params
-    if constexpr (!init_tilize && !uninit_tilize) {
-        compute_kernel_lib::tilize<
-            TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_INIT | TilizeFlags::SKIP_UNINIT>(
-            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
-    } else if constexpr (!init_tilize) {
-        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_INIT>(
-            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
-    } else if constexpr (!uninit_tilize) {
-        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG | TilizeFlags::SKIP_UNINIT>(
-            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
-    } else {
-        compute_kernel_lib::tilize<TilizeFlags::FAST | TilizeFlags::DT_RECONFIG>(
-            in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
-    }
+    // Compute flags at compile time: base flags + conditional SKIP_INIT/SKIP_UNINIT
+    constexpr TilizeFlags flags = TilizeFlags::FAST | TilizeFlags::DT_RECONFIG |
+                                  (init_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_INIT) |
+                                  (uninit_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_UNINIT);
+
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<in_cb_id>, OutputCB<out_cb_id>, flags>>(
+        in_block_w, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -286,12 +278,15 @@ void MAIN {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader || split_reader_cb_shared>(
-                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        tilize_in<
+                            in0_pretilize_cb_id,
+                            tilized_in0_cb_id,
+                            true,
+                            !split_reader || split_reader_cb_shared>(in0_block_w, in0_num_subblocks_read);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            tilize_in<in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
+                                in0_block_w, in0_num_subblocks_read_last);
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -316,14 +311,14 @@ void MAIN {
                     }
 
                     if constexpr (!activation_reuse) {
-                        tilize_in<true, !split_reader>(
-                            in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        tilize_in<in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
+                            in0_block_w, in0_num_subblocks_read);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            tilize_in<in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
+                                in0_block_w, in0_num_subblocks_read_last);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<

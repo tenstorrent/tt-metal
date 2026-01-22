@@ -51,7 +51,7 @@ ALWI void UNTILIZE_TILES() {
 template <uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb>
 ALWI void TILIZE_ROWS(uint32_t num_tiles) {
     cb_wait_front(sync_cb, num_tiles);
-    compute_kernel_lib::tilize<TilizeConfig<InputCB<in0_cb>, OutputCB<out_cb>>>(num_tiles, 1, 1, 0, 0);
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<in0_cb>, OutputCB<out_cb>>>(num_tiles, 1);
     cb_pop_front(sync_cb, num_tiles);
 }
 

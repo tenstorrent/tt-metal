@@ -230,23 +230,32 @@ struct UntilizeConfig : UntilizeConfigBase {
  * Configuration for tilize operations.
  * Inherits from TilizeConfigBase; wrapper types provide named parameters.
  *
+ * Template parameter order optimized for common usage (Flags before PreviousCB):
+ *   - Most common: just InputCB + OutputCB
+ *   - Second common: with Flags (e.g., SKIP_WAIT, FAST)
+ *   - Least common: with PreviousCB (only needed for DT_RECONFIG)
+ *
  * Usage:
+ *   // Default (most common)
  *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(block_w, num_blocks);
  *
- *   // With DT reconfig:
- *   tilize<TilizeConfig<InputCB<new_cb>, OutputCB<cb_out>, PreviousCB<old_cb>,
- *                       TilizeFlags::DT_RECONFIG>>(block_w, num_blocks);
+ *   // With flags (no need to specify PreviousCB)
+ *   tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>, TilizeFlags::SKIP_WAIT>>(block_w, num_blocks);
+ *
+ *   // With DT reconfig (requires PreviousCB)
+ *   tilize<TilizeConfig<InputCB<new_cb>, OutputCB<cb_out>,
+ *                       TilizeFlags::DT_RECONFIG, PreviousCB<old_cb>>>(block_w, num_blocks);
  */
 template <
     typename InputCBT,
     typename OutputCBT,
-    typename PreviousCBT = PreviousCB<0>,
-    TilizeFlags Flags = TilizeFlags::NONE>
+    TilizeFlags Flags = TilizeFlags::NONE,
+    typename PreviousCBT = PreviousCB<0>>
 struct TilizeConfig : TilizeConfigBase {
     static constexpr uint32_t input_cb = ExtractInputCB<InputCBT>::value;
     static constexpr uint32_t output_cb = ExtractOutputCB<OutputCBT>::value;
-    static constexpr uint32_t previous_cb = ExtractPreviousCB<PreviousCBT>::value;
     static constexpr TilizeFlags flags = Flags;
+    static constexpr uint32_t previous_cb = ExtractPreviousCB<PreviousCBT>::value;
 };
 
 // =============================================================================

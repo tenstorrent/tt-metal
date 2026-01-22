@@ -159,11 +159,11 @@ void MAIN {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
-    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>>>(per_core_N, per_core_M, 1, 0, 0);
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>>>(per_core_N, per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
-    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>, PreviousCB<0>, TilizeFlags::SKIP_WAIT>>(
-        per_core_N, per_core_M, 1, 0, 0);
+    compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in_rm>, OutputCB<cb_in>, TilizeFlags::SKIP_WAIT>>(
+        per_core_N, per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
 #else

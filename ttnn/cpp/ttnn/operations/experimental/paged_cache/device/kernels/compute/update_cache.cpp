@@ -31,7 +31,7 @@ void MAIN {
 
     // Config for re-tilizing the updated cache (with data format reconfig)
     using RetilizeUpdatedCache =
-        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, PreviousCB<cache_cb>, TilizeFlags::DT_RECONFIG>;
+        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, TilizeFlags::DT_RECONFIG, PreviousCB<cache_cb>>;
 
     // Untilize the new input token
     compute_kernel_lib::untilize<UntilizeNewToken>(1);
@@ -47,7 +47,7 @@ void MAIN {
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
         // Writer updates the untilized cache with new token. Re-tilize the result.
-        compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, 1, 1, 0, 0);
+        compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, 1);
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }

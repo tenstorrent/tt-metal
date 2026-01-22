@@ -19,6 +19,6 @@ void MAIN {
 
     compute_kernel_hw_startup(cb_in, cb_out);
     compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_out>>>(
-        block_size_row, block_size_col * third_dim, 1, 0, 0);
+        block_size_row, block_size_col * third_dim);
 }
 }  // namespace NAMESPACE
