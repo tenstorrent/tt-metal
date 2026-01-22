@@ -80,6 +80,24 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def _ensure_tuple(shape):
+    """Convert shape to tuple, handling various input formats"""
+    if shape is None:
+        return None
+    if isinstance(shape, tuple):
+        return shape
+    if isinstance(shape, list):
+        return tuple(shape)
+    if isinstance(shape, dict):
+        # If it's still a dict at this point, something is wrong
+        raise ValueError(f"Shape should not be a dict at this point: {shape}")
+    # Handle any other iterable (but not strings)
+    if hasattr(shape, "__iter__") and not isinstance(shape, str):
+        return tuple(shape)
+    # If it's a single value or something unexpected, return as-is
+    return shape
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -100,16 +118,16 @@ def run(
     # Handle both sample suite (tuple) and model_traced suite (dict)
     if isinstance(input_shape, dict) and "self" in input_shape:
         # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = input_shape["self"]
-        shape_b = input_shape.get("other")  # May be None for scalar operations
+        shape_a = _ensure_tuple(input_shape["self"])
+        shape_b = _ensure_tuple(input_shape.get("other"))  # May be None for scalar operations
     else:
         # This is sample suite - use same shape for both inputs
-        if isinstance(input_shape, (tuple, list)):
-            shape_a = tuple(input_shape)
-            shape_b = tuple(input_shape)
-        else:
-            shape_a = input_shape
-            shape_b = input_shape
+        shape_a = _ensure_tuple(input_shape)
+        shape_b = _ensure_tuple(input_shape)
+
+    # Validate that either shape_b or scalar is provided (not both None)
+    if shape_b is None and scalar is None:
+        raise ValueError("Either shape_b or scalar must be provided for multiply operation")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -153,8 +171,7 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
     else:
         # Tensor-tensor operation: create second tensor
-        # Check if storage_type is HOST - if so, don't pass device to from_torch
-        is_host = storage_type and "HOST" in str(storage_type)
+        # Reuse is_host variable already computed above (no need to recompute)
 
         # Build from_torch arguments based on storage_type
         from_torch_kwargs = {

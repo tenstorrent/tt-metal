@@ -2,12 +2,12 @@ name: "ttnn - Run sweeps"
 
 run-name: >-
   ${{
-    github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' && 'ttnn - Run sweeps (Nightly)' ||
-    github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' && 'ttnn - Run sweeps (Comprehensive)' ||
-    github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' && 'ttnn - Run sweeps (Model Traced)' ||
-    github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' && 'ttnn - Run sweeps (Lead Models)' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' && 'ttnn - Run sweeps nightly' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' && 'ttnn - Run sweeps comprehensive' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' && 'ttnn - Run sweeps model traced' ||
+    github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' && 'ttnn - Run sweeps lead models' ||
     github.event.inputs.sweep_name && format('ttnn - Run sweeps ({0})', github.event.inputs.sweep_name) ||
-    'ttnn - Run sweeps (Scheduled)'
+    'ttnn - Run sweeps scheduled'
   }}
 
 on:

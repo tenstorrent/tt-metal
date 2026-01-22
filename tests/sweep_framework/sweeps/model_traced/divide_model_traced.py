@@ -41,6 +41,24 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def _ensure_tuple(shape):
+    """Convert shape to tuple, handling various input formats"""
+    if shape is None:
+        return None
+    if isinstance(shape, tuple):
+        return shape
+    if isinstance(shape, list):
+        return tuple(shape)
+    if isinstance(shape, dict):
+        # If it's still a dict at this point, something is wrong
+        raise ValueError(f"Shape should not be a dict at this point: {shape}")
+    # Handle any other iterable (but not strings)
+    if hasattr(shape, "__iter__") and not isinstance(shape, str):
+        return tuple(shape)
+    # If it's a single value or something unexpected, return as-is
+    return shape
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -60,17 +78,17 @@ def run(
     # Handle both sample suite (tuple) and model_traced suite (dict)
     if isinstance(input_shape, dict) and "self" in input_shape:
         # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = tuple(input_shape["self"]) if isinstance(input_shape["self"], (list, tuple)) else input_shape["self"]
+        shape_a = _ensure_tuple(input_shape["self"])
         shape_b_raw = input_shape.get("other")
-        shape_b = tuple(shape_b_raw) if isinstance(shape_b_raw, (list, tuple)) else shape_b_raw
+        shape_b = _ensure_tuple(shape_b_raw)
+
+        # Validate that 'other' exists for divide operations (always needs two tensors)
+        if shape_b is None:
+            raise ValueError("Divide operation requires two tensors - 'other' key missing from input_shape")
     else:
         # This is sample suite - use same shape for both inputs
-        if isinstance(input_shape, (tuple, list)):
-            shape_a = tuple(input_shape)
-            shape_b = tuple(input_shape)
-        else:
-            shape_a = input_shape
-            shape_b = input_shape
+        shape_a = _ensure_tuple(input_shape)
+        shape_b = _ensure_tuple(input_shape)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
