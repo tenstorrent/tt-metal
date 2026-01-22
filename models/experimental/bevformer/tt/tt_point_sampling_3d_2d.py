@@ -204,7 +204,6 @@ def point_sampling_3d_to_2d_ttnn(
     valid_y = ttnn.logical_and(
         (reference_points_cam_clamped[..., 1:2] >= 0.0), (reference_points_cam_clamped[..., 1:2] <= 1.0)
     )
-    valid_bounds = ttnn.logical_and(valid_x, valid_y)
 
     bev_mask = ttnn.logical_and(bev_mask, valid_x)
     bev_mask = ttnn.logical_and(bev_mask, valid_y)

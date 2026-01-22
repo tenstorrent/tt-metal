@@ -86,7 +86,6 @@ def test_ms_deformable_attention_forward(
     reference_points = torch.rand(batch_size, num_queries, num_levels, 2, dtype=torch.float32)
 
     indices = spatial_shapes.prod(1).cumsum(0)
-    level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
     # Convert tensors to ttnn format for ttnn model
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)

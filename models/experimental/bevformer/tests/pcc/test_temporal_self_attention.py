@@ -9,7 +9,6 @@ import pytest
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
 
 from models.experimental.bevformer.config.encoder_config import (
     get_preset_config,
@@ -69,7 +68,6 @@ def test_temporal_self_attention_forward(
     if preset_config is None:
         pytest.fail(f"Configuration '{config_name}' not found")
 
-    dataset_config = preset_config.dataset_config
     model_config = preset_config.model_config
 
     # Extract parameters from configs
@@ -81,11 +79,6 @@ def test_temporal_self_attention_forward(
     # BEV spatial shapes - single level for temporal self attention
     bev_spatial_shapes = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
     num_levels = len(bev_spatial_shapes)
-
-    # Create configuration from extracted parameters
-    config = DeformableAttentionConfig(
-        embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points, batch_first=True
-    )
 
     # --------------------------------------------------------------------------- #
     # Generate Inputs                                                             #

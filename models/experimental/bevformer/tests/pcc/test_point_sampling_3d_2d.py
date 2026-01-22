@@ -61,7 +61,7 @@ def create_sample_camera_matrices(num_cams):
         # Camera looks towards the origin (simplified)
         # Create rotation to look towards center
         look_dir = np.array([-cam_x, -cam_y, -cam_z])
-        look_dir = look_dir / np.linalg.norm(look_dir)
+        look_dir /= np.linalg.norm(look_dir)
 
         # Simplified rotation matrix (just use identity for testing)
         R = np.eye(3, dtype=np.float32)

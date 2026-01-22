@@ -9,7 +9,6 @@ import pytest
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import TTSpatialCrossAttention
 from models.experimental.bevformer.reference.spatial_cross_attention import SpatialCrossAttention
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
 
 from models.experimental.bevformer.config.encoder_config import (
     get_preset_config,
@@ -122,11 +121,6 @@ def test_spatial_cross_attention_forward(
     tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_level_start_index = ttnn.from_torch(
         level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-
-    # Create configuration from extracted parameters
-    config = DeformableAttentionConfig(
-        embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points, batch_first=True
     )
 
     # --------------------------------------------------------------------------- #
