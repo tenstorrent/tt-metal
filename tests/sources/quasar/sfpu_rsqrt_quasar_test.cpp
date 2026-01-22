@@ -42,6 +42,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     td_val.buf_desc_id     = buf_desc_id;
     td_val.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
+    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // If Dst fmt is 32b and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
@@ -164,6 +165,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
 
+    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
     _llk_pack_<p_pacr::PACK0>(params->DST_INDEX, 0);
