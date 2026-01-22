@@ -401,8 +401,10 @@ def test_gpt_oss_demo(
         users_row_sharded=users_row_sharded,
         long_context_mode=long_context_mode,
     )
-    if long_context_mode and ("120b" in model_args[0].model_name.lower()):
-        pytest.skip(f"Long-context mode currently not supported for {model_args[0].model_name} model.")
+    if long_context_mode:
+        pytest.skip(
+            f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
+        )
 
     # Create generator (match tt-transformers pattern)
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
