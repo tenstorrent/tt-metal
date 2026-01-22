@@ -68,35 +68,28 @@ def multi_scale_deformable_attn_ttnn(
         logger.info("MSDA Start")
 
     # Split value into a list of tensors for each level
-    # This separates features from different pyramid levels which may have different spatial resolutions
     value_list = ttnn.split(value, [H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
 
-    # Convert sampling_locations to normalized grid coordinates [-1, 1]
-    # TTNN grid_sample expects coordinates in [-1, 1] range where (-1, -1) is top-left and (1, 1) is bottom-right
-    # Input sampling_locations are in [0, 1] range, so we apply: coord_new = coord_old * 2 - 1
+    # Normalize sampling locations from [0,1] to [-1,1] for grid_sample
     sampling_grids = ttnn.mul(sampling_locations, 2.0)
     sampling_grids = ttnn.sub(sampling_grids, 1.0)
 
     sampling_value_list = []
     for level, (H_, W_) in enumerate(value_spatial_shapes):
-        # Reshape value tensor for bilinear sampling at current pyramid level
-        # Transform from [bs, H_*W_, num_heads, head_dim] to [bs*num_heads, H_, W_, head_dim]
-        # This groups all heads across batches and restores spatial dimensions for grid sampling
+        # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
         value_l_ = ttnn.to_layout(value_list[level], layout=ttnn.ROW_MAJOR_LAYOUT)
         value_l_ = ttnn.permute(value_l_, (0, 2, 1, 3))  # Move heads to dimension 1
         value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
 
-        # Prepare sampling coordinates for current level
-        # Extract sampling points for this specific pyramid level and reshape for grid_sample
         sampling_grid_l_ = sampling_grids[:, :, :, level, :, :]  # [bs, num_queries, num_heads, num_points, 2]
         sampling_grid_l_ = ttnn.to_layout(sampling_grid_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # Reorder dimensions to group by heads: [bs, num_heads, num_queries, num_points, 2]
-        sampling_grid_l_ = ttnn.permute(sampling_grid_l_, (0, 2, 1, 3, 4))
-        # Flatten for grid_sample which expects [N, H_out, W_out, 2] format
-        # Here N=bs*num_heads, H_out*W_out=num_queries*num_points, and we add singleton dimension
-        sampling_grid_l_ = ttnn.reshape(sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2))
+        sampling_grid_l_ = ttnn.permute(
+            sampling_grid_l_, (0, 2, 1, 3, 4)
+        )  # [bs, num_heads, num_queries, num_points, 2]
+        sampling_grid_l_ = ttnn.reshape(
+            sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2)
+        )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
 
-        # Perform bilinear sampling
         # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
         # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
         sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
@@ -112,27 +105,21 @@ def multi_scale_deformable_attn_ttnn(
 
         sampling_value_list.append(sampling_value_l_)
 
-    # Prepare attention weights for element-wise multiplication with sampled values
-    # Reshape from [bs, num_queries, num_heads, num_levels, num_points] to [bs*num_heads, 1, num_queries, num_levels*num_points]
-    # The singleton dimension allows broadcasting over head_dim during multiplication
+    # [bs, num_queries, num_heads, num_levels, num_points] -> [bs*num_heads, 1, num_queries, num_levels*num_points]
     attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))  # Move heads to dim 1
     attention_weights = ttnn.reshape(attention_weights, (bs * num_heads, 1, num_queries, num_levels * num_points))
 
     # Stack sampled values from all pyramid levels
-    # Combine values from different levels: list of tensors -> single tensor with level dimension
     stacked_values = ttnn.stack(
         sampling_value_list, dim=-2
     )  # (bs*num_heads, head_dim, num_queries, num_levels, num_points)
-    # Flatten level and point dimensions for attention weight application
+    # Flatten level and point dimensions
     stacked_values = ttnn.reshape(stacked_values, (bs * num_heads, head_dim, num_queries, num_levels * num_points))
 
-    # Apply attention weights to combine features from different levels and sampling points
-    # Element-wise multiplication: each feature dimension gets weighted by corresponding attention weight
     output = ttnn.mul(stacked_values, attention_weights)
-    # Aggregate across all sampling points and levels using weighted sum
+    # Aggregate across all sampling points and levels
     output = ttnn.sum(output, dim=-1)  # Final shape: (bs*num_heads, head_dim, num_queries)
 
-    # Reshape and transpose
     output = ttnn.reshape(output, (bs, num_heads * head_dim, num_queries))
     output = ttnn.permute(output, (0, 2, 1))  # [bs, num_queries, num_heads * head_dim]
 
@@ -183,12 +170,12 @@ class TTMSDeformableAttention:
 
     def forward(
         self,
-        query,  # ttnn tensor or torch.Tensor
-        value=None,  # Optional ttnn tensor
-        identity=None,  # Optional ttnn tensor
-        query_pos=None,  # Optional ttnn tensor
-        key_padding_mask=None,  # Optional ttnn tensor
-        reference_points=None,  # Optional ttnn tensor
+        query,
+        value=None,
+        identity=None,
+        query_pos=None,
+        key_padding_mask=None,
+        reference_points=None,
         spatial_shapes: Optional[torch.Tensor] = None,
         **kwargs,
     ):
@@ -292,55 +279,38 @@ class TTMSDeformableAttention:
             # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
             D = reference_points.shape[2]
 
-            # Convert spatial_shapes to ttnn for operations
             spatial_shapes_tt = ttnn.from_torch(
                 spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
             # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-            # Stack [width, height] for each level since sampling_offsets are in pixel coordinates
-            # Note: we swap H,W to W,H because offsets are in (x,y) format while spatial_shapes are (H,W)
             offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
 
-            # Convert reference_points to ttnn if it's not already
-            if not isinstance(reference_points, ttnn.Tensor):
-                reference_points = ttnn.from_torch(
-                    reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                )
-
-            # Expand offset_normalizer dimensions for broadcasting with sampling_offsets
             # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
             # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
             offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
             offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
-            # Normalize offsets: convert from pixel coordinates to [0,1] normalized coordinates
+
             sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 
-            # Expand reference_points to match sampling_offsets dimensions for broadcasting
             # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
-            # This allows each reference point to be broadcast across all heads, levels, and sampling points
             reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 3)  # Add level dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 4)  # Add point dimension
 
             # Reshape sampling_offsets to separate depth dimension for proper addition with reference_points
-            # From [bs*num_queries*num_heads, num_levels, num_points, 2] to match reference_points structure
-            # The num_points dimension is split into (num_points//D, D) to align with reference point depth levels
+            # From [bs*num_queries*num_heads, num_levels, num_points, 2]
             sampling_offsets = ttnn.reshape(
                 sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels, self.num_points // D, D, 2)
             )
-            # Compute final sampling locations by adding learned offsets to base reference points
-            # This enables deformable attention by allowing each query to sample from offset locations
+            # Compute final sampling locations
             sampling_locations = ttnn.add(reference_points_expanded, sampling_offsets)
             # Flatten back to standard format for multi-scale deformable attention
             sampling_locations = ttnn.reshape(
                 sampling_locations, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
             )
-
-        elif reference_points.shape[-1] == 4:
-            raise NotImplementedError("4D reference points not implemented")
         else:
-            raise ValueError(f"Reference points must have 2 or 4 dimensions, got {reference_points.shape[-1]}")
+            raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
 
         # Apply multi-scale deformable attention
         output = multi_scale_deformable_attn_ttnn(
