@@ -1,15 +1,9 @@
-name: "(Single-card) Frequent model and ttnn tests"
+name: "(T3K) T3000 nightly tests"
 
 on:
   workflow_dispatch:
-    inputs:
-      models-to-run:
-        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
-        default: "all"
-        type: string
-  workflow_call:
   schedule:
-    - cron: "0 5,14,23 * * *"
+    - cron: "0 21 * * *"
 
 jobs:
   build-artifact:
@@ -18,14 +12,13 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
       version: 22.04
-  fd-nightly:
+      build-wheel: true
+  t3000-nightly-tests:
     needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     secrets: inherit
+    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      models-to-run: ${{ inputs.models-to-run }}
