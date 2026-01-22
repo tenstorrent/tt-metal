@@ -14,6 +14,13 @@
 
 using namespace ckernel;
 
+namespace custom_mm {
+// Finalization instruction count: set during init, used during math
+// m=1, m=4: 10 instructions (4 MVMUL + 4 MOV + 2 ELWADD)
+// m=8: 14 instructions (4 MVMUL + 8 MOV + 2 ELWADD)
+inline std::uint32_t finalization_len = 10;
+}  // namespace custom_mm
+
 // CUSTOM_MM
 // Custom matmul that uses MOP to loop both srcA and srcB along inner dim. Output height
 // and width should be single tile with tile shape [1, 32]. Further work will uplift the
@@ -58,15 +65,18 @@ inline void custom_mm_configure_mop(
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face = false) {
-    // Select MOV instruction based on output tile height (in0_tile_r_dim)
-    // For m=1: MOV_1_ROW, for m=4: MOV_4_ROWS
-    const bool use_mov_4_rows = (in0_tile_r_dim == 4);
+    // Select MOV instruction count based on output tile height (in0_tile_r_dim)
+    // m=1: 4 MOVs (MOV_1_ROW), m=4: 4 MOVs (MOV_4_ROWS), m=8: 8 MOVs (2x MOV_4_ROWS)
+    // Replay buffer size: 8 MVMULs + MOVs + 2 ELWADDs
+    const std::uint32_t replay_buf_len = (in0_tile_r_dim == 8) ? 18 : 14;
+    // Finalization length: 4 MVMULs + MOVs + 2 ELWADDs (starting from offset 4)
+    custom_mm::finalization_len = (in0_tile_r_dim == 8) ? 14 : 10;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        14,
+        replay_buf_len,
         // Lambda function to load reply buffer
-        [use_mov_4_rows] {
+        [in0_tile_r_dim] {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
@@ -75,12 +85,24 @@ inline void custom_mm_configure_mop(
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
-            if (use_mov_4_rows) {
+            if (in0_tile_r_dim == 8) {
+                // m=8: need 2x MOV_4_ROWS per face (8 MOV total)
+                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
+                TTI_MOVD2A(0, 4, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 4);
+                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
+                TTI_MOVD2A(0, 20, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 20);
+                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
+                TTI_MOVD2B(0, 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 36);
+                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
+                TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 52);
+            } else if (in0_tile_r_dim == 4) {
+                // m=4: MOV_4_ROWS
                 TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
                 TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
                 TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
                 TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
             } else {
+                // m=1: MOV_1_ROW
                 TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
                 TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
                 TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 32);
@@ -132,6 +154,7 @@ inline void _llk_math_custom_mm_(
             lltt::replay(ckernel::math::replay_buf_offset, 4);
         }
         // Final K tile + finalization (MOVD2A/MOVD2B/ELWADD)
-        lltt::replay(ckernel::math::replay_buf_offset + 4, 10);
+        // Finalization length depends on tile height: 10 for m=1/4, 14 for m=8
+        lltt::replay(ckernel::math::replay_buf_offset + 4, custom_mm::finalization_len);
     }
 }
