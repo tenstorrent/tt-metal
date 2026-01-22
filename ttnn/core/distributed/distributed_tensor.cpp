@@ -498,7 +498,7 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 
 // Shard a tensor across one mesh dimension, and replicate the tensor along the other dimensions.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
-    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis = std::nullopt) {
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis) {
     if (!cluster_axis.has_value()) {
         return std::make_unique<TensorToMesh>(TensorToMesh::create(
             mesh_device,
