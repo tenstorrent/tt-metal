@@ -289,7 +289,8 @@ void directed_ideal_test(
     NOC noc_id,
     uint32_t multicast_scheme_type,
     bool use_2_0_api,
-    bool use_semaphore) {
+    bool use_semaphore,
+    uint32_t pages_override_factor) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -299,7 +300,7 @@ void directed_ideal_test(
     }
 
     // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
-    uint32_t pages_per_transaction = 256;
+    uint32_t pages_per_transaction = 256 * pages_override_factor;
     uint32_t num_of_transactions = 256;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
@@ -318,6 +319,7 @@ void directed_ideal_test(
         .multicast_scheme_type = multicast_scheme_type,
         .num_virtual_channels = 1,
         .use_2_0_api = use_2_0_api,
+        .use_semaphore = use_semaphore,
     };
 
     // Run
@@ -875,6 +877,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
     bool is_linked = true;
     bool use_2_0_api = false;
     bool use_semaphore = true;
+    uint32_t pages_override_factor = 64;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
@@ -892,7 +895,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
         noc_id,
         0,  // multicast_scheme_type (not used here)
         use_2_0_api,
-        use_semaphore);
+        use_semaphore,
+        pages_override_factor);
 }
 
 /* ========== VIRTUAL CHANNELS ========== */

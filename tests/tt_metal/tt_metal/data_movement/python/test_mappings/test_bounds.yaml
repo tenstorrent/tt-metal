@@ -55,7 +55,7 @@
 "One to All Multicast Linked Semaphore Directed Ideal":
   wormhole_b0:
     riscv_1:
-      bandwidth: 23
+      bandwidth: 22
   blackhole:
     riscv_1:
       bandwidth: 41
