@@ -140,20 +140,19 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         secondary_axis_neighbor = secondary_sender_coord_opt;
     }
 
+    // Get reverse neighbor along secondary axis (for secondary_sender->sender sync)
+    std::optional<MeshCoordinate> reverse_secondary_axis_neighbor;
+    if (secondary_cluster_axis.has_value() && is_secondary_sender) {
+        // Secondary sender needs a connection back to the primary sender for bidirectional sync
+        reverse_secondary_axis_neighbor = sender_coord;
+    }
+
     TT_FATAL(
         forward_coord.has_value() || backward_coord.has_value() || secondary_axis_neighbor.has_value(),
         "DEBUG: No valid neighbors found for device at coord {}",
         self_coord);
 
     auto* mesh_device = input_tensor.device();
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        self_coord,
-        is_first_chip,
-        is_last_chip);
 
     // Fatal if input is not tilized with tiny tiles (1, 32)
     bool tilized = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -227,9 +226,17 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     auto core_noc_x = data_core_coord.x;
     auto core_noc_y = data_core_coord.y;
 
-    uint32_t effective_num_targets_forward = is_active_broadcaster ? num_targets_forward : 0;
-    uint32_t effective_num_targets_backward = is_active_broadcaster ? num_targets_backward : 0;
+    uint32_t has_secondary_target = 0;
+    if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
+        has_secondary_target = 1;
+    }
 
+    uint32_t has_reverse_secondary_connection = 0;
+    if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+        has_reverse_secondary_connection = 1;
+    }
+
+    printf("num_pages_per_packet: %u\n", num_pages_per_packet);
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -251,11 +258,10 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         is_sender,                                   // is_sender
         core_noc_x,
         core_noc_y,
-        is_secondary_sender,                           // is_secondary_sender
-        is_active_broadcaster ? 1u : 0u,               // is_active_broadcaster
-        secondary_cluster_axis.has_value() ? 1u : 0u,  // has_secondary_axis (dual-axis mode)
-        effective_num_targets_forward,                 // mcast_num_targets_forward (for data, 0 for non-broadcasters)
-        effective_num_targets_backward};               // mcast_num_targets_backward (for data, 0 for non-broadcasters)
+        is_secondary_sender,               // is_secondary_sender
+        has_secondary_target,              // has_secondary_target
+        has_reverse_secondary_connection,  // has_reverse_secondary_connection
+    };
 
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
@@ -270,14 +276,6 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
-
-    // Add secondary axis args for dual-axis broadcast
-    std::vector<uint32_t> secondary_axis_args(2, 0);
-    if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
-        secondary_axis_args[0] = 1;  // has_secondary_target
-        secondary_axis_args[1] = 1;  // num_secondary_targets (just 1 for now - the secondary sender)
-    }
-    writer_compile_args.insert(writer_compile_args.end(), secondary_axis_args.begin(), secondary_axis_args.end());
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -366,6 +364,9 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
             num_connections += 1;
         }
+        if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+            num_connections += 1;
+        }
         writer_rt_args.push_back(num_connections);
 
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
@@ -385,6 +386,13 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
             const auto secondary_fabric_node_id = mesh_device->get_fabric_node_id(secondary_axis_neighbor.value());
             dst_nodes.push_back(secondary_fabric_node_id);
+        }
+
+        // Add reverse secondary axis connection (for secondary sender to sync back to primary sender)
+        if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+            const auto reverse_secondary_fabric_node_id =
+                mesh_device->get_fabric_node_id(reverse_secondary_axis_neighbor.value());
+            dst_nodes.push_back(reverse_secondary_fabric_node_id);
         }
 
         append_routing_plane_connection_manager_rt_args(

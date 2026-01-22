@@ -444,42 +444,50 @@ def test_broadcast_batch1_dual_axis(
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_mem_config = input_mem_config
 
-    input_tensor_mesh_list = []
-    sender_tensor_list = []
+    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
 
+    device_tensors = []
+    for row in range(mesh_rows):
+        if row == sender_row:
+            device_tensors.append(sender_tensor)
+        else:
+            device_tensors.append(torch.zeros_like(sender_tensor))
+
+    # Concatenate along dim 0 (batch) - this gives [mesh_rows, 7168]
+    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
+    input_tensor_mesh = ttnn.from_torch(
+        mesh_tensor_torch,
+        device=mesh_device,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            mesh_mapper_config,
+        ),
+    )
+
+    # Run once to compile
+    logger.info("Running dual-axis broadcast (compiling)...")
+    tt_out_tensor = ttnn.experimental.deepseek_minimal_broadcast(
+        input_tensor_mesh,
+        sender_coord=sender_coord,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=worker_sub_device_id,
+        cluster_axis=0,
+        secondary_cluster_axis=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace...")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iters):
-        # Create sender tensor
-        sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-        sender_tensor_list.append(sender_tensor)
-
-        device_tensors = []
-        for row in range(mesh_rows):
-            if row == sender_row:
-                device_tensors.append(sender_tensor)
-            else:
-                device_tensors.append(torch.zeros_like(sender_tensor))
-
-        # Concatenate along dim 0 (batch) - this gives [mesh_rows, 7168]
-        mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-        input_tensor_mesh = ttnn.from_torch(
-            mesh_tensor_torch,
-            device=mesh_device,
-            layout=layout,
-            tile=ttnn.Tile((1, 32)),
-            dtype=input_dtype,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                mesh_device,
-                mesh_mapper_config,
-            ),
-        )
-        input_tensor_mesh_list.append(input_tensor_mesh)
-
-    tt_out_tensor_list = []
-    for i in range(num_iters):
-        print("Running dual-axis broadcast iteration ", i)
-        tt_out_tensors = ttnn.experimental.deepseek_minimal_broadcast(
-            input_tensor_mesh_list[i],
+        tt_out_tensor = ttnn.experimental.deepseek_minimal_broadcast(
+            input_tensor_mesh,
             sender_coord=sender_coord,
             num_links=num_links,
             memory_config=output_mem_config,
@@ -488,37 +496,39 @@ def test_broadcast_batch1_dual_axis(
             cluster_axis=0,
             secondary_cluster_axis=1,
         )
-        tt_out_tensor_list.append(tt_out_tensors)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
 
-    logger.info("Waiting for op")
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-    logger.info("Done op")
+    # Execute trace
+    logger.info("Executing trace...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Done trace execution")
 
     # Compare tensors - all devices should have the sender's data
-    # With PlacementShard(0) along rows and PlacementReplicate() along cols,
-    # we have mesh_rows shards, each replicated across mesh_cols columns
-    for iter_idx in range(len(tt_out_tensor_list)):
-        output_tensor_torch = ttnn.to_torch(
-            tt_out_tensor_list[iter_idx],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        )
-        sender_tensor = sender_tensor_list[iter_idx]
-        slice_size = output_shape[0]  # Batch dimension
-        # Check each row's shard (mesh_rows shards total)
-        for row_idx in range(mesh_rows):
-            start = row_idx * slice_size
-            end = start + slice_size
-            received = output_tensor_torch[start:end, :]
-            assert (
-                received.shape == sender_tensor.shape
-            ), f"Shape mismatch at row {row_idx}: received {received.shape}, expected {sender_tensor.shape}"
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(received, sender_tensor)
-            else:
-                eq, output = comp_pcc(received, sender_tensor)
-            if not eq:
-                logger.error(f"output mismatch for row {row_idx}")
-                assert eq, f"Row {row_idx} FAILED: {output}"
+    # ConcatMeshToTensor concatenates all num_devices tensors along dim 0
+    output_tensor_torch = ttnn.to_torch(
+        tt_out_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+    slice_size = output_shape[0]  # Batch dimension
+    # Validate ALL devices (mesh_rows * mesh_cols)
+    for device_idx in range(num_devices):
+        print("checking device idx: ", device_idx)
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert (
+            received.shape == sender_tensor.shape
+        ), f"Shape mismatch at device {device_idx}: received {received.shape}, expected {sender_tensor.shape}"
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(received, sender_tensor)
+        else:
+            eq, output = comp_pcc(received, sender_tensor)
+        if not eq:
+            logger.error(f"output mismatch for device {device_idx}")
+            assert eq, f"Device {device_idx} FAILED: {output}"
 
     assert (
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
