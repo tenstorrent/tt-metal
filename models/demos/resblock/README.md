@@ -19,6 +19,12 @@ This block is fused into a single operation in [op.py](./op.py) and supports mul
 
 The operation processes `num_layers` sequentially, with each layer using its own unique `weight0` and `weight1` matrices.
 
+Tests can be run using the following command:
+
+```sh
+pytest models/demos/resblock/tests/test_op.py
+```
+
 ## Architecture
 
 ### Data Layout and Sharding
