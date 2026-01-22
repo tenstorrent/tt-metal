@@ -487,26 +487,6 @@ void device_module(nb::module_& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
-
-    m_device.def(
-        "release_ownership",
-        &tt::tt_metal::detail::ReleaseOwnership,
-        R"doc(
-            Release ownership of the MetalContext singleton instance.
-
-            This function destroys the MetalContext instance, releasing all associated resources.
-            All devices must be closed before calling this function.
-
-            After calling this function, the MetalContext will be re-created on the next access.
-
-            Raises:
-                RuntimeError: If any devices are still open.
-
-            Example:
-                >>> device = ttnn.open_device(device_id=0)
-                >>> ttnn.close_device(device)
-                >>> ttnn.release_ownership()
-        )doc");
 }
 
 void py_device_module(nb::module_& mod) {

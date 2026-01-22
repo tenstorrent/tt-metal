@@ -248,8 +248,6 @@ def get_memory_view(device, buffer_type):
 
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
-release_ownership = ttnn._ttnn.device.release_ownership
-
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
