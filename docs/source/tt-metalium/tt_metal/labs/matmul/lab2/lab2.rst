@@ -335,19 +335,141 @@ In general, for an MxK @ KxN matmul producing MxN output tiles:
 
 This redundant DRAM traffic becomes the performance bottleneck, especially as matrix
 dimensions grow.
-A simple optimization would be to store the whole row of A in a temporary on-chip buffer, and then
+A naive optimization would be to store the whole row of A in a temporary on-chip SRAM, and then
 use that buffer to compute all the output tiles in the row. However, this naive approach doesn't scale
-well to large matrices because the amount of on-chip memory is limited.
+well to large matrices because the amount of on-chip memory is usually not sufficient to hold the entire
+row of A. Also, this approach only reuses data in rows of A, but not in columns of B.
 
-Multi-Step Optimization: Blocking and Subblocking
-=================================================
+Blocked Matrix Multiplication
+=============================
 
-A more general approach is to group output tiles into blocks, and then reuse the data within the blocks.
-The blocking implementation requires computation of partial results for each block. Storing these partial
-results in off-chip DRAM would result in poor perfromance. Therefore, they should ideally be stored in on-chip
-SRAM, as long as the amount of on-chip SRAM is sufficient.
-While this approach is also limited by the amount of on-chip SRAM, it breaks up data into smaller chunks
-than the naive approach, thus supporting larger matrices.
+Instead of considering one row at a time, a more general approach is to group output tiles into
+rectangular blocks. This may seem counterintuitive at first; if a single row of A
+doesn't fit into on-chip SRAM, then multiple rows needed to compute a single block would not fit either.
+The solution is to compute partial results, which require only a subset of the input tiles that is small
+enough to fit into on-chip SRAM.
+Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
+avoid performance degradation due to repeated writes and reads to off-chip DRAM.
+
+We will again assume multiplication of two matrices ``A`` of shape ``MxK`` and ``B`` of shape ``KxN``,
+with the resulting matrix ``C`` having shape ``MxN``.
+We will assume that all the matrix dimensions are divisible by the tile size, and use the notation
+``Mt = M / TILE_HEIGHT`` and ``Nt = N / TILE_WIDTH`` to denote the number of tiles in the
+``M`` and ``N`` dimensions, respectively.
+
+In blocked matrix multiplication, each core is responsible for computing a rectangular block of
+output tiles ``C_block`` consisting of ``M_block_tiles`` rows of tiles and ``N_block_tiles`` columns of tiles.
+The division of the ``Mt`` and ``Nt`` dimensions into blocks is done simply by dividing
+the number of tiles in each dimension by the number of cores in that dimension of the core grid.
+
+To compute all tiles in a block, the core needs the matching ``M_block_tiles x Kt`` tile rows of A
+(we will call this ``A_block``) and the matching ``Kt x N_block_tiles`` tile columns of B
+(we will call this ``B_block``).
+Since this is too large to fit into on-chip SRAM, we split the ``Kt`` dimension into K-blocks of size ``K_block_tiles``,
+such that ``Kt = num_k_blocks * K_block_tiles``.
+For each K-block index ``b`` in range ``(0, 1, …, num_k_blocks-1)`` we define:
+
+* ``A_slab(b)``: tiles of ``A``, not consisting of full rows, but rather of only appropriate ``K_block_tiles`` tiles
+  in the row (size: ``M_block_tiles * K_block_tiles``).
+* ``B_slab(b)``: tiles of ``B``, not consisting of full columns, but rather of only appropriate ``K_block_tiles`` tiles
+  in the column (size: ``K_block_tiles * N_block_tiles``).
+
+If we choose ``K_block_tiles`` judiciously, then both ``A_slab(b)`` and ``B_slab(b)``, and
+the partial results can all fit into the on-chip SRAM.
+
+To figure out the exact computation that needs to be performed, consider the computation
+of a single output element: ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``.
+We can split the sum over ``k`` into consecutive chunks corresponding to K-blocks:
+
+* Each K-block ``b`` spans some range of ``k`` values: ``k = b * K_block_size, ... ,(b + 1) * K_block_size - 1``.
+  Then:
+
+    ``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``.
+
+= \sum_{b=0}^{\text{num_blocks}-1} \; \sum_{\substack{k \in \text{block } b}} A_{ik} B_{kj}.
+
+Define the partial result from block b as:
+
+``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``.
+
+Then:
+
+``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``.
+
+The overall approach can be summarized by the following pseudo-code:
+
+.. code-block:: cpp
+
+   // For every K-block:
+   for (b in 0 .. num_k_blocks) {
+       Load A_slab(b) into CB0 // Size: M_block_tiles * K_block_tiles.
+       Load B_slab(b) into CB1 // Size: K_block_tiles * N_block_tiles.
+       // For every output tile (i,j) in this C_block:
+       for (i in 0 .. M_block_tiles) {
+           for (j in 0 .. N_block_tiles) {
+               // Get the current accumulator tile for C(i,j)
+               if (b == 0)
+                  // First K-block: start from zero
+                  acc_tile = zero_tile()
+               else
+                  // Middle or last K-block: reload partial result built so far
+                  acc_tile = load_partial_C_tile(i, j)
+
+               // Add this K-block's contribution to acc_tile
+               for (k_local in 0 .. K_block_tiles) {
+                   // Indices into the current A and B slabs
+                   a_tile = A_slab_tile(i, k_local)
+                   b_tile = B_slab_tile(k_local, j)
+
+                   // Multiply and accumulate into the accumulator tile
+                   acc_tile += matmul(a_tile, b_tile)    // tile × tile → tile accumulate
+               }
+               // Store updated result for C(i,j)
+               if (b == num_blocks - 1)
+                  // Last K-block: acc_tile is the final result forC(i,j)
+                  store_final_C_tile(i, j, acc_tile)
+               else
+                  // Not last K-block: acc_tile is a partial result to be reused later
+                  store_partial_C_tile(i, j, acc_tile)
+           }
+       }
+   }
+
+Blocked Matrix Multiplication in TT-Metalium
+============================================
+
+Most of the code needed for blocked matrix multiplication is similar to the basic multi-core
+implementation from Exercise 1.
+The key new addition is the introduction of an intermediate circular buffer (CB) to hold partial results.
+As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used
+as temporary storage for partial results. Since CBs behave as FIFO queues, they are not typically used
+as raw memory storage. Instead, they are used as a stream of tiles that carry partial results between
+phases of the computation.
+In the context of blocked matrix multiplication, this results in the following pattern:
+
+* The compute kernel produces a block of partial results into an intermediate
+  CB using ``cb_reserve_back``, ``pack_tile`` and ``cb_push_back``.
+* On the next K-block, the same compute kernel reloads these partial results from the CB so it can
+  accumulate the next K-block's contribution.
+  It calls ``cb_wait_front`` to ensure the partial tiles are available, reads them
+  and then uses ``cb_pop_front`` to indicate they have been consumed.
+* The kernel computes another K-block's contribution and adds it to the partial result
+* If this is not the last K-block, write the updated partial results back to the intermediate CB
+  (again via ``reserve_back`` / ``pack_tile`` / ``push_back``) to be used in the next iteration.
+* If this is the last K-block, it writes the fully accumulated tiles into a separate output CB
+  (also via ``reserve_back`` / ``pack_tile`` / ``push_back``), for writer kernel to consume.
+
+So the CB holding partials is never treated as random L1 memory; it is still a FIFO queue.
+What changes is who consumes and produces that queue over time: the compute kernel both produces
+and later consumes tiles from the same CB index, using the standard reserve/push/wait/pop protocol
+to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
+final outputs.
+
+
+we cannot use them as
+unrestricted 
+
+
 
 There are two distinct ways in which Tenstorrent architecture allows storing partial results in on-chip memory:
 
@@ -356,9 +478,9 @@ There are two distinct ways in which Tenstorrent architecture allows storing par
   temporary storage for partial results.
 * Using **destination registers** in Tensix cores.
   As discussed in Lab 1, destination register array in the Tensix core can hold multiple tiles of data.
-  Specifically, the destination register array can hold 8 tiles of data.
-  Previously we only used a single tile in the destination register array.
-  However, in blocked matrix multiplication, we can use the destination register array to hold
+  While previously we only used a single tile in the destination register array, the TT-Metalium
+  programming model exposes the array holding up to 8 tiles of data.
+  In blocked matrix multiplication, we will use the destination register array to hold
   a subset of partial results.
 
 Visualizing the Data Reuse Opportunity
@@ -475,15 +597,21 @@ To do this, you introduce an additional circular buffer in L1 that serves as an 
 
 The configuration is as follows:
 
-* Both the final output circular buffer (for example, indexed by ``c_16``) and the intermediate buffer (for example, indexed by another index such as ``c_24``) are created on all participating cores.
+* Both the final output circular buffer (for example, indexed by ``c_16``) and the intermediate buffer
+  (for example, indexed by another index such as ``c_24``) are created on all participating cores.
 
-* Each buffer uses the same data format and tile size, and the capacity is chosen to hold all tiles needed for one subblock of partial or final results.
+* Each buffer uses the same data format and tile size, and the capacity is chosen to hold all tiles needed
+  for one subblock of partial or final results.
 
 During computation, the compute kernel uses this intermediate buffer in three phases:
 
-1. When a subblock of output tiles is processed for the **first** block along ``K``, partial results are computed with ``matmul_tiles`` and stored into the intermediate circular buffer using ``pack_tile`` and ``cb_push_back``.
+1. When a subblock of output tiles is processed for the **first** block along ``K``,
+   partial results are computed with ``matmul_tiles`` and stored into the intermediate
+   circular buffer using ``pack_tile`` and ``cb_push_back``.
 
-2. For subsequent blocks along ``K``, the kernel reloads those partial results from the intermediate buffer using ``cb_wait_front`` and ``copy_tile``, and then continues to accumulate additional contributions using ``matmul_tiles``.
+2. For subsequent blocks along ``K``, the kernel reloads those partial results from the intermediate buffer
+   using ``cb_wait_front`` and ``copy_tile``, and then continues to accumulate additional contributions
+   using ``matmul_tiles``.
 
 3. After all blocks for that subblock have been processed, the final results are either written from the intermediate buffer to the output buffer or packed directly from the destination registers into the output buffer, and the space in the intermediate buffer is freed using ``cb_pop_front``.
 
@@ -563,9 +691,11 @@ Steps
 
    * The compute kernel:
 
-     - For the first block along the inner dimension, computes partial results for a subblock with ``matmul_tiles`` and writes them into the intermediate buffer.
+     - For the first block along the inner dimension, computes partial results for a subblock with ``matmul_tiles``
+       and writes them into the intermediate buffer.
 
-     - For subsequent blocks, reloads partial results from the intermediate buffer, adds new contributions with ``matmul_tiles``, and writes updated partial results back into the intermediate buffer.
+     - For subsequent blocks, reloads partial results from the intermediate buffer, adds new contributions with
+       ``matmul_tiles``, and writes updated partial results back into the intermediate buffer.
 
      - After processing the last block for a subblock, writes final results into the output circular buffer.
 
