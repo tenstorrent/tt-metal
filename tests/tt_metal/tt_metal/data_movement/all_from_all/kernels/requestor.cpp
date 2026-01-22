@@ -58,5 +58,5 @@ void kernel_main() {
 
     DeviceTimestampedData("NoC Index", noc_index);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
-    DeviceTimestampedData("Number of peers", num_subordinates);
+    DeviceTimestampedData("Number of subordinates", num_subordinates);
 }

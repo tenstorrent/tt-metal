@@ -97,5 +97,5 @@ void kernel_main() {
         DeviceTimestampedData("Subordinate Grid Size Y", sub_grid_size_y);
     }
 
-    DeviceTimestampedData("Number of peers", num_subordinates);
+    DeviceTimestampedData("Number of subordinates", num_subordinates);
 }

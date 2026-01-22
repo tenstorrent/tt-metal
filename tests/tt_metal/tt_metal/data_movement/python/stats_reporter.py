@@ -159,8 +159,8 @@ class StatsReporter:
                             for field in optional_fields:
                                 value = test_metadata[field]
                                 # If we have profiled data and it's not set in the test_information
-                                if field == "num_peers" and value == "":
-                                    value = run_stats.get("num_peers", 0)
+                                if field == "num_subordinates" and value == "":
+                                    value = run_stats.get("num_subordinates", 0)
                                 if field == "same_axis" and value == "":
                                     value = bool(run_stats.get("same_axis", 0))
                                 row.append(value)
