@@ -74,11 +74,28 @@ POLLING_FREQUENCIES_FULL = ["5s", "1s", "500ms", "100ms", "50ms", "10ms", "5ms",
 # Reduced frequency range - focus on critical frequencies
 POLLING_FREQUENCIES_REDUCED = ["5s", "1s", "100ms", "10ms", "1ms", "100us"]
 
-# Memory configurations
-MEMORY_CONFIGS = {
-    "DRAM": ttnn.DRAM_MEMORY_CONFIG,
-    "L1": ttnn.L1_MEMORY_CONFIG,
-}
+# Memory configurations - handle different ttnn versions
+try:
+    # Try the standard attribute names first
+    MEMORY_CONFIGS = {
+        "DRAM": ttnn.DRAM_MEMORY_CONFIG,
+        "L1": ttnn.L1_MEMORY_CONFIG,
+    }
+except AttributeError:
+    # Fallback: try to create memory configs manually
+    try:
+        # Some versions might use functions or different names
+        MEMORY_CONFIGS = {
+            "DRAM": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "L1": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        }
+    except:
+        # Last resort: use None and let ttnn use defaults
+        print("Warning: Could not determine memory config format. Using defaults.")
+        MEMORY_CONFIGS = {
+            "DRAM": None,
+            "L1": None,
+        }
 
 # Test parameters
 N_SAMPLES = 100

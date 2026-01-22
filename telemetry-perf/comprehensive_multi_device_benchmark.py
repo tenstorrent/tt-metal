@@ -69,6 +69,18 @@ TENSOR_SIZE = (1, 1, 8192, 8192)  # 128MB
 N_SAMPLES = 100
 WARMUP_ITERS = 20
 
+# Memory configuration - handle different ttnn versions
+try:
+    DRAM_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+except AttributeError:
+    try:
+        # Try to create memory config manually
+        DRAM_MEMORY_CONFIG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    except:
+        # Use None and let ttnn use defaults
+        print("Warning: Could not determine DRAM memory config format. Using defaults.")
+        DRAM_MEMORY_CONFIG = None
+
 
 @dataclass
 class MultiDeviceTestConfig:
@@ -98,12 +110,12 @@ class MultiDeviceOperations:
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=DRAM_MEMORY_CONFIG,
         )
 
         # Measure AllGather
         start = time.perf_counter()
-        output_tensor = ttnn.all_gather(input_tensor, dim=0, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor = ttnn.all_gather(input_tensor, dim=0, num_links=1, memory_config=DRAM_MEMORY_CONFIG)
         ttnn.synchronize_device(self.mesh_device)
         end = time.perf_counter()
 
@@ -121,13 +133,13 @@ class MultiDeviceOperations:
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=DRAM_MEMORY_CONFIG,
         )
 
         # Measure ReduceScatter
         start = time.perf_counter()
         output_tensor = ttnn.reduce_scatter(
-            input_tensor, scatter_dim=0, math_op=ttnn.ReduceType.Sum, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            input_tensor, scatter_dim=0, math_op=ttnn.ReduceType.Sum, num_links=1, memory_config=DRAM_MEMORY_CONFIG
         )
         ttnn.synchronize_device(self.mesh_device)
         end = time.perf_counter()
@@ -146,13 +158,13 @@ class MultiDeviceOperations:
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=DRAM_MEMORY_CONFIG,
         )
 
         # Measure AllReduce
         start = time.perf_counter()
         output_tensor = ttnn.all_reduce(
-            input_tensor, math_op=ttnn.ReduceType.Sum, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            input_tensor, math_op=ttnn.ReduceType.Sum, num_links=1, memory_config=DRAM_MEMORY_CONFIG
         )
         ttnn.synchronize_device(self.mesh_device)
         end = time.perf_counter()
