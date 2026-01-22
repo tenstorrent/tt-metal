@@ -25,6 +25,9 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+# Default Test Configuration                                                  #
+PRINT_DETAILED_COMPARISON_FLAG = False
+
 
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
@@ -48,7 +51,6 @@ def test_ms_deformable_attention_forward(
     seed,
 ):
     """Test TTMSDeformableAttention against PyTorch reference implementation using configurations."""
-    print_detailed_comparison = False
     torch.manual_seed(seed)
 
     # Get configuration from preset
@@ -70,6 +72,10 @@ def test_ms_deformable_attention_forward(
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
+
     # Create input tensors
     query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
@@ -79,6 +85,11 @@ def test_ms_deformable_attention_forward(
     indices = spatial_shapes.prod(1).cumsum(0)
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
+    # Convert tensors to ttnn format for ttnn model
+    tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
     # Create DeformableAttentionConfig from extracted parameters
     config = DeformableAttentionConfig(
         embed_dims=embed_dims,
@@ -86,6 +97,10 @@ def test_ms_deformable_attention_forward(
         num_levels=num_levels,
         num_points=num_points,
     )
+
+    # --------------------------------------------------------------------------- #
+    # Models Init                                                                 #
+    # --------------------------------------------------------------------------- #
 
     # Create PyTorch reference model
     ref_model = MSDeformableAttention(config)
@@ -106,16 +121,16 @@ def test_ms_deformable_attention_forward(
         params=tt_parameters,
     )
 
+    # --------------------------------------------------------------------------- #
+    # Models Forward                                                              #
+    # --------------------------------------------------------------------------- #
+
     ref_model_output = ref_model(
         query,
         value,
         reference_points=reference_points,
         spatial_shapes=spatial_shapes,
     )
-
-    tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     tt_model_output = tt_model(
         query=tt_query,
@@ -125,11 +140,15 @@ def test_ms_deformable_attention_forward(
     )
     tt_model_output = ttnn.to_torch(tt_model_output)
 
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
+
     # Comprehensive comparison using enhanced test utilities
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
     logger.info(f"TT model output type: {type(tt_model_output)}")
 
-    if print_detailed_comparison:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
         print_detailed_comparison(
             ref_model_output,
