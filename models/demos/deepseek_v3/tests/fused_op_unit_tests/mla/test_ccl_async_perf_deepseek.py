@@ -34,7 +34,7 @@ def galaxy_type():
         ("wq_b", 10, 57.5),
         ("wkv_b1", 10, 50),
         ("wkv_b2", 10, 142),
-        ("wo", 10, 211.5),
+        ("wo", 10, 259.59),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -313,28 +313,13 @@ def test_rmsnorm_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us, op_name",
     [
-        (
-            "kv_nope_to_interleaved",
-            10,
-            0.75,
-            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
-        ),
-        ("kv_rope_reshard", 10, 1.04, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
-        (
-            "kv_rope_out_reshard",
-            10,
-            1.19,
-            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
-        ),
-        ("kvpe_reshard", 10, 2.8, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
-        ("q_rope_out_reshard", 10, 1.18, "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>"),
-        ("flash_mla_reshard", 10, 9.34, "MeshDeviceOperationAdapter<ttnn::prim::InterleavedToShardedDeviceOperation>"),
-        (
-            "flash_mla_out_reshard",
-            10,
-            3.86,
-            "MeshDeviceOperationAdapter<ttnn::prim::ShardedToInterleavedDeviceOperation>",
-        ),
+        ("kv_nope_to_interleaved", 10, 0.75, "ShardedToInterleavedDeviceOperation"),
+        ("kv_rope_reshard", 10, 1.04, "InterleavedToShardedDeviceOperation"),
+        ("kv_rope_out_reshard", 10, 1.19, "ShardedToInterleavedDeviceOperation"),
+        ("kvpe_reshard", 10, 2.8, "InterleavedToShardedDeviceOperation"),
+        ("q_rope_out_reshard", 10, 1.18, "ShardedToInterleavedDeviceOperation"),
+        ("flash_mla_reshard", 10, 9.34, "InterleavedToShardedDeviceOperation"),
+        ("flash_mla_out_reshard", 10, 3.86, "ShardedToInterleavedDeviceOperation"),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -504,7 +489,6 @@ def test_rope_deepseek_perf(
     assert measured_avg_us > perf_target_us - max(
         THRESHOLD, perf_target_us * 0.05
     ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
-
 
 
 @pytest.mark.parametrize(
@@ -693,7 +677,7 @@ def test_reshape_deepseek_perf(
     subdir = "deepseek_reshape_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_reshape_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "ReshapeDeviceOperation"
+    op_name = "ReshapeViewDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)
@@ -727,7 +711,6 @@ def test_reshape_deepseek_perf(
     assert measured_avg_us > perf_target_us - max(
         THRESHOLD, perf_target_us * 0.05
     ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
-
 
 
 @pytest.mark.parametrize(
@@ -804,7 +787,7 @@ def test_mesh_partition_deepseek_perf(
     subdir = "deepseek_ccl_perf"
     command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_mesh_partition.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "MeshDeviceOperationAdapter<ttnn::operations::ccl::MeshPartitionDeviceOperation>"
+    op_name = "MeshPartitionDeviceOperation"
     warmup_iters = warmup_iters * 32  # Multiply by number of devices (32 for TG)
 
     profiler.start("run")
