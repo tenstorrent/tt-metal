@@ -1618,7 +1618,11 @@ void TestConfigBuilder::expand_sequential_neighbor_exchange(
 
     // Select only the pair for this iteration
     if (iteration_idx < neighbor_pairs.size()) {
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {neighbor_pairs[iteration_idx]};
+        const auto& pair = neighbor_pairs[iteration_idx];
+        // Append sender→receiver device IDs to test name for clarity
+        detail::append_with_separator(test.parametrized_name, "_", pair.first.chip_id, "to", pair.second.chip_id);
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
         add_senders_from_pairs(test, single_pair, base_pattern);
     } else {
         TT_THROW(

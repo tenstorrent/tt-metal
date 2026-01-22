@@ -455,7 +455,7 @@ void LatencyTestManager::report_latency_results(
 
     // Populate LatencyResult structure for CSV export
     LatencyResult latency_result;
-    latency_result.test_name = config.name;
+    latency_result.test_name = config.parametrized_name;
 
     // Extract ftype and ntype from first sender's first pattern
     const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
