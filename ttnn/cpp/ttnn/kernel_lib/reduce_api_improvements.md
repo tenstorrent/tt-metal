@@ -301,7 +301,7 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 | Issue | Recommendation | Status |
 |-------|----------------|--------|
 | Bool template args | Use `ReduceInitMode` enum | ✅ Implemented |
-| `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | Pending |
+| `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | ✅ Implemented |
 | TileShape naming | Rename to `TileGrid` | Pending |
 | ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | Pending |
 | CB arguments | Group into `ReduceCBs` struct | Pending |
@@ -363,3 +363,53 @@ ALWI void reduce(...);
 - No existing call sites use explicit `init`/`uninit` parameters (all use defaults)
 - Ran `pytest tests/ttnn/unit_tests/operations/test_reduce.py` - all tests pass
 - API is backwards compatible for all existing code
+
+### Issue 2: Explicit default constructors (Implemented)
+
+**Date:** 2026-01-22
+
+**Changes made:**
+1. Added `explicit` to default constructors of `TileLayout`, `NoAccumulation`, and `NoOp`
+2. Added two-argument constructor to `TileLayout` for factory method usage
+3. Updated function signature default parameters from `{}` to explicit constructions:
+   - `TileLayout layout = TileLayout::contiguous()`
+   - `AccumT accum = AccumT{}`
+   - `PostReduceOp post_reduce_op = PostReduceOp{}`
+4. Updated all call sites using `{}` to use explicit type names
+
+**Files modified:**
+- `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp`
+- `ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax_large_tensor.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp`
+- `ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp`
+
+**API change:**
+
+Before:
+```cpp
+reduce<SUM, REDUCE_ROW>(..., shape, {}, {}, my_lambda);  // What are {}, {}?
+```
+
+After:
+```cpp
+reduce<SUM, REDUCE_ROW>(..., shape,
+    TileLayout::contiguous(),
+    NoAccumulation{},
+    my_lambda);  // Self-documenting
+```
+
+**Migration guide:**
+- `{}` for layout → `TileLayout::contiguous()` or `compute_kernel_lib::TileLayout::contiguous()`
+- `{}` for accum → `NoAccumulation{}` or `compute_kernel_lib::NoAccumulation{}`
+- `{}` for post_reduce_op → `NoOp{}` or omit (uses default)
+
+**Testing:**
+- Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass
+- Ran `pytest tests/ttnn/unit_tests/operations/fused/test_softmax.py` - all tests pass

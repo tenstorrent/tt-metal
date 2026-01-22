@@ -82,7 +82,7 @@ void MAIN {
                 cb_scaler,
                 cb_out,
                 compute_kernel_lib::TileShape::single(),
-                {},  // layout (use default)
+                compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
         }
     }

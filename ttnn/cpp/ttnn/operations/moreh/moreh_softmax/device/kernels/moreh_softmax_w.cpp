@@ -51,7 +51,7 @@ void MAIN {
                 cb_bcast_scaler,
                 cb_max,
                 compute_kernel_lib::TileShape::single(),
-                {},                                              // layout (use default)
+                compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
@@ -113,8 +113,8 @@ void MAIN {
                 cb_bcast_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::TileShape::row(Wt),
-                {},
-                {},  // accum parameter (use default NoAccumulation)
+                compute_kernel_lib::TileLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {
                     log_tile_init();
                     log_tile(dst_idx);
@@ -127,8 +127,8 @@ void MAIN {
                 cb_bcast_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::TileShape::row(Wt),
-                {},
-                {},  // accum parameter (use default NoAccumulation)
+                compute_kernel_lib::TileLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
                 [](uint32_t dst_idx) {
                     recip_tile_init();
                     recip_tile(dst_idx);

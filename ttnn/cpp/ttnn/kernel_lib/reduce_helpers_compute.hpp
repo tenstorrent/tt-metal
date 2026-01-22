@@ -106,15 +106,22 @@ enum class ReduceInitMode { BOTH, INIT_ONLY, UNINIT_ONLY, NONE };
  *
  * Specifies the stride pattern for accessing tiles in non-contiguous memory layouts.
  * Used only when input_mode is PRELOADED or PERSISTENT.
+ *
+ * Note: Default constructor is explicit to prevent accidental use of `{}` at call sites.
+ * Use TileLayout::contiguous() for self-documenting code.
  */
 struct TileLayout {
     uint32_t row_stride = 0;    // 0 = auto-detect from Wt (contiguous row-major)
     uint32_t batch_stride = 0;  // 0 = auto-detect from Ht * row_stride (reserved for future use)
 
+    // Explicit default constructor to prevent `{}` initialization - use factory methods instead
+    explicit constexpr TileLayout() = default;
+    constexpr TileLayout(uint32_t row, uint32_t batch) : row_stride(row), batch_stride(batch) {}
+
     // Factory methods for common patterns
-    static constexpr TileLayout contiguous() { return {}; }
-    static constexpr TileLayout with_row_stride(uint32_t s) { return {s, 0}; }
-    static constexpr TileLayout with_strides(uint32_t row, uint32_t batch) { return {row, batch}; }
+    static constexpr TileLayout contiguous() { return TileLayout(); }
+    static constexpr TileLayout with_row_stride(uint32_t s) { return TileLayout(s, 0); }
+    static constexpr TileLayout with_strides(uint32_t row, uint32_t batch) { return TileLayout(row, batch); }
 };
 
 /**
@@ -146,8 +153,13 @@ struct TileShape {
  *
  * When this type is passed to reduce(), all accumulation code is
  * eliminated at compile-time via `if constexpr`.
+ *
+ * Note: Default constructor is explicit to prevent accidental use of `{}` at call sites.
+ * Use NoAccumulation{} for self-documenting code.
  */
-struct NoAccumulation {};
+struct NoAccumulation {
+    explicit NoAccumulation() = default;
+};
 
 /**
  * @brief Configuration for accumulation-style reductions
@@ -203,8 +215,12 @@ struct Accumulate {
  *
  * When no custom post-reduce operation is needed, this empty functor is used.
  * It compiles away completely due to inlining.
+ *
+ * Note: Default constructor is explicit to prevent accidental use of `{}` at call sites.
+ * Use NoOp{} for self-documenting code.
  */
 struct NoOp {
+    explicit NoOp() = default;
     ALWI void operator()(uint32_t = 0) const {}
 };
 
@@ -417,7 +433,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
  *       cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::TileShape::grid(Ht, Wt),
- *       {},
+ *       compute_kernel_lib::TileLayout::contiguous(),
+ *       compute_kernel_lib::NoAccumulation{},
  *       [](uint32_t dst_idx) {
  *           recip_tile_init();
  *           recip_tile(dst_idx);
@@ -436,9 +453,9 @@ ALWI void reduce(
     uint32_t icb_scaler,
     uint32_t ocb,
     TileShape shape,
-    TileLayout layout = {},
-    AccumT accum = {},
-    PostReduceOp post_reduce_op = {}) {
+    TileLayout layout = TileLayout::contiguous(),
+    AccumT accum = AccumT{},
+    PostReduceOp post_reduce_op = PostReduceOp{}) {
     // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumT>;
     // Extract shape components

@@ -92,7 +92,7 @@ void MAIN {
                     cb_scaler,
                     output_cb,
                     compute_kernel_lib::TileShape::single(),
-                    {},  // layout (use default)
+                    compute_kernel_lib::TileLayout::contiguous(),
                     compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done));
 
                 num_tile_done++;
