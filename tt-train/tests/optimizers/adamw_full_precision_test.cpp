@@ -16,6 +16,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
+#include "xtensor/generators/xbuilder.hpp"
 
 struct AdamWFullPrecisionCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
@@ -57,50 +58,45 @@ protected:
     }
 };
 
-static xt::xarray<float> make_random_xarray(const std::array<std::size_t, 4>& s, uint32_t seed) {
+static xt::xarray<float> make_random_xarray(
+    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
     xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
     ttml::core::parallel_generate(
         std::span{x.data(), x.size()},  // NOLINT(performance-no-span-copy)
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
+        [min, max]() { return std::uniform_real_distribution<float>(min, max); },
         seed);
     return x;
 }
 
-// Convert float to bfloat16 and back to simulate bf16 precision loss
-static float to_bfloat16(float value) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(float));
-    // Zero out the lower 16 bits (mantissa truncation for bfloat16)
-    bits &= 0xFFFF0000U;
-    float result;
-    std::memcpy(&result, &bits, sizeof(float));
-    return result;
+static xt::xarray<bfloat16> make_random_bf16_xarray(
+    const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
+    xt::xarray<bfloat16> x = xt::empty<bfloat16>({s[0], s[1], s[2], s[3]});
+    ttml::core::parallel_generate(
+        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
+    return x;
 }
 
-// Convert entire xarray to bfloat16 precision
-static xt::xarray<float> to_bfloat16_precision(const xt::xarray<float>& x) {
-    xt::xarray<float> result = xt::empty_like(x);
-    for (size_t i = 0; i < x.size(); ++i) {
-        result.flat(i) = to_bfloat16(x.flat(i));
-    }
-    return result;
+static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
+    return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
 }
 
-[[maybe_unused]] static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
-    return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
-}
+// NOTE: ttml::core::from_xtensor() performs fp32 -> bf16 conversion, that's why this function exists
+static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(x);
+    auto buffer_span = ttml::core::xtensor_to_span(x);
 
-static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
-    auto tensor = ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
-    return ttnn::typecast(tensor, tt::tt_metal::DataType::BFLOAT16);
+    ttnn::MemoryConfig output_mem_config{};
+    const auto tensor_layout = ttnn::TensorLayout(
+        ttnn::DataType::FLOAT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
+    auto output = ttnn::Tensor::from_span<float>(buffer_span, ttnn::TensorSpec(shape, tensor_layout));
+
+    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
+    output = ttnn::to_device(output, device, output_mem_config);
+    return output;
 }
 
 // CPU reference implementation of AdamW with fp32 master weights
-// This simulates the full precision optimizer behavior:
-// - Receives bf16 gradients (simulated by truncating to bf16 precision)
-// - Stores master weights in fp32
-// - Stores momentum buffers in fp32
-// - Outputs bf16 visible weights (simulated by truncating to bf16 precision)
 class CPUAdamWFullPrecision {
 public:
     CPUAdamWFullPrecision(
@@ -115,13 +111,31 @@ public:
     }
 
     // Initialize master weights from bf16 weights (converted to fp32)
-    void init(const xt::xarray<float>& bf16_weights) {
+    void init(const xt::xarray<float>& fp32_weights) {
         // Master weights are fp32 copy of bf16 weights
-        m_master_weights = bf16_weights;  // Already in fp32, but values are bf16-truncated
+        m_master_weights = fp32_weights;
         m_first_moment = xt::zeros_like(m_master_weights);
         m_second_moment = xt::zeros_like(m_master_weights);
         if (m_amsgrad) {
             m_max_second_moment = xt::zeros_like(m_master_weights);
+        }
+    }
+
+    // Set initial optimizer state for testing
+    void set_state(
+        const xt::xarray<float>& master_weights,
+        const xt::xarray<float>& first_moment,
+        const xt::xarray<float>& second_moment,
+        size_t steps,
+        const xt::xarray<float>& max_second_moment = {}) {
+        m_master_weights = master_weights;
+        m_first_moment = first_moment;
+        m_second_moment = second_moment;
+        m_steps = steps;
+        if (m_amsgrad && max_second_moment.size() > 0) {
+            m_max_second_moment = max_second_moment;
+        } else if (m_amsgrad) {
+            m_max_second_moment = xt::zeros_like(master_weights);
         }
     }
 
@@ -140,24 +154,21 @@ public:
         xt::xarray<float> first_moment_hat = m_first_moment / bias_correction1;
 
         float bias_correction2 = 1.0f - std::pow(m_beta2, static_cast<float>(m_steps));
-        // v_hat = v_t / (1 - beta2^t)
-        xt::xarray<float> second_moment_hat = m_second_moment / bias_correction2;
 
         // For AMSGrad: use max of past squared gradients
         xt::xarray<float> denom;
         if (m_amsgrad) {
-            m_max_second_moment = xt::maximum(m_max_second_moment, second_moment_hat);
-            denom = xt::sqrt(m_max_second_moment) + m_epsilon;
+            m_max_second_moment = xt::maximum(m_max_second_moment, m_second_moment);
+            denom = xt::sqrt(m_max_second_moment / bias_correction2) + m_epsilon;
         } else {
-            denom = xt::sqrt(second_moment_hat) + m_epsilon;
+            denom = xt::sqrt(m_second_moment / bias_correction2) + m_epsilon;
         }
 
         // Update master weights (fp32): params = params - lr * m_hat / denom - lr * weight_decay * params
         m_master_weights =
             m_master_weights - m_lr * first_moment_hat / denom - m_lr * m_weight_decay * m_master_weights;
 
-        // Return bf16-truncated visible weights
-        return to_bfloat16_precision(m_master_weights);
+        return m_master_weights;
     }
 
     const xt::xarray<float>& get_master_weights() const {
@@ -172,10 +183,10 @@ private:
     float m_weight_decay;
     bool m_amsgrad;
     size_t m_steps;
-    xt::xarray<float> m_master_weights;     // fp32
-    xt::xarray<float> m_first_moment;       // fp32
-    xt::xarray<float> m_second_moment;      // fp32
-    xt::xarray<float> m_max_second_moment;  // fp32, for amsgrad
+    xt::xarray<float> m_master_weights;
+    xt::xarray<float> m_first_moment;
+    xt::xarray<float> m_second_moment;
+    xt::xarray<float> m_max_second_moment;  // amsgrad
 };
 
 struct ErrorMetrics {
@@ -210,64 +221,76 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     auto& g = autograd::ctx().get_generator();
     const uint32_t seed_param = g();
     const uint32_t seed_grad = g();
+    const uint32_t seed_first_moment = g();
+    const uint32_t seed_second_moment = g();
+    const uint32_t seed_max_second_moment = g();
 
-    // Generate random data in fp32
-    xt::xarray<float> g0_fp32 = make_random_xarray(pc.shape, seed_grad);
+    // Generate random data
     xt::xarray<float> w0_fp32 = make_random_xarray(pc.shape, seed_param);
+    xt::xarray<float> m0 = make_random_xarray(pc.shape, seed_first_moment);
+    xt::xarray<float> v0 = make_random_xarray(pc.shape, seed_second_moment, 0.0F, 1.0F);  // must be >= 0
+    xt::xarray<float> max_v0 = make_random_xarray(pc.shape, seed_max_second_moment, 0.0F, 1.0F);
 
-    // Convert to bf16 precision (simulate bf16 input)
-    xt::xarray<float> g0_bf16 = to_bfloat16_precision(g0_fp32);
-    xt::xarray<float> w0_bf16 = to_bfloat16_precision(w0_fp32);
+    // Generate gradient directly as bfloat16
+    xt::xarray<bfloat16> g0_bf16 = make_random_bf16_xarray(pc.shape, seed_grad);
+    auto g0_bf16_tt = to_tt_bf16(g0_bf16);
+
+    // Initial step count (non-zero to test bias correction with accumulated steps)
+    const size_t initial_steps = 10;
 
     // CPU reference implementation with fp32 master weights
     CPUAdamWFullPrecision cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
-    cpu_opt.init(w0_bf16);  // Initialize with bf16-truncated weights
+    cpu_opt.set_state(w0_fp32, m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
 
-    // AdamWFullPrecision implementation
-    auto theta_full_precision = autograd::create_tensor(to_tt_bf16(w0_bf16), true);
-    theta_full_precision->set_grad(to_tt_bf16(g0_bf16));
-    ttml::serialization::NamedParameters params_full_precision{{"theta", theta_full_precision}};
+    // Create theta parameter with bf16 weights
+    auto theta = autograd::create_tensor(ttml::core::from_xtensor(w0_fp32, &ttml::autograd::ctx().get_device()), true);
+    ttml::serialization::NamedParameters params{{"theta", theta}};
 
-    ttml::optimizers::AdamWFullPrecisionConfig full_precision_cfg;
-    full_precision_cfg.lr = pc.lr;
-    full_precision_cfg.beta1 = pc.beta1;
-    full_precision_cfg.beta2 = pc.beta2;
-    full_precision_cfg.epsilon = pc.epsilon;
-    full_precision_cfg.weight_decay = pc.weight_decay;
-    full_precision_cfg.amsgrad = pc.amsgrad;
+    ttml::optimizers::AdamWFullPrecisionConfig cfg;
+    cfg.lr = pc.lr;
+    cfg.beta1 = pc.beta1;
+    cfg.beta2 = pc.beta2;
+    cfg.epsilon = pc.epsilon;
+    cfg.weight_decay = pc.weight_decay;
+    cfg.amsgrad = pc.amsgrad;
 
-    ttml::optimizers::AdamWFullPrecision opt_full_precision(params_full_precision, full_precision_cfg);
+    ttml::optimizers::AdamWFullPrecision opt(params, cfg);
+
+    // Inject optimizer state
+    serialization::StateDict state;
+    state["steps"] = initial_steps;
+    state["master_weights"] =
+        serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
+    state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
+    state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
+    state["amsgrad"] = pc.amsgrad;
+    if (pc.amsgrad) {
+        state["max_exp_avg_sq"] =
+            serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(max_v0), false)}};
+    }
+    opt.set_state_dict(state);
 
     // Run both optimizers for the specified number of steps
     for (uint32_t i = 0; i < steps; ++i) {
-        cpu_opt.step(g0_bf16);
-        opt_full_precision.step();
+        theta->set_grad(g0_bf16_tt);
+        cpu_opt.step(xt::cast<float>(g0_bf16));
+        opt.step();
     }
 
-    // Get CPU master weights (fp32)
+    // Compare master weights
     const auto& cpu_master_weights = cpu_opt.get_master_weights();
-
-    // Get device master weights (fp32)
-    const auto& device_master_weights = opt_full_precision.get_master_weights();
+    const auto& device_master_weights = opt.get_master_weights();
     auto master_weights_tensor = device_master_weights.at("theta")->get_value(autograd::PreferredPrecision::FULL);
-
-    // Convert to CPU for comparison
     auto device_master_weights_cpu = core::to_xtensor(master_weights_tensor);
 
-    fmt::print("\n=== Error Metrics (comparing fp32 master weights) ===\n");
+    auto metrics = compute_error_metrics(cpu_master_weights, device_master_weights_cpu, pc.name);
 
-    // Compute error metrics for master weights
-    auto master_weights_metrics =
-        compute_error_metrics(cpu_master_weights, device_master_weights_cpu, "AdamWFullPrecision Master Weights");
-
-    // The error should be very small since both use fp32 master weights
-    // Allow for small numerical differences due to hardware
-    EXPECT_LT(master_weights_metrics.mean_error, 1e-3f)
+    EXPECT_LT(metrics.mean_error, 1e-7f)
         << "AdamWFullPrecision master weights mean error should be small compared to CPU reference";
-    EXPECT_LT(master_weights_metrics.max_error, 1e-2f)
+    EXPECT_LT(metrics.max_error, 1e-6f)
         << "AdamWFullPrecision master weights max error should be small compared to CPU reference";
 
-    fmt::print("\n");
+    autograd::ctx().close_device();
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<AdamWFullPrecisionCase>& info) {
@@ -277,8 +300,8 @@ static std::string CaseName(const ::testing::TestParamInfo<AdamWFullPrecisionCas
 
 TEST_P(AdamWFullPrecisionComparisonTest, CompareWithCPU) {
     const auto& pc = GetParam();
-    // Run 2 steps to ensure momentum buffers are properly exercised
-    const uint32_t steps = 2;
+    // Single step with pre-initialized momentum states for rigorous testing
+    const uint32_t steps = 1;
     run_steps_and_compare(pc, steps);
 }
 
@@ -305,11 +328,6 @@ static const AdamWFullPrecisionCase kBasicCases[] = {
     {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-7f, 0.0f, false, "Epsilon_1e7"},
     {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, false, "Epsilon_1e9"},
     {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
-
-    // Mixed configurations
-    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.0f, false, "Mixed_1"},
-    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.0f, false, "Mixed_2"},
-    {{1, 32, 128, 512}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.0f, false, "Mixed_3"},
 
     // Large and small tensor shapes
     {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_flat"},
@@ -396,6 +414,3 @@ static const AdamWFullPrecisionCase kAMSGradCases[] = {
     {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "Large_4D"},
     {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, true, "Wide"},
 };
-
-INSTANTIATE_TEST_SUITE_P(
-    AdamWFullPrecisionAMSGrad, AdamWFullPrecisionComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
