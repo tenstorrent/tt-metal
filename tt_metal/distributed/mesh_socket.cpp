@@ -707,17 +707,14 @@ void D2HSocket::pop_pages(uint32_t num_pages) {
 void D2HSocket::notify_sender() {
     const SocketSenderSize_ sender_size;
     const auto& mesh_device = config_buffer_->device();
-    auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     uint32_t bytes_acked_addr = config_buffer_->address() + sender_size.md_size_bytes;
-    auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
 
-    mesh_cq.enqueue_write_shard_to_core(
-        {sender_core_.device_coord, sender_virtual_core, bytes_acked_addr},
-        &bytes_acked_,
-        sizeof(bytes_acked_),
-        false,
-        {},
-        false);
+    // Use slow dispatch to write bytes_acked to sender core
+    // This avoids blocking during trace capture (fast dispatch writes are not allowed during trace)
+    IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+    std::vector<uint32_t> ack_data = {bytes_acked_};
+    tt::tt_metal::detail::WriteToDeviceL1(
+        device, sender_core_.core_coord, bytes_acked_addr, ack_data, CoreType::WORKER);
 }
 
 void D2HSocket::barrier() {
