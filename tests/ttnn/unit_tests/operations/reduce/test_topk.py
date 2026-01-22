@@ -18,6 +18,8 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     # Input tensor
     shape = [N, C, H, W]
+    ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
+    torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
@@ -28,8 +30,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
         for i in range(W):
             indices_tensor_torch[:, :, :, i] = i
-        dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
-        indices_tensor = ttnn.from_torch(indices_tensor_torch, dtype, layout=ttnn.Layout.TILE, device=device)
+        indices_tensor = ttnn.from_torch(
+            indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
+        )
     else:
         indices_tensor = None
 
@@ -45,7 +48,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     # Convert TTNN outputs to Torch for comparison
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
-    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
 
     # Assert output shapes
     desired_shape = [N, C, H, W]
@@ -102,6 +105,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 18992, 3, 3000),
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
+        (1, 1, 32, 64128, 3, 32),
     ),
 )
 @pytest.mark.parametrize(
