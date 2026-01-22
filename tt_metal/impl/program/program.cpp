@@ -213,6 +213,12 @@ detail::ProgramImpl::ProgramImpl() :
         core_to_kernel_group_index_table_.push_back({});
     }
 
+    TT_ASSERT(
+        cb_mask_width_ >= max_cbs_,
+        "CB mask width ({}) is insufficient for architecture's {} CBs",
+        cb_mask_width_,
+        max_cbs_);
+
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
 
@@ -597,12 +603,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint64_t used_cbs = local_val->second.to_ullong();
                             local_cb_mask |= used_cbs;
-                            uint32_t calculated_index = CB_MASK_WIDTH - (uint32_t)__builtin_clzll(used_cbs);
-                            TT_ASSERT(
-                                calculated_index <= CB_MASK_WIDTH,
-                                "Calculated CB index {} exceeds CB_MASK_WIDTH {}",
-                                calculated_index,
-                                CB_MASK_WIDTH);
+                            uint32_t calculated_index =
+                                cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(used_cbs));
                             max_local_cb_end_index = std::max(max_local_cb_end_index, calculated_index);
                             if (!logged_noncontiguous) {
                                 // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
@@ -611,7 +613,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                 if (non_contiguous_cbs) {
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
-                                    uint32_t first_unused_index = (uint32_t)__builtin_ctzll(~used_cbs);
+                                    uint32_t first_unused_index = static_cast<uint32_t>(__builtin_ctzll(~used_cbs));
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);

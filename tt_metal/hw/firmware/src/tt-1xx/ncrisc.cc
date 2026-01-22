@@ -139,12 +139,13 @@ int main(int argc, char* argv[]) {
 #endif
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        // Setup CBs 0-31 from low 32 bits, CBs 32-63 from high 32 bits (Blackhole only)
-        // shift_mask=false since masks are pre-shifted
-        uint32_t local_cb_mask_low = launch_msg->kernel_config.local_cb_mask & 0xFFFFFFFF;
+        // CB mask split: low bits for lower CB indices, high bits for upper CB indices
+        // Wormhole uses only lower half (TRISC memory limit), Blackhole uses both
+        uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
         setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
 #ifdef ARCH_BLACKHOLE
-        uint32_t local_cb_mask_upper = launch_msg->kernel_config.local_cb_mask >> 32;
+        uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
         setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
 #endif
 

@@ -202,6 +202,11 @@ public:
 
     ~ProgramImpl() noexcept;
 
+    // CB mask width derived from kernel_config_msg_t::local_cb_mask type
+    using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
+        FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
+    static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
+
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;

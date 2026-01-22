@@ -105,6 +105,7 @@ protected:
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        init_max_cbs();
     }
 
     void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -149,6 +150,7 @@ protected:
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }
+        init_max_cbs();
     }
 
     void TearDown() override {

@@ -95,9 +95,9 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
     return get_exp_precision(last_valid_format);
 }
 
-std::vector<DataFormat> get_unpack_src_formats(std::span<DataFormat> data_formats) {
+std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats) {
     std::vector<DataFormat> unpack_src_format;
-    for (auto& src_format : data_formats) {
+    for (auto src_format : data_formats) {
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
             switch (src_format) {
@@ -139,7 +139,7 @@ bool is_all_fp32_formats(std::span<const DataFormat> data_format) {
 }
 
 std::vector<DataFormat> get_unpack_dst_formats(
-    std::span<DataFormat> buf_formats,
+    std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
@@ -309,7 +309,7 @@ DataFormat get_single_pack_src_format(
 }
 
 std::vector<DataFormat> get_pack_src_formats(
-    std::span<DataFormat> data_formats,
+    std::span<const DataFormat> data_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
@@ -317,7 +317,7 @@ std::vector<DataFormat> get_pack_src_formats(
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
     DataFormat pack_src_format;
-    for (const auto& src_format : data_formats) {
+    for (auto src_format : data_formats) {
         pack_src_format = get_single_pack_src_format(
             src_format, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
@@ -326,10 +326,9 @@ std::vector<DataFormat> get_pack_src_formats(
     return pack_src_formats;
 }
 
-std::vector<DataFormat> get_pack_dst_formats(std::span<DataFormat> buf_formats) {
+std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats) {
     std::vector<DataFormat> pack_dst_format;
-    for (auto& dst_format : buf_formats) {
-        // DataFormat dst_format = buf_formats[i];
+    for (auto dst_format : buf_formats) {
         if (dst_format == DataFormat::RawUInt32 || dst_format == DataFormat::RawUInt16 ||
             dst_format == DataFormat::RawUInt8) {
             switch (dst_format) {

@@ -24,20 +24,20 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats);
 // Checks if all formats in format array are fp32/tf32/invalid, then data can be unpacked as tf32 for fp32 accumulation
 bool is_all_fp32_formats(std::span<const DataFormat> data_format);
 
-std::vector<DataFormat> get_unpack_src_formats(std::span<DataFormat> data_formats);
+std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats);
 std::vector<DataFormat> get_unpack_dst_formats(
-    std::span<DataFormat> buf_formats,
+    std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en = false);
 std::vector<DataFormat> get_pack_src_formats(
-    std::span<DataFormat> data_formats,
+    std::span<const DataFormat> data_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
-std::vector<DataFormat> get_pack_dst_formats(std::span<DataFormat> buf_formats);
+std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats);
 
 }  // namespace tt

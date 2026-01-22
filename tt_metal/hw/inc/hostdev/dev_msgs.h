@@ -26,11 +26,9 @@
 
 #include <atomic>
 #include <cstdint>
-#include <utility>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "tt-metalium/circular_buffer_constants.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -177,9 +175,6 @@ static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0)
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
-
-// Ensure local_cb_mask size matches CB_MASK_WIDTH
-static_assert(sizeof(decltype(std::declval<kernel_config_msg_t&>().local_cb_mask)) * 8 == CB_MASK_WIDTH);
 
 struct go_msg_t {
     union {
