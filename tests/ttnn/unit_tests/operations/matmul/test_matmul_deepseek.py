@@ -68,7 +68,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         {
             "m": 32,
             "k": 7168,
-            "n": 3584,  # 2304, don't have Galaxy 9x8 grid
+            "n": 3584,  # 2304, padded up
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
             "out_core_grid": (7, 8),
@@ -82,7 +82,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # mlp ff2
         {
             "m": 32,
-            "k": 3584,  # 2304, really need tiny tiles
+            "k": 3584,  # 2304, padded up
             "n": 7168,
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
@@ -94,8 +94,53 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             "tile_h": 32,
             "tile_w": 32,
         },
+        # shared expert ff1 / ff3
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 384,  # 256, padded up
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (3, 4),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "tile_h": 32,
+            "tile_w": 32,
+        },
+        # shared expert ff2
+        {
+            "m": 32,
+            "k": 256,
+            "n": 7168,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "tile_h": 32,
+            "tile_w": 32,
+        },
+        # lm heads
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 16512,  # 16160 padded
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (8, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "tile_h": 32,
+            "tile_w": 32,
+        },
     ],
-    ids=["qkv_a", "wq_b", "wo", "ff1_ff3", "ff2"],
+    ids=["qkv_a", "wq_b", "wo", "mlp_ff1_ff3", "mlp_ff2", "shared_expert_ff1_ff3", "shared_expert_mlp_ff2", "lm_heads"],
 )
 @pytest.mark.parametrize("num_iters", [1])
 def test_matmul_l1_dram_sharded(device, test_case, num_iters):
