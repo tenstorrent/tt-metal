@@ -465,7 +465,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     uint32_t total_pages_to_write = region.size / buffer.page_size();
     const uint32_t dst_page_index = region.offset / buffer.page_size();
 
-    if (are_pages_larger_than_max_prefetch_cmd_size(buffer, sub_device_ids.size())) {
+    if (!use_pinned_transfer && are_pages_larger_than_max_prefetch_cmd_size(buffer, sub_device_ids.size())) {
         const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
         const uint32_t num_full_pages = total_pages_to_write;
         total_pages_to_write = num_full_pages * partial_page_spec.num_partial_pages_per_full_page;
