@@ -20,7 +20,7 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, use_pack
     # Output memory config
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    # Test
+    # Test.
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
