@@ -10,10 +10,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-  # Keep for later (manual testing)
+  # Manual trigger (useful for debugging)
   workflow_dispatch:
 
-  # Keep for later (only meaningful on main)
+  # Scheduled execution (only meaningful after merge to main)
   schedule:
     - cron: "*/5 * * * *"
 
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Sanity check: does GH_TOKEN work at all?
+      # Sanity check: confirm GH_TOKEN works
       # ------------------------------------------------------------
       - name: Check GitHub API rate limit
         env:
@@ -39,7 +39,7 @@ jobs:
           gh api rate_limit
 
       # ------------------------------------------------------------
-      # Try simplest possible PR fetch (no flags, no vars)
+      # Fetch open PRs using simplest possible endpoint
       # ------------------------------------------------------------
       - name: Fetch open PRs (hardcoded endpoint)
         env:
@@ -52,7 +52,7 @@ jobs:
           jq 'length' pulls.json
 
       # ------------------------------------------------------------
-      # Build merge-queue snapshot JSON
+      # Build merge queue snapshot JSON
       # ------------------------------------------------------------
       - name: Build merge queue snapshot
         run: |
@@ -97,7 +97,7 @@ jobs:
           ls -lh generated/merge_queue
 
       # ------------------------------------------------------------
-      # Upload via SFTP
+      # Upload via SFTP (NO mkdir — aligns with CI/CD permissions)
       # ------------------------------------------------------------
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp

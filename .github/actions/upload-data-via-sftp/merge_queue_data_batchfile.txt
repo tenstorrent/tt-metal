@@ -1,4 +1,3 @@
-mkdir merge_queue
-cd merge_queue
 put generated/merge_queue/*.json
+
 
