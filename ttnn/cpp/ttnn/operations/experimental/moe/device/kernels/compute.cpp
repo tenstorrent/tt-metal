@@ -36,11 +36,10 @@ void MAIN {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
-    constexpr auto cb_w2s_out = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -161,9 +160,11 @@ void MAIN {
         for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            cb_wait_front(cb_w2c_rdy, 1);
+            if (i == 0) {
+                cb_wait_front(cb_w2c_rdy, 1);
+            }
 
-            uint32_t in0_index = 0;
+            uint32_t in2_index = 0;
 
             tile_regs_acquire();
 
@@ -171,25 +172,30 @@ void MAIN {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 2) {
-                    // For cores which have only 18 mm2 tiles, we need to drain the pipeline for the last 2 and just
-                    // exit.
+                    // The last block has only 16 tiles of interest, so we exit early.
                     if ((block_id == (w2_blocks_per_two_mm2_tile - 1)) && (k == 16)) {
-                        cb_pop_front(cb_w2c_rdy, 1);
+                        if (i == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                        }
                         break;
                     }
 
                     if (dm1_tiles_remaining == 0) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        cb_wait_front(cb_w2c_rdy, 1);
+                        if (i == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                        }
+                        if (i == 0) {
+                            cb_wait_front(cb_w2c_rdy, 1);
+                        }
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in0_index = 0;
+                        in2_index += tiles_per_step;
                     }
                     dm1_tiles_remaining--;
 
                     matmul_block(
                         cb_s2c_in2,
                         cb_r2c_w2,
-                        in0_index++,
+                        in2_index++,
                         /*in1_index=*/k,
                         /*idst=*/0,
                         /*transpose=*/false,
@@ -207,17 +213,9 @@ void MAIN {
 
             tile_regs_wait();
             // Pack this in-place for now.
-            pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(1, cb_s2c_in, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
             tile_regs_release();
-        }
-
-        // For cores which have only 18 mm2 tiles, we need to drain the pipeline for the last 2.
-        if ((num_mm2_tiles >> 1) < num_a2a_iters) {
-            for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                cb_wait_front(cb_w2c_rdy, 1);
-                cb_pop_front(cb_w2c_rdy, 1);
-            }
         }
 
         in0_offset_per_expert += num_w0_w1_tiles_h;
