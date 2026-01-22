@@ -27,7 +27,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     if pass_indices_tensor:
-        indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
+        indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
         for i in range(W):
             indices_tensor_torch[:, :, :, i] = i
         indices_tensor = ttnn.from_torch(
