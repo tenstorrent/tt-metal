@@ -168,8 +168,10 @@ void kernel_main() {
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
         auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
+        auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
 
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
 
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
@@ -180,6 +182,9 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0,                           // ignore
                 static_cast<uint32_t>(1)});  // increment 1
+
+        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
 
         // Skip barrier semaphore in minimal version (no fabric multicast to increment it)
 
@@ -252,15 +257,15 @@ void kernel_main() {
                                         DPRINT << "writing into intermediate_tile_id: " << intermediate_tile_id
                                                << ENDL();
                                     }
-                                    // auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                    //     intermediate_addrgen, intermediate_tile_id, 0);
-                                    // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                    //     &mux_connection_handle,
-                                    //     pkt_unicast_hdr,
-                                    //     l1_read_addr,
-                                    //     NocUnicastCommandHeader{noc_address0});
-                                    // l1_read_addr += page_size;
-                                    // noc_async_writes_flushed();
+                                    auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                        intermediate_addrgen, intermediate_tile_id, 0);
+                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                        &mux_connection_handle,
+                                        pkt_unicast_hdr,
+                                        l1_read_addr,
+                                        NocUnicastCommandHeader{noc_address0});
+                                    l1_read_addr += page_size;
+                                    noc_async_writes_flushed();
                                 }
                                 DPRINT << "--------------------------------" << ENDL();
                                 cb_pop_front(cb_output_id, tile_granularity);
