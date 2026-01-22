@@ -4,6 +4,7 @@
 
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
+#include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
@@ -13,9 +14,33 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental {
 
+static Tensor prepare_and_check_weight_tensor(
+    const Tensor& weight_tensor,
+    uint32_t groups_,
+    const ttnn::experimental::prim::Conv3dConfig& config,
+    ttnn::MeshDevice* device) {
+    Tensor prepared_weight_tensor = weight_tensor;
+    switch (prepared_weight_tensor.logical_shape().rank()) {
+        case 5:
+            TT_FATAL(prepared_weight_tensor.device() == nullptr, "Unprepared weight tensor must be on host");
+            prepared_weight_tensor = ttnn::operations::experimental::conv3d::prepare_conv3d_weights(
+                prepared_weight_tensor, groups_, config.C_in_block, config.alignment, device);
+            break;
+        case 2: break;
+        default: TT_THROW("Unsupported weight tensor rank: {}", prepared_weight_tensor.logical_shape().rank());
+    }
+
+    if (prepared_weight_tensor.layout() != Layout::TILE) {
+        prepared_weight_tensor = ttnn::to_layout(prepared_weight_tensor, ttnn::Layout::TILE);
+    }
+
+    return prepared_weight_tensor;
+}
+
 ttnn::Tensor conv3d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    ttnn::MeshDevice* device,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const std::optional<ttnn::experimental::prim::Conv3dConfig>& config_opt,
     tt::tt_metal::DataType dtype_,
@@ -39,12 +64,14 @@ ttnn::Tensor conv3d(
         32,                                                      // C_out_block (one tile width)
         0,                                                       // C_in_block (0 = full C_in)
         dilation_,                                               // dilation (match the op's dilation)
+        32,                                                      // alignment
         input_tensor.device()->compute_with_storage_grid_size()  // use full device grid
         ));
 
+    Tensor prepared_weight_tensor = prepare_and_check_weight_tensor(weight_tensor, groups_, config, device);
     return ttnn::prim::conv3d(
         input_tensor,
-        weight_tensor,
+        prepared_weight_tensor,
         bias_tensor,
         config,
         dtype_,
