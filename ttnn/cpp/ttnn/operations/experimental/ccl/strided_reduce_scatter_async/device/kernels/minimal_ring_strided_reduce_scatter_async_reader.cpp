@@ -126,6 +126,9 @@ void kernel_main() {
     DPRINT << " start_tiles_to_read: " << start_tiles_to_read << ENDL();
     DPRINT << " start_pages_read_in_row: " << start_pages_read_in_row << ENDL();
     DPRINT << " start_row_offset: " << start_row_offset << ENDL();
+    DPRINT << " out_ready_sem: " << out_ready_sem << ENDL();
+
+    uint32_t sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
@@ -155,7 +158,13 @@ void kernel_main() {
                     // DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        // TODO: wait on the semaphore here!
+                        if (do_reduce) {
+                            DPRINT << "WAITING ON SEMAPHORE: " << out_ready_sem << ENDL();
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                            sem_target++;
+                            DPRINT << "SEMAPHORE WAIT COMPLETE: " << sem_target << ENDL();
+                        }
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         uint32_t direction_offset = direction ? 0 : chunk_width / 2;
@@ -202,6 +211,12 @@ void kernel_main() {
                         slice_idx--;
                     } else {
                         slice_idx++;
+                    }
+
+                    if (do_reduce && (i == (ring_size - 1))) {
+                        // Reset the semaphore before the next batch
+                        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+                        sem_target = 0;
                     }
                 }
             }

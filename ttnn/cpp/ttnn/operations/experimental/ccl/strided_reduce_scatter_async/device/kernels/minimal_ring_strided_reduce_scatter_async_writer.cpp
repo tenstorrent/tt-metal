@@ -101,6 +101,7 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
@@ -166,9 +167,19 @@ void kernel_main() {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-        auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+        auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
+
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
+
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_seminc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                           // ignore
+                static_cast<uint32_t>(1)});  // increment 1
 
         // Skip barrier semaphore in minimal version (no fabric multicast to increment it)
 
@@ -253,6 +264,16 @@ void kernel_main() {
                                 }
                                 DPRINT << "--------------------------------" << ENDL();
                                 cb_pop_front(cb_output_id, tile_granularity);
+
+                                uint64_t out_ready_sem_noc_addr_in_pkt =
+                                    safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+                                DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                                    &mux_connection_handle,
+                                    pkt_hdr_seminc,
+                                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                                DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                noc_async_writes_flushed();
                             }
                         } else {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
