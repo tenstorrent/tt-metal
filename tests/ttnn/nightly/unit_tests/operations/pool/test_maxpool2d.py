@@ -821,3 +821,47 @@ def test_golden_maxpool2d_with_vovnet_params(device, padding):
     assert torch.equal(
         golden_torch, torch_output
     ), f"Golden function produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_torch.shape}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    (([1, 1, 112, 112],)),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((3, 3),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+    ((1, 1),),
+)
+@pytest.mark.parametrize("stride", ((2, 2),))
+@pytest.mark.parametrize(
+    "dilation",
+    ((1, 1),),
+)
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_run_max_pool_low_rank(
+    input_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    tensor_map,
+    in_dtype,
+):
+    run_max_pool2d(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        ttnn.bfloat16,
+        ceil_mode=False,
+        config_tensor_in_dram=False,
+    )
