@@ -345,60 +345,6 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
-PyDType get_py_tensor_type_info(nb::dlpack::dtype py_tensor_dtype) {
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Float) && py_tensor_dtype.bits == 32 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::FLOAT32;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Float) && py_tensor_dtype.bits == 64 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::FLOAT64;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Float) && py_tensor_dtype.bits == 16 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::FLOAT16;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat) && py_tensor_dtype.bits == 16 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::BFLOAT16;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Int) && py_tensor_dtype.bits == 8 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::INT8;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Int) && py_tensor_dtype.bits == 16 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::INT16;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Int) && py_tensor_dtype.bits == 32 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::INT32;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Int) && py_tensor_dtype.bits == 64 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::INT64;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::UInt) && py_tensor_dtype.bits == 32 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::UINT32;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::UInt) && py_tensor_dtype.bits == 8 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::UINT8;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
-        return PyDType::BOOL;
-    }
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::UInt) && py_tensor_dtype.bits == 16 &&
-        py_tensor_dtype.lanes == 1) {
-        return PyDType::UINT16;
-    }
-
-    TT_THROW(
-        "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
-        py_tensor_dtype);
-}
-
 HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py_tensor, DataType target_dtype) {
     auto to_host_buffer_impl = []<typename T>(const nb::ndarray<nb::array_api>& contiguous_py_tensor) -> HostBuffer {
         // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
@@ -710,7 +656,7 @@ void pytensor_module(nb::module_& mod) {
                     py_tensor_dtype.lanes = 1;
                 }
 
-                auto src_dtype = CMAKE_UNIQUE_NAMESPACE::get_py_tensor_type_info(py_tensor_dtype);
+                auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
                 const bool tile_layout_by_default =

@@ -214,7 +214,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     }
 
     GraphTracker::instance().track_function_start(
-        "detail::convert_python_tensor_to_tt_tensor",
+        "ttnn::convert_python_tensor_to_tt_tensor",
         dst_dtype,
         layout,
         optional_tile,
