@@ -823,7 +823,7 @@ def test_golden_maxpool2d_with_vovnet_params(device, padding):
     ), f"Golden function produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_torch.shape}"
 
 
-# quick test to verify the results of max pool are the same for tesnors with the N or C dim squeezed
+# quick test to verify the results of max pool are the same for tensors with the N or C dim squeezed
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("rank", [4, 3, 2])
 def test_run_max_pool_low_rank(rank, device):

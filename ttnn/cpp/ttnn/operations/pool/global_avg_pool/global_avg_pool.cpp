@@ -55,7 +55,7 @@ Tensor global_avg_pool2d(
         input_4d = ttnn::reshape(input, reshaped_logical, reshaped_padded);
         in_shape = input_4d.padded_shape();
     } else if (rank != 4) {
-        TT_THROW("Input tensor must be rank 2, 3, or 4");
+        TT_THROW("Input tensor must be rank 2, 3, or 4, got rank {}", rank);
     }
 
     auto output = input_4d;
