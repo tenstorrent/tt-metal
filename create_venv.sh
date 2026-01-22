@@ -19,6 +19,9 @@ OPTIONS:
     --force               Overwrite existing virtual environment without prompting.
                           By default, warns and prompts for confirmation if the
                           target directory exists and is not empty.
+    --bundle-python       Deep-copy the Python interpreter into the venv instead of
+                          using symlinks. This makes the venv fully self-contained
+                          and portable, at the cost of increased disk space.
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -57,6 +60,7 @@ EOF
 ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
+BUNDLE_PYTHON="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -83,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_OVERWRITE="true"
+            shift
+            ;;
+        --bundle-python)
+            BUNDLE_PYTHON="true"
             shift
             ;;
         --help|-h)
@@ -318,5 +326,34 @@ if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
 else
     echo "In worktree: not generating git hooks"
 fi
+
+# Bundle Python interpreter into the venv if requested
+if [[ "$BUNDLE_PYTHON" == "true" ]]; then
+    echo "Bundling Python interpreter into venv..."
+
+    # Get the real path to the Python interpreter
+    REAL_PYTHON_PATH=$(readlink -f "$PYTHON_ENV_DIR/bin/python")
+    echo "  Python interpreter: $REAL_PYTHON_PATH"
+
+    # Extract the cpython installation directory (parent of bin/python)
+    # Path is in form: <prefix>/python/cpython<version>/bin/python
+    CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
+    echo "  CPython directory: $CPYTHON_DIR"
+
+    # Remove python symlinks in venv (they may not match the interpreter's structure)
+    echo "  Removing venv python symlinks..."
+    rm -f "$PYTHON_ENV_DIR/bin/python"*
+
+    # Copy the cpython directory contents into the venv
+    echo "  Copying Python interpreter files into venv..."
+    cp -r "$CPYTHON_DIR"/* "$PYTHON_ENV_DIR/"
+
+    echo "  Python interpreter bundled successfully"
+fi
+
+# Compile bytecode for improved startup performance
+echo "  Compiling bytecode (for network mount performance)..."
+python -m compileall -j 0 -q "$PYTHON_ENV_DIR/lib" 2>/dev/null || true
+echo "  Bytecode compilation completed"
 
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"
