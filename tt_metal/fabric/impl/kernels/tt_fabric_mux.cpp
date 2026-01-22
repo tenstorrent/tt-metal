@@ -82,8 +82,8 @@ void setup_channel(
     new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-//        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
-        reinterpret_cast<uint32_t* const>(connection_handshake_address),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+//        static_cast<uint32_t>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
