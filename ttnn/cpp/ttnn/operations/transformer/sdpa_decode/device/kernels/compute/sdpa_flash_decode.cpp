@@ -416,7 +416,8 @@ void MAIN {
                     /* OUT_ACC *= EXP_MAX_DIFF */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
                     pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
+                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
 
                     /* CUR_SUM += PREV_SUM */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);
