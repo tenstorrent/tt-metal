@@ -68,7 +68,7 @@ class UNet3DTestInfra:
         )
         p_s = config["dataset"]["slice_builder"]["patch_shape"]
         h_s = config["dataset"]["slice_builder"]["halo_shape"]
-        self.resolution = [p + h for p, h in zip(p_s, h_s)]
+        self.resolution = [p + (2 * h) for p, h in zip(p_s, h_s)]
 
         self.torch_input = torch.randn(
             (self.batch_size, self.channels, self.resolution[0], self.resolution[1], self.resolution[2])

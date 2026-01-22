@@ -87,6 +87,7 @@ class Predictor:
                         index = (channel_slice,) + tuple(index)
                         prediction_array[index] = (pred > 0.5).astype("uint16")
 
+            self._create_prediction_dataset(h5_output_file, prediction_array)
             logger.info(f"Finished inference in {time.perf_counter() - start:.2f} seconds")
 
             result = {}
