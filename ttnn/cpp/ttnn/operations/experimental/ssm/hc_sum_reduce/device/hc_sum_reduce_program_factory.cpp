@@ -8,15 +8,13 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const HcSumReduceParams& operation_attributes, const HcSumReduceInputs& tensor_args, Tensor& output) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -190,9 +188,9 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
 
 void HCSumReduceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const HcSumReduceParams& /*operation_attributes*/,
+    const HcSumReduceInputs& tensor_args,
+    Tensor& tensor_return_value) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -244,4 +242,4 @@ void HCSumReduceProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_variables.compute_kernel_id, shared_variables.cores, compute_runtime_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program
+}  // namespace ttnn::experimental::prim

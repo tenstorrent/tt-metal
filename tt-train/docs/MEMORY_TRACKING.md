@@ -16,6 +16,8 @@ Each snapshot records:
 
 ### Usage
 
+#### C++
+
 ```cpp
 #include "ttml/utils/memory_utils.hpp"
 
@@ -39,14 +41,52 @@ ttml::utils::MemoryUsageTracker::clear(); // Not required, since guard will clea
                                           // You might want to clear earlier to remove traces from memory
 ```
 
+#### Python
+
+```python
+import ttml
+
+# Access MemoryUsageTracker from ttml.core.utils
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
+# Begin capture (returns guard that auto-cleans when destroyed)
+guard = MemoryUsageTracker.begin_capture()
+
+# ... model creation code ...
+MemoryUsageTracker.snapshot("MODEL_CREATION")
+
+# ... optimizer creation code ...
+MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
+
+# ... training iteration ...
+MemoryUsageTracker.snapshot("FORWARD_PASS")
+MemoryUsageTracker.snapshot("BACKWARD_PASS")
+
+# Print and cleanup
+MemoryUsageTracker.end_capture("ITERATION_COMPLETE")
+MemoryUsageTracker.print_memory_usage()
+MemoryUsageTracker.clear()
+guard.release()  # Prevent double cleanup when guard is garbage collected
+```
+
+See [train_nanogpt.py](/tt-train/sources/examples/nano_gpt/train_nanogpt.py) with `--track_memory` flag for a complete example.
+
 ### NO_DISPATCH Mode
 
-To measure memory for models that don't fit in device memory, use:
+To measure memory for models that don't fit in device memory, use NO_DISPATCH mode:
 
+**C++:**
 ```cpp
 ttnn::ScopeGuard guard = ttml::utils::MemoryUsageTracker::begin_capture(
     tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH
 );
+```
+
+**Python:**
+```python
+import ttnn
+
+guard = MemoryUsageTracker.begin_capture(ttnn.graph.RunMode.NO_DISPATCH)
 ```
 
 This mode records allocations without actually allocating memory and executing operations on device. Note that training loss is messed up after running first iteration in NO_DISPATCH, which is expected, since none of ttnn operations were actually dispatched on the device.
@@ -79,7 +119,7 @@ This mode records allocations without actually allocating memory and executing o
 - `Cumulative Current[N] = Cumulative Current[N-1] + Segment Change[N]`
 - `Cumulative Peak[N] = max(Cumulative Peak[N-1], Cumulative Current[N-1] + Segment Peak[N])`
 
-## Example: TinyLlama Training Loop
+## Example: NanoGPT Training Loop
 
 From `tt-train/sources/examples/nano_gpt/main.cpp`:
 
@@ -158,7 +198,7 @@ python scripts/analyze_memory.py --logs <logfile> [options]
 ```
 
 **Required:**
-- `--logs`: Log file containing memory usage summaries (memory tool logs from training). Note: you can concatenate multiple logs, it would analyze them separately, and add all of them on the histogram
+- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/nano_gpt/train_nanogpt.py)). Note: you can concatenate multiple trainig logs in one file, it would analyze them separately, and add all of them on the histogram
 
 **Optional:**
 - `--device_memory`: Device memory in bytes (default: 12GB)

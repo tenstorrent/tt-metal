@@ -12,7 +12,6 @@ set(UNIT_TESTS_LEGACY_SRC
     test_bcast.cpp
     test_bfp8_conversion.cpp
     test_bmm.cpp
-    test_clean_init.cpp
     test_compile_program.cpp
     test_compile_sets_kernel_binaries.cpp
     test_core_range_set.cpp
@@ -58,6 +57,25 @@ set_target_properties(
 )
 list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 
+# Standalone test_clean_init executable (not a gtest - requires custom main with skip-teardown handling)
+add_executable(test_clean_init test_clean_init.cpp)
+target_link_libraries(test_clean_init PUBLIC Metalium::Metal)
+target_include_directories(
+    test_clean_init
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+set_target_properties(
+    test_clean_init
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
@@ -70,6 +88,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/jit_build)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc_debugging)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
@@ -89,6 +108,7 @@ add_custom_target(
         unit_tests_integration
         unit_tests_llk
         unit_tests_noc
+        unit_tests_noc_debugging
         unit_tests_lightmetal
         unit_tests_sfpi
         unit_tests_misc

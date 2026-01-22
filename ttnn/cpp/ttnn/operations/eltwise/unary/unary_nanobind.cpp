@@ -68,8 +68,8 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
@@ -160,8 +160,8 @@ void bind_unary_composite_optional_floats_with_default(
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config);
             },

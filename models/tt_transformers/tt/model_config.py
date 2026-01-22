@@ -570,6 +570,7 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -633,6 +634,10 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
         self.processor = None if dummy_weights else self.create_processor()
+
+        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        self.use_qk_fused = not self.is_multimodal
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -773,6 +778,7 @@ class ModelArgs:
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
+                and self.ccl_topology() == ttnn.Topology.Ring
             )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
@@ -864,7 +870,8 @@ class ModelArgs:
                     1024
                     if self.num_devices == 8
                     and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and 1024 % (self.dim / self.num_devices) == 0
+                    and not is_blackhole()
+                    and 1024 % (self.dim // self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -1331,10 +1338,6 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
-            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")
@@ -1411,26 +1414,33 @@ class ModelArgs:
                 "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
+                "T3K": [128],
+                "TG": [128, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-8B": {
+                "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.2-3B": {
+                "N150": [],
             },
         }
 
         model_name = self.base_model_name
         device_name = self.device_name
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
+        if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        else:
+            return []
 
     @staticmethod
     def __get_llama_local_params_name(model_name):
@@ -3265,14 +3275,59 @@ class DecodersPrecision:
         return inst
 
 
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
+def num_to_corerange(
+    x: int,
+    start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0),
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.CoreRange:
+    """
+    Construct a rectangular CoreRange of exactly ``x`` cores starting at
+    ``start_core`` on a ``grid_x × grid_y`` core grid.
+
+    The CoreRange is allocated in row-major order semantics but must form
+    a single contiguous rectangle representable by ``ttnn.CoreRange``.
+
+    Defaults to an 8×8 grid for backward compatibility.
+    """
+
+    # --- basic sanity ---
+    assert x > 0, "x must be positive"
+    assert grid_x > 0 and grid_y > 0
+    assert 0 <= start_core.x < grid_x
+    assert 0 <= start_core.y < grid_y
+
+    sx, sy = start_core.x, start_core.y
+
+    # --- linear availability (row-major correctness) ---
+    remaining_linear_cores = (grid_x - sx) + (grid_y - sy - 1) * grid_x  # remainder of start row  # full rows below
+    assert remaining_linear_cores >= x, (
+        f"Not enough cores from start_core {start_core} "
+        f"to allocate {x} cores (only {remaining_linear_cores} available)"
+    )
+
+    # --- rectangular availability ---
+    remaining_x = grid_x - sx
+    remaining_y = grid_y - sy
+
+    # --- shape rule ---
+    assert x < grid_x or x % grid_x == 0, f"x must be < grid_x ({grid_x}) or a multiple of grid_x"
+
+    # --- choose rectangle dimensions ---
+    num_x = min(x, remaining_x)
     num_y = x // num_x
-    assert num_x * num_y == x
+
+    assert num_x * num_y == x, f"x={x} cannot form a rectangular CoreRange starting at {start_core}"
+
+    # --- bounds check ---
+    assert num_y <= remaining_y, f"CoreRange height {num_y} exceeds available rows {remaining_y}"
+
+    end_x = sx + num_x - 1
+    end_y = sy + num_y - 1
+
     return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
+        start_core,
+        ttnn.CoreCoord(end_x, end_y),
     )
 
 

@@ -37,10 +37,18 @@ golden_benchmarks = {}
 def add_benchmark_iterations(input):
     out = {}
     for benchmark in input["benchmarks"]:
+        name = benchmark["name"]
         if benchmark["repetitions"] == 1:
-            out[benchmark["name"]] = benchmark
-        elif benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "mean":
-            out[benchmark["name"].replace("_mean", "")] = benchmark
+            out[name] = benchmark
+        elif benchmark["repetitions"] == 2 and benchmark["run_type"] == "iteration":
+            if name in out:
+                # Use the minimum time to reduce the impact of flakes. Flakes are unlikely to improve performance, but
+                # may hurt performance due to some other process using CPU.
+                out[name]["IterationTime"] = min(out[name]["IterationTime"], benchmark["IterationTime"])
+            else:
+                out[name] = benchmark
+        elif benchmark["run_type"] == "aggregate" and benchmark["aggregate_name"] == "median":
+            out[benchmark["name"].replace("_median", "")] = benchmark
     return out
 
 

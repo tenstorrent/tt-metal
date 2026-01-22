@@ -20,6 +20,7 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
+#include <memory>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -173,6 +174,17 @@ public:
 
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
+    // Get the MeshGraphDescriptor instance (if available)
+    // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
+    const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
+        TT_FATAL(mesh_graph_descriptor_.has_value(), "MeshGraphDescriptor not available");
+        return mesh_graph_descriptor_.value();
+    }
+
+    // Get the Mesh Graph Descriptor file path (if available)
+    // Returns empty path if MeshGraph was created via generate_mesh_graph_of_shape()
+    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
+
 private:
     // Private constructor for static factory functions
     MeshGraph() = default;
@@ -212,6 +224,12 @@ private:
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+
+    // Store the MeshGraphDescriptor instance if created from a descriptor file
+    std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
+
+    // Store the file path if MeshGraph was created from a descriptor file
+    std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
 };
 
 }  // namespace tt::tt_fabric
