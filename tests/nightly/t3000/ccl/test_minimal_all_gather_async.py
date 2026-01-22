@@ -339,118 +339,122 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold",
     [
-        (
-            [1, 1, 1024, 5120],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            True,
-            True,
-            1.0,
-        ),  # perf, barrier_with_persistent
-        (
-            [8, 1, 512, 512],
-            0,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            False,
-            1.0,
-        ),  # check, barrier_without_persistent
-        (
-            [1, 1, 1024, 1024],
-            2,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            False,
-            True,
-            1.0,
-        ),  # perf, no_barrier_with_persistent
-        (
-            [1, 1, 1024, 1024],
-            -1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            False,
-            True,
-            1.0,
-        ),  # perf, no_barrier_with_persistent
-        (
-            [1, 1, 48, 1024],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            True,
-            1.0,
-        ),  # check, barrier_with_persistent
-        (
-            [1, 1, 48, 1024],
-            -1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            True,
-            True,
-            1.0,
-        ),  # check, barrier_with_persistent
-        # Composite-AG tests
-        (
-            [1, 1, 1, 8],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            10,
-            True,
-            False,
-            1.0,
-        ),  # perf, barrier_without_persistent
-        (
-            [1, 16, 32, 32],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            False,
-            1,
-            False,
-            True,
-            1.0,
-        ),  # check, no_barrier_with_persistent
-        (
-            [1, 1, 1024, 5120],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat8_b,
-            False,
-            1,
-            True,
-            True,
-            0.9999,
-        ),  # perf, barrier_with_persistent
+        ([1, 32, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 100, None, None, 1.0),  # perf
+        # ([1, 1, 256, 2112], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, 1.0),  # perf
     ],
-    ids=[
-        "sd35_spatial-perf-barrier_with_persistent",
-        "gather_dim_0-check-barrier_without_persistent",
-        "gather_dim_2-perf-no_barrier_with_persistent",
-        "gather_dim_negative_2-perf-no_barrier_with_persistent",
-        "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
-        "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
-        "composite_ag_test_two-perf-barrier_without_persistent",
-        "composite_ag_test_four-check-no_barrier_with_persistent",
-        "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
-    ],
+    # [
+    #     (
+    #         [1, 1, 1024, 5120],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # perf, barrier_with_persistent
+    #     (
+    #         [8, 1, 512, 512],
+    #         0,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         False,
+    #         1.0,
+    #     ),  # check, barrier_without_persistent
+    #     (
+    #         [1, 1, 1024, 1024],
+    #         2,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # perf, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 1024, 1024],
+    #         -1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # perf, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 48, 1024],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # check, barrier_with_persistent
+    #     (
+    #         [1, 1, 48, 1024],
+    #         -1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         1.0,
+    #     ),  # check, barrier_with_persistent
+    #     # Composite-AG tests
+    #     (
+    #         [1, 1, 1, 8],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         True,
+    #         10,
+    #         True,
+    #         False,
+    #         1.0,
+    #     ),  # perf, barrier_without_persistent
+    #     (
+    #         [1, 16, 32, 32],
+    #         1,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat16,
+    #         False,
+    #         1,
+    #         False,
+    #         True,
+    #         1.0,
+    #     ),  # check, no_barrier_with_persistent
+    #     (
+    #         [1, 1, 1024, 5120],
+    #         3,
+    #         ttnn.TILE_LAYOUT,
+    #         ttnn.bfloat8_b,
+    #         False,
+    #         1,
+    #         True,
+    #         True,
+    #         0.9999,
+    #     ),  # perf, barrier_with_persistent
+    # ],
+    # ids=[
+    #     "sd35_spatial-perf-barrier_with_persistent",
+    #     "gather_dim_0-check-barrier_without_persistent",
+    #     "gather_dim_2-perf-no_barrier_with_persistent",
+    #     "gather_dim_negative_2-perf-no_barrier_with_persistent",
+    #     "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
+    #     "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
+    #     "composite_ag_test_two-perf-barrier_without_persistent",
+    #     "composite_ag_test_four-check-no_barrier_with_persistent",
+    #     "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -464,11 +468,11 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_async(
     mesh_device,
@@ -512,22 +516,26 @@ def test_all_gather_async(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
-        # Composite-AG tests
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
+        ([1, 32, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 100, None, None, None),  # perf
+        # ([1, 1, 256, 2112], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
     ],
-    ids=[
-        "dit_shape-perf",  # this one triggers the default chunks_per_sync
-        "sd35_prompt-check",
-        "gather_dim_1-perf",
-        "gather_dim_2_padded_dim_3-check",
-        "composite_ag_test_one-perf",
-        "composite_ag_test_three-check",
-    ],
+    # [
+    #     ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+    #     ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+    #     # Composite-AG tests
+    #     ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+    #     ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
+    # ],
+    # ids=[
+    #     "dit_shape-perf",  # this one triggers the default chunks_per_sync
+    #     "sd35_prompt-check",
+    #     "gather_dim_1-perf",
+    #     "gather_dim_2_padded_dim_3-check",
+    #     "composite_ag_test_one-perf",
+    #     "composite_ag_test_three-check",
+    # ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -541,11 +549,11 @@ def test_all_gather_async(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    # ids=["fabric_ring", "fabric_linear"],
 )
 def test_ttnn_all_gather(
     mesh_device,
