@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import random
+import secrets
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
@@ -60,6 +62,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self.seed_manager = SeedManager(self.tt_sampling)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -98,10 +101,17 @@ class SamplingGenerator:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens)
 
-    def reset_output_state(self, tokens):
+    def reset_output_state(self, tokens=None):
         if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens(tokens)
+
+    def reset_seed(self, seeds, user_ids=None):
+        """Reset seeds for sampling. If user_ids not provided, resets all 32 slots."""
+        if user_ids is None:
+            user_ids = list(range(32))
+        self.seed_manager.reset_seed(seeds, user_ids)
+        self.seed_manager.get_new_values(user_ids)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
@@ -153,7 +163,7 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor],
     ):
         if penalties_on:
-            self.tt_penalties.apply(logits)
+            logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 
@@ -253,24 +263,6 @@ class SamplingGenerator:
                 self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
-    def reset_seed(self, seed):
-        for i, s in enumerate(seed):
-            if s is None:
-                # set to default seed value which is 0
-                seed[i] = 0
-        seed = torch.tensor(seed)
-        user_ids = torch.arange(seed.shape[0])
-
-        user_ids_tt = ttnn.from_torch(
-            user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        seeds_tt = ttnn.from_torch(seed, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # reset seed for each user_id
-        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
-        seeds_tt.deallocate()
-        user_ids_tt.deallocate()
-
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -297,7 +289,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": 0,
+        "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
@@ -356,3 +348,26 @@ def format_sampling_params(sampling_params, max_batch_size):
         if sampling_params.repetition_penalty[i] == 0:
             sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
     return sampling_params
+
+
+class SeedManager:
+    def __init__(self, tt_sampling):
+        self.seeds = [secrets.randbits(64) for _ in range(32)]
+        self.rngs = [random.Random(seed) for seed in self.seeds]
+        self.tt_sampling = tt_sampling
+
+    def reset_seed(self, seeds, user_ids):
+        for i, user in enumerate(user_ids):
+            self.rngs[user].seed(seeds[i])
+            self.seeds[user] = seeds[i]
+
+    def get_new_values(self, empty_slots=range(32), replicate_seeds=False):
+        # get new seeds for each user in empty_slots otherwise 0
+        new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
+
+        if replicate_seeds:
+            assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
+            new_seeds = 32 * [new_seeds[empty_slots[0]]]
+        # send new seeds to sampling module
+        new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
