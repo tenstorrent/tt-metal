@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,14 +63,6 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
     std::filesystem::path current_exe = std::filesystem::canonical("/proc/self/exe");
     std::filesystem::path test_dir = current_exe.parent_path();
     std::filesystem::path test_clean_init_path = test_dir / "test_clean_init";
-    
-    if (!std::filesystem::exists(test_clean_init_path)) {
-        // Try relative to project root
-        const char* tt_metal_home = getenv("TT_METAL_HOME");
-        if (tt_metal_home) {
-            test_clean_init_path = std::filesystem::path(tt_metal_home) / "build" / "test" / "tt_metal" / "test_clean_init";
-        }
-    }
     
     ASSERT_TRUE(std::filesystem::exists(test_clean_init_path)) 
         << "Could not find test_clean_init executable at: " << test_clean_init_path;
