@@ -73,14 +73,13 @@ constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
-constexpr uint32_t cb_prev_grad_query = tt::CBIndex::c_8;     // used for holding previous grad query
-constexpr uint32_t cb_cur_grad_query = tt::CBIndex::c_9;      // used for holding current grad query
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
-constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
-constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of key/value
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
-constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;         // Output: grad_Q
+constexpr uint32_t cb_grad_query_accum = tt::CBIndex::c_8;    // L1 accumulator for grad_query
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_9;   // Recomputed attention weights = softmax(QK^T / sqrt(Et))
+constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_10;  // Gradient w.r.t. attention: dL/dP
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t. QK scores
+constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_12;       // Transpose of key/value
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_13;       // u_scalar per row
+constexpr uint32_t cb_grad_query = tt::CBIndex::c_14;         // Output: grad_Q
 
 const uint32_t onetile = 1U;
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
@@ -97,9 +96,6 @@ void MAIN {
         cb_wait_front(cb_attn_output, tiles_per_row);
         cb_wait_front(cb_grad_output, tiles_per_row);
         cb_wait_front(cb_query, tiles_per_row);
-
-        // uint32_t alias_cb_prev_grad_query = cb_prev_grad_query;
-        // uint32_t alias_cb_cur_grad_query = cb_cur_grad_query;
 
         // Step 1: calculate u_scalar row, one per query row
         // Calculate u_scalar row once before K/V loop(could be shared with kv kernel for optimization)
@@ -152,29 +148,17 @@ void MAIN {
 
             // Step 6: compute grad w.r.t. query
             // dQ = scaler * (dZ @ K)
-            // we apply scaler inside compute_grad_scores function to improve numerical stablility of upcoming matmul
-            // for grad Q(and grad K in kv kernel)
-            // update_grad_query(
-            //     cb_grad_scores,
-            //     cb_key,
-            //     scaler_bits,
-            //     alias_cb_prev_grad_query,
-            //     alias_cb_cur_grad_query,
-            //     tiles_per_row,
-            //     /* do_accumulate */ (h > 0));
-            // cb_wait_front(alias_cb_cur_grad_query, tiles_per_row);
-            update_grad_query_l1_accum(
+            // we apply scaler inside compute_grad_scores function to improve numerical stability of upcoming matmul
+            // for grad Q (and grad K in kv kernel)
+            update_grad_query(
                 cb_grad_scores,
                 cb_key,
                 scaler_bits,
-                cb_cur_grad_query,
+                cb_grad_query_accum,
                 tiles_per_row,
                 block_size,
                 /* do_accumulate */ (h > 0));
-            cb_wait_front(cb_cur_grad_query, tiles_per_row);
-
-            // Swap current and previous grad_query buffers for double-buffering
-            // std::swap(alias_cb_prev_grad_query, alias_cb_cur_grad_query);
+            cb_wait_front(cb_grad_query_accum, tiles_per_row);
 
             // Pop CBs consumed in this K/V iteration
             cb_pop_front(cb_key, tiles_per_row);
@@ -185,8 +169,7 @@ void MAIN {
         }
 
         // Push final grad_query to output CB
-        // pack_tiles_to_output(alias_cb_prev_grad_query, cb_grad_query, tiles_per_row);
-        pack_tiles_to_output(cb_cur_grad_query, cb_grad_query, tiles_per_row);
+        pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, tiles_per_row);
 
         cb_pop_front(cb_u_scalar_row, onetile);
         cb_pop_front(cb_intermediates, num_of_interm_tiles);
