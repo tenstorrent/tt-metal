@@ -70,7 +70,7 @@ void MAIN {
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
     constexpr uint32_t w2_blocks_per_two_mm2_tile = 2 * w2_txns_h / w2_txns_per_block;          // 2 * 5 / 2 = 5
     const uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT_A[ring_core_id];
-    // (num_w2_tiles_w/2) * w2_txns_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
+    // (num_w2_tiles_w/2) * w2_blocks_per_two_mm2_tile;  // (18|20 / 2) * 5 = 45|50
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -223,7 +223,7 @@ void MAIN {
         out_offset_per_expert += num_w0_w1_tiles_h;
     }  // end for (expert_id)
 
-    // Drain the pipeline - the last txn in flight
+    // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
 }
