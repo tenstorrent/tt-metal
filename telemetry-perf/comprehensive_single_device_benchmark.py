@@ -121,10 +121,11 @@ class SingleDeviceTestConfig:
 class SingleDeviceOperations:
     """Single-device operations for benchmarking."""
 
-    def __init__(self, device: ttnn.Device):
+    def __init__(self, device):
+        # device can be ttnn.Device or any device object
         self.device = device
 
-    def run_matmul(self, shape: Tuple[int, ...], memory_config: ttnn.MemoryConfig) -> float:
+    def run_matmul(self, shape: Tuple[int, ...], memory_config) -> float:
         """Run matrix multiplication (compute-bound)."""
         # Create two input tensors
         a = ttnn.from_torch(
@@ -152,7 +153,7 @@ class SingleDeviceOperations:
 
         return end - start
 
-    def run_add(self, shape: Tuple[int, ...], memory_config: ttnn.MemoryConfig) -> float:
+    def run_add(self, shape: Tuple[int, ...], memory_config) -> float:
         """Run element-wise addition (memory-bound)."""
         # Create two input tensors
         a = ttnn.from_torch(
@@ -180,7 +181,7 @@ class SingleDeviceOperations:
 
         return end - start
 
-    def run_concat(self, shape: Tuple[int, ...], memory_config: ttnn.MemoryConfig) -> float:
+    def run_concat(self, shape: Tuple[int, ...], memory_config) -> float:
         """Run concatenation (pure memory copy, memory-bound)."""
         # Create two input tensors
         a = ttnn.from_torch(
@@ -208,7 +209,7 @@ class SingleDeviceOperations:
 
         return end - start
 
-    def run_to_memory_config(self, shape: Tuple[int, ...], memory_config: ttnn.MemoryConfig) -> float:
+    def run_to_memory_config(self, shape: Tuple[int, ...], memory_config) -> float:
         """Run explicit L1↔DRAM transfer (memory-bound)."""
         # Create tensor in opposite memory location
         if memory_config == ttnn.DRAM_MEMORY_CONFIG:
@@ -236,7 +237,7 @@ class SingleDeviceOperations:
 
         return end - start
 
-    def run_reshape(self, shape: Tuple[int, ...], memory_config: ttnn.MemoryConfig) -> float:
+    def run_reshape(self, shape: Tuple[int, ...], memory_config) -> float:
         """Run reshape (layout transformation, memory-bound)."""
         # Create input tensor
         a = ttnn.from_torch(

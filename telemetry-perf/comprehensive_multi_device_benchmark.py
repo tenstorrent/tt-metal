@@ -99,7 +99,8 @@ class MultiDeviceTestConfig:
 class MultiDeviceOperations:
     """Multi-device CCL operations for benchmarking."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice):
+    def __init__(self, mesh_device):
+        # mesh_device can be ttnn.MeshDevice or any mesh device object
         self.mesh_device = mesh_device
 
     def run_allgather(self, shape: Tuple[int, ...]) -> float:
@@ -176,7 +177,7 @@ class MultiDeviceOperations:
         return end - start
 
 
-def create_mesh_device(num_devices: int) -> ttnn.MeshDevice:
+def create_mesh_device(num_devices: int):
     """Create a mesh device with specified number of devices."""
     print(f"Creating mesh device with {num_devices} devices...")
 
