@@ -57,10 +57,6 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
     detail::ReleaseOwnership();
 
     // Find the test_clean_init executable
-    // It should be in the same directory as this test executable or in a known build location
-    std::string test_executable;
-
-    // Try to find test_clean_init in the build directory
     std::filesystem::path current_exe = std::filesystem::canonical("/proc/self/exe");
     std::filesystem::path test_dir = current_exe.parent_path();
     std::filesystem::path test_clean_init_path = test_dir / "test_clean_init";
