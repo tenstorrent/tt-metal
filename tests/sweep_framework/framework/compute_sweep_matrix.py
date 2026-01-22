@@ -154,6 +154,7 @@ def compute_lead_models_matrix(modules, batch_size):
                     "test_group_name": runner_config["test_group_name"],
                     "arch": runner_config["arch"],
                     "runs_on": runner_config["runs_on"],
+                    "runner_label": runner_config["runner_label"],
                     "tt_smi_cmd": runner_config["tt_smi_cmd"],
                     "module_selector": batch,
                     "batch_display": f"{mesh_label}:{batch}",
