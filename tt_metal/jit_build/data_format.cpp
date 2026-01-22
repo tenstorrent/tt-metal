@@ -98,7 +98,6 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
 std::vector<DataFormat> get_unpack_src_formats(std::span<DataFormat> data_formats) {
     std::vector<DataFormat> unpack_src_format;
     for (auto& src_format : data_formats) {
-        // DataFormat src_format = data_formats[i];
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
             switch (src_format) {

@@ -101,7 +101,7 @@ float get_inf();
 /**
  * @brief Uses the hardware abstraction layer to get the maximum number of circular buffers per core.
  *
- * @return Maximum number of circular buffers (64 for Blackhole, 32 for Wormhole)
+ * @return Maximum number of circular buffers
  */
 uint32_t get_arch_num_circular_buffers();
 
