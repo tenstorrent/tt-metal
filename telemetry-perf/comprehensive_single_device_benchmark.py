@@ -68,11 +68,11 @@ SINGLE_DEVICE_SHAPES_REDUCED = [
     (1, 1, 17408, 17408),  # very large
 ]
 
-# Full frequency range
-POLLING_FREQUENCIES_FULL = ["60s", "10s", "5s", "1s", "500ms", "100ms", "50ms", "10ms", "5ms", "1ms", "500us", "100us"]
+# Full frequency range - removed 60s and 10s as too slow to be relevant
+POLLING_FREQUENCIES_FULL = ["5s", "1s", "500ms", "100ms", "50ms", "10ms", "5ms", "1ms", "500us", "100us"]
 
-# Reduced frequency range
-POLLING_FREQUENCIES_REDUCED = ["60s", "1s", "100ms", "10ms", "1ms", "100us"]
+# Reduced frequency range - focus on critical frequencies
+POLLING_FREQUENCIES_REDUCED = ["5s", "1s", "100ms", "10ms", "1ms", "100us"]
 
 # Memory configurations
 MEMORY_CONFIGS = {

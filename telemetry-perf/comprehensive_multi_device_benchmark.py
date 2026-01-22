@@ -48,11 +48,11 @@ from telemetry_benchmark_utils import (
 import ttnn
 import torch
 
-# Full frequency range
-POLLING_FREQUENCIES_FULL = ["60s", "10s", "5s", "1s", "500ms", "100ms", "50ms", "10ms", "5ms", "1ms", "500us", "100us"]
+# Full frequency range - removed 60s and 10s as too slow to be relevant
+POLLING_FREQUENCIES_FULL = ["5s", "1s", "500ms", "100ms", "50ms", "10ms", "5ms", "1ms", "500us", "100us"]
 
-# Reduced frequency range (Phase 1)
-POLLING_FREQUENCIES_REDUCED = ["60s", "1s", "100ms", "10ms", "1ms", "100us"]
+# Reduced frequency range (Phase 1) - focus on critical frequencies
+POLLING_FREQUENCIES_REDUCED = ["5s", "1s", "100ms", "10ms", "1ms", "100us"]
 
 # Device counts to test
 DEVICE_COUNTS_FULL = [2, 4, 8]
@@ -168,14 +168,18 @@ def create_mesh_device(num_devices: int) -> ttnn.MeshDevice:
     """Create a mesh device with specified number of devices."""
     print(f"Creating mesh device with {num_devices} devices...")
 
-    if num_devices == 4:
+    if num_devices == 2:
+        mesh_shape = (1, 2)
+    elif num_devices == 4:
         mesh_shape = (2, 2)
     elif num_devices == 8:
-        mesh_shape = (2, 4)
-    elif num_devices == 2:
-        mesh_shape = (1, 2)
+        mesh_shape = (2, 4)  # Single tray on Galaxy
+    elif num_devices == 16:
+        mesh_shape = (4, 4)  # Two trays on Galaxy
+    elif num_devices == 32:
+        mesh_shape = (4, 8)  # Full Galaxy (4 trays x 8 devices)
     else:
-        raise ValueError(f"Unsupported device count: {num_devices}")
+        raise ValueError(f"Unsupported device count: {num_devices}. Supported: 2, 4, 8, 16, 32")
 
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(*mesh_shape))
 
