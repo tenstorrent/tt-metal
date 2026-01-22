@@ -19,12 +19,22 @@
 #endif
 #include "internal/debug/stack_usage.h"
 
+#include "llk_san_types.h"
+
 // Global vars
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
+
+namespace llk_san {
+
+static_assert(
+    sizeof(sanitizer_state_t) <= MEM_LLK_DEBUG_SIZE, "llk_san: sanitizer state must fit in MEM_LLK_DEBUG region");
+
+extern sanitizer_state_t* const sanitizer = reinterpret_cast<sanitizer_state_t*>(MEM_LLK_DEBUG_BASE);
+}  // namespace llk_san
 
 namespace ckernel {
 // Transition shim
@@ -60,6 +70,19 @@ uint32_t _start() {
 #else
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
+
+    if constexpr (COMPILE_FOR_TRISC == 0) {
+        // Unpacker thread
+        new (&llk_san::sanitizer->operand.unpack) llk_san::unpack_operand_state_t();
+    } else if constexpr (COMPILE_FOR_TRISC == 1) {
+        // Math thread
+        new (&llk_san::sanitizer->operand.math) llk_san::math_operand_state_t();
+    } else if constexpr (COMPILE_FOR_TRISC == 2) {
+        // Packer thread
+        new (&llk_san::sanitizer->operand.pack) llk_san::pack_operand_state_t();
+    }
+    new (&llk_san::sanitizer->operation[COMPILE_FOR_TRISC]) llk_san::operation_state_t();
+    new (&llk_san::sanitizer->fsm[COMPILE_FOR_TRISC]) llk_san::fsm_state_t(llk_san::fsm_state_t::INITIAL);
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
