@@ -15,23 +15,10 @@ import ttnn
 import torch
 from typing import Optional, List, Dict, Any
 
-# Handle imports for both relative and absolute import contexts
-try:
-    from .tt_spatial_cross_attention import TTSpatialCrossAttention
-    from .tt_temporal_self_attention import TTTemporalSelfAttention
-    from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
-    from ..reference.point_sampling_3d_2d import generate_reference_points
-except ImportError:
-    # Fallback for direct execution
-    import sys
-    from pathlib import Path
-
-    bevformer_path = Path(__file__).parent.parent
-    sys.path.insert(0, str(bevformer_path))
-    from tt_spatial_cross_attention import TTSpatialCrossAttention
-    from tt_temporal_self_attention import TTTemporalSelfAttention
-    from tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
-    from reference.point_sampling_3d_2d import generate_reference_points
+from .tt_spatial_cross_attention import TTSpatialCrossAttention
+from .tt_temporal_self_attention import TTTemporalSelfAttention
+from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
+from ..reference.point_sampling_3d_2d import generate_reference_points
 
 try:
     from tracy import signpost
@@ -41,6 +28,9 @@ except ModuleNotFoundError:
     use_signpost = False
 
 from loguru import logger
+
+# Enable/disable logging output
+ENABLE_LOGGING = False
 
 
 class TTBEVFormerLayer:
@@ -273,7 +263,8 @@ class TTBEVFormerLayer:
         if not (
             hasattr(self.params, "ffn") and hasattr(self.params.ffn, "linear1") and hasattr(self.params.ffn, "linear2")
         ):
-            logger.warning("FFN parameters not found, skipping FFN forward pass")
+            if ENABLE_LOGGING:
+                logger.warning("FFN parameters not found, skipping FFN forward pass")
             return ttnn.zeros_like(x)
 
         # First linear layer: [embed_dims] -> [feedforward_channels]
@@ -381,7 +372,8 @@ class TTBEVFormerEncoder:
         for layer_idx in range(num_layers):
             layer_params = getattr(params, f"layer_{layer_idx}", None)
             if layer_params is None:
-                logger.warning(f"Parameters for layer {layer_idx} not found")
+                if ENABLE_LOGGING:
+                    logger.warning(f"Parameters for layer {layer_idx} not found")
                 continue
 
             layer = TTBEVFormerLayer(

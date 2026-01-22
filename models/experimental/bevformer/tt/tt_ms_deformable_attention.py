@@ -29,6 +29,9 @@ except ModuleNotFoundError:
 
 from loguru import logger
 
+# Enable/disable logging output
+ENABLE_LOGGING = False
+
 
 def multi_scale_deformable_attn_ttnn(
     value,
@@ -61,7 +64,8 @@ def multi_scale_deformable_attn_ttnn(
     bs, _, num_heads, head_dim = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
 
-    logger.info("MSDA Start")
+    if ENABLE_LOGGING:
+        logger.info("MSDA Start")
 
     # Split value into a list of tensors for each level
     # This separates features from different pyramid levels which may have different spatial resolutions
@@ -132,7 +136,8 @@ def multi_scale_deformable_attn_ttnn(
     output = ttnn.reshape(output, (bs, num_heads * head_dim, num_queries))
     output = ttnn.permute(output, (0, 2, 1))  # [bs, num_queries, num_heads * head_dim]
 
-    logger.info("MSDA End")
+    if ENABLE_LOGGING:
+        logger.info("MSDA End")
 
     return output
 
@@ -236,7 +241,8 @@ class TTMSDeformableAttention:
         total_keys = spatial_shapes.prod(dim=1).sum()
         assert total_keys == num_keys, f"Inconsistent keys: {total_keys} != {num_keys}"
 
-        logger.info("MSDA Value Projection Start")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Value Projection Start")
 
         # Project value and reshape to multi-head format
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
@@ -250,7 +256,8 @@ class TTMSDeformableAttention:
 
         value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
 
-        logger.info("MSDA Sampling Offset Generation")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Sampling Offset Generation")
 
         # Generate sampling offsets
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
@@ -261,7 +268,8 @@ class TTMSDeformableAttention:
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
 
-        logger.info("MSDA Attention Weight Generation")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Attention Weight Generation")
 
         # Generate attention weights
         attention_weights = ttnn.linear(
@@ -276,7 +284,8 @@ class TTMSDeformableAttention:
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels, self.num_points)
         )
 
-        logger.info("MSDA Sampling Location Calculation")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Sampling Location Calculation")
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
@@ -342,14 +351,16 @@ class TTMSDeformableAttention:
             device=self.device,
         )
 
-        logger.info("MSDA Core Attention Complete")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Core Attention Complete")
 
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
-        logger.info("MSDA Adding Residual")
+        if ENABLE_LOGGING:
+            logger.info("MSDA Adding Residual")
 
         # Add residual connection
         output = ttnn.add(output, identity)

@@ -17,19 +17,11 @@ import torch
 import warnings
 from loguru import logger
 
-# Handle imports for both relative and absolute import contexts
-try:
-    from .tt_ms_deformable_attention import TTMSDeformableAttention
-    from ..config import DeformableAttentionConfig
-except ImportError:
-    # Fallback for direct execution
-    import sys
-    from pathlib import Path
+# Enable/disable logging output
+ENABLE_LOGGING = False
 
-    bevformer_path = Path(__file__).parent.parent
-    sys.path.insert(0, str(bevformer_path))
-    from tt_ms_deformable_attention import TTMSDeformableAttention
-    from config import DeformableAttentionConfig
+from .tt_ms_deformable_attention import TTMSDeformableAttention
+from ..config import DeformableAttentionConfig
 
 try:
     from tracy import signpost
@@ -171,10 +163,12 @@ class TTTemporalSelfAttention:
                 level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
-        logger.info("TSA Tensor Conversion Complete")
+        if ENABLE_LOGGING:
+            logger.info("TSA Tensor Conversion Complete")
 
         # Apply deformable attention with integrated temporal processing
-        logger.info("TSA Calling Deformable Attention")
+        if ENABLE_LOGGING:
+            logger.info("TSA Calling Deformable Attention")
         output = self.deformable_attention(
             query=query,
             value=value,
@@ -185,7 +179,8 @@ class TTTemporalSelfAttention:
             **kwargs,
         )
 
-        logger.info("TSA Adding Residual")
+        if ENABLE_LOGGING:
+            logger.info("TSA Adding Residual")
 
         # Residual connection
         output = ttnn.add(output, identity)

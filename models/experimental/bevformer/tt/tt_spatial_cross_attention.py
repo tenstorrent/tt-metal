@@ -26,6 +26,9 @@ except ModuleNotFoundError:
 
 from loguru import logger
 
+# Enable/disable logging output
+ENABLE_LOGGING = False
+
 
 class TTSpatialCrossAttention:
     """
@@ -132,7 +135,8 @@ class TTSpatialCrossAttention:
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        logger.info("SCA Tensor Conversion Complete")
+        if ENABLE_LOGGING:
+            logger.info("SCA Tensor Conversion Complete")
 
         bs, num_queries, _ = query.shape
         # Extract number of depth levels for 3D point sampling
@@ -154,7 +158,8 @@ class TTSpatialCrossAttention:
             index_query_per_img = mask_per_img.sum(-1) > 0  # [B, num_queries]
             indexes.append(index_query_per_img)
 
-        logger.info(f"SCA Valid Queries: {[index.sum().item() for index in indexes]}")
+        if ENABLE_LOGGING:
+            logger.info(f"SCA Valid Queries: {[index.sum().item() for index in indexes]}")
 
         max_len = max([index.sum().max().item() for index in indexes])
 
@@ -166,7 +171,8 @@ class TTSpatialCrossAttention:
 
         if max_len == 0:
             # No valid points, return original query
-            logger.warning("No valid points found in SCA, returning residual")
+            if ENABLE_LOGGING:
+                logger.warning("No valid points found in SCA, returning residual")
             return inp_residual
 
         # Save indices to files for visualization
@@ -189,9 +195,11 @@ class TTSpatialCrossAttention:
         }
         torch.save(metadata, "./sca_indices_output/metadata_tt.pth")
 
-        logger.info("SCA Valid Query Detection Complete")
+        if ENABLE_LOGGING:
+            logger.info("SCA Valid Query Detection Complete")
 
-        logger.info("SCA Rebatching Start")
+        if ENABLE_LOGGING:
+            logger.info("SCA Rebatching Start")
 
         # Create compact rebatched tensors to eliminate invalid query-camera pairs
         # Instead of processing all [bs, num_queries] for each camera (many of which are invalid),
@@ -241,7 +249,8 @@ class TTSpatialCrossAttention:
                         ref_rebatch_torch, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                     )
 
-        logger.info("SCA Rebatching Complete")
+        if ENABLE_LOGGING:
+            logger.info("SCA Rebatching Complete")
 
         slots = ttnn.zeros_like(query)
 
@@ -274,7 +283,8 @@ class TTSpatialCrossAttention:
             reference_points_rebatch, (bs * self.num_cams, max_len, num_depth_levels, 2)
         )
 
-        logger.info("SCA Calling Deformable Attention")
+        if ENABLE_LOGGING:
+            logger.info("SCA Calling Deformable Attention")
         queries_output = self.deformable_attention(
             query=queries_batched,
             key=key_reshaped,
@@ -290,9 +300,11 @@ class TTSpatialCrossAttention:
                 queries_output, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
 
-        logger.info("SCA Deformable Attention Complete")
+        if ENABLE_LOGGING:
+            logger.info("SCA Deformable Attention Complete")
 
-        logger.info("SCA Feature Aggregation Start")
+        if ENABLE_LOGGING:
+            logger.info("SCA Feature Aggregation Start")
 
         # Reshape deformable attention output back to per-camera format
         queries_output = ttnn.reshape(queries_output, (bs, self.num_cams, max_len, self.embed_dims))
@@ -317,7 +329,8 @@ class TTSpatialCrossAttention:
 
         slots = ttnn.from_torch(slots_torch, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-        logger.info("SCA Feature Aggregation Complete")
+        if ENABLE_LOGGING:
+            logger.info("SCA Feature Aggregation Complete")
 
         # Count how many cameras contributed valid features for each query
         # Since queries accumulate features from multiple cameras, we need to normalize by the number of contributors
@@ -337,7 +350,8 @@ class TTSpatialCrossAttention:
             slots = ttnn.to_layout(slots, ttnn.TILE_LAYOUT)
             slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
-        logger.info("SCA Adding Residual")
+        if ENABLE_LOGGING:
+            logger.info("SCA Adding Residual")
 
         # Residual connection
         output = ttnn.add(slots, inp_residual)

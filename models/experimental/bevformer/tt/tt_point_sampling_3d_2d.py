@@ -26,17 +26,6 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-# Get default dtype with fallback
-try:
-    DEFAULT_DTYPE = ttnn.float32
-except AttributeError:
-    try:
-        DEFAULT_DTYPE = ttnn.DataType.float32
-    except AttributeError:
-        # Ultimate fallback
-        DEFAULT_DTYPE = None
-
-
 def generate_reference_points_ttnn(
     bev_h: int,
     bev_w: int,

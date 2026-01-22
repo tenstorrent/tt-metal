@@ -11,25 +11,9 @@ from typing import Optional
 from pathlib import Path
 
 
-# Get default layout and dtype with fallback
-try:
-    DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
-except AttributeError:
-    # Fallback for different ttnn versions
-    try:
-        DEFAULT_LAYOUT = ttnn.Layout.TILE
-    except AttributeError:
-        # Ultimate fallback - use None and let ttnn decide
-        DEFAULT_LAYOUT = None
-
-try:
-    DEFAULT_DTYPE = ttnn.bfloat16
-except AttributeError:
-    try:
-        DEFAULT_DTYPE = ttnn.DataType.BFLOAT16
-    except AttributeError:
-        # Ultimate fallback
-        DEFAULT_DTYPE = None
+# Get default layout and dtype
+DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
+DEFAULT_DTYPE = ttnn.bfloat16
 
 
 def convert_parameterdict_to_object(param_dict):
@@ -130,10 +114,8 @@ def _manage_cache_load(cache_file_name, device):
 
     try:
         parameters = ttnn.load_parameters(device, cache_path)
-        print(f"Loaded cached parameters from {cache_path}")
         return parameters
     except Exception as e:
-        print(f"Failed to load cached parameters: {e}")
         return None
 
 
@@ -145,7 +127,6 @@ def _manage_cache_save(parameters, cache_file_name, device, cache_type=""):
     cache_path = Path(cache_file_name)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     ttnn.save_parameters(device, parameters, cache_path)
-    print(f"Saved {cache_type}parameters to cache: {cache_path}")
 
 
 # Local preprocessing functions to avoid import issues
@@ -209,7 +190,6 @@ def preprocess_ms_deformable_attention_parameters(
         # Convert cached params to object format for dot notation access
         return convert_parameterdict_to_object(cached_params)
 
-    print("Preprocessing multi-scale deformable attention parameters...")
     parameters = {}
 
     # Process all linear layers using helper function
@@ -226,7 +206,6 @@ def preprocess_ms_deformable_attention_parameters(
 
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "MS deformable attention ")
-    print("Parameter preprocessing completed.")
     return params_obj
 
 
@@ -262,16 +241,13 @@ def create_ms_deformable_attention_parameters(
     if torch_model is None:
         if torch_model_path is not None:
             torch_model = torch.load(torch_model_path, map_location="cpu")
-            print(f"Loaded PyTorch model from {torch_model_path}")
         else:
             # Create a fresh PyTorch model for parameter extraction
             from ..pytorch.deformable_attention import PyTorchMultiScaleDeformableAttention
 
             torch_model = PyTorchMultiScaleDeformableAttention(config)
-            print("Created fresh PyTorch model for parameter extraction")
     else:
-        print("Using provided PyTorch model")
-
+        pass
     torch_model.eval()
 
     return preprocess_ms_deformable_attention_parameters(
@@ -314,7 +290,6 @@ def preprocess_spatial_cross_attention_parameters(
         # Convert cached params to object format for dot notation access
         return convert_parameterdict_to_object(cached_params)
 
-    print("Preprocessing spatial cross attention parameters...")
     parameters = {}
 
     # SCA has its own output projection layer
@@ -347,7 +322,6 @@ def preprocess_spatial_cross_attention_parameters(
 
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "SCA ")
-    print("SCA parameter preprocessing completed.")
     return params_obj
 
 
@@ -381,7 +355,6 @@ def preprocess_temporal_self_attention_parameters(
         # Convert cached params to object format for dot notation access
         return convert_parameterdict_to_object(cached_params)
 
-    print("Preprocessing temporal self attention parameters...")
     parameters = {}
 
     # TSA has a query projection layer for temporal features
@@ -414,7 +387,6 @@ def preprocess_temporal_self_attention_parameters(
 
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "TSA ")
-    print("TSA parameter preprocessing completed.")
     return params_obj
 
 
@@ -435,9 +407,8 @@ def create_spatial_cross_attention_parameters(
         if torch_model_path is None:
             raise ValueError("Either torch_model or torch_model_path must be provided for SCA")
         torch_model = torch.load(torch_model_path, map_location="cpu")
-        print(f"Loaded PyTorch SCA model from {torch_model_path}")
     else:
-        print("Using provided PyTorch SCA model")
+        pass
 
     torch_model.eval()
 
@@ -468,9 +439,8 @@ def create_temporal_self_attention_parameters(
         if torch_model_path is None:
             raise ValueError("Either torch_model or torch_model_path must be provided for TSA")
         torch_model = torch.load(torch_model_path, map_location="cpu")
-        print(f"Loaded PyTorch TSA model from {torch_model_path}")
     else:
-        print("Using provided PyTorch TSA model")
+        pass
 
     torch_model.eval()
 
@@ -543,7 +513,6 @@ def preprocess_bevformer_layer_parameters(
     if cached_params is not None:
         return convert_parameterdict_to_object(cached_params)
 
-    print("Preprocessing BEVFormer layer parameters...")
     parameters = {}
 
     # Process temporal self-attention if present
@@ -606,7 +575,6 @@ def preprocess_bevformer_layer_parameters(
 
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "BEVFormer layer ")
-    print("BEVFormer layer parameter preprocessing completed.")
     return params_obj
 
 
@@ -695,9 +663,8 @@ def create_bevformer_encoder_parameters(
         if torch_model_path is None:
             raise ValueError("Either torch_model or torch_model_path must be provided for BEVFormer encoder")
         torch_model = torch.load(torch_model_path, map_location="cpu")
-        print(f"Loaded PyTorch BEVFormer encoder from {torch_model_path}")
     else:
-        print("Using provided PyTorch BEVFormer encoder model")
+        pass
 
     torch_model.eval()
 

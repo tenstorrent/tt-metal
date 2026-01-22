@@ -29,6 +29,9 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+# Enable/disable logging output
+ENABLE_LOGGING = True
+
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
@@ -199,8 +202,10 @@ def test_spatial_cross_attention_forward(
     # --------------------------------------------------------------------------- #
 
     # Comprehensive comparison using enhanced test utilities
-    logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
-    logger.info(f"TT model output type: {type(tt_model_output)}")
+    if ENABLE_LOGGING:
+        logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
+    if ENABLE_LOGGING:
+        logger.info(f"TT model output type: {type(tt_model_output)}")
 
     if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
@@ -238,4 +243,5 @@ def test_spatial_cross_attention_forward(
     # Assert that the comprehensive check passes
     assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
 
-    logger.info("✅ All SCA tolerance checks passed successfully!")
+    if ENABLE_LOGGING:
+        logger.info("✅ All SCA tolerance checks passed successfully!")
