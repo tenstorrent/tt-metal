@@ -251,6 +251,7 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
+    preserve_nan_values: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -314,6 +315,7 @@ def from_torch(
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        preserve_nan_values=preserve_nan_values,
     )
 
 

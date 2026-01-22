@@ -83,7 +83,8 @@ Tensor create_tt_tensor_from_host_data(
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<ttnn::QueueId> cq_id,
-    ttnn::distributed::MeshDevice* device) {
+    ttnn::distributed::MeshDevice* device,
+    bool preserve_nan_values) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
@@ -118,6 +119,16 @@ Tensor create_tt_tensor_from_host_data(
                 static_cast<T>(pad_value));
         }
 
+        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+        if (preserve_nan_values) {
+            return Tensor::from_span(
+                tt::stl::make_const_span(host_buffer.view_as<T>()),
+                tensor_spec,
+                nullptr,
+                std::nullopt,
+                static_cast<T>(pad_value));
+        }
+
         if (exec_on_device && construct_on_device && pydata_type_borrowable) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
@@ -128,15 +139,15 @@ Tensor create_tt_tensor_from_host_data(
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
-
-        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
         // from_span do first copy of the data to pass to from_vector
-        // than from_vecotr allocation another vector to change layout, in that use case we don't need first allocation.
+        // than from_vecotr allocation another vector to change layout, in that use case we don't need first
+        // allocation.
         if constexpr (std::is_same_v<T, bfloat16>) {
             if (layout == Layout::TILE) {
                 return Tensor::from_buffer(host_buffer.view_as<T>(), tensor_spec, static_cast<T>(pad_value));
             }
         }
+
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
             tensor_spec,
@@ -213,7 +224,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<distributed::MeshDevice*> device,
     std::optional<ttnn::QueueId> cq_id,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::optional<float> pad_value) {
+    std::optional<float> pad_value,
+    bool preserve_nan_values) {
     ZoneScoped;
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
@@ -244,7 +256,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value.value_or(0.0f),
         mesh_mapper,
         cq_id,
-        device.value_or(nullptr));
+        device.value_or(nullptr),
+        preserve_nan_values);
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
