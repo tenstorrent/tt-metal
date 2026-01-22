@@ -30,8 +30,6 @@ ttnn::Tensor FastReduceNCOperation::invoke(
     ttnn::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
-    std::cout << sorted_dims.size() << std::endl;
-
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
         auto temp_output =
