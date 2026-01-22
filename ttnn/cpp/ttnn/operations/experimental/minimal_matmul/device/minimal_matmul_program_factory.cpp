@@ -121,6 +121,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     bool fuse_op = fused_op_signaler.has_value();
 
+    std::cout << "Calling minimal_matmul_factory_helper_common" << std::endl;
+    std::cout << "N_chunks: " << N_chunks << std::endl;
+
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
     }

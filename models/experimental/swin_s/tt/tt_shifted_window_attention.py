@@ -141,7 +141,8 @@ class TtShiftedWindowAttention(nn.Module):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if input_tensor.shape[0] == 361:
             shape = ttnn.pad_to_tile_shape([1, 384, 49, 96])
-            mem_config = ttnn.create_sharded_memory_config_(
+            print(f"shape: {shape}, type(shape): {type(shape)}")
+            mem_config = ttnn.create_sharded_memory_config_(  # ERROR happens here
                 shape=shape,
                 core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
                 strategy=ttnn.ShardStrategy.HEIGHT,
