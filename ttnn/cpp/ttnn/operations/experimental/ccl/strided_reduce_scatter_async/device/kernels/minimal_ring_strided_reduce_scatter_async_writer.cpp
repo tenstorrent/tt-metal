@@ -144,6 +144,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 #endif
 
     if (mux_connection_valid) {
@@ -291,12 +292,12 @@ void kernel_main() {
                                 uint32_t output_tile_id =
                                     output_tile_id_start + input_row_offset + direction_offset + j;
                                 DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
-                                // uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
-                                // noc_async_write(l1_read_addr, local_noc_addr, page_size);
+                                uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
                                 l1_read_addr += page_size;
                             }
                             DPRINT << "--------------------------------" << ENDL();
-                            // noc_async_write_barrier();
+                            noc_async_write_barrier();
                             cb_pop_front(cb_output_id, tile_granularity);
                         }
                         DPRINT << "====================================" << ENDL();
