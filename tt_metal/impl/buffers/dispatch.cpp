@@ -62,10 +62,11 @@ struct BufferWriteDispatchParams {
     uint32_t pinned_src_noc_xy = 0;
     uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
+    bool remote_chip = false;
 
     BufferWriteDispatchParams() = default;
-    BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr{src_addr}, use_pinned_transfer{src_pinned} {}
+    BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false, bool remote_chip = false) :
+        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr{src_addr}, use_pinned_transfer{src_pinned}, remote_chip{remote_chip} {}
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
@@ -85,8 +86,9 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
-        bool src_pinned) :
-        BufferWriteDispatchParams(src_noc_xy, src_addr, src_pinned), dst_page_index(dst_page_index) {
+        bool src_pinned,
+        bool remote_chip) :
+        BufferWriteDispatchParams(src_noc_xy, src_addr, src_pinned, remote_chip), dst_page_index(dst_page_index) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
 
@@ -147,7 +149,8 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
-        bool src_pinned) :
+        bool src_pinned,
+        bool remote_chip) :
         InterleavedBufferWriteDispatchParams(
             buffer,
             dst_page_index,
@@ -156,7 +159,8 @@ public:
             expected_num_workers_completed,
             src_noc_xy,
             src_addr,
-            src_pinned),
+            src_pinned,
+            remote_chip),
         buffer(buffer),
         curr_full_pages_start_address(buffer.address()),
         size_of_partial_page(partial_page_spec.partial_page_size),
@@ -284,8 +288,9 @@ public:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         uint32_t pinned_noc_xy,
         uint64_t pinned_addr,
-        bool is_pinned) :
-        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned),
+        bool is_pinned,
+        bool remote_chip) :
+        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned, remote_chip),
         buffer_page_mapping(buffer->get_buffer_page_mapping()),
         buffer(buffer),
         are_pages_large(
@@ -459,7 +464,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     uint32_t pinned_src_noc_xy,
     uint64_t pinned_src_addr,
-    bool use_pinned_transfer) {
+    bool use_pinned_transfer,
+    bool remote_chip) {
     InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
     uint32_t total_pages_to_write = region.size / buffer.page_size();
@@ -479,7 +485,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             expected_num_workers_completed,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
     } else {
         dispatch_params.emplace<InterleavedBufferWriteDispatchParams>(
             buffer,
@@ -489,7 +496,8 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             expected_num_workers_completed,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
     }
     return dispatch_params;
 }
@@ -697,16 +705,24 @@ void issue_buffer_dispatch_command_sequence(
         // prefetch_h for remote device. If we don't do this, prefetch_h will "fetch" it along with the
         // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH command and send it to prefetch_d
         calculator.clear();
-        calculator.add_prefetch_relay_linear();
+        if (dispatch_params.remote_chip) {
+            calculator.add_prefetch_relay_linear_h();
+        } else {
+            calculator.add_prefetch_relay_linear();
+        }
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
         HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
         const uint64_t data_size_bytes =
             (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
-        command_sequence.add_prefetch_relay_linear(
-            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
-
+        if (dispatch_params.remote_chip) {
+            command_sequence.add_prefetch_relay_linear_h(
+                dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
+        } else {
+            command_sequence.add_prefetch_relay_linear(
+                dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
+        }
         sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
         sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
         sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -835,10 +851,12 @@ void write_to_device_buffer(
     uint32_t pinned_src_noc_xy = 0;
     uint64_t pinned_src_addr = 0;
     bool use_pinned_transfer = false;
+    bool remote_chip = false;
     if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-        if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
+        if (noc_addr_pair_opt.has_value()) {
+            remote_chip = noc_addr_pair_opt->device_id != device_id;
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
@@ -878,7 +896,8 @@ void write_to_device_buffer(
             sub_device_ids,
             pinned_src_noc_xy,
             pinned_src_addr,
-            use_pinned_transfer);
+            use_pinned_transfer,
+            remote_chip);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
@@ -908,7 +927,8 @@ void write_to_device_buffer(
                 sub_device_ids,
                 pinned_src_noc_xy,
                 pinned_src_addr,
-                use_pinned_transfer);
+                use_pinned_transfer,
+                remote_chip);
 
         InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
             ttsl::overloaded{
