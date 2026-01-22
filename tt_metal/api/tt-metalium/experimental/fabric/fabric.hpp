@@ -93,11 +93,12 @@ void append_routing_plane_connection_manager_rt_args(
 
 // append runtime parameter for RoutingPlaneConnectionManager
 // convenience function using RoutingDirection's
+template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<RoutingDirection>& attemped_directions,
     const std::vector<uint32_t>& connection_link_indices,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
