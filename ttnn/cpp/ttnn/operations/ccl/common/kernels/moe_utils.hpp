@@ -43,6 +43,25 @@ struct PolarState {
 PolarState polar_state;
 }
 
+struct MuxSyncCoreArgs {
+    static constexpr uint16_t is_sync_core_arg_offset = 1;
+    static constexpr uint16_t termination_sync_address_arg_offset = 10;
+    static constexpr uint16_t termination_master_noc_x_arg_offset = 2;
+    static constexpr uint16_t termination_master_noc_y_arg_offset = 3;
+
+public:
+    const bool is_sync_core;
+    uint32_t termination_sync_address;
+    const uint32_t termination_master_noc_x;
+    const uint32_t termination_master_noc_y;
+
+    MuxSyncCoreArgs(const uint32_t arg_idx) :
+        is_sync_core(get_arg_val<uint32_t>(arg_idx + is_sync_core_arg_offset)),
+        termination_sync_address(get_semaphore(get_arg_val<uint32_t>(arg_idx + termination_sync_address_arg_offset))),
+        termination_master_noc_x(get_arg_val<uint32_t>(arg_idx + termination_master_noc_x_arg_offset)),
+        termination_master_noc_y(get_arg_val<uint32_t>(arg_idx + termination_master_noc_y_arg_offset)) {};
+};
+
 struct MuxConnectionBaseArgs {
 private:
     static constexpr uint16_t fabric_mux_x_arg_offset = 2;
@@ -127,7 +146,7 @@ template <size_t TerminationSignalAddress>
 struct MuxTerminationArgs : MuxConnectionBaseArgs {
     static constexpr size_t fabric_mux_termination_signal_address = TerminationSignalAddress;
 
-    MuxTerminationArgs(uint32_t& arg_idx) : MuxConnectionBaseArgs(arg_idx) {};
+    MuxTerminationArgs(const uint32_t arg_idx) : MuxConnectionBaseArgs(arg_idx) {};
 };
 
 template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
@@ -173,7 +192,7 @@ inline void open_direction_connections_barrier(
                 args.fabric_mux_y,
                 args.fabric_mux_status_address,
                 args.local_fabric_mux_status_address);
-
+            tt::tt_fabric::fabric_client_connect(connections[i]);
             args.increment(rt_args_idx);
         }
     }
