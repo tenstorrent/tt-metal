@@ -13,8 +13,8 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/analysis_prompt.md"
 DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download_job_logs.sh"
-OUTPUT_DIR="${SCRIPT_DIR}/analysis_output"
-LOG_DIR="${SCRIPT_DIR}/downloaded_logs"
+OUTPUT_DIR="${SCRIPT_DIR}/build_analysis_output"
+LOG_DIR="${SCRIPT_DIR}/build_downloaded_logs"
 REPO_ROOT="${SCRIPT_DIR}/../../.."
 
 # Colors for output
@@ -106,7 +106,6 @@ find_copilot_cmd() {
 }
 
 # Function to prepare analysis context
-# Note: We let Copilot analyze the logs directly instead of pre-extracting files
 prepare_analysis_context() {
     local job_dir=$1
     local context_dir="${OUTPUT_DIR}/context_$(basename "$job_dir")"
@@ -115,66 +114,38 @@ prepare_analysis_context() {
 
     log_info "Preparing analysis context for $(basename "$job_dir")"
 
-    # Copy logs
+    # Copy logs - Copilot will analyze them directly
     cp -r "${job_dir}/logs" "${context_dir}/" 2>/dev/null || true
 
-    # Find and copy relevant test files
-    local test_files=()
-    for log_file in "${job_dir}"/logs/*.log; do
-        [[ ! -f "$log_file" ]] && continue
-        while IFS= read -r test_file; do
-            [[ -n "$test_file" ]] && test_files+=("$test_file")
-        done < <(extract_test_info "$log_file")
-    done
-
-    if [[ ${#test_files[@]} -gt 0 ]]; then
-        log_info "Found ${#test_files[@]} relevant test file(s)"
-        mkdir -p "${context_dir}/test_files"
-        for test_file in "${test_files[@]}"; do
-            local dest_file="${context_dir}/test_files/$(basename "$test_file")"
-            cp "${REPO_ROOT}/${test_file}" "$dest_file" 2>/dev/null || true
-        done
-    fi
-
-    # Find and copy relevant source files
-    local source_files=()
-    for log_file in "${job_dir}"/logs/*.log; do
-        [[ ! -f "$log_file" ]] && continue
-        while IFS= read -r source_file; do
-            [[ -n "$source_file" ]] && source_files+=("$source_file")
-        done < <(extract_source_files "$log_file")
-    done
-
-    if [[ ${#source_files[@]} -gt 0 ]]; then
-        log_info "Found ${#source_files[@]} relevant source file(s)"
-        mkdir -p "${context_dir}/source_files"
-        for source_file in "${source_files[@]}"; do
-            local rel_path="${source_file}"
-            local dest_dir="${context_dir}/source_files/$(dirname "$rel_path")"
-            mkdir -p "$dest_dir"
-            cp "${REPO_ROOT}/${source_file}" "${dest_dir}/$(basename "$source_file")" 2>/dev/null || true
-        done
-    fi
-
-    # Create summary file
-    cat > "${context_dir}/summary.txt" <<EOF
-Analysis Context Summary
-=======================
-
-Job Directory: $job_dir
-Prepared: $(date)
-
-Test Files Found: ${#test_files[@]}
-Source Files Found: ${#source_files[@]}
-
-Test Files:
-$(printf '%s\n' "${test_files[@]}")
-
-Source Files:
-$(printf '%s\n' "${source_files[@]}")
-EOF
-
     echo "$context_dir"
+}
+
+# Function to extract failure metadata from logs
+extract_failure_metadata() {
+    local log_file=$1
+
+    [[ ! -f "$log_file" ]] && return 1
+
+    # Extract just the essential failure information:
+    # - Failed test names
+    # - Error messages
+    # - File paths mentioned in errors
+    # - Stack trace snippets (first few lines)
+
+    {
+        # Extract failed test names
+        grep -E "FAILED|ERROR" "$log_file" | grep -E "test_" | head -10
+
+        # Extract error messages (RuntimeError, Exception, etc.)
+        grep -E "(RuntimeError|Exception|Error|TT_THROW)" "$log_file" | head -20
+
+        # Extract file paths mentioned in errors (look for /project/ or file paths)
+        grep -E "(/project/|\.py:|\.cpp:|\.hpp:)" "$log_file" | head -10
+
+        # Extract pytest failure summary
+        grep -A 5 "FAILURES ==" "$log_file" | head -20
+
+    } | sort -u
 }
 
 # Function to create analysis prompt with context
@@ -185,34 +156,45 @@ create_analysis_prompt() {
     # Start with the base prompt
     cat "$PROMPT_FILE" > "$output_file"
 
-    # Add context information
+    # Add failure metadata instead of full logs
     cat >> "$output_file" <<EOF
 
 ---
 
-## Job Logs
+## Failure Metadata
 
-The following logs are from the failed GitHub Actions job(s):
+The following information was extracted from the failed GitHub Actions job logs.
+Use this information to locate and analyze the relevant code files in the repository.
 
 EOF
 
-    # Include full logs - Copilot will analyze them
+    # Extract and include only failure metadata
     for log_file in "${context_dir}"/logs/*.log; do
         [[ ! -f "$log_file" ]] && continue
         local log_name=$(basename "$log_file")
-        cat >> "$output_file" <<EOF
+        local metadata
+        metadata=$(extract_failure_metadata "$log_file" 2>/dev/null)
 
-### Log File: $log_name
+        if [[ -n "$metadata" ]]; then
+            cat >> "$output_file" <<EOF
+
+### Failure Information from: $log_name
 
 \`\`\`
-$(cat "$log_file" 2>/dev/null || echo "[Could not read log file]")
+$metadata
 \`\`\`
 
 EOF
+        fi
     done
 
-    # Note: Copilot will analyze the logs to identify relevant files
-    # We don't need to pre-extract files - Copilot can do that analysis
+    cat >> "$output_file" <<EOF
+
+---
+
+**Note**: you should be tracking exactly what is being done as the test reaches the failure to determine the root instability. Make sure to look through the codebase to figure out what went wrong.
+
+EOF
 
     echo "$output_file"
 }
@@ -227,172 +209,48 @@ run_copilot_analysis() {
     log_info "Prompt file: $prompt_file"
     log_info "Output file: $output_file"
 
-    # Check if timeout command is available
-    local has_timeout=false
-    if command -v timeout &> /dev/null; then
-        has_timeout=true
-        log_info "Using timeout command (10 minute limit)"
-    else
-        log_warn "timeout command not available - commands may hang indefinitely"
-        log_warn "Consider installing coreutils (timeout) or use Ctrl+C to interrupt"
-    fi
+    # Print the full prompt before sending to Copilot
+    echo ""
+    log_info "=== Full Prompt to be sent to Copilot ==="
+    cat "$prompt_file"
+    echo ""
+    log_info "=== End of Prompt ==="
+    echo ""
 
-    # Try different copilot CLI interfaces
-    # The GitHub Copilot CLI can be used in several ways:
-    # 1. github-copilot-cli explain <file>
-    # 2. github-copilot-cli chat (interactive)
-    # 3. github-copilot-cli what-the-shell <command>
-    # 4. Direct pipe to copilot (if configured as alias)
-
-    log_info "Using Copilot CLI: $copilot_cmd"
-
-    # Method 1: Try explain command (most common)
-    if $copilot_cmd explain --help &> /dev/null; then
-        log_info "Using 'explain' command"
-        $copilot_cmd explain "$prompt_file" > "$output_file" 2>&1 && {
-            log_info "Analysis complete using 'explain' command"
-            return 0
-        } || log_warn "'explain' command failed, trying alternatives"
-    fi
-
-    # Method 2: Try chat command (if available)
-    if $copilot_cmd chat --help &> /dev/null 2>&1; then
-        log_info "Using 'chat' command (non-interactive)"
-        log_info "Note: This may take several minutes. Large prompts can take time to process..."
-
-        # Create a temporary input file for chat
-        local chat_input="${OUTPUT_DIR}/chat_input.txt"
-        cat > "$chat_input" <<EOF
-Please analyze the following GitHub Actions job failure and provide recommendations for code changes that could prevent similar failures in the future.
-
-$(cat "$prompt_file")
-EOF
-        # Use timeout to prevent hanging (10 minutes) if available
-        if [[ "$has_timeout" == true ]]; then
-            if timeout 600 bash -c "echo 'Analyze this failure:' | $copilot_cmd chat < '$chat_input'" > "$output_file" 2>&1; then
-                local success=true
-            else
-                local exit_code=$?
-                local success=false
-                if [[ $exit_code -eq 124 ]]; then
-                    log_error "'chat' command timed out after 10 minutes"
-                else
-                    log_warn "'chat' command failed (exit code: $exit_code)"
-                fi
-            fi
-        else
-            # No timeout - run directly
-            if bash -c "echo 'Analyze this failure:' | $copilot_cmd chat < '$chat_input'" > "$output_file" 2>&1; then
-                local success=true
-            else
-                local success=false
-                log_warn "'chat' command failed"
-            fi
-        fi
-
-        if [[ "${success:-false}" == true ]]; then
-            # Check if we got actual output
-            if [[ -s "$output_file" ]] && ! grep -qi "error\|failed\|not found" "$output_file" 2>/dev/null; then
-                log_info "Analysis complete using 'chat' command"
-                return 0
-            else
-                log_warn "'chat' command produced no valid output"
-            fi
-        fi
-    fi
-
-    # Method 3: Try direct pipe (if copilot is configured as a command)
-    log_info "Trying direct pipe method"
     log_info "Note: This may take several minutes. Large prompts can take time to process..."
 
-    # Use timeout to prevent hanging (10 minutes) if available
-    if [[ "$has_timeout" == true ]]; then
-        if timeout 600 cat "$prompt_file" | $copilot_cmd > "$output_file" 2>&1; then
-            local success=true
+    # Pipe prompt to copilot (reads from stdin)
+    # Use --allow-all-tools for non-interactive mode
+    # Use tee to show output in real-time while also saving to file
+    if command -v timeout &> /dev/null; then
+        log_info "Using timeout (10 minute limit)"
+        if timeout 600 sh -c "cat '$prompt_file' | '$copilot_cmd' --allow-all-tools" 2>&1 | tee "$output_file"; then
+            local exit_code=0
         else
             local exit_code=$?
-            local success=false
             if [[ $exit_code -eq 124 ]]; then
-                log_error "Direct pipe method timed out after 10 minutes"
-            else
-                log_warn "Direct pipe failed (exit code: $exit_code)"
+                log_error "Copilot analysis timed out after 10 minutes"
+                return 1
             fi
         fi
     else
-        # No timeout - run directly (user can Ctrl+C if needed)
-        if cat "$prompt_file" | $copilot_cmd > "$output_file" 2>&1; then
-            local success=true
+        # No timeout - run directly
+        if cat "$prompt_file" | "$copilot_cmd" --allow-all-tools 2>&1 | tee "$output_file"; then
+            local exit_code=0
         else
-            local success=false
-            log_warn "Direct pipe failed"
+            local exit_code=$?
         fi
     fi
 
-    if [[ "${success:-false}" == true ]]; then
-        # Check if we got actual output (not just empty or error)
-        if [[ -s "$output_file" ]] && ! grep -qi "error\|failed\|not found" "$output_file" 2>/dev/null; then
-            log_info "Analysis complete using direct pipe"
-            return 0
-        else
-            log_warn "Direct pipe produced no valid output"
-        fi
+    # Check if we got valid output
+    if [[ $exit_code -eq 0 ]] && [[ -s "$output_file" ]]; then
+        log_info "Analysis complete"
+        return 0
+    else
+        log_error "Copilot analysis failed (exit code: $exit_code)"
+        log_info "Check the output file for details: $output_file"
+        return 1
     fi
-
-    # Method 4: Manual fallback - create a script that user can run
-    log_warn "Automatic Copilot CLI execution failed. Creating manual analysis script."
-    local manual_script="${OUTPUT_DIR}/manual_analysis.sh"
-    cat > "$manual_script" <<EOF
-#!/bin/bash
-# Manual analysis script
-# Run this script manually with your preferred Copilot CLI method
-
-echo "To analyze this failure, use one of these methods:"
-echo ""
-echo "1. Using github-copilot-cli explain:"
-echo "   $copilot_cmd explain '$prompt_file'"
-echo ""
-echo "2. Using github-copilot-cli chat:"
-echo "   cat '$prompt_file' | $copilot_cmd chat"
-echo ""
-echo "3. Copy the prompt and use Copilot in your IDE:"
-echo "   Prompt file: $prompt_file"
-echo ""
-echo "The prompt file contains all the context needed for analysis."
-EOF
-    chmod +x "$manual_script"
-
-    # Still create a placeholder output file
-    cat > "$output_file" <<EOF
-# Analysis Pending
-
-Automatic Copilot CLI execution was not successful.
-
-Please run the manual analysis script:
-  ${manual_script}
-
-Or use one of these commands directly:
-
-1. \`$copilot_cmd explain "$prompt_file"\`
-
-2. \`cat "$prompt_file" | $copilot_cmd chat\`
-
-3. Open the prompt file in your IDE and use Copilot there:
-   $prompt_file
-
----
-
-## Prompt File Location
-$prompt_file
-
-## Context Files
-The analysis context has been prepared in:
-$(dirname "$output_file")
-
-EOF
-
-    log_warn "Created manual analysis script: $manual_script"
-    log_info "You can run the analysis manually using the instructions above"
-    return 0
 }
 
 # Main function
@@ -426,7 +284,7 @@ main() {
                 echo ""
                 echo "Options:"
                 echo "  --file, -f <file>       Read URLs from file (one per line)"
-                echo "  --output-dir, -o <dir>  Output directory (default: ./analysis_output)"
+                echo "  --output-dir, -o <dir>  Output directory (default: ./build_analysis_output)"
                 echo "  --skip-download         Skip downloading logs (use existing downloads)"
                 echo "  --keep-output           Keep output and downloaded folders (don't clean up)"
                 echo "  --help, -h              Show this help message"

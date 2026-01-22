@@ -10,7 +10,7 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${SCRIPT_DIR}/downloaded_logs"
+OUTPUT_DIR="${SCRIPT_DIR}/build_downloaded_logs"
 REPO="tenstorrent/tt-metal"
 
 # Colors for output
@@ -175,7 +175,7 @@ main() {
                 echo ""
                 echo "Options:"
                 echo "  --file, -f <file>    Read URLs from file (one per line)"
-                echo "  --output-dir, -o <dir>  Output directory (default: ./downloaded_logs)"
+                echo "  --output-dir, -o <dir>  Output directory (default: ./build_downloaded_logs)"
                 echo "  --help, -h           Show this help message"
                 echo ""
                 echo "Examples:"
