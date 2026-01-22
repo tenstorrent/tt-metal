@@ -46,9 +46,6 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    bool input_is_sharded = a.memory_config().is_sharded();
-    bool output_is_sharded = output.memory_config().is_sharded();
-
     uint32_t num_tiles = a.physical_volume() / tile_volume;
     uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
@@ -102,23 +99,14 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
     // Reader compute defines
     std::map<std::string, std::string> reader_compute_defines;
-    if (input_is_sharded) {
-        reader_compute_defines["SHARDED"] = "1";
-    }
 
     // Writer compute defines
     std::map<std::string, std::string> writer_compute_defines;
-    if (output_is_sharded) {
-        writer_compute_defines["SHARDED"] = "1";
-    }
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
-    } else {
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    }
+
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -139,11 +127,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         (uint32_t)num_tiles_per_block,
         (uint32_t)output_single_block_width_size,
     };
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-    } else {
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -198,15 +182,9 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         num_tiles,
         start_page_id,
     };
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
-    }
 
     // Writer run-time args
     std::vector<uint32_t> writer_run_time_args = {dst_buffer->address()};
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-    }
 
     // Set run-time args
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
