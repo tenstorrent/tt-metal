@@ -49,11 +49,21 @@ def _ensure_tuple(shape):
         return shape
     if isinstance(shape, list):
         return tuple(shape)
+    if isinstance(shape, str):
+        # Handle string representations like "(1, 1, 8, 8)"
+        import ast
+
+        try:
+            parsed = ast.literal_eval(shape)
+            return tuple(parsed) if isinstance(parsed, (list, tuple)) else parsed
+        except (ValueError, SyntaxError):
+            # If parsing fails, return as-is (might be a non-shape string)
+            return shape
     if isinstance(shape, dict):
         # If it's still a dict at this point, something is wrong
         raise ValueError(f"Shape should not be a dict at this point: {shape}")
-    # Handle any other iterable (but not strings)
-    if hasattr(shape, "__iter__") and not isinstance(shape, str):
+    # Handle any other iterable
+    if hasattr(shape, "__iter__"):
         return tuple(shape)
     # If it's a single value or something unexpected, return as-is
     return shape
