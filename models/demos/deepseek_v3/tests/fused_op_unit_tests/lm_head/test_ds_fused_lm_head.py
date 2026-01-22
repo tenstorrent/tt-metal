@@ -1,32 +1,54 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Fused op unit test for lm_head (vocabulary projection).
+
+lm_head is the linear projection from hidden_size (7168) to vocab_size (129280).
+The weight is sharded across all 32 devices, with each device holding vocab/32 = 4040
+output features.
+
+Sequence of ops:
+    Decode:  output = ttnn.linear(x, **cfg["linear"])
+    Prefill: output = ttnn.linear(x, program_config=..., **cfg["linear"])
+
+Key characteristics:
+    - Weight dtype: bfloat4_b (quantized)
+    - Weight shape per device: [7168, 4040]
+    - Weight memory: WIDTH_SHARDED DRAM
+    - Decode input: WIDTH_SHARDED L1
+    - Prefill input: DRAM INTERLEAVED
+"""
+
 import json
 import math
 import os
 from collections import defaultdict
-from typing import Literal
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
 import torch
+import torch.nn as nn
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
-from models.demos.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.tt.lm_head import LMHead
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_test_weight_config,
+    pad_or_trim_seq_len,
     system_name_to_mesh_shape,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
-DEVICE_PERF_ENV_VAR = "DS_FUSED_REDUCE_SCATTER_POST_FF2_DEVICE_PERF"
+DEVICE_PERF_ENV_VAR = "DS_FUSED_LM_HEAD_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
@@ -35,7 +57,7 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -49,118 +71,99 @@ def _get_int_env(name: str, default: int) -> int:
         raise ValueError(f"Env var {name} must be an int, got {val!r}") from e
 
 
-def ds_fused_reduce_scatter_post_ff2_reference(
-    x: torch.Tensor, mesh_width: int, mode: Literal["decode", "prefill"]
+class DeepseekV3LMHead(nn.Module):
+    """PyTorch reference model for LMHead."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+    def forward(self, hidden_states):
+        return self.lm_head(hidden_states)
+
+
+def ds_fused_lm_head_reference(
+    x: torch.Tensor,
+    weight: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Reference implementation for ReduceScatter_post_ff2.
-
-    In the distributed model, reduce_scatter:
-    1. Takes input from each device which is a partial product from w2 linear
-    2. Performs a reduction (sum) across the mesh_width devices
-    3. Scatters the result so each device gets 1/mesh_width of the output
-
-    For the test, the input tensor `x` represents partial products from each device
-    that are concatenated along the last dimension (simulating what all devices have).
-    Each device originally has [..., dim], and there are mesh_width devices.
-    So x has shape [..., dim * mesh_width].
-
-    The reduce_scatter operation:
-    1. Sums all partial products element-wise (each is [..., dim])
-    2. Scatters the result: each device gets [..., dim / mesh_width]
-
-    For the reference, we need to match the first device's output:
-    - Sum: x[..., :dim] + x[..., dim:2*dim] + ... = summed_result [..., dim]
-    - First device gets: summed_result[..., :dim/mesh_width]
+    Reference implementation for lm_head linear projection.
 
     Args:
-        x: Input tensor of shape [num_layers, seq_len, batch, dim * mesh_width] for decode
-           or [num_layers, batch, seq_len, dim * mesh_width] for prefill.
-           This represents the concatenated partial products from all mesh_width devices.
-        mesh_width: Number of devices in the mesh width (typically 8 for TG).
-        mode: "decode" or "prefill" (unused but kept for API consistency).
+        x: Input tensor of shape [1, 1, seq_len, hidden_size] or [1, num_chunks, chunk_size, hidden_size]
+        weight: Weight tensor of shape [vocab_size, hidden_size]
 
     Returns:
-        Output tensor representing what the first device has after reduce_scatter.
-        Shape is [num_layers, seq_len, batch, dim / mesh_width] for decode
-        or [num_layers, batch, seq_len, dim / mesh_width] for prefill.
+        Output tensor of shape [1, 1, seq_len, vocab_size] or [1, num_chunks, chunk_size, vocab_size]
     """
-    # Get the dimensions
-    last_dim = x.shape[-1]
-    per_device_input_dim = last_dim // mesh_width  # dim - what each device has as input
-    per_device_output_dim = per_device_input_dim // mesh_width  # dim / mesh_width - output per device
-
-    # Reshape to separate device contributions: [..., mesh_width, per_device_input_dim]
-    shape_prefix = x.shape[:-1]
-    x_reshaped = x.reshape(*shape_prefix, mesh_width, per_device_input_dim)
-
-    # Sum across devices (dim=-2) to get the reduced result: [..., per_device_input_dim]
-    x_reduced = x_reshaped.sum(dim=-2)
-
-    # Scatter: each device gets 1/mesh_width of the reduced result
-    # First device gets the first chunk: [..., per_device_output_dim]
-    x_scattered = x_reduced[..., :per_device_output_dim]
-
-    return x_scattered
+    return torch.nn.functional.linear(x, weight)
 
 
-def ds_fused_reduce_scatter_post_ff2_ttnn(
+def ds_fused_lm_head_ttnn_decode(
     x: ttnn.Tensor,
     cfg: dict,
-    ccl,
-    mode: Literal["decode", "prefill"],
-    persistent_output_buffer: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """
-    TTNN implementation for ReduceScatter_post_ff2.
+    TTNN implementation for lm_head linear projection (decode mode).
 
-    This performs the reduce_scatter operation after the w2 (down projection) linear layer.
-    For decode mode, it first converts to DRAM memory config before the reduce_scatter.
+    Uses DRAM sharded matmul with WIDTH_SHARDED L1 activations.
 
     Args:
-        x: Input tensor (output of w2 linear layer)
-        cfg: Configuration dictionary containing reduce_scatter config
-        ccl: CCL runtime object
-        mode: "decode" or "prefill"
-        persistent_output_buffer: Optional pre-allocated output buffer for trace mode
+        x: Input tensor (WIDTH_SHARDED L1)
+        cfg: Configuration dictionary containing linear config
 
     Returns:
-        Output tensor after reduce_scatter
+        Output tensor (WIDTH_SHARDED L1)
     """
-    if mode == "decode":
-        # Decode mode: convert to DRAM first (as in MLP.forward_decode)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.linear(x, **cfg["linear"])
+    return output
 
-    # Get runtime args from CCL
-    runtime_args = dict(ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"]))
 
-    # Normalize negative dims
-    if "dim" in runtime_args and isinstance(runtime_args["dim"], int) and runtime_args["dim"] < 0:
-        runtime_args["dim"] = runtime_args["dim"] % len(x.shape)
+def ds_fused_lm_head_ttnn_prefill(
+    x: ttnn.Tensor,
+    cfg: dict,
+    seq_len: int,
+) -> ttnn.Tensor:
+    """
+    TTNN implementation for lm_head linear projection (prefill mode).
 
-    # Handle persistent output buffer for trace mode
-    if persistent_output_buffer is not None:
-        runtime_args["persistent_output_buffers"] = persistent_output_buffer
+    Uses multicore multicast matmul with DRAM INTERLEAVED tensors.
+    For long sequences, handles chunking.
 
-    output = ttnn.experimental.reduce_scatter_minimal_async(x, **runtime_args)
+    Args:
+        x: Input tensor (DRAM INTERLEAVED)
+        cfg: Configuration dictionary containing linear and linear_pc_gen configs
+        seq_len: Original sequence length (before any chunking)
+
+    Returns:
+        Output tensor (DRAM INTERLEAVED)
+    """
+    # Generate program config based on sequence length
+    pc_gen = cfg["linear_pc_gen"]
+    program_config = LMHead._get_prefill_pc(
+        seq_len=seq_len,
+        hidden_dim=pc_gen.hidden_dim,
+        vocab_size=pc_gen.vocab_size,
+        num_devices=pc_gen.num_devices,
+        core_grid_size=pc_gen.core_grid_size,
+    )
+
+    output = ttnn.linear(x, program_config=program_config, **cfg["linear"])
     return output
 
 
 def _compare_with_reference(
     tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
 ) -> tuple[float, float]:
-    """Compare TTNN output with reference and return metrics.
-
-    Returns:
-        Tuple of (pcc_value, max_abs_error) for logging to superset.
-    """
+    """Compare TTNN output with reference and return metrics."""
     passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
-    max_abs_error = (tt_output - ref_output).abs().max().item()
+    max_abs_error = (tt_output.float() - ref_output.float()).abs().max().item()
     logger.info(f"PCC: {pcc}")
     logger.info(f"Max absolute error: {max_abs_error}")
     assert passing, f"PCC {pcc} is below required {expected_pcc}"
     try:
-        torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
+        torch.testing.assert_close(tt_output.float(), ref_output.float(), rtol=rtol, atol=atol)
     except AssertionError as e:
         logger.warning(f"assert_close failed but PCC passed: {e}")
     return pcc, max_abs_error
@@ -181,35 +184,31 @@ def _measure_perf_us(
 ) -> float:
     ttnn.synchronize_device(mesh_device)
     if trace_mode:
-        # Trace mode: use a persistent output buffer and avoid deallocate inside trace capture.
-        persistent_output = op_fn()
-        ttnn.synchronize_device(mesh_device)
-        # Warm up the persistent-buffer variant before capture
-        _ = op_fn(persistent_output_buffer=persistent_output)
-        ttnn.synchronize_device(mesh_device)
+        # Warmup
+        for _ in range(warmup_iters):
+            output = op_fn()
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(output)
 
-        logger.info("Capturing trace for perf…")
+        ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        op_fn(persistent_output_buffer=persistent_output)
+        traced_output = op_fn()
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        logger.info("Trace captured. Replaying warmup…")
+        ttnn.deallocate(traced_output)
 
         for _ in range(warmup_iters):
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.synchronize_device(mesh_device)
 
-        logger.info("Warmup done. Replaying measured iterations…")
         profiler.clear()
-        profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+        profiler.start("ds_fused_lm_head_perf")
         for _ in range(measure_iters):
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.synchronize_device(mesh_device)
-        profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
-        logger.info("Measured iterations done. Releasing trace…")
+        profiler.end("ds_fused_lm_head_perf", PERF_CNT=measure_iters)
         ttnn.release_trace(mesh_device, trace_id)
-        ttnn.deallocate(persistent_output)
-        return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+        return profiler.get("ds_fused_lm_head_perf") * 1e6
 
     for _ in range(warmup_iters):
         output = op_fn()
@@ -217,16 +216,16 @@ def _measure_perf_us(
         ttnn.deallocate(output)
 
     profiler.clear()
-    profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+    profiler.start("ds_fused_lm_head_perf")
     for _ in range(measure_iters):
         output = op_fn()
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(output)
-    profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
-    return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+    profiler.end("ds_fused_lm_head_perf", PERF_CNT=measure_iters)
+    return profiler.get("ds_fused_lm_head_perf") * 1e6
 
 
-def _run_ds_fused_reduce_scatter_post_ff2_test(
+def _run_ds_fused_lm_head_test(
     mesh_device: ttnn.MeshDevice,
     run_config: dict,
     tt_input: ttnn.Tensor,
@@ -240,17 +239,22 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
     mode: str,
     seq_len: int,
     batch_size: int,
-    ccl,
     step_prefix: str,
 ):
-    # Log run configuration for superset
     _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
 
-    tt_output = ds_fused_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
+    # Run lm_head
+    if mode == "decode":
+        tt_output = ds_fused_lm_head_ttnn_decode(tt_input, run_config)
+    else:
+        tt_output = ds_fused_lm_head_ttnn_prefill(tt_input, run_config, seq_len)
 
-    # Get output from the first device only for comparison with reference
-    # (similar to how all_gather test does it)
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
+    # Convert output to torch - concatenate vocab dimension across all 32 devices
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+
+    # Slice to actual vocab_size if needed (output may be padded)
+    if tt_output_torch.shape[-1] > ref_output.shape[-1]:
+        tt_output_torch = tt_output_torch[..., : ref_output.shape[-1]]
 
     pcc_value, max_abs_error = _compare_with_reference(
         tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol
@@ -263,8 +267,8 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
         step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
 
-        warmup_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
-        measure_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
+        warmup_iters = _get_int_env("DS_LM_HEAD_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
+        measure_iters = _get_int_env("DS_LM_HEAD_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
         logger.info(
             f"Starting e2e perf measurement: trace_mode={trace_mode}, program_cache={program_cache_enabled}, "
             f"warmup_iters={warmup_iters}, measure_iters={measure_iters}"
@@ -273,10 +277,15 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         perf_profiler.start("run")
         perf_profiler.start(step_name)
 
-        def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
-                tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
-            )
+        if mode == "decode":
+
+            def op_fn():
+                return ds_fused_lm_head_ttnn_decode(tt_input, run_config)
+
+        else:
+
+            def op_fn():
+                return ds_fused_lm_head_ttnn_prefill(tt_input, run_config, seq_len)
 
         perf_us = _measure_perf_us(
             mesh_device,
@@ -298,7 +307,6 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
             step_warm_up_num_iterations=PERF_WARMUP_ITERS,
             target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
         )
-        # Log PCC and ATOL metrics to superset
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-pcc", pcc_value)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-max_abs_error", max_abs_error)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-expected_atol", expected_atol)
@@ -313,9 +321,9 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
                 "mode": mode,
                 "trace": trace_mode,
                 "program_cache_enabled": program_cache_enabled,
-                "module": "mlp",
+                "module": "lm_head",
                 "mesh_device": os.getenv("MESH_DEVICE", "TG"),
-                "op_type": "reduce_scatter",
+                "op_type": "lm_head",
             },
         )
         if expected_perf_us > 0 and not trace_mode and program_cache_enabled:
@@ -329,10 +337,15 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         logger.info("Skipping e2e perf measurement during device-perf profiling.")
         from tracy import signpost
 
-        def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
-                tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
-            )
+        if mode == "decode":
+
+            def op_fn():
+                return ds_fused_lm_head_ttnn_decode(tt_input, run_config)
+
+        else:
+
+            def op_fn():
+                return ds_fused_lm_head_ttnn_prefill(tt_input, run_config, seq_len)
 
         for _ in range(PERF_WARMUP_ITERS):
             output = op_fn()
@@ -341,13 +354,8 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
 
         ttnn.synchronize_device(mesh_device)
         if trace_mode:
-            persistent_output = op_fn()
-            ttnn.synchronize_device(mesh_device)
-            _ = op_fn(persistent_output_buffer=persistent_output)
-            ttnn.synchronize_device(mesh_device)
-
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            op_fn(persistent_output_buffer=persistent_output)
+            traced_output = op_fn()
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(mesh_device)
             signpost("start")
@@ -356,7 +364,7 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
                 ttnn.synchronize_device(mesh_device)
             signpost("stop")
             ttnn.release_trace(mesh_device, trace_id)
-            ttnn.deallocate(persistent_output)
+            ttnn.deallocate(traced_output)
         else:
             signpost("start")
             for _ in range(DEVICE_PERF_ITERS):
@@ -365,99 +373,93 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
                 ttnn.deallocate(output)
             signpost("stop")
 
+    # Clean up output
+    ttnn.deallocate(tt_output)
 
-def _build_reduce_scatter_inputs(
+
+def _build_lm_head_inputs(
     mesh_device: ttnn.MeshDevice,
-    hf_config,
-    cache_path: str,
-    ccl,
+    hf_config: Any,
+    cache_path: Path,
     force_recalculate_weight_config: bool,
+    use_real_weights: bool,
     mode: str,
     seq_len: int,
+    state_dict: dict[str, torch.Tensor] | None,
 ):
-    """Build inputs for reduce_scatter_post_ff2 test.
+    """Build inputs for lm_head test.
 
-    The input to reduce_scatter is the output of the w2 linear layer (down projection).
-    In the MLP, reduce_scatter takes partial products from each device and:
-    1. Reduces (sums) across mesh columns
-    2. Scatters the result across mesh columns
+    Args:
+        mesh_device: The mesh device
+        hf_config: HuggingFace config
+        cache_path: Path for weight caching
+        force_recalculate_weight_config: Whether to force recalculate weights
+        use_real_weights: Whether to use real model weights
+        mode: "decode" or "prefill"
+        seq_len: Sequence length
+        state_dict: Model state dict (needed if use_real_weights=True)
 
-    For this test:
-    - Create input tensor that will be sharded across the mesh
-    - Each device gets a portion of the input
-    - reduce_scatter sums contributions from all devices and scatters
+    LMHead shape convention (from original test_lm_head.py):
+    - Decode: height = 32 (USERS_PER_ROW users × 1 token each)
+    - Prefill: height = seq_len (1 user × seq_len tokens)
     """
-    # Get MLP config to get the reduce_scatter configuration
+    hidden_size = hf_config.hidden_size
+    vocab_size = hf_config.vocab_size
+
+    # LMHead uses different batch conventions:
+    # - Decode: batch_size=32 (USERS_PER_ROW), seq_len=1 → height=32
+    # - Prefill: batch_size=1, seq_len=N → height=N
+    if mode == "decode":
+        batch_size = USERS_PER_ROW
+        effective_height = batch_size * seq_len  # 32 × 1 = 32
+    else:
+        batch_size = 1
+        effective_height = seq_len  # 1 × seq_len = seq_len
+
+    # Create reference model
+    reference_model = DeepseekV3LMHead(hf_config).eval()
+
+    if use_real_weights and state_dict is not None:
+        # Use provided real weights
+        lm_head_state_dict = sub_state_dict(state_dict, "lm_head.")
+        reference_model.load_state_dict(lm_head_state_dict, strict=False)
+    else:
+        # Use random weights (already initialized by nn.Linear)
+        pass
+
+    # Get state dict for TTNN weight conversion
+    lm_head_state_dict = sub_state_dict(reference_model.state_dict(), "lm_head.")
+
+    # Generate reference output
+    # Shape: [1, 1, effective_height, hidden_size]
+    torch_input = torch.randn(1, 1, effective_height, hidden_size)
+    reference_output = reference_model(torch_input)
+
+    # Pad input to SEQ_LEN_CHUNK_SIZE if necessary for TTNN
+    torch_input_padded = pad_or_trim_seq_len(torch_input, mode, effective_height)
+
+    # Generate TTNN configs
+    # input_row_idx=3 matches the default in LMHead module test
+    input_row_idx = 3
     weight_config = get_test_weight_config(
-        MLP,
-        hf_config,
-        (None,) * mesh_device.shape[0],  # No actual weights needed for this test
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
+        LMHead, hf_config, (lm_head_state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
-    model_state = {
-        "mesh_device": mesh_device,
-        "mesh_shape": mesh_device.shape,
-        "ccl": ccl,
-    }
+    # Note: LMHead doesn't take seq_len in model_config - it computes program config dynamically
+    model_config = get_model_config(LMHead, mode, hf_config, mesh_device, input_row_idx)
+    model_state = LMHead.create_state(hf_config, mesh_device, None)  # CCL not needed for linear only
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    batch_size = USERS_PER_ROW if mode == "decode" else 1
-    num_layers = mesh_device.shape[0]
-    mesh_width = mesh_device.shape[1]
-    dim = hf_config.hidden_size
-
-    # Create input tensor with shape [num_layers, ..., dim]
-    # This will be sharded: each device gets [1, ..., dim/mesh_width] after sharding on dims=(0, -1)
-    if mode == "decode":
-        torch_input = torch.randn(num_layers, seq_len, batch_size, dim, dtype=torch.bfloat16)
-    else:
-        torch_input = torch.randn(num_layers, batch_size, seq_len, dim, dtype=torch.bfloat16)
-
-    # Shard across mesh devices with dims=(0, -1)
-    # Each device (row=r, col=c) gets portion:
-    # - Layer: layers[r]
-    # - Dim: dim[c * dim/mesh_width : (c+1) * dim/mesh_width]
+    # Convert input to TTNN - replicate to all devices
     tt_input = ttnn.from_torch(
-        torch_input,
+        torch_input_padded,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=run_config["input_memory_config"],
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Reference output for the first device (row=0, col=0):
-    # reduce_scatter on cluster_axis=1 (mesh columns) with dim=3 means:
-    # 1. Each device in a row has shape [1, seq, batch, dim/mesh_width]
-    # 2. reduce: sum all mesh_width devices' tensors elementwise -> [1, seq, batch, dim/mesh_width]
-    # 3. scatter along dim 3: divide into mesh_width chunks, each device gets one chunk
-    #    -> output shape [1, seq, batch, dim/mesh_width/mesh_width]
-    #
-    # For the reference simulation:
-    # - First layer data: torch_input[:1] has shape [1, seq, batch, dim]
-    # - This represents all column devices' data concatenated on last dim
-    # - Reshape to [1, seq, batch, mesh_width, dim/mesh_width] to separate contributions
-    # - Sum across dim -2 (devices) -> [1, seq, batch, dim/mesh_width]
-    # - Scatter: first device gets first chunk -> [1, seq, batch, dim/mesh_width/mesh_width]
-
-    per_device_dim = dim // mesh_width
-    per_device_output_dim = per_device_dim // mesh_width
-
-    # Get first layer and reshape to separate device contributions
-    first_layer = torch_input[:1]  # [1, seq, batch, dim]
-    shape_prefix = first_layer.shape[:-1]  # [1, seq, batch]
-    first_layer_reshaped = first_layer.reshape(*shape_prefix, mesh_width, per_device_dim)
-
-    # Sum across devices (simulate reduce)
-    reduced = first_layer_reshaped.sum(dim=-2)  # [1, seq, batch, per_device_dim]
-
-    # Scatter: first device gets first chunk
-    ref_output = reduced[..., :per_device_output_dim]  # [1, seq, batch, per_device_output_dim]
-
-    return run_config, tt_input, ref_output, batch_size
+    return run_config, tt_input, reference_output, batch_size
 
 
 def _maybe_skip_long_seq(seq_len: int):
@@ -499,7 +501,7 @@ def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
 
         if missing_devices:
             logger.warning(
-                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
+                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices"
             )
 
         if not blocks:
@@ -581,73 +583,75 @@ def _collect_device_perf(
     return op_stats, total_kernel_ns, total_op_to_op_ns
 
 
-def _skip_single_device_ccl():
-    pytest.skip("Single-device test is not applicable because ds_fused_reduce_scatter_post_ff2 includes CCL ops.")
-
-
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # TODO: Replace expected_perf_us baselines with theoretical targets.
-        ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
+        # PCC ~0.97 expected for bfloat4_b quantized weights
+        # batch_size=32 for all modes, seq_len=1 for decode
+        # height = batch_size × seq_len = 32 × 1 = 32 for decode
+        ("decode", 1, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1 → 32 tokens
+        ("prefill", 128, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128 → 4096 tokens
+        ("prefill", 1024, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1024 → 32768 tokens
+        ("prefill", 131072, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128k
     ],
 )
+@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
 @pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "trace_region_size": 23740416,  # Large trace region for vocab projection
         }
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2(
+def test_ds_fused_lm_head(
     mode,
     seq_len,
     expected_pcc,
     expected_atol,
     expected_rtol,
     expected_perf_us,
+    use_real_weights,
     program_cache_enabled,
     trace_mode,
     hf_config,
     cache_path,
     mesh_device,
-    ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
-    # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
-    # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
+    """Test lm_head fused op (vocabulary projection).
+
+    This tests the linear projection from hidden_size (7168) to vocab_size (129280).
+    The weight is sharded across all 32 devices with bfloat4_b quantization.
+    """
+    # Trace capture requires program cache enabled
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
 
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+    _maybe_skip_long_seq(seq_len)
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
 
-    run_config, tt_input, ref_output, batch_size = _build_reduce_scatter_inputs(
+    run_config, tt_input, ref_output, batch_size = _build_lm_head_inputs(
         mesh_device,
         hf_config,
         cache_path,
-        ccl,
         force_recalculate_weight_config,
+        use_real_weights,
         mode,
         seq_len,
+        state_dict if use_real_weights else None,
     )
-    _run_ds_fused_reduce_scatter_post_ff2_test(
+
+    _run_ds_fused_lm_head_test(
         mesh_device,
         run_config,
         tt_input,
@@ -661,51 +665,63 @@ def test_ds_fused_reduce_scatter_post_ff2(
         mode,
         seq_len,
         batch_size,
-        ccl,
-        f"ds_fused_reduce_scatter_post_ff2_{mode}_seq{seq_len}",
+        f"ds_fused_lm_head_{mode}_seq{seq_len}",
     )
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # TODO: Replace expected_perf_us baselines with theoretical targets.
-        ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
+        ("decode", 1, 0.97, 1.0, 1.0, 0.0),
+        ("prefill", 128, 0.97, 1.0, 1.0, 0.0),
+        ("prefill", 1024, 0.97, 1.0, 1.0, 0.0),
+        ("prefill", 131072, 0.97, 1.0, 1.0, 0.0),
     ],
 )
+@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
 @pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
+            "trace_region_size": 23740416,
         }
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device(
+def test_ds_fused_lm_head_single_device(
     mode,
     seq_len,
     expected_pcc,
     expected_atol,
     expected_rtol,
     expected_perf_us,
+    use_real_weights,
     program_cache_enabled,
     trace_mode,
     hf_config,
     cache_path,
     mesh_device,
-    ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
-    _skip_single_device_ccl()
+    """Single device test for lm_head.
+
+    The lm_head linear projection can run on a single device with per-device
+    weight shard (vocab/32). However, the output would only be 1/32 of the full vocab.
+    For simplicity, we skip this test as the multi-device test is the primary use case.
+    """
+    pytest.skip(
+        "Single-device test skipped: lm_head outputs vocab_size/32 per device. "
+        "Multi-device test with all_gather is the primary use case."
+    )
 
 
 @pytest.mark.parametrize(
@@ -714,35 +730,29 @@ def test_ds_fused_reduce_scatter_post_ff2_single_device(
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
         ("prefill", 131072),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+def test_ds_fused_lm_head_device_perf(mode, seq_len):
+    _maybe_skip_long_seq(seq_len)
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    batch_size = USERS_PER_ROW * mesh_shape[0]
+    # batch_size=32 (USERS_PER_ROW) for all modes
+    batch_size = USERS_PER_ROW
 
-    profiler = BenchmarkProfiler()
+    perf_profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"ds_fused_reduce_scatter_post_ff2_device_perf_{mode}_seq{seq_len}"
-    test_path = (
-        "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py"
-    )
+    step_name = f"ds_fused_lm_head_device_perf_{mode}_seq{seq_len}"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_lm_head.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
-    command = f'pytest {test_path}::test_ds_fused_reduce_scatter_post_ff2 -k "{expr}"'
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
+    command = f'pytest {test_path}::test_ds_fused_lm_head -k "{expr}"'
 
-    profiler.start("run")
-    profiler.start(step_name)
+    perf_profiler.start("run")
+    perf_profiler.start(step_name)
     os.environ[DEVICE_PERF_ENV_VAR] = "1"
     op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
         command,
@@ -751,8 +761,8 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         use_signposts=True,
     )
     os.environ.pop(DEVICE_PERF_ENV_VAR, None)
-    profiler.end(step_name)
-    profiler.end("run")
+    perf_profiler.end(step_name)
+    perf_profiler.end("run")
 
     assert op_stats, "No device perf stats captured."
     total_kernel_us = total_kernel_ns / 1000.0
@@ -777,21 +787,21 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         ), f"Op-to-op perf regression: {total_op_to_op_us:.3f}us exceeds {op_to_op_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
 
     benchmark_data.add_measurement(
-        profiler,
+        perf_profiler,
         0,
         step_name,
         "total_kernel_duration_us",
         total_kernel_us,
     )
     benchmark_data.add_measurement(
-        profiler,
+        perf_profiler,
         0,
         step_name,
         "total_op_to_op_latency_us",
         total_op_to_op_us,
     )
     benchmark_data.save_partial_run_json(
-        profiler,
+        perf_profiler,
         run_type="deepseek_v3_fused_ops_device_perf",
         ml_model_name="deepseek-v3",
         batch_size=batch_size,
@@ -805,12 +815,13 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         ("decode", 1),
         ("prefill", 128),
         ("prefill", 1024),
-        ("prefill", 8192),
-        ("prefill", 131072),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device_device_perf(mode, seq_len):
-    _skip_single_device_ccl()
+def test_ds_fused_lm_head_single_device_device_perf(mode, seq_len):
+    pytest.skip(
+        "Single-device device perf test skipped: lm_head outputs vocab_size/32 per device. "
+        "Multi-device test with all_gather is the primary use case."
+    )
 
 
 if __name__ == "__main__":

@@ -1,11 +1,26 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Fused op unit test for mesh_scatter.
+
+mesh_scatter is a communication primitive used in LMHead that broadcasts tensor data
+from one row of the mesh to all other rows. This enables all 32 devices to participate
+in the vocabulary projection by replicating the input across all mesh rows.
+
+Sequence of ops:
+    mesh_scatter(x, mesh_shape, scatter_idx)
+
+Where:
+    - mesh_shape: (4, 8) - 4 rows × 8 columns
+    - scatter_idx: (row_idx, None) - broadcast from row_idx to all other rows
+    - Internally uses ttnn.point_to_point for device-to-device data transfer
+"""
+
 import json
 import math
 import os
 from collections import defaultdict
-from typing import Literal
 
 import pandas as pd
 import pytest
@@ -14,19 +29,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
-from models.demos.deepseek_v3.tt.mlp.mlp import MLP
+from models.demos.deepseek_v3.utils.composite_ops import mesh_scatter
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    get_model_config,
-    get_test_weight_config,
-    system_name_to_mesh_shape,
-)
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 LONG_SEQ_ENV_VAR = "DEEPSEEK_V3_LONG_SEQ_TESTS"
-DEVICE_PERF_ENV_VAR = "DS_FUSED_REDUCE_SCATTER_POST_FF2_DEVICE_PERF"
+DEVICE_PERF_ENV_VAR = "DS_FUSED_MESH_SCATTER_DEVICE_PERF"
 PERF_WARMUP_ITERS = 10
 PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
@@ -35,7 +45,7 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -49,128 +59,121 @@ def _get_int_env(name: str, default: int) -> int:
         raise ValueError(f"Env var {name} must be an int, got {val!r}") from e
 
 
-def ds_fused_reduce_scatter_post_ff2_reference(
-    x: torch.Tensor, mesh_width: int, mode: Literal["decode", "prefill"]
+def ds_fused_mesh_scatter_reference(
+    x: torch.Tensor,
+    mesh_shape: tuple[int, int],
+    scatter_idx: tuple[int | None, int | None],
 ) -> torch.Tensor:
     """
-    Reference implementation for ReduceScatter_post_ff2.
+    Reference implementation for mesh_scatter.
 
-    In the distributed model, reduce_scatter:
-    1. Takes input from each device which is a partial product from w2 linear
-    2. Performs a reduction (sum) across the mesh_width devices
-    3. Scatters the result so each device gets 1/mesh_width of the output
-
-    For the test, the input tensor `x` represents partial products from each device
-    that are concatenated along the last dimension (simulating what all devices have).
-    Each device originally has [..., dim], and there are mesh_width devices.
-    So x has shape [..., dim * mesh_width].
-
-    The reduce_scatter operation:
-    1. Sums all partial products element-wise (each is [..., dim])
-    2. Scatters the result: each device gets [..., dim / mesh_width]
-
-    For the reference, we need to match the first device's output:
-    - Sum: x[..., :dim] + x[..., dim:2*dim] + ... = summed_result [..., dim]
-    - First device gets: summed_result[..., :dim/mesh_width]
+    mesh_scatter broadcasts data from one mesh row to all other rows.
+    Since this is a communication primitive (not compute), the reference
+    simply returns the input unchanged - the actual test verifies that
+    all devices have consistent data after the operation.
 
     Args:
-        x: Input tensor of shape [num_layers, seq_len, batch, dim * mesh_width] for decode
-           or [num_layers, batch, seq_len, dim * mesh_width] for prefill.
-           This represents the concatenated partial products from all mesh_width devices.
-        mesh_width: Number of devices in the mesh width (typically 8 for TG).
-        mode: "decode" or "prefill" (unused but kept for API consistency).
+        x: Input tensor of shape [1, 1, seq_len, hidden_size]
+        mesh_shape: Tuple (num_rows, num_cols) of the mesh
+        scatter_idx: Tuple (from_row, from_col) indicating source indices
+                    None means don't scatter on that dimension
 
     Returns:
-        Output tensor representing what the first device has after reduce_scatter.
-        Shape is [num_layers, seq_len, batch, dim / mesh_width] for decode
-        or [num_layers, batch, seq_len, dim / mesh_width] for prefill.
+        The same tensor (mesh_scatter is a communication op, not compute)
     """
-    # Get the dimensions
-    last_dim = x.shape[-1]
-    per_device_input_dim = last_dim // mesh_width  # dim - what each device has as input
-    per_device_output_dim = per_device_input_dim // mesh_width  # dim / mesh_width - output per device
-
-    # Reshape to separate device contributions: [..., mesh_width, per_device_input_dim]
-    shape_prefix = x.shape[:-1]
-    x_reshaped = x.reshape(*shape_prefix, mesh_width, per_device_input_dim)
-
-    # Sum across devices (dim=-2) to get the reduced result: [..., per_device_input_dim]
-    x_reduced = x_reshaped.sum(dim=-2)
-
-    # Scatter: each device gets 1/mesh_width of the reduced result
-    # First device gets the first chunk: [..., per_device_output_dim]
-    x_scattered = x_reduced[..., :per_device_output_dim]
-
-    return x_scattered
+    # mesh_scatter is a communication primitive that broadcasts data
+    # The output data is identical to the input (from the source row's perspective)
+    return x
 
 
-def ds_fused_reduce_scatter_post_ff2_ttnn(
+def ds_fused_mesh_scatter_ttnn(
     x: ttnn.Tensor,
-    cfg: dict,
-    ccl,
-    mode: Literal["decode", "prefill"],
-    persistent_output_buffer: ttnn.Tensor | None = None,
+    mesh_shape: tuple[int, int],
+    scatter_idx: tuple[int | None, int | None],
 ) -> ttnn.Tensor:
     """
-    TTNN implementation for ReduceScatter_post_ff2.
+    TTNN implementation for mesh_scatter.
 
-    This performs the reduce_scatter operation after the w2 (down projection) linear layer.
-    For decode mode, it first converts to DRAM memory config before the reduce_scatter.
+    Broadcasts tensor data from one row of the mesh to all other rows
+    using ttnn.point_to_point for device-to-device transfers.
 
     Args:
-        x: Input tensor (output of w2 linear layer)
-        cfg: Configuration dictionary containing reduce_scatter config
-        ccl: CCL runtime object
-        mode: "decode" or "prefill"
-        persistent_output_buffer: Optional pre-allocated output buffer for trace mode
+        x: Input tensor (on device)
+        mesh_shape: Tuple (num_rows, num_cols) of the mesh
+        scatter_idx: Tuple (from_row, from_col) indicating source indices
 
     Returns:
-        Output tensor after reduce_scatter
+        The same tensor with data broadcast across all rows
     """
-    if mode == "decode":
-        # Decode mode: convert to DRAM first (as in MLP.forward_decode)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-
-    # Get runtime args from CCL
-    runtime_args = dict(ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"]))
-
-    # Normalize negative dims
-    if "dim" in runtime_args and isinstance(runtime_args["dim"], int) and runtime_args["dim"] < 0:
-        runtime_args["dim"] = runtime_args["dim"] % len(x.shape)
-
-    # Handle persistent output buffer for trace mode
-    if persistent_output_buffer is not None:
-        runtime_args["persistent_output_buffers"] = persistent_output_buffer
-
-    output = ttnn.experimental.reduce_scatter_minimal_async(x, **runtime_args)
-    return output
+    mesh_scatter(x, mesh_shape=mesh_shape, scatter_idx=scatter_idx)
+    return x  # Returns same tensor (modified in-place across devices)
 
 
 def _compare_with_reference(
     tt_output: torch.Tensor, ref_output: torch.Tensor, expected_pcc: float, atol: float, rtol: float
 ) -> tuple[float, float]:
-    """Compare TTNN output with reference and return metrics.
-
-    Returns:
-        Tuple of (pcc_value, max_abs_error) for logging to superset.
-    """
+    """Compare TTNN output with reference and return metrics."""
     passing, pcc = comp_pcc(ref_output, tt_output, expected_pcc)
-    max_abs_error = (tt_output - ref_output).abs().max().item()
+    max_abs_error = (tt_output.float() - ref_output.float()).abs().max().item()
     logger.info(f"PCC: {pcc}")
     logger.info(f"Max absolute error: {max_abs_error}")
     assert passing, f"PCC {pcc} is below required {expected_pcc}"
     try:
-        torch.testing.assert_close(tt_output, ref_output, rtol=rtol, atol=atol)
+        torch.testing.assert_close(tt_output.float(), ref_output.float(), rtol=rtol, atol=atol)
     except AssertionError as e:
         logger.warning(f"assert_close failed but PCC passed: {e}")
     return pcc, max_abs_error
 
 
-def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int):
+def _verify_data_consistency_across_rows(
+    mesh_device: ttnn.MeshDevice,
+    tt_tensor: ttnn.Tensor,
+    source_row: int,
+) -> bool:
+    """
+    Verify that all rows have identical data after mesh_scatter.
+
+    Args:
+        mesh_device: The mesh device
+        tt_tensor: The tensor after mesh_scatter
+        source_row: The row that was the source of the broadcast
+
+    Returns:
+        True if all rows have identical data
+    """
+    device_tensors = ttnn.get_device_tensors(tt_tensor)
+    num_rows, num_cols = mesh_device.shape
+
+    # Get reference data from source row (first device in that row)
+    source_device_idx = source_row * num_cols
+    ref_data = ttnn.to_torch(device_tensors[source_device_idx])
+
+    all_consistent = True
+    for row in range(num_rows):
+        for col in range(num_cols):
+            device_idx = row * num_cols + col
+            device_data = ttnn.to_torch(device_tensors[device_idx])
+
+            # Compare with reference (same column in source row)
+            ref_device_idx = source_row * num_cols + col
+            expected_data = ttnn.to_torch(device_tensors[ref_device_idx])
+
+            passing, pcc = comp_pcc(expected_data, device_data, 0.9999)
+            if not passing:
+                logger.error(f"Device ({row}, {col}) data mismatch with source. PCC: {pcc}")
+                all_consistent = False
+            else:
+                logger.debug(f"Device ({row}, {col}) data consistent with source. PCC: {pcc}")
+
+    return all_consistent
+
+
+def _log_run_mode(mode: str, trace_mode: bool, program_cache_enabled: bool, seq_len: int, scatter_row: int):
     """Log the test run configuration."""
     logger.info("=== TEST RUN CONFIGURATION ===")
     logger.info(f"Mode: {mode}")
     logger.info(f"Sequence length: {seq_len}")
+    logger.info(f"Scatter source row: {scatter_row}")
     logger.info(f"Trace mode: {trace_mode}")
     logger.info(f"Program cache enabled: {program_cache_enabled}")
     logger.info("===============================")
@@ -181,56 +184,49 @@ def _measure_perf_us(
 ) -> float:
     ttnn.synchronize_device(mesh_device)
     if trace_mode:
-        # Trace mode: use a persistent output buffer and avoid deallocate inside trace capture.
-        persistent_output = op_fn()
-        ttnn.synchronize_device(mesh_device)
-        # Warm up the persistent-buffer variant before capture
-        _ = op_fn(persistent_output_buffer=persistent_output)
-        ttnn.synchronize_device(mesh_device)
+        # Warmup
+        for _ in range(warmup_iters):
+            op_fn()
+            ttnn.synchronize_device(mesh_device)
 
-        logger.info("Capturing trace for perf…")
+        ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        op_fn(persistent_output_buffer=persistent_output)
+        op_fn()
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        logger.info("Trace captured. Replaying warmup…")
 
         for _ in range(warmup_iters):
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.synchronize_device(mesh_device)
 
-        logger.info("Warmup done. Replaying measured iterations…")
         profiler.clear()
-        profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+        profiler.start("ds_fused_mesh_scatter_perf")
         for _ in range(measure_iters):
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.synchronize_device(mesh_device)
-        profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
-        logger.info("Measured iterations done. Releasing trace…")
+        profiler.end("ds_fused_mesh_scatter_perf", PERF_CNT=measure_iters)
         ttnn.release_trace(mesh_device, trace_id)
-        ttnn.deallocate(persistent_output)
-        return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+        return profiler.get("ds_fused_mesh_scatter_perf") * 1e6
 
     for _ in range(warmup_iters):
-        output = op_fn()
+        op_fn()
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(output)
 
     profiler.clear()
-    profiler.start("ds_fused_reduce_scatter_post_ff2_perf")
+    profiler.start("ds_fused_mesh_scatter_perf")
     for _ in range(measure_iters):
-        output = op_fn()
+        op_fn()
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(output)
-    profiler.end("ds_fused_reduce_scatter_post_ff2_perf", PERF_CNT=measure_iters)
-    return profiler.get("ds_fused_reduce_scatter_post_ff2_perf") * 1e6
+    profiler.end("ds_fused_mesh_scatter_perf", PERF_CNT=measure_iters)
+    return profiler.get("ds_fused_mesh_scatter_perf") * 1e6
 
 
-def _run_ds_fused_reduce_scatter_post_ff2_test(
+def _run_ds_fused_mesh_scatter_test(
     mesh_device: ttnn.MeshDevice,
-    run_config: dict,
     tt_input: ttnn.Tensor,
     ref_output: torch.Tensor,
+    mesh_shape: tuple[int, int],
+    scatter_idx: tuple[int | None, int | None],
     expected_pcc: float,
     expected_atol: float,
     expected_rtol: float,
@@ -240,17 +236,21 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
     mode: str,
     seq_len: int,
     batch_size: int,
-    ccl,
     step_prefix: str,
 ):
-    # Log run configuration for superset
-    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
+    scatter_row = scatter_idx[0] if scatter_idx[0] is not None else 0
+    _log_run_mode(mode, trace_mode, program_cache_enabled, seq_len, scatter_row)
 
-    tt_output = ds_fused_reduce_scatter_post_ff2_ttnn(tt_input, run_config, ccl, mode)
+    # Run mesh_scatter
+    tt_output = ds_fused_mesh_scatter_ttnn(tt_input, mesh_shape, scatter_idx)
 
-    # Get output from the first device only for comparison with reference
-    # (similar to how all_gather test does it)
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
+    # Verify data consistency across all rows
+    all_consistent = _verify_data_consistency_across_rows(mesh_device, tt_output, scatter_row)
+    assert all_consistent, "Data inconsistency detected across mesh rows after mesh_scatter"
+
+    # Get output from first device for PCC comparison with reference
+    device_tensors = ttnn.get_device_tensors(tt_output)
+    tt_output_torch = ttnn.to_torch(device_tensors[0])
 
     pcc_value, max_abs_error = _compare_with_reference(
         tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol
@@ -263,8 +263,8 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
         step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
 
-        warmup_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
-        measure_iters = _get_int_env("DS_REDUCE_SCATTER_POST_FF2_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
+        warmup_iters = _get_int_env("DS_MESH_SCATTER_PERF_WARMUP_ITERS", PERF_WARMUP_ITERS)
+        measure_iters = _get_int_env("DS_MESH_SCATTER_PERF_MEASURE_ITERS", PERF_MEASURE_ITERS)
         logger.info(
             f"Starting e2e perf measurement: trace_mode={trace_mode}, program_cache={program_cache_enabled}, "
             f"warmup_iters={warmup_iters}, measure_iters={measure_iters}"
@@ -273,10 +273,8 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         perf_profiler.start("run")
         perf_profiler.start(step_name)
 
-        def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
-                tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
-            )
+        def op_fn():
+            ds_fused_mesh_scatter_ttnn(tt_input, mesh_shape, scatter_idx)
 
         perf_us = _measure_perf_us(
             mesh_device,
@@ -298,7 +296,6 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
             step_warm_up_num_iterations=PERF_WARMUP_ITERS,
             target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
         )
-        # Log PCC and ATOL metrics to superset
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-pcc", pcc_value)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-max_abs_error", max_abs_error)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-expected_atol", expected_atol)
@@ -313,9 +310,9 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
                 "mode": mode,
                 "trace": trace_mode,
                 "program_cache_enabled": program_cache_enabled,
-                "module": "mlp",
+                "module": "lm_head",
                 "mesh_device": os.getenv("MESH_DEVICE", "TG"),
-                "op_type": "reduce_scatter",
+                "op_type": "mesh_scatter",
             },
         )
         if expected_perf_us > 0 and not trace_mode and program_cache_enabled:
@@ -329,25 +326,17 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
         logger.info("Skipping e2e perf measurement during device-perf profiling.")
         from tracy import signpost
 
-        def op_fn(*, persistent_output_buffer=None):
-            return ds_fused_reduce_scatter_post_ff2_ttnn(
-                tt_input, run_config, ccl, mode, persistent_output_buffer=persistent_output_buffer
-            )
+        def op_fn():
+            ds_fused_mesh_scatter_ttnn(tt_input, mesh_shape, scatter_idx)
 
         for _ in range(PERF_WARMUP_ITERS):
-            output = op_fn()
+            op_fn()
             ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(output)
 
         ttnn.synchronize_device(mesh_device)
         if trace_mode:
-            persistent_output = op_fn()
-            ttnn.synchronize_device(mesh_device)
-            _ = op_fn(persistent_output_buffer=persistent_output)
-            ttnn.synchronize_device(mesh_device)
-
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            op_fn(persistent_output_buffer=persistent_output)
+            op_fn()
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(mesh_device)
             signpost("start")
@@ -356,108 +345,89 @@ def _run_ds_fused_reduce_scatter_post_ff2_test(
                 ttnn.synchronize_device(mesh_device)
             signpost("stop")
             ttnn.release_trace(mesh_device, trace_id)
-            ttnn.deallocate(persistent_output)
         else:
             signpost("start")
             for _ in range(DEVICE_PERF_ITERS):
-                output = op_fn()
+                op_fn()
                 ttnn.synchronize_device(mesh_device)
-                ttnn.deallocate(output)
             signpost("stop")
 
 
-def _build_reduce_scatter_inputs(
+def _build_mesh_scatter_inputs(
     mesh_device: ttnn.MeshDevice,
-    hf_config,
-    cache_path: str,
-    ccl,
-    force_recalculate_weight_config: bool,
     mode: str,
     seq_len: int,
+    hidden_size: int,
+    scatter_row: int,
 ):
-    """Build inputs for reduce_scatter_post_ff2 test.
+    """Build inputs for mesh_scatter test.
 
-    The input to reduce_scatter is the output of the w2 linear layer (down projection).
-    In the MLP, reduce_scatter takes partial products from each device and:
-    1. Reduces (sums) across mesh columns
-    2. Scatters the result across mesh columns
+    Args:
+        mesh_device: The mesh device
+        mode: "decode" or "prefill"
+        seq_len: Sequence length (1 for decode, varies for prefill)
+        hidden_size: Hidden dimension (7168 for DeepSeek V3)
+        scatter_row: The row index to scatter from (0-3)
 
-    For this test:
-    - Create input tensor that will be sharded across the mesh
-    - Each device gets a portion of the input
-    - reduce_scatter sums contributions from all devices and scatters
+    LMHead shape convention (from original test_lm_head.py):
+    - Decode: height = 32 (USERS_PER_ROW users × 1 token each)
+    - Prefill: height = seq_len (1 user × seq_len tokens)
     """
-    # Get MLP config to get the reduce_scatter configuration
-    weight_config = get_test_weight_config(
-        MLP,
-        hf_config,
-        (None,) * mesh_device.shape[0],  # No actual weights needed for this test
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-    )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
-    model_state = {
-        "mesh_device": mesh_device,
-        "mesh_shape": mesh_device.shape,
-        "ccl": ccl,
-    }
-    run_config = create_run_config(model_config, weight_config, model_state)
+    mesh_shape = tuple(mesh_device.shape)
+    num_rows, num_cols = mesh_shape
 
-    batch_size = USERS_PER_ROW if mode == "decode" else 1
-    num_layers = mesh_device.shape[0]
-    mesh_width = mesh_device.shape[1]
-    dim = hf_config.hidden_size
-
-    # Create input tensor with shape [num_layers, ..., dim]
-    # This will be sharded: each device gets [1, ..., dim/mesh_width] after sharding on dims=(0, -1)
+    # LMHead uses different batch conventions:
+    # - Decode: batch_size=32 (USERS_PER_ROW), seq_len=1 → height=32
+    # - Prefill: batch_size=1, seq_len=N → height=N
     if mode == "decode":
-        torch_input = torch.randn(num_layers, seq_len, batch_size, dim, dtype=torch.bfloat16)
+        batch_size = USERS_PER_ROW
+        effective_height = batch_size * seq_len  # 32 × 1 = 32
     else:
-        torch_input = torch.randn(num_layers, batch_size, seq_len, dim, dtype=torch.bfloat16)
+        batch_size = 1
+        effective_height = seq_len  # 1 × seq_len = seq_len
 
-    # Shard across mesh devices with dims=(0, -1)
-    # Each device (row=r, col=c) gets portion:
-    # - Layer: layers[r]
-    # - Dim: dim[c * dim/mesh_width : (c+1) * dim/mesh_width]
+    # Input shape: [1, 1, effective_height, hidden_size]
+    torch_input = torch.randn(1, 1, effective_height, hidden_size, dtype=torch.bfloat16)
+
+    # Memory config based on mode
+    if mode == "decode":
+        # For decode: WIDTH_SHARDED L1
+        # Grid: (0,0) - (7,6) = 56 cores
+        # Shard shape: (32, 128) since hidden_size=7168, 7168/56 = 128
+        num_cores = 56
+        shard_width = hidden_size // num_cores
+        input_memory_config = ttnn.create_sharded_memory_config_(
+            shape=(effective_height, shard_width),
+            core_grid=ttnn.num_cores_to_corerangeset(
+                num_cores,
+                ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y),
+                row_wise=True,
+            ),
+            strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:
+        # For prefill: DRAM INTERLEAVED
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Convert to TTNN - replicate to all devices
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # Reference output for the first device (row=0, col=0):
-    # reduce_scatter on cluster_axis=1 (mesh columns) with dim=3 means:
-    # 1. Each device in a row has shape [1, seq, batch, dim/mesh_width]
-    # 2. reduce: sum all mesh_width devices' tensors elementwise -> [1, seq, batch, dim/mesh_width]
-    # 3. scatter along dim 3: divide into mesh_width chunks, each device gets one chunk
-    #    -> output shape [1, seq, batch, dim/mesh_width/mesh_width]
-    #
-    # For the reference simulation:
-    # - First layer data: torch_input[:1] has shape [1, seq, batch, dim]
-    # - This represents all column devices' data concatenated on last dim
-    # - Reshape to [1, seq, batch, mesh_width, dim/mesh_width] to separate contributions
-    # - Sum across dim -2 (devices) -> [1, seq, batch, dim/mesh_width]
-    # - Scatter: first device gets first chunk -> [1, seq, batch, dim/mesh_width/mesh_width]
+    # Reference output is same as input (mesh_scatter is communication, not compute)
+    ref_output = ds_fused_mesh_scatter_reference(torch_input, mesh_shape, (scatter_row, None))
 
-    per_device_dim = dim // mesh_width
-    per_device_output_dim = per_device_dim // mesh_width
+    scatter_idx = (scatter_row, None)
 
-    # Get first layer and reshape to separate device contributions
-    first_layer = torch_input[:1]  # [1, seq, batch, dim]
-    shape_prefix = first_layer.shape[:-1]  # [1, seq, batch]
-    first_layer_reshaped = first_layer.reshape(*shape_prefix, mesh_width, per_device_dim)
-
-    # Sum across devices (simulate reduce)
-    reduced = first_layer_reshaped.sum(dim=-2)  # [1, seq, batch, per_device_dim]
-
-    # Scatter: first device gets first chunk
-    ref_output = reduced[..., :per_device_output_dim]  # [1, seq, batch, per_device_output_dim]
-
-    return run_config, tt_input, ref_output, batch_size
+    return tt_input, ref_output, mesh_shape, scatter_idx, batch_size
 
 
 def _maybe_skip_long_seq(seq_len: int):
@@ -499,13 +469,13 @@ def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
 
         if missing_devices:
             logger.warning(
-                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
+                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices"
             )
 
         if not blocks:
             break
 
-        is_collective = any(tag in op_name for tag in ("AllGather", "ReduceScatter", "AllReduce", "AllToAll"))
+        is_collective = any(tag in op_name for tag in ("AllGather", "ReduceScatter", "AllReduce", "AllToAll", "Point"))
         if is_collective:
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -581,20 +551,25 @@ def _collect_device_perf(
     return op_stats, total_kernel_ns, total_op_to_op_ns
 
 
-def _skip_single_device_ccl():
-    pytest.skip("Single-device test is not applicable because ds_fused_reduce_scatter_post_ff2 includes CCL ops.")
+# Hidden size for DeepSeek V3
+HIDDEN_SIZE = 7168
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # TODO: Replace expected_perf_us baselines with theoretical targets.
-        ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
+        # mesh_scatter is a communication op, so PCC should be ~1.0 (perfect)
+        # batch_size=32 for all modes, seq_len=1 for decode
+        ("decode", 1, 0.9999, 0.001, 0.001, 0.0),  # batch=32, seq=1 → 32 tokens
+        ("prefill", 128, 0.9999, 0.001, 0.001, 0.0),  # batch=32, seq=128 → 4096 tokens
+        ("prefill", 1024, 0.9999, 0.001, 0.001, 0.0),
+        ("prefill", 131072, 0.9999, 0.001, 0.001, 0.0),  # 128k
     ],
+)
+@pytest.mark.parametrize(
+    "scatter_row",
+    [0, 1, 2, 3],
+    ids=["row_0", "row_1", "row_2", "row_3"],
 )
 @pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
@@ -602,56 +577,60 @@ def _skip_single_device_ccl():
     "device_params",
     [
         {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 2967552,
         }
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2(
+def test_ds_fused_mesh_scatter(
     mode,
     seq_len,
     expected_pcc,
     expected_atol,
     expected_rtol,
     expected_perf_us,
+    scatter_row,
     program_cache_enabled,
     trace_mode,
-    hf_config,
-    cache_path,
     mesh_device,
-    ccl,
-    force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
-    # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
+    """Test mesh_scatter fused op.
+
+    mesh_scatter broadcasts tensor data from one mesh row to all other rows.
+    This is used in LMHead to replicate input across all 32 devices before
+    the vocabulary projection.
+    """
+    # Trace capture requires program cache enabled
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
 
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+    _maybe_skip_long_seq(seq_len)
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
 
-    run_config, tt_input, ref_output, batch_size = _build_reduce_scatter_inputs(
+    # Validate scatter_row is within mesh bounds
+    num_rows = mesh_device.shape[0]
+    if scatter_row >= num_rows:
+        pytest.skip(f"scatter_row={scatter_row} exceeds mesh rows ({num_rows})")
+
+    tt_input, ref_output, mesh_shape, scatter_idx, batch_size = _build_mesh_scatter_inputs(
         mesh_device,
-        hf_config,
-        cache_path,
-        ccl,
-        force_recalculate_weight_config,
         mode,
         seq_len,
+        HIDDEN_SIZE,
+        scatter_row,
     )
-    _run_ds_fused_reduce_scatter_post_ff2_test(
+
+    _run_ds_fused_mesh_scatter_test(
         mesh_device,
-        run_config,
         tt_input,
         ref_output,
+        mesh_shape,
+        scatter_idx,
         expected_pcc,
         expected_atol,
         expected_rtol,
@@ -661,21 +640,26 @@ def test_ds_fused_reduce_scatter_post_ff2(
         mode,
         seq_len,
         batch_size,
-        ccl,
-        f"ds_fused_reduce_scatter_post_ff2_{mode}_seq{seq_len}",
+        f"ds_fused_mesh_scatter_{mode}_seq{seq_len}_row{scatter_row}",
     )
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
 
 
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        # TODO: Replace expected_perf_us baselines with theoretical targets.
-        ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 8192, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
+        ("decode", 1, 0.9999, 0.001, 0.001, 0.0),  # batch=32, seq=1
+        ("prefill", 128, 0.9999, 0.001, 0.001, 0.0),
+        ("prefill", 1024, 0.9999, 0.001, 0.001, 0.0),
+        ("prefill", 131072, 0.9999, 0.001, 0.001, 0.0),
     ],
+)
+@pytest.mark.parametrize(
+    "scatter_row",
+    [0, 1, 2, 3],
+    ids=["row_0", "row_1", "row_2", "row_3"],
 )
 @pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
@@ -683,66 +667,67 @@ def test_ds_fused_reduce_scatter_post_ff2(
     "device_params",
     [
         {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 2967552,
         }
     ],
     indirect=True,
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device(
+def test_ds_fused_mesh_scatter_single_device(
     mode,
     seq_len,
     expected_pcc,
     expected_atol,
     expected_rtol,
     expected_perf_us,
+    scatter_row,
     program_cache_enabled,
     trace_mode,
-    hf_config,
-    cache_path,
     mesh_device,
-    ccl,
-    force_recalculate_weight_config,
     set_deterministic_env,
 ):
-    _skip_single_device_ccl()
+    """Single device test for mesh_scatter.
+
+    mesh_scatter uses ttnn.point_to_point which is a CCL operation for
+    device-to-device communication. Therefore, single device test is not applicable.
+    """
+    pytest.skip(
+        "Single-device test skipped: mesh_scatter uses ttnn.point_to_point "
+        "for inter-device communication, which requires multiple devices."
+    )
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len",
+    "mode, seq_len, scatter_row",
     [
-        ("decode", 1),
-        ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 8192),
-        ("prefill", 131072),
+        ("decode", 1, 3),  # Default scatter_row for LMHead is 3 (last transformer layer)
+        ("prefill", 128, 3),
+        ("prefill", 1024, 3),
+        ("prefill", 131072, 3),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
-    if mode == "decode":
-        assert seq_len == 1, "Decode only supports seq_len=1"
-    else:
-        assert mode == "prefill", "Unsupported mode"
-        _maybe_skip_long_seq(seq_len)
+def test_ds_fused_mesh_scatter_device_perf(mode, seq_len, scatter_row):
+    _maybe_skip_long_seq(seq_len)
 
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    batch_size = USERS_PER_ROW * mesh_shape[0]
+    # batch_size=32 (USERS_PER_ROW) for all modes
+    batch_size = USERS_PER_ROW
 
-    profiler = BenchmarkProfiler()
+    perf_profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"ds_fused_reduce_scatter_post_ff2_device_perf_{mode}_seq{seq_len}"
-    test_path = (
-        "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/reduce_scatter/test_ds_fused_reduce_scatter_post_ff2.py"
-    )
+    step_name = f"ds_fused_mesh_scatter_device_perf_{mode}_seq{seq_len}_row{scatter_row}"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_fused_mesh_scatter.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
-    command = f'pytest {test_path}::test_ds_fused_reduce_scatter_post_ff2 -k "{expr}"'
+    row_filter = f"row_{scatter_row}"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and {row_filter}"
+    command = f'pytest {test_path}::test_ds_fused_mesh_scatter -k "{expr}"'
 
-    profiler.start("run")
-    profiler.start(step_name)
+    perf_profiler.start("run")
+    perf_profiler.start(step_name)
     os.environ[DEVICE_PERF_ENV_VAR] = "1"
     op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
         command,
@@ -751,8 +736,8 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         use_signposts=True,
     )
     os.environ.pop(DEVICE_PERF_ENV_VAR, None)
-    profiler.end(step_name)
-    profiler.end("run")
+    perf_profiler.end(step_name)
+    perf_profiler.end("run")
 
     assert op_stats, "No device perf stats captured."
     total_kernel_us = total_kernel_ns / 1000.0
@@ -777,21 +762,21 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
         ), f"Op-to-op perf regression: {total_op_to_op_us:.3f}us exceeds {op_to_op_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
 
     benchmark_data.add_measurement(
-        profiler,
+        perf_profiler,
         0,
         step_name,
         "total_kernel_duration_us",
         total_kernel_us,
     )
     benchmark_data.add_measurement(
-        profiler,
+        perf_profiler,
         0,
         step_name,
         "total_op_to_op_latency_us",
         total_op_to_op_us,
     )
     benchmark_data.save_partial_run_json(
-        profiler,
+        perf_profiler,
         run_type="deepseek_v3_fused_ops_device_perf",
         ml_model_name="deepseek-v3",
         batch_size=batch_size,
@@ -800,17 +785,18 @@ def test_ds_fused_reduce_scatter_post_ff2_device_perf(mode, seq_len):
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len",
+    "mode, seq_len, scatter_row",
     [
-        ("decode", 1),
-        ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 8192),
-        ("prefill", 131072),
+        ("decode", 1, 3),
+        ("prefill", 128, 3),
+        ("prefill", 1024, 3),
     ],
 )
-def test_ds_fused_reduce_scatter_post_ff2_single_device_device_perf(mode, seq_len):
-    _skip_single_device_ccl()
+def test_ds_fused_mesh_scatter_single_device_device_perf(mode, seq_len, scatter_row):
+    pytest.skip(
+        "Single-device device perf test skipped: mesh_scatter uses ttnn.point_to_point "
+        "for inter-device communication, which requires multiple devices."
+    )
 
 
 if __name__ == "__main__":

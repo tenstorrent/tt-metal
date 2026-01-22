@@ -271,12 +271,22 @@ def _run_ds_fused_ff1_3_test(
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w1_max_abs_error", w1_max_abs_error)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w3_pcc", w3_pcc)
         benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-w3_max_abs_error", w3_max_abs_error)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-expected_atol", expected_atol)
+        benchmark_data.add_measurement(perf_profiler, 0, step_name, f"{step_name}-expected_rtol", expected_rtol)
         benchmark_data.save_partial_run_json(
             perf_profiler,
             run_type="deepseek_v3_fused_ops",
             ml_model_name="deepseek-v3",
             batch_size=batch_size,
             input_sequence_length=seq_len,
+            config_params={
+                "mode": mode,
+                "trace": trace_mode,
+                "program_cache_enabled": program_cache_enabled,
+                "module": "mlp",
+                "mesh_device": os.getenv("MESH_DEVICE", "TG"),
+                "op_type": "ff1_3",
+            },
         )
         if expected_perf_us > 0 and not trace_mode and program_cache_enabled:
             perf_margin = 0.2
