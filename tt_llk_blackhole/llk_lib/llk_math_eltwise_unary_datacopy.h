@@ -342,7 +342,7 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0));
             tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::COL)
