@@ -192,6 +192,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
 
+    const uint32_t block_size = get_block_size(qWt, 4U);
+
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -234,15 +236,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_9
+    [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_8
         create_circular_buffer(
             program, all_cores, kPrevGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_cur_grad_query =  // CBIndex::c_10
+    [[maybe_unused]] auto cb_cur_grad_query =  // CBIndex::c_9
         create_circular_buffer(
             program, all_cores, kCurGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_13
+    [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_10
         create_circular_buffer(
             program,
             all_cores,
@@ -251,7 +253,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_14
+    [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_11
         create_circular_buffer(
             program,
             all_cores,
@@ -260,7 +262,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
+    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_12
         create_circular_buffer(
             program,
             all_cores,
@@ -269,11 +271,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_transpose_wh =  // CBIndex::c_16
+    [[maybe_unused]] auto cb_transpose_wh =  // CBIndex::c_13
         create_circular_buffer(
             program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
+    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_14
         create_circular_buffer(
             program,
             all_cores,
@@ -282,7 +284,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_18
+    [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_15
         create_circular_buffer(
             program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
@@ -355,7 +357,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,                         // 2: num_seq_len / TILE_H
         scaler,                     // 3: sqrt(Et) - sdpa scaler factor
         minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-        custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
+        custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
+        block_size                  // 6: block size
     };
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,
@@ -377,7 +380,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             St,                         // 2: num_seq_len / TILE_H
             scaler,                     // 3: sqrt(Et) - sdpa scaler factor
             minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-            custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
+            custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
+            block_size                  // 6: block size
         };
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
             program,
