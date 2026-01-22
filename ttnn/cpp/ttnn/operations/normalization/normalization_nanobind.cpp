@@ -13,6 +13,8 @@
 #include "layernorm_distributed/layernorm_distributed_nanobind.hpp"
 #include "rmsnorm_distributed/rmsnorm_distributed_nanobind.hpp"
 #include "batch_norm/batch_norm_nanobind.hpp"
+#include "layer_norm_w_rm/layer_norm_w_rm_nanobind.hpp"
+#include "layer_norm_w_rm/layer_norm_w_rm.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -24,6 +26,7 @@ void py_module(nb::module_& mod) {
     detail::bind_normalization_layernorm_distributed(mod);
     detail::bind_normalization_rms_norm_distributed(mod);
     detail::bind_batch_norm_operation(mod);
+    ::ttnn::operations::layer_norm_w_rm::bind_layer_norm_w_rm_operation(mod);
 }
 
 }  // namespace ttnn::operations::normalization

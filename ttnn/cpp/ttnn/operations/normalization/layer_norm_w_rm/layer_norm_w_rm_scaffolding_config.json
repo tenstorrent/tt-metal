@@ -1,0 +1,128 @@
+{
+  "operation_name": "layer_norm_w_rm",
+  "operation_name_pascal": "LayerNormWRm",
+  "category": "normalization",
+  "namespace": "ttnn::operations::normalization::layer_norm_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/normalization/layer_norm_w_rm",
+  "parameters": [
+    {
+      "name": "epsilon",
+      "cpp_type": "float",
+      "py_type": "float",
+      "default": "1e-5f",
+      "description": "Numerical stability constant for variance normalization"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 2,
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    },
+    {
+      "name": "gamma",
+      "cpp_name": "gamma",
+      "required_rank": -1,
+      "required_dtypes": ["same_as_input"],
+      "required_layout": "Layout::ROW_MAJOR"
+    },
+    {
+      "name": "beta",
+      "cpp_name": "beta",
+      "required_rank": -1,
+      "required_dtypes": ["same_as_input"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input tensor must have at least 2 dimensions, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input tensor must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input tensor must be interleaved",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input tensor must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype: only BFLOAT16 and FLOAT32 are supported, got {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "gamma.logical_shape()[-1] == input.logical_shape()[-1]",
+      "error_message": "Gamma shape must match input width, expected {} got {}",
+      "error_args": ["input.logical_shape()[-1]", "gamma.logical_shape()[-1]"]
+    },
+    {
+      "condition": "gamma.layout() == Layout::ROW_MAJOR",
+      "error_message": "Gamma must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Gamma must be interleaved in DRAM",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.device() == input.device()",
+      "error_message": "Gamma must be on same device as input",
+      "error_args": []
+    },
+    {
+      "condition": "gamma.dtype() == input.dtype()",
+      "error_message": "Gamma dtype must match input dtype, expected {} got {}",
+      "error_args": ["input.dtype()", "gamma.dtype()"]
+    },
+    {
+      "condition": "beta.logical_shape()[-1] == input.logical_shape()[-1]",
+      "error_message": "Beta shape must match input width, expected {} got {}",
+      "error_args": ["input.logical_shape()[-1]", "beta.logical_shape()[-1]"]
+    },
+    {
+      "condition": "beta.layout() == Layout::ROW_MAJOR",
+      "error_message": "Beta must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "beta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Beta must be interleaved in DRAM",
+      "error_args": []
+    },
+    {
+      "condition": "beta.device() == input.device()",
+      "error_message": "Beta must be on same device as input",
+      "error_args": []
+    },
+    {
+      "condition": "beta.dtype() == input.dtype()",
+      "error_message": "Beta dtype must match input dtype, expected {} got {}",
+      "error_args": ["input.dtype()", "beta.dtype()"]
+    },
+    {
+      "condition": "epsilon > 0.0f",
+      "error_message": "Epsilon must be positive, got {}",
+      "error_args": ["epsilon"]
+    }
+  ],
+  "output_shape": {
+    "formula": "same_as_input",
+    "cpp_code": "ttnn::Shape output_shape = input.logical_shape();"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Layer normalization across the last dimension (W) with learnable affine transformation. Computes mean and variance along W, standardizes values, then applies gamma (scale) and beta (shift): output = (input - mean) / sqrt(variance + epsilon) * gamma + beta"
+}

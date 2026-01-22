@@ -74,6 +74,9 @@ target_sources(
         softmax/softmax.cpp
         softmax/device/softmax_device_operation.cpp
         softmax/device/softmax_program_factory.cpp
+        layer_norm_w_rm/device/layer_norm_w_rm_device_operation.cpp
+        layer_norm_w_rm/device/layer_norm_w_rm_program_factory.cpp
+        layer_norm_w_rm/layer_norm_w_rm.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

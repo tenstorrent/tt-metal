@@ -348,6 +348,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/centralize_w_rm/centralize_w_rm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/variance_w_rm/variance_w_rm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/standardize_w_rm/standardize_w_rm_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/layer_norm_w_rm/layer_norm_w_rm_nanobind.cpp
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
