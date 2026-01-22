@@ -114,6 +114,10 @@ def test_bevformer_encoder_forward(
     spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]  # Take required number of levels
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
 
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
+
     # Create input tensors
     bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     bev_pos = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
@@ -135,6 +139,19 @@ def test_bevformer_encoder_forward(
     # Camera metadata for point sampling (convert width, height to height, width for img_metas)
     img_shape = (image_shape[1], image_shape[0])  # (height, width) for img_metas
     img_metas = create_sample_img_metas(batch_size, num_cams, img_shape)
+
+    # Convert tensors to ttnn format for ttnn model
+    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_level_start_index = ttnn.from_torch(
+        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    # --------------------------------------------------------------------------- #
+    # Models Init                                                                 #
+    # --------------------------------------------------------------------------- #
 
     # Create PyTorch reference model using config
     encoder_kwargs = config.get_encoder_kwargs()
@@ -164,6 +181,10 @@ def test_bevformer_encoder_forward(
         **encoder_kwargs,
     )
 
+    # --------------------------------------------------------------------------- #
+    # Models Forward                                                              #
+    # --------------------------------------------------------------------------- #
+
     # Forward pass with PyTorch reference model
     with torch.no_grad():
         ref_output = ref_model(
@@ -178,15 +199,6 @@ def test_bevformer_encoder_forward(
             prev_bev=None,  # No temporal attention
             img_metas=img_metas,
         )
-
-    # Convert tensors to ttnn format
-    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
 
     # Forward pass with ttnn model
     tt_output = tt_model(
@@ -204,6 +216,10 @@ def test_bevformer_encoder_forward(
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
+
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
 
     # Comprehensive comparison using enhanced test utilities
     logger.info(f"Reference model output shape: {ref_output.shape}")

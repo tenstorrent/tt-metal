@@ -147,10 +147,6 @@ class TTTemporalSelfAttention:
         if value is None:
             # For simplified version, just use query as value (no temporal information)
             value = ttnn.clone(query)
-        else:
-            # Value already provided in the expected format
-            if isinstance(value, torch.Tensor):
-                value = ttnn.from_torch(value, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
         # Handle defaults
         if identity is None:
@@ -158,8 +154,6 @@ class TTTemporalSelfAttention:
 
         # Add query positional encoding
         if query_pos is not None:
-            if isinstance(query_pos, torch.Tensor):
-                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             query = ttnn.add(query, query_pos)
 
         bs, num_queries, _ = query.shape
@@ -190,10 +184,6 @@ class TTTemporalSelfAttention:
             key_padding_mask=key_padding_mask,
             **kwargs,
         )
-
-        # Convert back to ttnn tensor if needed
-        if isinstance(output, torch.Tensor):
-            output = ttnn.from_torch(output, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         logger.info("TSA Adding Residual")
 

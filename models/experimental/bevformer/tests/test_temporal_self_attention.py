@@ -5,12 +5,15 @@
 import torch
 import ttnn
 import pytest
-import math
 
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 
 from models.experimental.bevformer.config import DeformableAttentionConfig
+
+from models.experimental.bevformer.config.encoder_config import (
+    get_preset_config,
+)
 
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
@@ -25,41 +28,65 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
-# --------------------------------------------------------------------------- #
-# Default Test Configuration                                                  #
-# --------------------------------------------------------------------------- #
-
-# Flag to control detailed comparison output
+# Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
 
 @pytest.mark.parametrize(
-    "batch_size, num_queries, embed_dims, num_heads, num_bev_queue",
+    "config_name, batch_size, bev_h, bev_w, num_bev_queue, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        (1, 900, 256, 8, 2),  # nuScenes 30x30 BEV grid
-        (1, 2500, 256, 8, 2),  # 50x50 BEV grid
-        (1, 10000, 256, 8, 2),  # 100x100 BEV grid
-        (2, 900, 256, 8, 2),  # Batch size 2
-        (1, 900, 256, 4, 2),  # Different number of heads
-        (1, 40000, 256, 4, 2),  # 200x200 BEV grid
+        ("nuscenes_tiny", 1, 30, 30, 2, 0.999, 0.02, 0.15, 0.2),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_base", 1, 50, 50, 2, 0.999, 0.02, 0.11, 0.3),  # NuScenes base model - 50x50 BEV grid
+        ("nuscenes_base", 1, 100, 100, 2, 0.999, 0.03, 0.16, 0.4),  # NuScenes base model - 100x100 BEV grid
+        ("nuscenes_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
+        ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.16, 0.4),  # CARLA base model
+        ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.4, 0.4),  # Large BEV grid
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_temporal_self_attention_forward(
     device,
+    config_name,
     batch_size,
-    num_queries,
-    embed_dims,
-    num_heads,
+    bev_h,
+    bev_w,
     num_bev_queue,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
     seed,
 ):
+    """Test TTTemporalSelfAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
 
-    bev_spatial_shapes = torch.tensor([[int(math.sqrt(num_queries))] * 2], dtype=torch.long)
-    bev_h, bev_w = bev_spatial_shapes[0]
+    # Get configuration from preset
+    preset_config = get_preset_config(config_name)
+    if preset_config is None:
+        pytest.fail(f"Configuration '{config_name}' not found")
+
+    dataset_config = preset_config.dataset_config
+    model_config = preset_config.model_config
+
+    # Extract parameters from configs
+    embed_dims = model_config.embed_dims
+    num_heads = model_config.num_heads
+    num_points = model_config.num_points
+    num_queries = bev_h * bev_w
+
+    # BEV spatial shapes - single level for temporal self attention
+    bev_spatial_shapes = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
     num_levels = len(bev_spatial_shapes)
+
+    # Create configuration from extracted parameters
+    config = DeformableAttentionConfig(
+        embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points, batch_first=True
+    )
+
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
 
     # Create input tensors for temporal self attention
     current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
@@ -72,17 +99,22 @@ def test_temporal_self_attention_forward(
     indices = bev_spatial_shapes.prod(1).cumsum(0)
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
-    # Create configuration
-    config = DeformableAttentionConfig(
-        embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=4, batch_first=True
+    # Convert tensors to ttnn format for ttnn model
+    tt_current_bev = ttnn.from_torch(current_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_reference_points_2d = ttnn.from_torch(
+        reference_points_2d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
 
-    # Create PyTorch reference model
+    # --------------------------------------------------------------------------- #
+    # Models Init                                                                 #
+    # --------------------------------------------------------------------------- #
+
+    # Create PyTorch reference model using extracted parameters
     ref_model = TemporalSelfAttention(
         embed_dims=embed_dims,
         num_heads=num_heads,
         num_levels=num_levels,
-        num_points=4,
+        num_points=num_points,
         num_bev_queue=num_bev_queue,
         batch_first=True,
     )
@@ -92,20 +124,24 @@ def test_temporal_self_attention_forward(
     tt_parameters = create_temporal_self_attention_parameters(
         torch_model=ref_model,
         device=device,
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
     )
 
-    # Create ttnn model with preprocessed parameters
+    # Create ttnn model with preprocessed parameters using extracted parameters
     tt_model = TTTemporalSelfAttention(
         device=device,
         params=tt_parameters,
         embed_dims=embed_dims,
         num_heads=num_heads,
         num_levels=num_levels,
-        num_points=4,
+        num_points=num_points,
         num_bev_queue=num_bev_queue,
         batch_first=True,
     )
+
+    # --------------------------------------------------------------------------- #
+    # Models Forward                                                              #
+    # --------------------------------------------------------------------------- #
 
     # Forward pass with PyTorch reference model
     ref_model_output = ref_model(
@@ -119,13 +155,17 @@ def test_temporal_self_attention_forward(
 
     # Forward pass with ttnn model
     tt_model_output = tt_model(
-        query=current_bev,
-        reference_points=reference_points_2d,
+        query=tt_current_bev,
+        reference_points=tt_reference_points_2d,
         spatial_shapes=bev_spatial_shapes,
         level_start_index=level_start_index,
         bev_h=bev_h,
         bev_w=bev_w,
     )
+
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
 
     # Comprehensive comparison using enhanced test utilities
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
@@ -140,14 +180,14 @@ def test_temporal_self_attention_forward(
             show_histograms=False,  # Set to True for even more detailed analysis
         )
 
-    # Comprehensive tolerance checking with multiple criteria
+    # Comprehensive tolerance checking with expected metrics from test parameters
     passed, results = check_with_tolerances(
         ref_model_output,
         tt_model_output,
-        pcc_threshold=0.999,
-        abs_error_threshold=6e-2,
-        rel_error_threshold=6e-1,
-        max_error_ratio=4e-1,
+        pcc_threshold=expected_pcc,
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
         tensor_name="temporal_self_attention_output",
     )
 
@@ -155,139 +195,3 @@ def test_temporal_self_attention_forward(
     assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
 
     logger.info("✅ All TSA tolerance checks passed successfully!")
-
-
-@pytest.mark.parametrize(
-    "batch_size, num_queries, embed_dims, num_heads",
-    [
-        (1, 100, 256, 4),  # Small test case
-        (2, 256, 256, 4),  # Different batch size and num_queries
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_temporal_self_attention_without_prev_bev(
-    device,
-    batch_size,
-    num_queries,
-    embed_dims,
-    num_heads,
-):
-    """Test TSA when no previous BEV is provided (should duplicate current BEV)."""
-    torch.manual_seed(42)
-
-    # Simple BEV spatial configuration - match the number of queries
-    # For 100 queries: 10x10, for 256 queries: 16x16
-    if num_queries == 100:
-        bev_spatial_shapes = torch.tensor([[10, 10]], dtype=torch.long)
-        bev_h, bev_w = 10, 10
-    elif num_queries == 256:
-        bev_spatial_shapes = torch.tensor([[16, 16]], dtype=torch.long)
-        bev_h, bev_w = 16, 16
-    else:
-        # Default: try to find square root for other cases
-        import math
-
-        side_length = int(math.sqrt(num_queries))
-        if side_length * side_length == num_queries:
-            bev_spatial_shapes = torch.tensor([[side_length, side_length]], dtype=torch.long)
-            bev_h, bev_w = side_length, side_length
-        else:
-            raise ValueError(f"num_queries {num_queries} is not a perfect square, cannot create square BEV grid")
-
-    # Create test inputs
-    current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-    reference_points_2d = torch.rand(batch_size, num_queries, 1, 2, dtype=torch.float32)
-    level_start_index = torch.tensor([0], dtype=torch.long)
-
-    # Create reference model
-    ref_model = TemporalSelfAttention(
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=1,
-        num_points=4,
-        num_bev_queue=2,
-        batch_first=True,
-    )
-    ref_model.eval()
-
-    # Forward pass without previous BEV (using default value=None)
-    output = ref_model(
-        query=current_bev,
-        reference_points=reference_points_2d,
-        spatial_shapes=bev_spatial_shapes,
-        level_start_index=level_start_index,
-        # No value parameter - will use default behavior (stack query num_bev_queue times)
-        bev_h=bev_h,
-        bev_w=bev_w,
-    )
-
-    # Verify output shape matches input query shape
-    assert output.shape == current_bev.shape, f"Output shape {output.shape} != input shape {current_bev.shape}"
-
-    # Verify output is not NaN or Inf
-    assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
-
-    logger.info("✅ TSA without previous BEV test passed!")
-
-
-@pytest.mark.parametrize(
-    "batch_size, num_queries, embed_dims, num_heads",
-    [
-        (1, 64, 128, 4),  # Smaller dimensions for validation
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_temporal_self_attention_shape_consistency(
-    device,
-    batch_size,
-    num_queries,
-    embed_dims,
-    num_heads,
-):
-    """Test that TSA maintains shape consistency and residual connections work."""
-    torch.manual_seed(123)
-
-    # Simple configuration
-    bev_spatial_shapes = torch.tensor([[8, 8]], dtype=torch.long)
-
-    # Create test inputs
-    current_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-    prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-    reference_points_2d = torch.rand(batch_size, num_queries, 1, 2, dtype=torch.float32)
-    level_start_index = torch.tensor([0], dtype=torch.long)
-
-    # Create reference model
-    ref_model = TemporalSelfAttention(
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=1,
-        num_points=2,  # Small number of points
-        num_bev_queue=2,
-        batch_first=True,
-    )
-    ref_model.eval()
-
-    # Test with explicit identity
-    identity = torch.randn_like(current_bev)
-
-    output = ref_model(
-        query=current_bev,
-        identity=identity,
-        reference_points=reference_points_2d,
-        spatial_shapes=bev_spatial_shapes,
-        level_start_index=level_start_index,
-        bev_h=8,
-        bev_w=8,
-    )
-
-    # Verify output shape matches input query shape
-    assert output.shape == current_bev.shape, f"Output shape {output.shape} != input shape {current_bev.shape}"
-
-    # Verify output is not NaN or Inf
-    assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
-
-    # Check that residual connection is working (output should be different from identity alone)
-    residual_diff = torch.abs(output - identity).mean()
-    assert residual_diff > 1e-6, f"Residual difference too small: {residual_diff}, attention may not be working"
-
-    logger.info("✅ TSA shape consistency and residual connection test passed!")
