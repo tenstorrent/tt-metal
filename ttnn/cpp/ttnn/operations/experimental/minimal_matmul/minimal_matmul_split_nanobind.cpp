@@ -115,6 +115,35 @@ void bind_minimal_matmul_split(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()});
+
+    auto py_minimal_matmul_split_config =
+        nb::class_<MinimalMatmulSplitConfig>(
+            mod,
+            "MinimalMatmulSplitConfig",
+            R"doc(
+    Configuration for the MinimalMatmulSplit operation.
+    )doc")
+            .def(nb::init<>())
+            .def(
+                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                nb::kw_only(),
+                nb::arg("M_block_size") = 1,
+                nb::arg("K_block_size") = 1,
+                nb::arg("N_block_size") = 1,
+                nb::arg("subblock_h") = 1,
+                nb::arg("subblock_w") = 1,
+                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+
+    py_minimal_matmul_split_config.def_rw("M_block_size", &MinimalMatmulSplitConfig::M_block_size, "");
+    py_minimal_matmul_split_config.def_rw("K_block_size", &MinimalMatmulSplitConfig::K_block_size, "");
+    py_minimal_matmul_split_config.def_rw("N_block_size", &MinimalMatmulSplitConfig::N_block_size, "");
+    py_minimal_matmul_split_config.def_rw("subblock_h", &MinimalMatmulSplitConfig::subblock_h, "");
+    py_minimal_matmul_split_config.def_rw("subblock_w", &MinimalMatmulSplitConfig::subblock_w, "");
+    py_minimal_matmul_split_config.def_rw(
+        "compute_with_storage_grid_size", &MinimalMatmulSplitConfig::compute_with_storage_grid_size, "");
+
+    py_minimal_matmul_split_config.def(
+        "__repr__", [](const MinimalMatmulSplitConfig& config) { return fmt::format("{}", config); });
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul_split::detail
