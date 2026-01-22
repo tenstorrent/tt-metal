@@ -192,3 +192,24 @@ def _invert_placements(placements: Sequence[int | None], *, output_rank: int) ->
             out[p] = i
 
     return tuple(out)
+
+
+def upsample(
+    x: ttnn.Tensor,
+    /,
+    *,
+    scale_factor: int,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Wrapper around ttnn.upsample that allows for padded tensors."""
+    change_layout = x.layout == ttnn.TILE_LAYOUT and x.shape != x.padded_shape
+
+    if change_layout:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    x = ttnn.upsample(x, scale_factor=scale_factor, memory_config=memory_config)
+
+    if change_layout:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    return x

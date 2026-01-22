@@ -68,7 +68,7 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::erisc::direct_send {
 size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
-    TT_ASSERT(!(base & 0x1F) and !(max & 0x1F));
+    TT_FATAL(!(base & 0x1F) and !(max & 0x1F), "base and max must be 32-byte aligned");
     size_t word_size = (max >> 5) - (base >> 5);
     return (((rand() % word_size) << 5) + base);
 }

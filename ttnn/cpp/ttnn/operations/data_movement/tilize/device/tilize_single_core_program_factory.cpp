@@ -11,15 +11,15 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory::create(
-    const tilize::operation_attributes_t& operation_attributes,
-    const tilize::tensor_args_t& tensor_args,
-    const tilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& operation_attributes,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     tt::tt_metal::Program program{};
 
     auto a = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
     CoreRange default_core({0, 0}, {0, 0});
@@ -144,15 +144,15 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
 
 void TilizeSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const tilize::operation_attributes_t& /*operation_attributes*/,
-    const tilize::tensor_args_t& tensor_args,
-    const tilize::tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::TilizeParams& /*operation_attributes*/,
+    const ttnn::prim::TilizeInputs& tensor_args,
+    const Tensor& output_tensor) {
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& core = cached_program.shared_variables.core;
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto& program = cached_program.program;
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     CoreCoord core_0 = corerange_to_cores(core).at(0);
     {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_0);
@@ -163,4 +163,4 @@ void TilizeSingleCoreProgramFactory::override_runtime_arguments(
         runtime_args[0] = dst_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

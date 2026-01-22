@@ -54,9 +54,6 @@ void kernel_main() {
     const auto cat_out_generator =
         CatAddrGenerator(out_writer, output_tile_logical, padded_Nqt, joint_out_writer, joint_tile_logical, padded_Lqt);
 
-    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
-    uint32_t barrier_count = 0;
-
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
@@ -83,8 +80,8 @@ void kernel_main() {
 
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-
-                write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
+                const auto out_row_end_tile = out_row_start_tile + Sq_chunk_t;
+                write_block(cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
             }
         }
     }

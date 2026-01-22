@@ -648,10 +648,10 @@ class MochiTransformer3DModel:
         )
 
         rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
         rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
 
         trans_mat = get_rot_transformation_mat()
@@ -718,9 +718,7 @@ class MochiTransformer3DModel:
         spatial = spatial.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
         spatial = spatial.permute(0, 2, 3, 5, 4, 6, 1).reshape(1, B, N, self.patch_size * self.patch_size * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
-        spatial = pad_vision_seq_parallel(
-            spatial, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
-        )
+        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
         logger.info(f"spatial input after padding: {spatial.shape}")
         spatial = bf16_tensor(
             spatial, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=-2

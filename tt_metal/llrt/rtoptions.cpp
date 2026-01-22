@@ -123,6 +123,7 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
+    TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
     // WATCHER SYSTEM
@@ -809,8 +810,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: nullopt (uses profiler default)
         // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
         case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
-            // Only set the program support count if device profiler is also enabled
-            if (this->profiler_enabled && value) {
+            if (value) {
                 this->profiler_program_support_count = std::stoi(value);
             }
             break;
@@ -827,8 +827,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (dump to files)
         // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
         case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
-            // Only disable dumping to files if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
+            if (is_env_enabled(value)) {
                 this->profiler_disable_dump_to_files = true;
             }
             break;
@@ -852,9 +851,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
         case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
             if (is_env_enabled(value)) {
-                this->profiler_enabled = true;
-                this->profiler_noc_events_enabled = true;
-                this->experimental_device_debug_dump_interval_seconds = std::stoi(value);
+                this->set_experimental_device_debug_dump_enabled(true);
             }
             break;
         }
@@ -893,6 +890,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
         case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
             this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
+
+        // TT_METAL_DISPATCH_PROGRESS_UPDATE_MS
+        // Dispatch kernel progress update period in milliseconds.
+        // Default: 100ms
+        // Usage: export TT_METAL_DISPATCH_PROGRESS_UPDATE_MS=200
+        case EnvVarID::TT_METAL_DISPATCH_PROGRESS_UPDATE_MS:
+            this->dispatch_progress_update_ms = std::stoul(value);
             break;
 
         // ========================================
@@ -1629,6 +1634,18 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
     dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
     return dispatch_core_config;
+}
+
+void RunTimeOptions::set_experimental_device_debug_dump_enabled(bool enabled) {
+    if (enabled) {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+        experimental_device_debug_dump_enabled = true;
+    } else {
+        profiler_enabled = false;
+        profiler_noc_events_enabled = false;
+        experimental_device_debug_dump_enabled = false;
+    }
 }
 
 }  // namespace tt::llrt

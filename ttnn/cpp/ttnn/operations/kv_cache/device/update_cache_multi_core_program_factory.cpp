@@ -12,14 +12,12 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::kv_cache::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
 UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*output_tensor*/) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto update_idx = operation_attributes.update_idx;
@@ -289,9 +287,9 @@ UpdateCacheMultiCoreProgramFactory::cached_program_t UpdateCacheMultiCoreProgram
 
 void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    const KvCacheParams& operation_attributes,
+    const KvCacheInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     auto& program = cached_program.program;
     const auto Wbytes = cached_program.shared_variables.Wbytes;
     const auto Wt = cached_program.shared_variables.Wt;
@@ -332,4 +330,4 @@ void UpdateCacheMultiCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::kv_cache::program
+}  // namespace ttnn::prim

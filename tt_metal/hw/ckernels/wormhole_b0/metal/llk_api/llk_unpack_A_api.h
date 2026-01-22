@@ -91,3 +91,11 @@ inline void llk_unpack_A_block(
         WAYPOINT("UPAD");
     }
 }
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_A_uninit(const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+
+    _llk_unpack_A_uninit_<BType>(face_r_dim);
+}

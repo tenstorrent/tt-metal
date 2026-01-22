@@ -517,7 +517,7 @@ void dump_eth_link_stats(
         auto& s_stats_per_iter = sender_stats[link.sender];
         auto& r_stats_per_iter = receiver_stats[link.receiver];
         if (s_stats_per_iter.empty()) {
-            TT_ASSERT(r_stats_per_iter.empty());
+            TT_FATAL(r_stats_per_iter.empty(), "Receiver stats should be empty when sender stats are empty");
             s_stats_per_iter.resize(total_iterations);
             r_stats_per_iter.resize(total_iterations);
         }

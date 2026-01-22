@@ -6,9 +6,9 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct FillRmParams {
     uint32_t N{0};
     uint32_t C{0};
     uint32_t H{0};
@@ -20,12 +20,8 @@ struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct FillRmInputs {
     Tensor input;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::data_movement::fill_rm
+}  // namespace ttnn::prim
