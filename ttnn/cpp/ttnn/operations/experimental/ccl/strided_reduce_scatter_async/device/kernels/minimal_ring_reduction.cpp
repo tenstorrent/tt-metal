@@ -43,21 +43,16 @@ void MAIN {
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         cb_wait_front(input_cb_id, tile_granularity);
                         cb_wait_front(intermediate_cb, tile_granularity);
-                        if (i < (ring_size - 1)) {
-                            cb_reserve_back(output_cb, tile_granularity);
-                        }
-                        // cb_reserve_back(output_cb, tile_granularity);
+                        cb_reserve_back(output_cb, tile_granularity);
                         acquire_dst();
                         for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_current_direction; tile_id++) {
                             add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                            // pack_tile(tile_id, output_cb);
+                            pack_tile(tile_id, output_cb);
                         }
                         release_dst();
                         cb_pop_front(input_cb_id, tile_granularity);
                         cb_pop_front(intermediate_cb, tile_granularity);
-                        if (i < (ring_size - 1)) {
-                            cb_push_back(output_cb, tile_granularity);
-                        }
+                        cb_push_back(output_cb, tile_granularity);
                     }
                 }
             }
