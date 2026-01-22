@@ -7,7 +7,6 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "params.h"
 
 // Globals
 uint32_t unp_cfg_context          = 0;

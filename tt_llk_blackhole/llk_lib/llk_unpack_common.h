@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -114,4 +115,54 @@ inline void _llk_unpack_set_srcb_dummy_valid_()
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+}
+
+/**
+ * @brief Validates L1 addresses and configures unpack base addresses in the configuration registers
+ *
+ * This helper function validates that both address_a and address_b are within the valid L1 memory region,
+ * then configures the appropriate THCON base address registers based on the unpack configuration context.
+ *
+ * @param address_a Address for unpacker A (THCON_SEC0)
+ * @param address_b Address for unpacker B (THCON_SEC1)
+ * @param cfg Pointer to configuration registers
+ */
+inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, const std::uint32_t address_b, volatile uint tt_reg_ptr *cfg)
+{
+    LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
+
+    if (0 == unp_cfg_context)
+    {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+    }
+    else
+    {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
+    }
+}
+
+/**
+ * @brief Validates L1 address and configures unpack base address for a single unpacker
+ *
+ * This helper function validates that the address is within the valid L1 memory region,
+ * then configures the appropriate THCON_SEC0 base address register based on the unpack configuration context.
+ *
+ * @param address Address for unpacker A (THCON_SEC0)
+ * @param cfg Pointer to configuration registers
+ */
+inline void _llk_unpack_configure_single_address_(const std::uint32_t address, volatile uint tt_reg_ptr *cfg)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
+
+    if (0 == unp_cfg_context)
+    {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+    }
+    else
+    {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+    }
 }

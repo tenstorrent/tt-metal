@@ -8,6 +8,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_math_common.h"
+#include "llk_memory_checks.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "params.h"

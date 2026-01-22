@@ -12,6 +12,7 @@
 #include "cpack_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;

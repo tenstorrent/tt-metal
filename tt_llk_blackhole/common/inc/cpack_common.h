@@ -13,6 +13,7 @@
 #include "ckernel_globals.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 
 namespace ckernel::packer
 {
@@ -497,6 +498,7 @@ inline void select_packer_dest_registers()
 // Program packer destination addresses from GPRs
 inline void program_packer_destination(uint32_t addr)
 {
+    LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
     /*
        The GPR OUTPUT_ADDR is only used by the packer mop when writing tile headers.
        Since we do not write tile headers in tt-metal, we do not need to wait for

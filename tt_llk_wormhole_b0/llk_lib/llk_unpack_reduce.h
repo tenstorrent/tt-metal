@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -58,15 +59,8 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     // Wait for free context
     wait_for_next_context(2);
 
-    // Get tile address
-    if (0 == unp_cfg_context)
-    {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
-    }
-    else
-    {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
-    }
+    // Validate and configure address
+    _llk_unpack_configure_single_address_(address, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);

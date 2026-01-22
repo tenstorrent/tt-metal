@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_unpack_common.h"
 #include "lltt.h"
 
 using namespace ckernel;
@@ -123,17 +124,8 @@ inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t a
     // Wait for free context
     wait_for_next_context(2);
 
-    // Get tile address
-    if (0 == unp_cfg_context)
-    {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-    }
-    else
-    {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
-    }
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
@@ -264,17 +256,8 @@ inline void _llk_unpack_bcastA_B_(const std::uint32_t address_a, const std::uint
     // Wait for free context
     wait_for_next_context(2);
 
-    // Get tile address
-    if (0 == unp_cfg_context)
-    {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-    }
-    else
-    {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
-    }
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);

@@ -13,6 +13,7 @@
 #include "ckernel_globals.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 
 namespace ckernel::packer
 {
@@ -636,6 +637,7 @@ inline void select_packer_dest_registers()
 // Program packer destination addresses from GPRs
 inline void program_packer_destination(uint32_t addr, bool restore = true)
 {
+    LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
     uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
@@ -654,6 +656,8 @@ inline void program_packer_destination(uint32_t addr, bool restore = true)
 template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool diagonal = false, uint32_t row_num_datums = TILE_C_DIM>
 inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
 {
+    LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
+
     if constexpr (diagonal)
     {
         const uint32_t block_size  = SCALE_DATUM_SIZE(pack_dst_format, FACE_C_DIM);

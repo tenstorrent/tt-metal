@@ -33,13 +33,16 @@ def check_hardware_headers():
     header_dir = TestConfig.LLK_ROOT / "tests" / "hw_specific" / arch_name / "inc"
 
     required_headers = [
+        "core_config.h",
         "cfg_defines.h",
         "dev_mem_map.h",
         "tensix.h",
         "tensix_types.h",
     ]
     required_headers_quasar = [
+        "core_config.h",
         "cfg_defines.h",
+        "dev_mem_map.h",
         "t6_debug_map.h",
         "t6_mop_config_map.h",
         "tensix_types.h",

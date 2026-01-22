@@ -112,17 +112,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
     // Wait for free context
     wait_for_next_context(2);
 
-    // Get tile address
-    if (0 == unp_cfg_context)
-    {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-    }
-    else
-    {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
-    }
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
 
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);

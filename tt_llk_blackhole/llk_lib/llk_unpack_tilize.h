@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -111,6 +112,7 @@ inline void _llk_unpack_tilize_(
     // std::uint32_t num_loops = narrow_tile ? 2 : num_faces/2;
 
     std::uint32_t address = base_address + top_face_offset_address;
+    LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
     // Clear z/w start counters
     TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
@@ -310,17 +312,8 @@ inline void _llk_unpack_tilizeA_B_(
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         }
 
-        // Get tile address
-        if (0 == unp_cfg_context)
-        {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_face_a;
-            cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-        }
-        else
-        {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_face_a;
-            cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
-        }
+        // Validate and configure addresses
+        _llk_unpack_configure_addresses_(address_face_a, address_b, cfg);
 
         // Trisc::SEMPOST for context acquire
         semaphore_post(semaphore::UNPACK_SYNC);

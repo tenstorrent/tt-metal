@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           cd tests
-          CHIP_ARCH=blackhole ./setup_testing_env.sh
+          CHIP_ARCH=quasar ./setup_testing_env.sh
           cd ..
 
       # Step 3: Compile for Quasar

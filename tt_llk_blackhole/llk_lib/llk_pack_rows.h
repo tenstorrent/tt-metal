@@ -12,6 +12,7 @@
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 #include "llk_pack_common.h"
 
 /**
