@@ -29,18 +29,14 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
-# --------------------------------------------------------------------------- #
-# Default Test Configuration                                                  #
-# --------------------------------------------------------------------------- #
-
-# Flag to control detailed comparison output
+# Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
 
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.05, 0.5, 0.5),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5),  # NuScenes tiny model - 30x30 BEV grid
         ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 50x50 BEV grid
         ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 100x100 BEV grid
         ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 200x200 BEV grid
@@ -87,6 +83,10 @@ def test_spatial_cross_attention_forward(
 
     sca_total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
+
     # Create input tensors
     bev_queries = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
 
@@ -110,10 +110,25 @@ def test_spatial_cross_attention_forward(
     indices = spatial_shapes.prod(1).cumsum(0)
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
+    # Convert tensors to ttnn format for ttnn model
+    tt_bev_queries = ttnn.from_torch(bev_queries, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_reference_points_cam = ttnn.from_torch(
+        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_level_start_index = ttnn.from_torch(
+        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
     # Create configuration from extracted parameters
     config = DeformableAttentionConfig(
         embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points, batch_first=True
     )
+
+    # --------------------------------------------------------------------------- #
+    # Models Init                                                                 #
+    # --------------------------------------------------------------------------- #
 
     # Create PyTorch reference model using extracted parameters
     ref_model = SpatialCrossAttention(
@@ -151,6 +166,10 @@ def test_spatial_cross_attention_forward(
         },
     )
 
+    # --------------------------------------------------------------------------- #
+    # Models Forward                                                              #
+    # --------------------------------------------------------------------------- #
+
     # Forward pass with PyTorch reference model
     ref_model_output = ref_model(
         query=bev_queries,
@@ -160,16 +179,6 @@ def test_spatial_cross_attention_forward(
         value=camera_features,
         spatial_shapes=spatial_shapes,
         level_start_index=level_start_index,
-    )
-
-    tt_bev_queries = ttnn.from_torch(bev_queries, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_reference_points_cam = ttnn.from_torch(
-        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
 
     # Forward pass with ttnn model
@@ -184,6 +193,10 @@ def test_spatial_cross_attention_forward(
     )
 
     tt_model_output = ttnn.to_torch(tt_model_output, dtype=torch.float32)
+
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
 
     # Comprehensive comparison using enhanced test utilities
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")

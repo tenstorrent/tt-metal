@@ -28,11 +28,7 @@ from models.experimental.bevformer.tests.test_utils import (
 
 from loguru import logger
 
-# --------------------------------------------------------------------------- #
 # Default Test Configuration                                                  #
-# --------------------------------------------------------------------------- #
-
-# Flag to control detailed comparison output (set to True for debugging)
 PRINT_DETAILED_COMPARISON_FLAG = False
 
 
@@ -127,6 +123,10 @@ def test_generate_reference_points(
     dataset_config = preset_config.dataset_config
     z_cfg = dataset_config.z_cfg
 
+    # --------------------------------------------------------------------------- #
+    # Function Execution                                                          #
+    # --------------------------------------------------------------------------- #
+
     # Test torch implementation
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
 
@@ -135,6 +135,10 @@ def test_generate_reference_points(
 
     # Convert TTNN result to torch for comparison
     ttnn_ref_points_torch = ttnn.to_torch(ttnn_ref_points, dtype=torch.float32)
+
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
 
     # Check shapes - now includes batch dimension
     expected_shape = (batch_size, bev_h * bev_w, z_cfg["num_points"], 3)
@@ -215,6 +219,10 @@ def test_point_sampling_3d_to_2d(
     img_shape = (dataset_config.input_size[1], dataset_config.input_size[0])  # (height, width)
     eps = 1e-5
 
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
+
     # Create camera matrices for testing
     lidar2img = create_sample_camera_matrices(num_cams)
     lidar2img = lidar2img.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # Add batch dimension
@@ -226,6 +234,10 @@ def test_point_sampling_3d_to_2d(
 
     # Generate reference points with batch dimension
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))
+
+    # --------------------------------------------------------------------------- #
+    # Function Execution                                                          #
+    # --------------------------------------------------------------------------- #
 
     # Test torch implementation
     torch_ref_points_cam, torch_bev_mask = point_sampling_3d_to_2d(
@@ -249,6 +261,10 @@ def test_point_sampling_3d_to_2d(
     # Convert TTNN results to torch for comparison
     ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32)
     ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
+
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
 
     # Check shapes - now includes batch dimension in the expected shape
     expected_points_shape = (num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"], 2)

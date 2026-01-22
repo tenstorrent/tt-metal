@@ -818,9 +818,9 @@ def check_with_tolerances(
 
         results["passed"] = all_pass
 
-        # Helper function to get status emoji with warnings for overly conservative thresholds
-        def get_status_emoji(passed, actual, threshold, higher_is_better=True, warn_margin=0.05):
-            """Get status emoji with warning for overly conservative thresholds."""
+        # Helper function to get status indicator with warnings for overly conservative thresholds
+        def get_status(passed, actual, threshold, higher_is_better=True, warn_margin=0.05):
+            """Get status indicator with warning for overly conservative thresholds."""
             if not passed:
                 return "❌"
 
@@ -839,29 +839,32 @@ def check_with_tolerances(
         print(f"\n🧪 TOLERANCE CHECK RESULTS ({tensor_name}):")
         print(f"  Shapes match: {'✅' if shapes_match else '❌'}")
 
-        pcc_emoji = get_status_emoji(pcc_pass, stats["pcc"], pcc_threshold, higher_is_better=True)
-        print(f"  PCC ≥ {pcc_threshold}: {pcc_emoji} (actual: {stats['pcc']:.6f})")
+        pcc_indicator = get_status(pcc_pass, stats["pcc"], pcc_threshold, higher_is_better=True)
+        print(f"  PCC ≥ {pcc_threshold}: {pcc_indicator} (actual: {stats['pcc']:.6f})")
 
-        abs_error_emoji = get_status_emoji(
+        abs_error_indicator = get_status(
             abs_error_pass, stats["abs_error_mean"], abs_error_threshold, higher_is_better=False
         )
-        print(f"  Abs error ≤ {abs_error_threshold}: {abs_error_emoji} (actual: {stats['abs_error_mean']:.6f})")
+        print(f"  Abs error ≤ {abs_error_threshold}: {abs_error_indicator} (actual: {stats['abs_error_mean']:.6f})")
 
-        rel_error_emoji = get_status_emoji(
+        rel_error_indicator = get_status(
             rel_error_pass, stats["rel_error_mean"], rel_error_threshold, higher_is_better=False
         )
-        print(f"  Rel error ≤ {rel_error_threshold}: {rel_error_emoji} (actual: {stats['rel_error_mean']:.6f})")
+        print(f"  Rel error ≤ {rel_error_threshold}: {rel_error_indicator} (actual: {stats['rel_error_mean']:.6f})")
 
-        error_ratio_emoji = get_status_emoji(
-            error_ratio_pass, high_error_ratio, max_error_ratio, higher_is_better=False
-        )
-        print(f"  High error ratio ≤ {max_error_ratio}: {error_ratio_emoji} (actual: {high_error_ratio:.6f})")
+        error_ratio_indicator = get_status(error_ratio_pass, high_error_ratio, max_error_ratio, higher_is_better=False)
+        print(f"  High error ratio ≤ {max_error_ratio}: {error_ratio_indicator} (actual: {high_error_ratio:.6f})")
 
         print(f"  OVERALL: {'✅ PASSED' if all_pass else '❌ FAILED'}")
 
         # Add explanation for warnings
         warnings_shown = any(
-            [pcc_emoji == "⚠️", abs_error_emoji == "⚠️", rel_error_emoji == "⚠️", error_ratio_emoji == "⚠️"]
+            [
+                pcc_indicator == "⚠️",
+                abs_error_indicator == "⚠️",
+                rel_error_indicator == "⚠️",
+                error_ratio_indicator == "⚠️",
+            ]
         )
         if warnings_shown:
             print(f"  ⚠️  = Warning: Actual performance significantly better than threshold (consider tightening)")
