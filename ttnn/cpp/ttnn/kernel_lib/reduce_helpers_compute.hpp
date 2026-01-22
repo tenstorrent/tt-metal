@@ -88,6 +88,20 @@ enum class ReduceInputMode { STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT
 enum class ReduceDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, BOTH = 3 };
 
 /**
+ * @brief Init/uninit lifecycle mode for reduce operations
+ *
+ * Controls whether reduce_init() and reduce_uninit() are called automatically.
+ * Replaces the previous bool init/uninit template parameters with a single enum
+ * for better readability at call sites.
+ *
+ * BOTH: Call both reduce_init() at start and reduce_uninit() at end (DEFAULT)
+ * INIT_ONLY: Only call reduce_init() - caller will call reduce_uninit() manually
+ * UNINIT_ONLY: Only call reduce_uninit() - caller already called reduce_init()
+ * NONE: Neither - caller manages both init and uninit externally
+ */
+enum class ReduceInitMode { BOTH, INIT_ONLY, UNINIT_ONLY, NONE };
+
+/**
  * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
  *
  * Specifies the stride pattern for accessing tiles in non-contiguous memory layouts.
@@ -306,7 +320,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * IMPORTANT - SCALER CB REQUIREMENT:
  * The scaler CB (icb_scaler) must contain the scaling factor tile BEFORE calling
- * this function. The function will wait for it automatically when init=true.
+ * this function. The function will wait for it automatically when init_mode includes init.
  *
  * IMPORTANT - REDUCE_COL DATA LAYOUT:
  * - STREAMING mode: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
@@ -329,8 +343,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
  * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
- * @tparam init If true, calls reduce_init before processing (default: true)
- * @tparam uninit If true, calls reduce_uninit after processing (default: true)
+ * @tparam init_mode Init/uninit lifecycle mode (BOTH, INIT_ONLY, UNINIT_ONLY, NONE) - defaults to BOTH
  *
  * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
@@ -385,11 +398,13 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
- *   // Set uninit=false since lambda calls reduce_uninit() before recip
+ *   // Set init_mode=INIT_ONLY since lambda calls reduce_uninit() before recip
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED,
- *       true, false>(
+ *       compute_kernel_lib::ReduceDataFormatReconfig::BOTH,
+ *       compute_kernel_lib::ReduceInitMode::INIT_ONLY>(
  *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
+ *       compute_kernel_lib::NoAccumulation{},
  *       [](uint32_t) {
  *           reduce_uninit();
  *           recip_tile_init();
@@ -413,8 +428,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
-    bool init = true,
-    bool uninit = true,
+    ReduceInitMode init_mode = ReduceInitMode::BOTH,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -444,7 +458,7 @@ ALWI void reduce(
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
 
     // Initialization
-    if constexpr (init) {
+    if constexpr (init_mode == ReduceInitMode::BOTH || init_mode == ReduceInitMode::INIT_ONLY) {
         reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, ocb);
     }
     cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
@@ -729,7 +743,7 @@ ALWI void reduce(
     }
 
     // Cleanup
-    if constexpr (uninit) {
+    if constexpr (init_mode == ReduceInitMode::BOTH || init_mode == ReduceInitMode::UNINIT_ONLY) {
         reduce_uninit<enforce_fp32_accumulation>();
     }
 }

@@ -10,8 +10,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
-    bool init = true,
-    bool uninit = true,
+    ReduceInitMode init_mode = ReduceInitMode::BOTH,  // Updated from bool init, bool uninit
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -299,10 +298,68 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 
 ## Summary
 
-| Issue | Recommendation |
-|-------|----------------|
-| Bool template args | Use `ReduceInitMode` enum |
-| `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` |
-| TileShape naming | Rename to `TileGrid` |
-| ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums |
-| CB arguments | Group into `ReduceCBs` struct |
+| Issue | Recommendation | Status |
+|-------|----------------|--------|
+| Bool template args | Use `ReduceInitMode` enum | ✅ Implemented |
+| `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | Pending |
+| TileShape naming | Rename to `TileGrid` | Pending |
+| ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | Pending |
+| CB arguments | Group into `ReduceCBs` struct | Pending |
+
+---
+
+## Implementation History
+
+### Issue 1: ReduceInitMode enum (Implemented)
+
+**Date:** 2026-01-22
+
+**Changes made:**
+1. Added `ReduceInitMode` enum to `reduce_helpers_compute.hpp` with values: `BOTH`, `INIT_ONLY`, `UNINIT_ONLY`, `NONE`
+2. Replaced `bool init = true, bool uninit = true` template parameters with single `ReduceInitMode init_mode = ReduceInitMode::BOTH`
+3. Updated implementation to use the new enum in `if constexpr` checks
+4. Updated documentation and examples
+
+**Files modified:**
+- `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+
+**API change (backwards compatible):**
+
+Before:
+```cpp
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
+    bool init = true,
+    bool uninit = true,
+    typename AccumT = NoAccumulation,
+    typename PostReduceOp = NoOp>
+ALWI void reduce(...);
+```
+
+After:
+```cpp
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
+    ReduceInitMode init_mode = ReduceInitMode::BOTH,
+    typename AccumT = NoAccumulation,
+    typename PostReduceOp = NoOp>
+ALWI void reduce(...);
+```
+
+**Migration guide:**
+- Default behavior unchanged (both init and uninit called)
+- `init=true, uninit=true` → `ReduceInitMode::BOTH` (default)
+- `init=true, uninit=false` → `ReduceInitMode::INIT_ONLY`
+- `init=false, uninit=true` → `ReduceInitMode::UNINIT_ONLY`
+- `init=false, uninit=false` → `ReduceInitMode::NONE`
+
+**Testing:**
+- No existing call sites use explicit `init`/`uninit` parameters (all use defaults)
+- Ran `pytest tests/ttnn/unit_tests/operations/test_reduce.py` - all tests pass
+- API is backwards compatible for all existing code
