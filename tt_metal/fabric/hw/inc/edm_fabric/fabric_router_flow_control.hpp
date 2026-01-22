@@ -13,11 +13,25 @@
 
 // Packed credit flags: determine whether credits are packed into shared registers
 // or sent individually per channel.
-// - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK is true
-// - BH (multi_txq_enabled): Uses counter-based mechanism (via function calls) regardless of ENABLE_FIRST_LEVEL_ACK
-constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
-constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
-constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK;// && !multi_txq_enabled;
+//
+// NOTE: Packing behavior is determined by VC0's enable_first_level_ack setting and
+// applies globally to both VCs. This is acceptable because VC1 always has
+// enable_first_level_ack=false (VC1 doesn't use bubble flow control).
+//
+// Architecture-specific behavior:
+// - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK_VC0 is true
+// - BH (multi_txq_enabled): Uses counter-based mechanism regardless of ENABLE_FIRST_LEVEL_ACK_VC0
+//
+constexpr bool USE_PACKED_PACKET_SENT_CREDITS = false;      // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
+constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = false;  // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
+constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = false;   // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
+
+// Validation: If VC1 enables first-level ack, VC0 must also have it enabled
+// because the packing policy (USE_PACKED_*) is derived from VC0's setting.
+static_assert(
+    !ENABLE_FIRST_LEVEL_ACK_VC1 || ENABLE_FIRST_LEVEL_ACK_VC0,
+    "If VC1 has first-level ack enabled, VC0 must also have it enabled "
+    "(global packing policy is governed by VC0's setting)");
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
@@ -37,13 +51,12 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
             size_t store_word_index = src_id >> 2;
             size_t offset_in_word = src_id & 0x3;
-            
+
             size_t shift = offset_in_word * 8;
             size_t mask = 0xFF << shift;
             auto old_completion_counter_value = completion_counters[store_word_index];
-            completion_counters[store_word_index] = 
-                (old_completion_counter_value & ~mask) | 
-                (((old_completion_counter_value & mask) + (1 << shift)) & mask);
+            completion_counters[store_word_index] = (old_completion_counter_value & ~mask) |
+                                                    (((old_completion_counter_value & mask) + (1 << shift)) & mask);
 
             // completion_counters[store_word_index] += 1 << (offset_in_word * 8);
             completion_counters_base_ptr[store_word_index] = completion_counters[store_word_index];
@@ -79,7 +92,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 ack_counters[0] = partial1 | partial0;
                 ack_counters_base_ptr[0] = ack_counters[0];
                 update_sender_side_credits();
-                
+
             } else {
                 ack_counters[0] += packed_count;
                 ack_counters_base_ptr[0] = ack_counters[0];
@@ -108,10 +121,13 @@ private:
     }
 };
 
+template <bool enable_first_level_ack>
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
-            if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+            // Packing behavior: when enable_first_level_ack is true, all sender channels
+            // pack into stream register 0. Otherwise, each uses its own register.
+            if constexpr (enable_first_level_ack) {
                 sender_channel_packets_completed_stream_ids[i] = to_receiver_packets_sent_streams[0];
                 // All sender channels pack into the first ack stream register (register 0)
                 sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[0];
@@ -137,23 +153,27 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
 };
 
+// Type alias for stream-register-based credit sender using global packing policy
+// Both VCs use the same packing behavior (determined by USE_PACKED_* flags derived from VC0)
+using ReceiverChannelStreamRegisterCreditSender =
+    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender<USE_PACKED_FIRST_LEVEL_ACK_CREDITS>;
+
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
     multi_txq_enabled,
     ReceiverChannelCounterBasedResponseCreditSender,
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
+    ReceiverChannelStreamRegisterCreditSender>;
 
 template <typename T = void>
 struct init_receiver_channel_response_credit_senders_impl;
 
-// Implementation for ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender
+// Implementation for ReceiverChannelStreamRegisterCreditSender
 template <>
-struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender> {
+struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelStreamRegisterCreditSender> {
     template <uint8_t NUM_RECEIVER_CHANNELS>
-    static constexpr auto init()
-        -> std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> {
-        std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
+    static constexpr auto init() -> std::array<ReceiverChannelStreamRegisterCreditSender, NUM_RECEIVER_CHANNELS> {
+        std::array<ReceiverChannelStreamRegisterCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
         for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-            credit_senders[i] = ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender();
+            credit_senders[i] = ReceiverChannelStreamRegisterCreditSender();
         }
         return credit_senders;
     }
@@ -199,14 +219,14 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         // }
     }
 
-    template<uint8_t sender_channel_index>
-    FORCE_INLINE void increment_num_processed_acks(size_t packed_num_acks) { 
+    template <uint8_t sender_channel_index>
+    FORCE_INLINE void increment_num_processed_acks(size_t packed_num_acks) {
         if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
             auto incremented_value = ((packed_num_acks & (0xFF << (sender_channel_index * 8))) + acks_received_and_processed) & (0xFF << (sender_channel_index * 8));
             acks_received_and_processed = acks_received_and_processed & ~(0xFF << (sender_channel_index * 8));
             acks_received_and_processed = acks_received_and_processed | incremented_value;
         } else {
-            acks_received_and_processed += packed_num_acks; 
+            acks_received_and_processed += packed_num_acks;
         }
     }
 
@@ -226,15 +246,19 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     uint32_t completions_received_and_processed = 0;
 };
 
+template <bool enable_first_level_ack>
 struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
+
+    // Packing behavior: when enable_first_level_ack is true, all sender channels use
+    // register 0 for packed credits. Otherwise, each uses its own register.
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
         to_sender_packets_acked_stream(
-            ENABLE_FIRST_LEVEL_ACK
+            enable_first_level_ack
                 ? to_sender_packets_acked_streams[0]  // All channels use register 0 for packed credits
                 : to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(
-            ENABLE_FIRST_LEVEL_ACK ? to_receiver_packets_sent_streams[0]
+            enable_first_level_ack ? to_receiver_packets_sent_streams[0]
                                    : to_sender_packets_completed_streams[sender_channel_index]) {}
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
@@ -261,21 +285,24 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     uint32_t to_sender_packets_completed_stream;
 };
 
+// Type alias for stream-register-based credits receiver using global packing policy
+// All sender channels use the same packing behavior (determined by USE_PACKED_* flags)
+using SenderChannelFromReceiverStreamRegisterCreditsReceiver =
+    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver<USE_PACKED_FIRST_LEVEL_ACK_CREDITS>;
+
 template <typename T = void>
 struct init_sender_channel_from_receiver_credits_flow_controllers_impl;
 
-// Implementation for SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver
-
+// Implementation for SenderChannelFromReceiverStreamRegisterCreditsReceiver
 template <>
 struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
-    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver> {
+    SenderChannelFromReceiverStreamRegisterCreditsReceiver> {
     template <uint8_t NUM_SENDER_CHANNELS>
     static constexpr auto init()
-        -> std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
-        std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS>
-            flow_controllers;
+        -> std::array<SenderChannelFromReceiverStreamRegisterCreditsReceiver, NUM_SENDER_CHANNELS> {
+        std::array<SenderChannelFromReceiverStreamRegisterCreditsReceiver, NUM_SENDER_CHANNELS> flow_controllers;
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            new (&flow_controllers[i]) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(i);
+            new (&flow_controllers[i]) SenderChannelFromReceiverStreamRegisterCreditsReceiver(i);
         }
         return flow_controllers;
     }
@@ -299,14 +326,14 @@ struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
 using SenderChannelFromReceiverCredits = typename std::conditional_t<
     multi_txq_enabled,
     SenderChannelFromReceiverCounterBasedCreditsReceiver,
-    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>;
+    SenderChannelFromReceiverStreamRegisterCreditsReceiver>;
 
-// SFINAE-based overload for multi_txq_enabled case
+// SFINAE-based overload for !multi_txq_enabled case (WH with stream registers)
 template <uint8_t NUM_SENDER_CHANNELS>
 constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_controllers()
     -> std::enable_if_t<!multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
-        SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
+        SenderChannelFromReceiverStreamRegisterCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
 }
 
 // SFINAE-based overload for !multi_txq_enabled case
@@ -340,9 +367,9 @@ FORCE_INLINE void receiver_send_received_ack(
 
 /**
  * Adapter functions to abstract packing/unpacking logic for different architectures.
- * - WH with ENABLE_FIRST_LEVEL_ACK: Uses packed credits (multiple channels in one register)
+ * - WH with enable_first_level_ack: Uses packed credits (multiple channels in one register)
  * - BH with multi_txq: Uses counter-based (one counter per channel, no packing)
- * - Non-ENABLE_FIRST_LEVEL_ACK: Uses individual stream registers (no packing)
+ * - Non-enable_first_level_ack: Uses individual stream registers (no packing)
  */
 
 /**
@@ -364,7 +391,7 @@ FORCE_INLINE uint32_t extract_sender_channel_acks(uint32_t packed_acks) {
                 to_sender_packets_acked_streams[0]>::template get_value<sender_channel_index>(packed_acks_named);
         }
     } else {
-        // BH or !ENABLE_FIRST_LEVEL_ACK: Counter-based, already unpacked (one counter per channel)
+        // BH or !enable_first_level_ack: Counter-based, already unpacked (one counter per channel)
         return packed_acks;
     }
 }
@@ -387,7 +414,7 @@ FORCE_INLINE uint32_t build_ack_decrement_value(uint32_t acks_count) {
                 .get();
         }
     } else {
-        // BH or !ENABLE_FIRST_LEVEL_ACK: Direct value, no packing
+        // BH or !enable_first_level_ack: Direct value, no packing
         return acks_count;
     }
 }
@@ -406,7 +433,7 @@ FORCE_INLINE constexpr uint32_t build_packet_forward_value() {
                    to_receiver_pkts_sent_id>::template pack_value<sender_channel_index>(1)
             .get();
     } else {
-        // BH or !ENABLE_FIRST_LEVEL_ACK: Always 1 (counter-based, no packing needed)
+        // BH or !enable_first_level_ack: Always 1 (counter-based, no packing needed)
         return 1;
     }
 }
@@ -424,7 +451,7 @@ FORCE_INLINE uint32_t accumulate_receiver_channel_credits(uint32_t packed_value)
             to_sender_packets_completed_streams[0]>;
         return PC::get_sum(typename PC::PackedCreditValueType(packed_value));
     } else {
-        // BH or !ENABLE_FIRST_LEVEL_ACK: Already unpacked (direct count)
+        // BH or !enable_first_level_ack: Already unpacked (direct count)
         return packed_value;
     }
 }

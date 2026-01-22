@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 

@@ -1681,6 +1681,12 @@ FORCE_INLINE
     return progress;
 };
 
+/*
+ * Sender channel processing template function.
+ *
+ * Internally compiles away the call to implementation if the channel
+ * is not serviced by this ERISC.
+ */
 template <
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
@@ -1759,7 +1765,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     uint32_t pkts_received_since_last_check;
     bool unwritten_packets;
     if constexpr (USE_PACKED_PACKET_SENT_CREDITS) {
-        // WH with ENABLE_FIRST_LEVEL_ACK: Packed credits - read from shared stream register
+        // WH with enable_first_level_ack: Packed credits - read from shared stream register
         uint32_t packed_num_packets_raw = get_ptr_val(to_sender_packets_completed_streams[0]);
         // Track newly received packets that need first-level acks
         if (packed_num_packets_raw != 0) {
@@ -1769,7 +1775,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         }
         unwritten_packets = receiver_channel_pointers.m.unsent_messages != 0;
     } else {
-        // BH (multi_txq_enabled) or !ENABLE_FIRST_LEVEL_ACK: Use stream register
+        // BH (multi_txq_enabled) or !enable_first_level_ack: Use stream register
         pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
         unwritten_packets = pkts_received_since_last_check != 0;
     }
@@ -1856,14 +1862,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (USE_PACKED_FIRST_LEVEL_ACK_CREDITS) {
-                // WH with ENABLE_FIRST_LEVEL_ACK: Packed credits - just decrement unsent_messages
                 receiver_channel_pointers.m.unsent_messages--;
             } else {
-                // BH or !ENABLE_FIRST_LEVEL_ACK: Decrement stream register
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-                
-                // For BH with ENABLE_FIRST_LEVEL_ACK, send first-level ACK via counter
-                if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+
+                if constexpr (enable_first_level_ack) {
                     uint8_t src_ch_id;
                     if constexpr (skip_src_ch_id_update) {
                         src_ch_id = receiver_channel_pointers.get_src_chan_id();
@@ -1881,10 +1884,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     // Close the code profiling timer
     receiver_forward_timer.close();
 
-    // For WH with ENABLE_FIRST_LEVEL_ACK (packed credits), send accumulated ACKs to channel 0
+    // For WH with enable_first_level_ack (packed credits), send accumulated ACKs to channel 0
     // For BH, ACKs are sent immediately per packet above via receiver_send_received_ack
-    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
-        static_assert(!ENABLE_FIRST_LEVEL_ACK || USE_PACKED_FIRST_LEVEL_ACK_CREDITS, "ENABLE_FIRST_LEVEL_ACK requires USE_PACKED_FIRST_LEVEL_ACK_CREDITS");
+    if constexpr (enable_first_level_ack) {
+        static_assert(
+            !enable_first_level_ack || USE_PACKED_FIRST_LEVEL_ACK_CREDITS,
+            "enable_first_level_ack requires USE_PACKED_FIRST_LEVEL_ACK_CREDITS");
         if (receiver_channel_pointers.m.unsent_first_level_acks) {
             // Send packed acks back to sender channel 0 (which will broadcast to all packed channels)
             bool can_send = true;
@@ -1913,10 +1918,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     if (can_send_completion) {
         uint8_t src_ch_id;
         if constexpr (USE_PACKED_COMPLETION_ACK_CREDITS) {
-            // WH with ENABLE_FIRST_LEVEL_ACK: Send to channel 0 (packed register)
+            // WH with enable_first_level_ack: Send to channel 0 (packed register)
             src_ch_id = 0;
         } else {
-            // BH or !ENABLE_FIRST_LEVEL_ACK: Send to specific sender channel via counter
+            // BH or !enable_first_level_ack: Send to specific sender channel via counter
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
@@ -1933,6 +1938,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     return progress;
 };
 
+/*
+ * Receiver channel processing template function.
+ *
+ * Internally compiles away the call to implementation if the channel
+ * is not serviced by this ERISC.
+ */
 template <
     uint8_t receiver_channel,
     bool enable_first_level_ack,
@@ -2054,7 +2065,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
 
     auto receiver_channel_pointers =
-        ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY, ENABLE_FIRST_LEVEL_ACK>::make();
+        ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY, ENABLE_FIRST_LEVEL_ACK_VC0>::make();
     // Workaround the perf regression in RingAsLinear test.
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();

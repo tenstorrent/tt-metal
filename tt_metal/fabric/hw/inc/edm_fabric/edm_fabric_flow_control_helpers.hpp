@@ -230,13 +230,13 @@ struct OutboundReceiverChannelPointers {
     }
 };
 
-template <uint8_t RECEIVER_NUM_BUFFERS, bool ENABLE_FIRST_LEVEL_ACK>
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
 struct ReceiverChannelPointersMembers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     uint32_t unsent_first_level_acks;
     uint8_t unsent_messages;
-    // Always include src_chan_ids for ENABLE_FIRST_LEVEL_ACK=true to support both
+    // Always include src_chan_ids for enable_first_level_ack=true to support both
     // packed credits (WH) and unpacked credits (BH). Small memory overhead but simpler.
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
 
@@ -263,10 +263,16 @@ struct ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, false> {
 
 /*
  * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
+ *
+ * Template parameter enable_first_level_ack controls first-level acknowledgment
+ * behavior for this specific receiver channel. Each virtual channel (VC0, VC1)
+ * is instantiated separately with its appropriate value:
+ * - VC0: Can have enable_first_level_ack=true for Ring/Torus topologies
+ * - VC1: Always has enable_first_level_ack=false (no bubble flow control needed)
  */
-template <uint8_t RECEIVER_NUM_BUFFERS, bool ENABLE_FIRST_LEVEL_ACK>
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
 struct ReceiverChannelPointers {
-    ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, ENABLE_FIRST_LEVEL_ACK> m;
+    ReceiverChannelPointersMembers<RECEIVER_NUM_BUFFERS, enable_first_level_ack> m;
 
     FORCE_INLINE auto& wr_sent_counter() { return m.wr_sent_counter; }
     FORCE_INLINE const auto& wr_sent_counter() const { return m.wr_sent_counter; }
@@ -277,11 +283,11 @@ struct ReceiverChannelPointers {
     FORCE_INLINE auto& completion_counter() { return m.completion_counter; }
     FORCE_INLINE const auto& completion_counter() const { return m.completion_counter; }
 
-    template <bool E = ENABLE_FIRST_LEVEL_ACK, typename = std::enable_if_t<E>>
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
     FORCE_INLINE auto& ack_counter() {
         return m.ack_counter;
     }
-    template <bool E = ENABLE_FIRST_LEVEL_ACK, typename = std::enable_if_t<E>>
+    template <bool E = enable_first_level_ack, typename = std::enable_if_t<E>>
     FORCE_INLINE const auto& ack_counter() const {
         return m.ack_counter;
     }
@@ -310,6 +316,7 @@ struct ChannelPointersTupleImpl;
 // Provide the specialization that actually holds the tuple and `get<>`:
 template <template <uint8_t, bool> class ChannelType, auto& BufferSizes, bool ExtraParam, size_t... Is>
 struct ChannelPointersTupleImpl<ChannelType, BufferSizes, ExtraParam, std::index_sequence<Is...>> {
+    static constexpr size_t N = sizeof...(Is);
     std::tuple<ChannelType<BufferSizes[Is], ExtraParam>...> channel_ptrs;
 
     template <size_t I>
