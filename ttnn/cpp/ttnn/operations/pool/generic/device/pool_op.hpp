@@ -63,6 +63,9 @@ struct Pool2D {
             tt::tt_metal::CBHandle right_inc_cb{};
             tt::tt_metal::CBHandle down_left_wrap_inc_cb{};
             tt::tt_metal::CBHandle up_left_wrap_inc_cb{};
+            tt::tt_metal::CBHandle intra_kernel_right_inc_cb{};
+            tt::tt_metal::CBHandle intra_kernel_down_left_wrap_inc_cb{};
+            tt::tt_metal::CBHandle compute_tmp_idx_cb{};
             uint32_t ncores{};
             tt::tt_metal::DeviceStorage reader_indices_storage;
             tt::tt_metal::DeviceStorage scalar_config_storage;

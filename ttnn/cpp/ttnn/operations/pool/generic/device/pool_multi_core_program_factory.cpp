@@ -437,9 +437,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t right_inc_cb_id = 32;
     uint32_t down_left_wrap_inc_cb_id = 32;
     uint32_t up_left_wrap_inc_cb_id = 32;
+    uint32_t intra_kernel_right_inc_cb_id = 32;
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
+    uint32_t compute_tmp_idx_cb_id = 32;
     uint16_t right_inc = 0;
     uint16_t down_left_wrap_inc = 0;
     uint16_t up_left_wrap_inc = 0;
+    uint16_t intra_kernel_right_inc = 0;
+    uint16_t intra_kernel_down_left_wrap_inc = 0;
     if (return_indices) {
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         in_idx_cb_id = next_cb_index++;
@@ -466,11 +471,67 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             up_left_wrap_inc_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
 
+        compute_tmp_idx_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            compute_tmp_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", compute_tmp_idx_cb_id, params.index_nbytes * tile_elems, 1);
+
         // compute increments for index tile population
         right_inc = stride_w;
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
         up_left_wrap_inc =
             (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
+
+        // edit incs for large kernels
+        if (params.is_large_kernel) {
+            intra_kernel_right_inc_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                intra_kernel_right_inc_cb_id,
+                program,
+                all_cores,
+                params.index_nbytes * tile_elems,
+                1,
+                params.index_format);
+            log_debug(
+                tt::LogOp,
+                "CB {} :: PS = {}, NP = {}",
+                intra_kernel_right_inc_cb_id,
+                params.index_nbytes * tile_elems,
+                1);
+            intra_kernel_down_left_wrap_inc_cb_id = next_cb_index++;
+            tt::tt_metal::create_cb(
+                intra_kernel_down_left_wrap_inc_cb_id,
+                program,
+                all_cores,
+                params.index_nbytes * tile_elems,
+                1,
+                params.index_format);
+            log_debug(
+                tt::LogOp,
+                "CB {} :: PS = {}, NP = {}",
+                intra_kernel_down_left_wrap_inc_cb_id,
+                params.index_nbytes * tile_elems,
+                1);
+
+            // for large kernels we process row by row since inc's aren't consistent if we just process fixed-size
+            // batches this means we process multiple top left positions within the kernel for a single top left
+            // position in the tensor, so when we move the kernel to a new position in the tensor we need to subtract
+            // the difference between the first top left index in the kernel and the last one
+            uint16_t sticks_per_chunk =
+                kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
+            uint16_t w_chunks =
+                kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : (kernel_w / sticks_per_chunk) + 1;
+            uint16_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
+            uint16_t first_top_left_kernel_index = 0;
+            uint16_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
+            uint16_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
+            right_inc -= index_correction;
+            down_left_wrap_inc -= index_correction;
+            up_left_wrap_inc -= index_correction;
+
+            intra_kernel_right_inc = dilation_w * sticks_per_chunk;
+            intra_kernel_down_left_wrap_inc = dilation_h * in_w - last_w_chunk_w_offset;
+        }
     }
 
     const bool is_output_tiled = output_layout == Layout::TILE;
@@ -654,11 +715,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)zero_pages,                                                                // 43
         out_cb_id,                                                                           // 44
         out_idx_cb_id,                                                                       // 45
-        config_tensor_in_dram,                                                               // 46
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 47
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 48
-        reader_indices_storage.get_buffer()->address(),                                      // 49
-        reader_indices_storage.get_buffer()->page_size()                                     // 50
+        intra_kernel_right_inc,                                                              // 46
+        intra_kernel_down_left_wrap_inc,                                                     // 47
+        intra_kernel_right_inc_cb_id,                                                        // 48
+        intra_kernel_down_left_wrap_inc_cb_id,                                               // 49
+        config_tensor_in_dram,                                                               // 50
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 51
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 52
+        reader_indices_storage.get_buffer()->address(),                                      // 53
+        reader_indices_storage.get_buffer()->page_size(),                                    // 54
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
@@ -668,9 +733,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
-    std::string reader_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-        "reader_pool_2d.cpp";
+    std::string reader_kernel_fname = return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+                                                       "reader_mpwi.cpp"
+                                                     : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
+                                                       "reader_pool_2d.cpp";
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -691,37 +757,44 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
 
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,             // 0
-        kernel_h * kernel_w,            // 1
-        params.split_reader,            // 2
-        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
-        in_c_per_shard_ceil,            // 4
-        in_nblocks_c,                   // 5
-        params.max_rows_for_reduction,  // 6
-        in_cb_id_0,                     // 7
-        in_cb_id_1,                     // 8
-        in_scalar_cb_id_0,              // 9
-        in_scalar_cb_id_1,              // 10
-        in_idx_cb_id,                   // 11
-        pack_tmp_cb_id,                 // 12
-        pack_idx_tmp_cb_id,             // 13
-        right_inc_cb_id,                // 14
-        down_left_wrap_inc_cb_id,       // 15
-        up_left_wrap_inc_cb_id,         // 16
-        out_cb_id,                      // 17
-        out_idx_cb_id,                  // 18
-        one_scalar_per_core,            // 19
-        pre_tilize_cb_id,               // 20
-        is_output_tiled,                // 21
-        is_output_block_format,         // 22
-        (uint32_t)return_indices,       // 23
-        stride_h,                       // 24
-        stride_w,                       // 25
-        in_h_padded,                    // 26
-        in_w_padded,                    // 27
-        eff_kernel_h,                   // 28
-        eff_kernel_w,                   // 29
-        pad_l};                         // 30
+        params.in_ntiles_c,                     // 0
+        kernel_h * kernel_w,                    // 1
+        params.split_reader,                    // 2
+        0,                                      // 3 - max_out_nhw_per_core, used for grid sample but not for pool
+        in_c_per_shard_ceil,                    // 4
+        in_nblocks_c,                           // 5
+        params.max_rows_for_reduction,          // 6
+        in_cb_id_0,                             // 7
+        in_cb_id_1,                             // 8
+        in_scalar_cb_id_0,                      // 9
+        in_scalar_cb_id_1,                      // 10
+        in_idx_cb_id,                           // 11
+        pack_tmp_cb_id,                         // 12
+        pack_idx_tmp_cb_id,                     // 13
+        right_inc_cb_id,                        // 14
+        down_left_wrap_inc_cb_id,               // 15
+        up_left_wrap_inc_cb_id,                 // 16
+        out_cb_id,                              // 17
+        out_idx_cb_id,                          // 18
+        one_scalar_per_core,                    // 19
+        pre_tilize_cb_id,                       // 20
+        is_output_tiled,                        // 21
+        is_output_block_format,                 // 22
+        (uint32_t)return_indices,               // 23
+        stride_h,                               // 24
+        stride_w,                               // 25
+        in_h_padded,                            // 26
+        in_w_padded,                            // 27
+        eff_kernel_h,                           // 28
+        eff_kernel_w,                           // 29
+        pad_l,                                  // 30
+        intra_kernel_right_inc_cb_id,           // 31
+        intra_kernel_down_left_wrap_inc_cb_id,  // 32
+        compute_tmp_idx_cb_id,                  // 33
+        kernel_h,                               // 34
+        kernel_w,                               // 35
+        clear_value_cb_id                       // 36
+    };
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
@@ -734,18 +807,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         false,                                         // math_approx_mode
         params.is_avg_pool && params.is_large_kernel,  // fp32_dest_acc_en
         false,                                         // packer_l1_acc
-        false                                          // dst_full_sync_en
+        params.is_large_kernel && return_indices       // dst_full_sync_en
     );
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = get_math_fidelity(device_compute_kernel_config),
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
 
     std::string compute_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
+        return_indices ? "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_mpwi.cpp"
+                       : "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
@@ -890,6 +965,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
          .right_inc_cb = right_inc_cb_id,
          .down_left_wrap_inc_cb = down_left_wrap_inc_cb_id,
          .up_left_wrap_inc_cb = up_left_wrap_inc_cb_id,
+         .intra_kernel_right_inc_cb = intra_kernel_right_inc_cb_id,
+         .intra_kernel_down_left_wrap_inc_cb = intra_kernel_down_left_wrap_inc_cb_id,
+         .compute_tmp_idx_cb = compute_tmp_idx_cb_id,
          .ncores = ncores,
          .reader_indices_storage = reader_indices_storage,
          .scalar_config_storage = scalar_config_storage}};
