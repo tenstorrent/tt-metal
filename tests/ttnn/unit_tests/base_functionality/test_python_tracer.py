@@ -43,10 +43,10 @@ def enable_tracing_for_test(request):
         # For test_operation_parameter_tracing, enable tensor value serialization (to test with values)
         # For test_default_no_tensor_values, use default (False - no values) to test default behavior
         if "test_operation_parameter_tracing" in request.node.name:
-            ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = True
+            ttnn.operation_tracer.enable_tensor_value_serialization(True)
         else:
             # Use default (False) - no values serialized by default
-            ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = False
+            ttnn.operation_tracer.enable_tensor_value_serialization(False)
     else:
         ttnn.operation_tracer._ENABLE_TRACE = False
 
@@ -54,7 +54,7 @@ def enable_tracing_for_test(request):
 
     # Restore original state after test
     ttnn.operation_tracer._ENABLE_TRACE = original_trace_flag
-    ttnn.operation_tracer._SERIALIZE_TENSOR_VALUES = original_serialize_values
+    ttnn.operation_tracer.enable_tensor_value_serialization(original_serialize_values)
 
 
 @pytest.mark.parametrize(
