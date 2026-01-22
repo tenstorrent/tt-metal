@@ -158,7 +158,11 @@ ALWI void matmul_tiles(
 // clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
+#ifdef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
+#else
+    MATH((llk_math_matmul_tile(idst)));
+#endif
 }
 
 // clang-format off
@@ -176,8 +180,13 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  */
 // clang-format on
 ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
+    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+#endif
 }
 
 // clang-format off
@@ -226,6 +235,7 @@ ALWI void mm_block_init(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+#ifndef ARCH_QUASAR
     // Note: in0_cb_id and in1_cb_id are swapped here because of the way matmul works:
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
@@ -241,6 +251,17 @@ ALWI void mm_block_init(
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(
+        in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));  // transpose not yet implemented
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure<p_pacr::PACK0>(out_cb_id)));
+    PACK((llk_pack_init<p_pacr::PACK0>(out_cb_id)));
+#endif
 }
 
 // clang-format off
@@ -276,11 +297,17 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+#ifndef ARCH_QUASAR
+
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+#endif
+
+#else  // ARCH_QUASAR
+    MATH((llk_math_matmul(idst, ct_dim, rt_dim)));
 #endif
 }
 
@@ -308,11 +335,18 @@ ALWI void mm_block_init_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
+#endif
+
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(
+        in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));  // transpose not yet implemented
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
 #endif
 }
 

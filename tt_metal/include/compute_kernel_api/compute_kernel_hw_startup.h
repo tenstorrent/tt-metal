@@ -38,6 +38,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
@@ -51,6 +52,12 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
           0 /*relu_treshold*/,
           false /*tilize*/>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_hw_configure(icb0, icb1)));
+    MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(icb, icb)));
+    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_hw_configure<p_pacr::PACK0>(ocb)));
+#endif
 }
 
 // clang-format off
