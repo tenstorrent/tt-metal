@@ -891,5 +891,181 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
     }
 }
 
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
+    // Test the map_multi_mesh_to_physical function
+    // This test manually creates both logical and physical multi-mesh graphs from adjacency maps
+    // and verifies that the mapping function correctly maps logical meshes to physical meshes
+    // and fabric nodes to ASICs within each mesh.
+    //
+    // Logical Topology (2 meshes):
+    //   Mesh 0: 2x2 grid (4 nodes)
+    //   Mesh 1: 2x2 grid (4 nodes)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 (line: 0-1)
+    //
+    // Physical Topology (3 meshes):
+    //   Mesh 0: Two disconnected 1x2 chains (4 ASICs: 2 + 2)
+    //   Mesh 1: 2x4 grid (8 ASICs)
+    //   Mesh 2: 2x2 grid (4 ASICs)
+    //   Inter-mesh: Mesh 0 <-> Mesh 1 <-> Mesh 2 (line: 0-1-2)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId logical_mesh0{0};
+    const MeshId logical_mesh1{1};
+    // Physical meshes: disconnected chains first (0), then grids (1,2)
+    const MeshId physical_mesh0{0};  // Disconnected chains
+    const MeshId physical_mesh1{1};  // 2x4 grid
+    const MeshId physical_mesh2{2};  // 2x2 grid
+
+    // =========================================================================
+    // Create Logical Multi-Mesh Graph (2 meshes, both 2x2)
+    // =========================================================================
+
+    // Logical Mesh 0: 2x2 grid
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, 2, 2);
+
+    // Logical Mesh 1: 2x2 grid
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < 4; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, 2, 2);
+
+    // Create logical multi-mesh graph
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[logical_mesh1] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+
+    // Create mesh-level adjacency map (line: 0-1)
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[logical_mesh0] = {logical_mesh1};
+    logical_mesh_level_adj_map[logical_mesh1] = {logical_mesh0};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Create Physical Multi-Mesh Graph (3 meshes)
+    // =========================================================================
+
+    // Physical Mesh 0: Two disconnected 1x2 chains (4 ASICs total)
+    // Chain 1: ASICs 300-301
+    // Chain 2: ASICs 302-303
+    PhysicalAdjacencyMap physical_adj_m0;
+    tt::tt_metal::AsicID asic300{300};
+    tt::tt_metal::AsicID asic301{301};
+    tt::tt_metal::AsicID asic302{302};
+    tt::tt_metal::AsicID asic303{303};
+
+    // First disconnected chain: 300-301
+    physical_adj_m0[asic300] = {asic301};
+    physical_adj_m0[asic301] = {asic300};
+
+    // Second disconnected chain: 302-303
+    physical_adj_m0[asic302] = {asic303};
+    physical_adj_m0[asic303] = {asic302};
+
+    // Physical Mesh 1: 2x4 grid (8 ASICs)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 8; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m1 = build_grid_adjacency(physical_asics_m1, 2, 4);
+
+    // Physical Mesh 2: 2x2 grid (4 ASICs)
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    auto physical_adj_m2 = build_grid_adjacency(physical_asics_m2, 2, 2);
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh2] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create mesh-level adjacency map (line: 0-1-2)
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {physical_mesh1};
+    physical_mesh_level_adj_map[physical_mesh1] = {physical_mesh0, physical_mesh2};
+    physical_mesh_level_adj_map[physical_mesh2] = {physical_mesh1};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // =========================================================================
+    // Run mapping and verify results
+    // =========================================================================
+
+    // Create mapping config
+    TopologyMappingConfig config;
+    config.strict_mode = true;            // Use strict mode for testing
+    config.disable_rank_bindings = true;  // Disable rank bindings - any mapping is valid
+
+    // Call map_multi_mesh_to_physical (rank mappings omitted since disable_rank_bindings is true)
+    const auto results = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    // Verify results
+    EXPECT_EQ(results.size(), 2u) << "Should have a result for each logical mesh";
+
+    // Both logical meshes should succeed
+    EXPECT_TRUE(results.at(logical_mesh0).success)
+        << "Logical Mesh 0 mapping should succeed: " << results.at(logical_mesh0).error_message;
+    EXPECT_TRUE(results.at(logical_mesh1).success)
+        << "Logical Mesh 1 mapping should succeed: " << results.at(logical_mesh1).error_message;
+
+    // Verify Mesh 0 mapping (2x2 logical -> should map to 2x2 physical mesh 1)
+    const auto& result0 = results.at(logical_mesh0);
+    verify_bidirectional_consistency(result0);
+    EXPECT_EQ(result0.fabric_node_to_asic.size(), 4u) << "Logical Mesh 0 should map all 4 nodes";
+
+    // Verify Mesh 1 mapping (2x2 logical -> should map to 2x2 physical mesh 1 or another suitable mesh)
+    const auto& result1 = results.at(logical_mesh1);
+    verify_bidirectional_consistency(result1);
+    EXPECT_EQ(result1.fabric_node_to_asic.size(), 4u) << "Logical Mesh 1 should map all 4 nodes";
+
+    // Verify connectivity for all successful mappings (rank constraints disabled)
+    for (const auto& [mesh_id, result] : results) {
+        if (result.success) {
+            // Find which physical mesh this logical mesh mapped to
+            MeshId physical_mesh_id = physical_mesh0;  // Default, will be updated
+            if (!result.fabric_node_to_asic.empty()) {
+                const auto& first_asic = result.fabric_node_to_asic.begin()->second;
+                // Determine which physical mesh this ASIC belongs to by checking all physical meshes
+                for (const auto& [pm_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+                    const auto& nodes = adjacency_graph.get_nodes();
+                    if (std::find(nodes.begin(), nodes.end(), first_asic) != nodes.end()) {
+                        physical_mesh_id = pm_id;
+                        break;
+                    }
+                }
+            }
+
+            // Verify connectivity is preserved
+            const auto& logical_graph = logical_multi_mesh_graph.mesh_adjacency_graphs_.at(mesh_id);
+            const auto& physical_graph = physical_multi_mesh_graph.mesh_adjacency_graphs_.at(physical_mesh_id);
+            const auto& logical_nodes = logical_graph.get_nodes();
+
+            for (const auto& node : logical_nodes) {
+                const auto mapped_asic = result.fabric_node_to_asic.at(node);
+                const auto& logical_neighbors = logical_graph.get_neighbors(node);
+                const auto& physical_neighbors = physical_graph.get_neighbors(mapped_asic);
+
+                for (const auto& neighbor : logical_neighbors) {
+                    const auto neighbor_asic = result.fabric_node_to_asic.at(neighbor);
+                    EXPECT_TRUE(
+                        std::find(physical_neighbors.begin(), physical_neighbors.end(), neighbor_asic) !=
+                        physical_neighbors.end())
+                        << "Logical edge not preserved in physical mapping for logical mesh " << mesh_id.get();
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::tt_fabric

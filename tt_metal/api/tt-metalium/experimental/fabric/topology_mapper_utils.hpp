@@ -66,6 +66,10 @@ struct TopologyMappingConfig {
     // Validation mode for inter-mesh mapping (mesh to mesh).
     // Defaults to RELAXED for backward compatibility if not set.
     std::optional<ConnectionValidationMode> inter_mesh_validation_mode;
+
+    // When true, disables rank binding constraints. Rank mappings will be ignored
+    // and any mapping that satisfies connectivity constraints will be valid.
+    bool disable_rank_bindings = false;
 };
 
 /**
@@ -273,23 +277,28 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  *
  * @param adjacency_map_logical Logical multi-mesh adjacency graph
  * @param adjacency_map_physical Physical multi-mesh adjacency graph
- * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
- * @param fabric_node_id_to_mesh_rank Mapping of mesh IDs to fabric node IDs to mesh host ranks
  * @param config Configuration options including pinning constraints, ASIC positions, and validation modes.
  *               config.mesh_validation_modes and config.inter_mesh_validation_mode should be set for proper
  *               validation. If not set, defaults to RELAXED mode. If config.strict_mode is true, it will be
  *               used as a fallback for backward compatibility.
+ *               If config.disable_rank_bindings is true, rank mappings are ignored and can be omitted.
+ * @param asic_id_to_mesh_rank Optional mapping of mesh IDs to ASIC IDs to mesh host ranks.
+ *                             Required if config.disable_rank_bindings is false.
+ * @param fabric_node_id_to_mesh_rank Optional mapping of mesh IDs to fabric node IDs to mesh host ranks.
+ *                                    Required if config.disable_rank_bindings is false.
  *
  * @return std::map<MeshId, TopologyMappingResult> Mapping result for each logical mesh
  *
  * @note If inter-mesh mapping fails, all mesh results will have success=false
  * @note If intra-mesh mapping fails for a specific mesh, only that mesh's result will have success=false
+ * @note If config.disable_rank_bindings is true, rank constraints are ignored and any valid connectivity
+ *       mapping is allowed
  */
 std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,
     const PhysicalMultiMeshGraph& adjacency_map_physical,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
-    const TopologyMappingConfig& config);
+    const TopologyMappingConfig& config,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

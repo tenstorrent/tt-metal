@@ -374,9 +374,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,
     const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
-    const TopologyMappingConfig& config) {
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
     using namespace ::tt::tt_fabric;
 
     std::map<MeshId, TopologyMappingResult> results;
@@ -388,8 +388,10 @@ std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
     // TODO: Remove this once rank bindings file is removed from multi-host systems
     // Use placeholder mesh id 1:1 mapping for physical to logical constraints for now
     MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
-    for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
-        inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
+    if (!config.disable_rank_bindings) {
+        for (const auto& mesh_id : mesh_physical_graph.get_nodes()) {
+            inter_mesh_constraints.add_required_constraint(mesh_id, mesh_id);
+        }
     }
 
     // Determine inter-mesh validation mode from config
@@ -426,9 +428,21 @@ std::map<MeshId, TopologyMappingResult> map_multi_mesh_to_physical(
         // Build intra-mesh constraints
         MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
 
-        // Build Rank bindings constraints
-        intra_mesh_constraints.add_required_trait_constraint(
-            fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id));
+        // TODO: Remove this once rank bindings file is removed from multi-host systems
+        // Build Rank bindings constraints (only if rank bindings are enabled)
+        if (!config.disable_rank_bindings) {
+            // Check that rank mappings are provided
+            if (fabric_node_id_to_mesh_rank.find(logical_mesh_id) == fabric_node_id_to_mesh_rank.end() ||
+                asic_id_to_mesh_rank.find(logical_mesh_id) == asic_id_to_mesh_rank.end()) {
+                result.success = false;
+                result.error_message = fmt::format(
+                    "Rank mappings required for mesh {} when disable_rank_bindings is false", logical_mesh_id.get());
+                results[logical_mesh_id] = result;
+                continue;
+            }
+            intra_mesh_constraints.add_required_trait_constraint(
+                fabric_node_id_to_mesh_rank.at(logical_mesh_id), asic_id_to_mesh_rank.at(logical_mesh_id));
+        }
 
         // Map of asic positions to asic ids (built from config.asic_positions)
         std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> asic_positions_to_asic_ids;
