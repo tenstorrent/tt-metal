@@ -543,7 +543,7 @@ run_t3000_qwen3_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen3_vl requirements
-  pip install -r models/demos/qwen3_vl/requirements.txt
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
