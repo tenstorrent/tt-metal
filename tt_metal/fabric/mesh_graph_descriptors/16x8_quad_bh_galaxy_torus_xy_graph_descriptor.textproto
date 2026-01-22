@@ -18,6 +18,7 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     channels { count: 2 policy: STRICT }
+    assign_z_direction: true
   }
 }
 

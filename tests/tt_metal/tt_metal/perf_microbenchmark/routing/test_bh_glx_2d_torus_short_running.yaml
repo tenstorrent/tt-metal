@@ -4,6 +4,20 @@ Tests:
 # Fabric 2D Tests (Mesh and Torus)
 # ================================================
 
+  - name: "Quick"
+    fabric_setup:
+      topology: Mesh
+      num_links: 1
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [1, 0]
+
   - name: "RandomPairing"
     enable_flow_control: true
     fabric_setup:

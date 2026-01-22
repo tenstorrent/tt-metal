@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # ====== Configuration ======
-USER="asaigal"
+USER="ucheema"
 SESSION_NAME="docker"
 CONTAINER_NAME="$USER-host-mapped"
 IMAGE="ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest"
-BUILD_DIR="/home/$USER/tt-metal-2"
+BUILD_DIR="/home/$USER/tt-metal"
 DEST_DIR="/home/$USER"
 
 MACHINES=(

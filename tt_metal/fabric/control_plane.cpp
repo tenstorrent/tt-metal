@@ -164,6 +164,20 @@ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     return UbbId{0, 0};  // Invalid UBB ID if not found
 }
 
+void ControlPlane::print_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    auto asic_id = topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+    const auto& asic_descriptors = physical_system_descriptor_->get_asic_descriptors();
+    auto desc = asic_descriptors.at(asic_id);
+    log_info(
+        tt::LogDistributed,
+        "M: {} D: {} is mapped to Host: {} Tray: {} Location: {}",
+        *fabric_node_id.mesh_id,
+        fabric_node_id.chip_id,
+        desc.host_name,
+        *desc.tray_id,
+        *desc.asic_location);
+}
+
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
     tt_fabric::FabricConfig fabric_config,
@@ -517,6 +531,13 @@ void ControlPlane::init_control_plane(
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
+
+    for (const auto& mesh_id : this->get_local_mesh_id_bindings()) {
+        const auto& chip_ids = this->mesh_graph_->get_chip_ids(mesh_id);
+        for (const auto& chip_id : chip_ids.values()) {
+            this->print_asic_id_from_fabric_node_id(FabricNodeId(mesh_id, chip_id));
+        }
+    }
 }
 
 void ControlPlane::init_control_plane_auto_discovery() {

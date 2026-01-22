@@ -1619,12 +1619,18 @@ FORCE_INLINE
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        // DPRINT << (uint32_t) outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
+        // DPRINT << to_sender_remote_completion_counters_base_address + sender_channel_index*4 << ENDL();
+        // DPRINT << MEM_AERISC_FABRIC_SCRATCH_BASE << ENDL();
+        // DPRINT <<"tx pkt " << (uint32_t) sender_channel_index<< " frs: " << (uint32_t)
+        // outbound_to_receiver_channel_pointers.num_free_slots << ENDL();
     }
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
+        // DPRINT << (uint32_t) completions_since_last_check << ENDL();
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
@@ -1823,6 +1829,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
         if (can_send_to_all_local_chip_receivers) {
+            // DPRINT << "got pkt" << ENDL();
             did_something = true;
             progress = true;
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
@@ -1906,6 +1913,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
+            // DPRINT << (uint32_t)src_ch_id << ENDL();
+            // DPRINT << "sent comp "<< receiver_channel_response_credit_sender.completion_counters[src_ch_id]<< ENDL();
         }
     }
     return progress;
@@ -2065,6 +2074,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     uint64_t loop_start_cycles;
+    // uint32_t temp = 0;
     while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         did_something = false;
 
@@ -2269,6 +2279,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
+                        // volatile uint32_t* to_sender_remote_comp_ptr = (volatile uint32_t*)
+                        // to_sender_remote_completion_counters_base_address; volatile uint32_t* completion_ptr =
+                        // (volatile uint32_t*) local_receiver_completion_counters_base_address;
+
+                        // DPRINT << (uint32_t) temp[0] << ENDL();
+                        // DPRINT << (uint32_t) temp[1] << ENDL();
+                        // auto idx = temp & 0x7;
+                        // DPRINT << idx << " " << (uint32_t) to_sender_remote_comp_ptr[idx] << " " << (uint32_t)
+                        // completion_ptr[idx] << ENDL(); DPRINT << idx << "=" << (uint32_t)
+                        // to_sender_remote_comp_ptr[idx] << ENDL(); temp++;
                         run_coordinated_context_switch_to_base_firmware(termination_signal_ptr);
                     }
                 }
@@ -2560,8 +2580,11 @@ void kernel_main() {
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
 #endif
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-
-    // Initialize fabric telemetry early to ensure valid values before router starts
+    // const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Starting kernel main" << "enable_ethernet_handshake: "<<
+    // static_cast<int>(enable_ethernet_handshake) << ENDL();
+    //  Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
 
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
@@ -2632,8 +2655,9 @@ void kernel_main() {
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
     }
-
-    // TODO: CONVERT TO SEMAPHORE
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 1" << ENDL();
+    //  TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
@@ -2750,6 +2774,8 @@ void kernel_main() {
             local_tensix_relay_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
         }
     }
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 2" << ENDL();
 
     //  initialize the statically allocated "semaphores"
     [&]<size_t... Is>(std::index_sequence<Is...>) {
@@ -2929,6 +2955,8 @@ void kernel_main() {
             has_downstream_edm >>= 1;
         }
     }
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 3 "  << (uint32_t)has_downstream_edm_vc1_buffer_connection << ENDL();
 
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>, VC1_DOWNSTREAM_EDM_SIZE>
         downstream_edm_noc_interfaces_vc1;
@@ -2945,6 +2973,12 @@ void kernel_main() {
                     local_sem_for_teardown_from_downstream_edm[dense_index + NUM_DOWNSTREAM_SENDERS_VC0];
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over
                 // noc)
+                // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id <<
+                // "compact_index: " << compact_index << " di: " << dense_index << " SENDERS_VC0: " << (uint32_t)
+                // NUM_DOWNSTREAM_SENDERS_VC0 << " CHANNELS: " << (uint32_t) NUM_DOWNSTREAM_CHANNELS << ENDL(); DPRINT
+                // << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id <<
+                // "compact_index: " << compact_index << " teardown_sem_address: " << (uint32_t) teardown_sem_address <<
+                // ENDL();
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 auto receiver_channel_free_slots_stream_id = StreamId{vc_1_free_slots_stream_ids[compact_index]};
                 new (&downstream_edm_noc_interfaces_vc1[compact_index])
@@ -2979,6 +3013,8 @@ void kernel_main() {
         }
     }
 #endif  // FABRIC_2D_VC1_ACTIVE
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 4" << ENDL();
 
     // Setup local tensix relay connection (UDM mode only)
     // This is a separate connection path from downstream EDM connections
@@ -3020,6 +3056,8 @@ void kernel_main() {
             }
         }
     }
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 5" << ENDL();
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE);
@@ -3077,7 +3115,9 @@ void kernel_main() {
 #else
     constexpr bool use_posted_writes_for_connection_open = true;
 #endif
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 6" << ENDL();
+
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // This barrier is here just in case the initialization process of any of the sender/receiver channel
         // implementations require any assumptions about channel contents or anything similar. Without it there
@@ -3089,17 +3129,24 @@ void kernel_main() {
         // Whether or not there truly is a race in a given snapshot/commit hash is not relevant. The intention with this
         // is to avoid all possible footguns as implementations of underlying datastructures potenntially change over
         // time.
-        DPRINT << "Waiting for other local erisc" << ENDL();
+        // DPRINT << "Waiting for other local erisc" << ENDL();
         wait_for_other_local_erisc();
     }
+    // DPRINT << " M: " << routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " ERISC ID: " <<
+    // MY_ERISC_ID << " Checkpoint 7" << ENDL();
+
     if constexpr (enable_ethernet_handshake) {
-        DPRINT << "Starting remote handshake. Z Router enabled: " << static_cast<int>(z_router_enabled) << ENDL();
+        // const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr
+        // tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+
+        // DPRINT << "M: "<< routing_table_l1->my_mesh_id << " D: " << routing_table_l1->my_device_id << " Starting
+        // remote handshake." << ENDL();
         if constexpr (is_handshake_sender) {
-            DPRINT << "Is handshake sender" << ENDL();
+            // DPRINT << "Is handshake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            DPRINT << "Is handshake receiver" << ENDL();
+            // DPRINT << "Is handshake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
@@ -3110,10 +3157,10 @@ void kernel_main() {
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
                 for (volatile uint32_t i = 0; i < 100000000; i++);
-                DPRINT << "Master got " << *reinterpret_cast<volatile uint32_t* const>(edm_local_sync_ptr)
-                       << " Expected" << num_local_edms - 1 << " M: " << routing_table_l1->my_mesh_id
-                       << " D: " << routing_table_l1->my_device_id
-                       << " Z router enabled: " << static_cast<int>(z_router_enabled) << ENDL();
+                // DPRINT << "Master got " << *reinterpret_cast<volatile uint32_t* const>(edm_local_sync_ptr)
+                //        << " Expected" << num_local_edms - 1 << " M: " << routing_table_l1->my_mesh_id
+                //        << " D: " << routing_table_l1->my_device_id
+                //        << ENDL();
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
@@ -3121,11 +3168,11 @@ void kernel_main() {
                 notify_subordinate_routers(
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {
-                DPRINT << "Notifying master router" << ENDL();
+                // DPRINT << "Sub notifying master router" << ENDL();
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-                DPRINT << "Master notified" << ENDL();
+                // DPRINT << "Master notified" << ENDL();
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms);
-                DPRINT << "Wait for notification complete" << ENDL();
+                // DPRINT << "Sub wait for notification complete" << ENDL();
             }
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
@@ -3277,6 +3324,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 #endif
+    // DPRINT << (uint32_t)MEM_AERISC_FABRIC_SCRATCH_BASE << ENDL();
 
     //////////////////////////////
     //////////////////////////////

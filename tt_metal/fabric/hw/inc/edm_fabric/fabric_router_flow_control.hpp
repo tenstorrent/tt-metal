@@ -25,6 +25,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
+        // DPRINT << "sent comp " << src_id << ENDL();
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
         update_sender_side_credits();
@@ -45,6 +46,15 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
 private:
     FORCE_INLINE void update_sender_side_credits() const {
+        volatile uint32_t* scratch_ptr = (volatile uint32_t*)MEM_AERISC_FABRIC_SCRATCH_BASE;
+        scratch_ptr[0] = local_receiver_credits_base_address;
+        scratch_ptr[1] = to_senders_credits_base_address;
+        scratch_ptr[2] = total_number_of_receiver_to_sender_credit_num_bytes;
+        scratch_ptr[3] = to_sender_remote_ack_counters_base_address;
+        scratch_ptr[4] = to_sender_remote_completion_counters_base_address;
+        // ROUTER_SCRATCH_WRITE(0, local_receiver_credits_base_address);
+        // ROUTER_SCRATCH_WRITE(1, to_senders_credits_base_address);
+        // ROUTER_SCRATCH_WRITE(2, total_number_of_receiver_to_sender_credit_num_bytes);
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
             local_receiver_credits_base_address,
@@ -62,6 +72,7 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
+        // DPRINT << (uint32_t) sender_channel_packets_completed_stream_ids[src_id] << ENDL();
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 

@@ -1,0 +1,16 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+      #env_overrides:
+      #TT_METAL_DPRINT_ETH_CORES: "all"
+      #TT_METAL_DPRINT_CHIPS: "all"
+
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+      #env_overrides:
+      #TT_METAL_DPRINT_ETH_CORES: "all"
+      #TT_METAL_DPRINT_CHIPS: "all"
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xyz_graph_descriptor.textproto"
