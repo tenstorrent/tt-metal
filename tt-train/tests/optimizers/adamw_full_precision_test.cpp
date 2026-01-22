@@ -62,9 +62,7 @@ static xt::xarray<float> make_random_xarray(
     const std::array<std::size_t, 4>& s, uint32_t seed, float min = -1.0F, float max = 1.0F) {
     xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
     ttml::core::parallel_generate(
-        std::span{x.data(), x.size()},  // NOLINT(performance-no-span-copy)
-        [min, max]() { return std::uniform_real_distribution<float>(min, max); },
-        seed);
+        std::span{x.data(), x.size()}, [min, max]() { return std::uniform_real_distribution<float>(min, max); }, seed);
     return x;
 }
 
@@ -272,8 +270,6 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
 
     EXPECT_LT(mean_error, mean_error_tolerance);
     EXPECT_LT(max_error, max_error_tolerance);
-
-    autograd::ctx().close_device();
 }
 
 static std::string CaseName(const ::testing::TestParamInfo<AdamWFullPrecisionCase>& info) {
