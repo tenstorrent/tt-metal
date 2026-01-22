@@ -477,6 +477,7 @@ def test_rope_deepseek_perf(
         measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
+
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
@@ -530,6 +531,7 @@ def test_concat_deepseek_perf(
         measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
+
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
@@ -578,4 +580,56 @@ def test_pad_deepseek_perf(
     assert (
         measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
-    
+
+
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
+        ("paged_update_cache_decode", 10, 10),  # Target based on existing test baseline
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_paged_update_cache_deepseek_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+    galaxy_type,
+):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    subdir = "deepseek_paged_update_cache_perf"
+    # Run the existing comprehensive test in trace mode with program cache
+    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_paged_update_cache_deepseek.py"
+    cols = ["DEVICE KERNEL"]
+    op_name = "PagedUpdateCacheDeviceOperation"
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_paged_update_cache",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
