@@ -46,19 +46,24 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         SEMAPHORE_INC = 27,
         SEMAPHORE_WAIT = 28,
         SEMAPHORE_SET = 29,
+        SEMAPHORE_SET_MULTICAST = 30,
 
         // NOTE: fabric events should be contiguous to allow quick range check!
-        FABRIC_UNICAST_WRITE = 30,
-        FABRIC_UNICAST_INLINE_WRITE = 31,
-        FABRIC_UNICAST_ATOMIC_INC = 32,
-        FABRIC_FUSED_UNICAST_ATOMIC_INC = 33,
-        FABRIC_MULTICAST_WRITE = 34,
-        FABRIC_MULTICAST_ATOMIC_INC = 35,
-        FABRIC_UNICAST_SCATTER_WRITE = 36,
-        FABRIC_ROUTING_FIELDS_1D = 37,
-        FABRIC_ROUTING_FIELDS_2D = 38,
+        FABRIC_UNICAST_WRITE = 31,
+        FABRIC_UNICAST_INLINE_WRITE = 32,
+        FABRIC_UNICAST_ATOMIC_INC = 33,
+        FABRIC_FUSED_UNICAST_ATOMIC_INC = 34,
+        FABRIC_MULTICAST_WRITE = 35,
+        FABRIC_MULTICAST_ATOMIC_INC = 36,
+        FABRIC_UNICAST_SCATTER_WRITE = 37,
+        FABRIC_ROUTING_FIELDS_1D = 38,
+        FABRIC_ROUTING_FIELDS_2D = 39,
 
-        UNSUPPORTED = 39,
+        LOCAL_MEM_READ_WRITE = 40,
+        LOCAL_MEM_READ = 41,
+        LOCAL_MEM_WRITE = 42,
+
+        UNSUPPORTED = 43,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -115,6 +120,31 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
     };
 
+    struct LocalMemEvent {
+        NocEventType noc_xfer_type;
+        uint64_t end_offset : 12;
+        // For read_write or write, contains the nonposted writes sent counter value
+        // For read, contains the reads received counter value
+        // Which noc being used is noc_index
+        uint64_t counter_value : 12;
+        uint32_t addr;
+
+        void setStartAddr(uint32_t address) { addr = address; }
+        uint32_t getStartAddr() const { return static_cast<uint32_t>(addr); }
+
+        void setEndOffset(uint32_t start_addr, uint32_t end_addr) {
+            end_offset = std::min(end_addr - start_addr, uint32_t(4095));
+        }
+        uint32_t getEndAddr() const { return static_cast<uint32_t>(addr + end_offset); }
+
+        void setAddresses(uint32_t start_addr, uint32_t end_addr) {
+            setStartAddr(start_addr);
+            setEndOffset(start_addr, end_addr);
+        }
+
+        uint32_t getSize() const { return static_cast<uint32_t>(end_offset); }
+    };
+
     // represents a fabric NOC event
     enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH, DYNAMIC_MESH };
     struct FabricNoCEvent {
@@ -161,6 +191,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         RawEvent raw_event;
         LocalNocEvent local_event;
         LocalNocEventDstTrailer local_event_dst_trailer;
+        LocalMemEvent local_mem_event;
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
@@ -205,8 +236,19 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
+    static bool isLocalMemEventType(NocEventType event_type) {
+        return event_type == NocEventType::LOCAL_MEM_READ_WRITE || event_type == NocEventType::LOCAL_MEM_READ ||
+               event_type == NocEventType::LOCAL_MEM_WRITE;
+    }
+
     // Getter to return the correct variant based on the tag (noc_xfer_type)
-    std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
+    std::variant<
+        LocalNocEvent,
+        FabricNoCEvent,
+        FabricNoCScatterEvent,
+        FabricRoutingFields1D,
+        FabricRoutingFields2D,
+        LocalMemEvent>
     getContents() const {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
@@ -219,6 +261,9 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         }
         if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_2d;
+        }
+        if (isLocalMemEventType(data.raw_event.noc_xfer_type)) {
+            return data.local_mem_event;
         }
         return data.local_event;
     }

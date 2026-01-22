@@ -64,50 +64,6 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 #if defined(TRACY_ENABLE)
-NOCDebugEvent make_noc_debug_event(
-    const CoreCoord& src_core,
-    const KernelProfilerNocEventMetadata::LocalNocEvent& event,
-    const KernelProfilerNocEventMetadata::LocalNocEventDstTrailer& trailer) {
-    using EMD = KernelProfilerNocEventMetadata;
-    int8_t src_x = static_cast<int8_t>(src_core.x);
-    int8_t src_y = static_cast<int8_t>(src_core.y);
-    switch (event.noc_xfer_type) {
-        case EMD::NocEventType::READ:
-            return NOCDebugEvent(NocReadEvent{
-                trailer.getDstAddr(),
-                trailer.getSrcAddr(),
-                event.getNumBytes(),
-                static_cast<uint32_t>(trailer.counter_value),
-                event.dst_x,
-                event.dst_y,
-                src_x,
-                src_y,
-                event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_:
-            return NOCDebugEvent(NocWriteEvent{
-                trailer.getSrcAddr(),
-                trailer.getDstAddr(),
-                event.getNumBytes(),
-                static_cast<uint32_t>(trailer.counter_value),
-                src_x,
-                src_y,
-                event.dst_x,
-                event.dst_y,
-                static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::READ_BARRIER_END:
-            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
-        case EMD::NocEventType::WRITE_FLUSH:
-            // This event is only being emitted from noc_async_writes_flushed which is non posted
-            // event.posted should always be false; if true, data was corrupted during read
-            TT_ASSERT(!event.posted);
-            return NOCDebugEvent(NocWriteFlushEvent{
-                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
-        default: return NOCDebugEvent(UnknownNocEvent{});
-    }
-}
-
 uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
     kernel_profiler::ControlBuffer offset;
     switch (risc_type) {
@@ -150,6 +106,99 @@ uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_ty
     return static_cast<uint32_t>(offset);
 }
 
+DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
+    const auto& hal = MetalContext::instance().hal();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::control_vector);
+    return control_vector_addr;
+}
+
+#endif
+
+NOCDebugEvent make_noc_debug_event(
+    const CoreCoord& src_core,
+    const KernelProfilerNocEventMetadata& event,
+    const KernelProfilerNocEventMetadata::LocalNocEventDstTrailer& trailer) {
+    using EMD = KernelProfilerNocEventMetadata;
+    int8_t src_x = static_cast<int8_t>(src_core.x);
+    int8_t src_y = static_cast<int8_t>(src_core.y);
+
+    const auto handle_local_noc_event = [&](const EMD::LocalNocEvent& event) {
+        switch (event.noc_xfer_type) {
+            case EMD::NocEventType::READ:
+                return NOCDebugEvent(NocReadEvent{
+                    trailer.getDstAddr(),
+                    trailer.getSrcAddr(),
+                    event.getNumBytes(),
+                    static_cast<uint32_t>(trailer.counter_value),
+                    event.dst_x,
+                    event.dst_y,
+                    src_x,
+                    src_y,
+                    event.noc_type == EMD::NocType::NOC_1});
+            case EMD::NocEventType::WRITE_:
+                return NOCDebugEvent(NocWriteEvent{
+                    trailer.getSrcAddr(),
+                    trailer.getDstAddr(),
+                    event.getNumBytes(),
+                    static_cast<uint32_t>(trailer.counter_value),
+                    src_x,
+                    src_y,
+                    event.dst_x,
+                    event.dst_y,
+                    static_cast<bool>(event.posted),
+                    event.noc_type == EMD::NocType::NOC_1});
+            case EMD::NocEventType::READ_BARRIER_END:
+                return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+            case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
+            case EMD::NocEventType::WRITE_FLUSH:
+                // This event is only being emitted from noc_async_writes_flushed which is non posted
+                // event.posted should always be false; if true, data was corrupted during read
+                TT_ASSERT(!event.posted);
+                return NOCDebugEvent(NocWriteFlushEvent{
+                    src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+            default: return NOCDebugEvent(UnknownNocEvent{});
+        }
+    };
+
+    const auto handle_local_mem_event = [&](const EMD::LocalMemEvent& event) {
+        switch (event.noc_xfer_type) {
+            case EMD::NocEventType::LOCAL_MEM_WRITE:
+                return NOCDebugEvent(LocalMemWriteEvent{
+                    event.getStartAddr(),
+                    event.getEndAddr(),
+                    static_cast<uint32_t>(event.counter_value),
+                    src_x,
+                    src_y});
+            case EMD::NocEventType::LOCAL_MEM_READ:
+                return NOCDebugEvent(LocalMemReadEvent{
+                    event.getStartAddr(),
+                    event.getEndAddr(),
+                    static_cast<uint32_t>(event.counter_value),
+                    src_x,
+                    src_y});
+            case EMD::NocEventType::LOCAL_MEM_READ_WRITE: [[fallthrough]];  // TODO: handle this case
+            default: return NOCDebugEvent(UnknownNocEvent{});
+        }
+    };
+
+    return std::visit(
+        [&](auto&& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, EMD::LocalNocEvent>) {
+                return handle_local_noc_event(e);
+            } else if constexpr (std::is_same_v<T, EMD::LocalMemEvent>) {
+                return handle_local_mem_event(e);
+            } else {
+                return NOCDebugEvent(UnknownNocEvent{});
+            }
+        },
+        event.getContents());
+}
+
 int get_processor_id(tracy::RiscType risc_type) {
     switch (risc_type) {
         case tracy::RiscType::BRISC: return 0;
@@ -161,16 +210,34 @@ int get_processor_id(tracy::RiscType risc_type) {
     }
 }
 
-DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
-    const auto& hal = MetalContext::instance().hal();
-    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
-    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
-    DeviceAddr control_vector_addr =
-        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
-                                dev_msgs::profiler_msg_t::Field::control_vector);
-    return control_vector_addr;
+void push_data_to_noc_debug_state(
+    int device_id,
+    const CoreCoord& physical_core,
+    tracy::RiscType risc_type,
+    uint64_t timestamp,
+    uint64_t payload,
+    uint64_t trailer) {
+    auto& noc_debug_state = MetalContext::instance().noc_debug_state();
+    if (noc_debug_state) {
+        using EMD = KernelProfilerNocEventMetadata;
+
+        const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+
+        EMD event_metadata(payload);
+        EMD trailer_metadata(trailer);
+
+        // disable linting here; slicing is __intended__
+        // NOLINTBEGIN
+        const CoreCoord virtual_core =
+            soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+        // NOLINTEND
+        noc_debug_state->push_event(
+            device_id,
+            timestamp,
+            get_processor_id(risc_type),
+            make_noc_debug_event(virtual_core, event_metadata, trailer_metadata.getLocalNocEventDstTrailer()));
+    }
 }
-#endif
 
 }  // namespace
 
@@ -812,6 +879,19 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     }
 
                     json_events_by_op[program_execution_uid].push_back(data);
+                } else if (std::holds_alternative<EMD::LocalMemEvent>(EMD(device_marker.data).getContents())) {
+                    auto local_memory_event = std::get<EMD::LocalMemEvent>(EMD(device_marker.data).getContents());
+                    json_events_by_op[program_execution_uid].push_back(nlohmann::ordered_json{
+                        {"run_host_id", device_marker.runtime_host_id},
+                        {"op_name", device_marker.op_name},
+                        {"proc", enchantum::to_string(device_marker.risc)},
+                        {"src_device_id", device_marker.chip_id},
+                        {"sx", device_marker.core_x},
+                        {"sy", device_marker.core_y},
+                        {"addr", local_memory_event.addr},
+                        {"type", enchantum::to_string(local_memory_event.noc_xfer_type)},
+                        {"timestamp", device_marker.timestamp},
+                    });
                 }
             } else if (std::holds_alternative<FabricEventMarkers>(marker_it)) {
                 // coalesce fabric event markers into a single logical trace event with extra 'fabric_send' metadata
@@ -1754,6 +1834,10 @@ void DeviceProfiler::readDeviceMarkerData(
         return;
     }
 
+    if (packet_type == kernel_profiler::PacketTypes::TS_DATA) {
+        push_data_to_noc_debug_state(device_id, physical_core, risc_type, timestamp, data, 0);
+    }
+
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
@@ -1827,21 +1911,7 @@ void DeviceProfiler::readTsData16BMarkerData(
         return;
     }
 
-    auto& noc_debug_state = MetalContext::instance().noc_debug_state();
-    if (noc_debug_state) {
-        EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
-        const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-        // disable linting here; slicing is __intended__
-        // NOLINTBEGIN
-        const CoreCoord virtual_core =
-            soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
-        // NOLINTEND
-        noc_debug_state->push_event(
-            device_id,
-            timestamp,
-            get_processor_id(risc_type),
-            make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
-    }
+    push_data_to_noc_debug_state(device_id, physical_core, risc_type, timestamp, data, trailer_data[0]);
 
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 

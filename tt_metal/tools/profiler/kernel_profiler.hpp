@@ -801,6 +801,7 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted)
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted)
 #define RECORD_NOC_EVENT(type, posted)
+#define RECORD_LOCAL_MEM_EVENT(event_type, local_addr, access_size)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 // null macros when perf counters are disabled

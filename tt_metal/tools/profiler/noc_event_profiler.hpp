@@ -160,6 +160,35 @@ FORCE_INLINE void recordNocEventWithAddr(uint32_t local_addr, NocAddrU64 noc_add
         recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc_index, 0, 0);
     }
 }
+
+template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t access_size, uint32_t STATIC_ID = 12345>
+FORCE_INLINE void recordLocalMemEvent(uint32_t local_addr) {
+    static_assert(
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_READ_WRITE ||
+            noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_READ ||
+            noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_WRITE,
+        "LocalMemEvent must be one of the following types: LOCAL_MEM_READ_WRITE, LOCAL_MEM_READ, LOCAL_MEM_WRITE");
+    if constexpr (kernel_profiler::NON_DROPPING) {
+        KernelProfilerNocEventMetadata ev_md;
+
+        auto& local_mem_event = ev_md.data.local_mem_event;
+        local_mem_event.noc_xfer_type = noc_event_type;
+        local_mem_event.setAddresses(local_addr, local_addr + access_size);
+        if constexpr (
+            noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_WRITE ||
+            noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_READ_WRITE) {
+            local_mem_event.counter_value = get_noc_counter_for_debug<true, false>(noc_index);
+        } else if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::LOCAL_MEM_READ) {
+            local_mem_event.counter_value = get_noc_counter_for_debug<false, false>(noc_index);
+        } else {
+            local_mem_event.counter_value = 0;
+        }
+
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    }
+}
+
 }  // namespace noc_event_profiler
 
 #define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted)                         \
@@ -188,6 +217,11 @@ FORCE_INLINE void recordNocEventWithAddr(uint32_t local_addr, NocAddrU64 noc_add
         noc_event_profiler::recordNocEvent<event_type, posted>();          \
     }
 
+#define RECORD_LOCAL_MEM_EVENT(event_type, local_addr, access_size)                   \
+    {                                                                                 \
+        noc_event_profiler::recordLocalMemEvent<event_type, access_size>(local_addr); \
+    }
+
 // preemptive quick push if transitioning from unlinked state to linked state
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
     {                                                           \
@@ -200,6 +234,7 @@ FORCE_INLINE void recordNocEventWithAddr(uint32_t local_addr, NocAddrU64 noc_add
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted)
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted)
 #define RECORD_NOC_EVENT(type, posted)
+#define RECORD_LOCAL_MEM_EVENT(event_type, local_addr, access_size)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif

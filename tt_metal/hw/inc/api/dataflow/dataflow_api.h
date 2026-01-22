@@ -1494,13 +1494,22 @@ inline void noc_semaphore_set_multicast(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false);
+
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
@@ -1543,13 +1552,21 @@ inline void noc_semaphore_set_multicast_loopback_src(
     bool linked = false,
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
+    constexpr uint32_t size_bytes = 4;
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::SEMAPHORE_SET_MULTICAST,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size_bytes,
+        NOC_MULTICAST_WRITE_VC,
+        /*posted=*/false);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
-        4 /*size in bytes*/,
+        size_bytes,
         NOC_MULTICAST_WRITE_VC,
         true,
         linked,
