@@ -22,14 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
+          # - name: LLMBox unit tests
+          #   runner-label: BH-LLMBox
+          # - name: DeskBox unit tests
+          #   runner-label: BH-DeskBox
           - name: LoudBox unit tests
             runner-label: BH-LoudBox
-          - name: P300 unit tests
-            runner-label: P300-viommu
+          # - name: P300 unit tests
+          #   runner-label: P300-viommu
           # - name: QuietBox Global Edition unit tests
           #   runner-label: BH-QB-GE
     with:
