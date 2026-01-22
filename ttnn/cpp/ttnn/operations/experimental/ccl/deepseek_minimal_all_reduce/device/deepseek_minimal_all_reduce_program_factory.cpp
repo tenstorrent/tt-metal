@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -286,6 +286,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         core_noc_y,
     };
 
+    uint32_t dst_num_hops = 1;
+    uint32_t num_connections = 1;
     std::vector<uint32_t> sender_writer_compile_args = {
         packet_header_cb_id,
         src0_cb_index,
@@ -297,6 +299,8 @@ DeepseekMinimalAllReduceProgramFactory::cached_program_t DeepseekMinimalAllReduc
         core_noc_y,
         remote_receiver_noc_x,  // remote receiver core for semaphore
         remote_receiver_noc_y,
+        dst_num_hops,
+        num_connections,
     };
 
     std::vector<uint32_t> receiver_reader_compile_args = {

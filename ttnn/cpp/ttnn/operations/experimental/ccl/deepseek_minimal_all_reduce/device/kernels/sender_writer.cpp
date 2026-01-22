@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -30,10 +30,10 @@ void kernel_main() {
     constexpr uint32_t data_noc_y = get_compile_time_arg_val(7);
     constexpr uint32_t remote_receiver_noc_x = get_compile_time_arg_val(8);
     constexpr uint32_t remote_receiver_noc_y = get_compile_time_arg_val(9);
+    constexpr uint32_t dst_num_hops = get_compile_time_arg_val(10);
+    constexpr uint32_t num_connections = get_compile_time_arg_val(11);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-    constexpr uint8_t dst_num_hops = 1;
-    constexpr uint32_t num_connections = 1;
 
     size_t arg_idx = 0;
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(arg_idx++);
