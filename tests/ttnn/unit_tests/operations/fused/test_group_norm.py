@@ -398,8 +398,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 def generate_sdxl_test_inputs():
     inputs = []
 
-    # 1024x1024 resoultion
-
+    ##### START: 1024x1024 resolution #####
     # UNet inputs
     inputs.append((1, 1280, 64, 64))
     inputs.append((1, 1280, 32, 32))
@@ -428,6 +427,7 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 384, 64, 64))
     inputs.append((1, 768, 32, 32))
     inputs.append((1, 768, 64, 64))
+    ###### END: 1024x1024 resolution ######
 
     return inputs
 
