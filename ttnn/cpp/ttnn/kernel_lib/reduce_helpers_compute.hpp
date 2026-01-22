@@ -63,7 +63,7 @@ namespace compute_kernel_lib {
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
 /**
- * @brief Input mode for reduce operations
+ * @brief Input mode for reduce operations (DEPRECATED - use policy structs instead)
  *
  * STREAMING: One-at-a-time mode - waits/pops each tile individually (default)
  *            Safe for numerical precision, compatible with any CB size.
@@ -73,6 +73,108 @@ namespace compute_kernel_lib {
  * PERSISTENT: Wait for all tiles upfront, indexed access, NO pop (tiles persist for reuse)
  */
 enum class ReduceInputMode { STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT };
+
+// =============================================================================
+// Input Policy Structs (preferred over ReduceInputMode enum)
+// =============================================================================
+
+namespace policies {
+
+/**
+ * @brief When to synchronize on input tiles
+ */
+enum class WaitMode {
+    PER_TILE,   // wait/process/pop one tile at a time
+    PER_BATCH,  // wait for batch, process all, pop batch
+    UPFRONT,    // wait for everything upfront
+    NONE        // caller manages synchronization
+};
+
+/**
+ * @brief Whether to pop tiles after processing
+ */
+enum class PopMode {
+    POP,    // pop tiles after processing
+    NO_POP  // leave tiles in CB (for reuse)
+};
+
+/**
+ * @brief Streaming policy - processes tiles one at a time
+ *
+ * Wait: per-tile, Pop: yes
+ * Safe for numerical precision, compatible with any CB size.
+ * Use when tiles arrive one at a time from dataflow.
+ */
+struct StreamingPolicy {
+    static constexpr WaitMode wait = WaitMode::PER_TILE;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+/**
+ * @brief Streaming batched policy - processes tiles in batches
+ *
+ * Wait: per-batch, Pop: yes
+ * Optimal performance when tiles are pre-loaded in CB per batch/row.
+ */
+struct StreamingBatchedPolicy {
+    static constexpr WaitMode wait = WaitMode::PER_BATCH;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+/**
+ * @brief Preloaded policy - caller manages synchronization
+ *
+ * Wait: none (caller already waited), Pop: no (caller manages)
+ * Use when tiles are already in CB and caller handles wait/pop externally.
+ */
+struct PreloadedPolicy {
+    static constexpr WaitMode wait = WaitMode::NONE;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+/**
+ * @brief Persistent policy - tiles remain for reuse
+ *
+ * Wait: upfront (all tiles), Pop: no (tiles persist)
+ * Ideal for softmax pattern where tiles are reused in subsequent operations.
+ */
+struct PersistentPolicy {
+    static constexpr WaitMode wait = WaitMode::UPFRONT;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+}  // namespace policies
+
+// Type trait to detect if a type is an input policy struct
+template <typename T>
+struct is_input_policy : std::false_type {};
+
+template <>
+struct is_input_policy<policies::StreamingPolicy> : std::true_type {};
+template <>
+struct is_input_policy<policies::StreamingBatchedPolicy> : std::true_type {};
+template <>
+struct is_input_policy<policies::PreloadedPolicy> : std::true_type {};
+template <>
+struct is_input_policy<policies::PersistentPolicy> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_input_policy_v = is_input_policy<T>::value;
+
+// Helper to convert ReduceInputMode enum to policy-equivalent constexpr values
+template <ReduceInputMode mode>
+struct InputModeToPolicy {
+    static constexpr policies::WaitMode wait =
+        (mode == ReduceInputMode::STREAMING)
+            ? policies::WaitMode::PER_TILE
+            : ((mode == ReduceInputMode::STREAMING_BATCHED)
+                   ? policies::WaitMode::PER_BATCH
+                   : ((mode == ReduceInputMode::PERSISTENT) ? policies::WaitMode::UPFRONT : policies::WaitMode::NONE));
+
+    static constexpr policies::PopMode pop =
+        (mode == ReduceInputMode::STREAMING || mode == ReduceInputMode::STREAMING_BATCHED) ? policies::PopMode::POP
+                                                                                           : policies::PopMode::NO_POP;
+};
 
 /**
  * @brief Data format reconfiguration mode for reduce operations

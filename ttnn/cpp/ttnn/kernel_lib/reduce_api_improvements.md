@@ -303,7 +303,7 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 | Bool template args | Use `ReduceInitMode` enum | ✅ Implemented |
 | `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` | ✅ Implemented |
 | TileShape naming | Rename to `TileGrid` | ✅ Implemented |
-| ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | Pending |
+| ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums | ✅ Implemented |
 | CB arguments | Group into `ReduceCBs` struct | Pending |
 
 ---
@@ -458,3 +458,64 @@ TileGrid::col(Ht)
 **Testing:**
 - Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass
 - Ran `pytest tests/ttnn/unit_tests/operations/fused/test_softmax.py` - all tests pass
+
+### Issue 4: Input Policy Structs (Implemented)
+
+**Date:** 2026-01-22
+
+**Changes made:**
+1. Added `policies` namespace with `WaitMode` and `PopMode` enums
+2. Added policy structs: `StreamingPolicy`, `StreamingBatchedPolicy`, `PreloadedPolicy`, `PersistentPolicy`
+3. Added type traits to detect policy structs
+4. Added `InputModeToPolicy` helper for backward compatibility with `ReduceInputMode` enum
+5. Existing code using `ReduceInputMode` enum continues to work (backward compatible)
+
+**Files modified:**
+- `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+
+**New API (policy structs):**
+
+```cpp
+namespace compute_kernel_lib::policies {
+
+enum class WaitMode { PER_TILE, PER_BATCH, UPFRONT, NONE };
+enum class PopMode { POP, NO_POP };
+
+struct StreamingPolicy {       // wait: PER_TILE, pop: POP
+    static constexpr WaitMode wait = WaitMode::PER_TILE;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+struct StreamingBatchedPolicy { // wait: PER_BATCH, pop: POP
+    static constexpr WaitMode wait = WaitMode::PER_BATCH;
+    static constexpr PopMode pop = PopMode::POP;
+};
+
+struct PreloadedPolicy {        // wait: NONE, pop: NO_POP
+    static constexpr WaitMode wait = WaitMode::NONE;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+struct PersistentPolicy {       // wait: UPFRONT, pop: NO_POP
+    static constexpr WaitMode wait = WaitMode::UPFRONT;
+    static constexpr PopMode pop = PopMode::NO_POP;
+};
+
+}  // namespace compute_kernel_lib::policies
+```
+
+**Benefits:**
+- Self-documenting: reading `PersistentPolicy` shows exactly what it does
+- No invalid states: enum members prevent conflicting bool combinations
+- Extensible: users can define custom policy structs with their own wait/pop behavior
+- Same compile-time elimination via `if constexpr`
+
+**Migration guide (optional):**
+- Existing `ReduceInputMode::STREAMING` → `policies::StreamingPolicy` (or keep using enum)
+- Existing `ReduceInputMode::STREAMING_BATCHED` → `policies::StreamingBatchedPolicy`
+- Existing `ReduceInputMode::PRELOADED` → `policies::PreloadedPolicy`
+- Existing `ReduceInputMode::PERSISTENT` → `policies::PersistentPolicy`
+
+**Testing:**
+- Ran `pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py` - all tests pass
+- Backward compatibility preserved - existing code unchanged
