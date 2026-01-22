@@ -54,7 +54,8 @@ template <
     bool DoubleAntipodalAtomicInc = false>
 FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint64_t semaphore_noc_addr) {
     using ttnn::operations::ccl::common::ReplicateGroup;
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
@@ -85,7 +86,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     if constexpr (positive_range > 0) {
         tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
             &fabric_connections[positive_direction],
-            packet_header,
+            packet_header_pos,
             cmd_header,
             static_cast<uint8_t>(1),
             static_cast<uint8_t>(positive_range));
@@ -95,7 +96,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     if constexpr (negative_range > 0) {
         tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
             &fabric_connections[negative_direction],
-            packet_header,
+            packet_header_neg,
             cmd_header,
             static_cast<uint8_t>(1),
             static_cast<uint8_t>(negative_range));
@@ -200,7 +201,8 @@ template <
     ttnn::operations::ccl::common::ReplicateGroup Axis>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
     const std::array<uint64_t, 2>& noc_addresses,
     const std::array<uint16_t, 2>& chunk_sizes) {
@@ -230,7 +232,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     if constexpr (positive_range > 0) {
         tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
             &fabric_connections[positive_direction],
-            packet_header,
+            packet_header_pos,
             src_addr,
             total_payload_size,
             scatter_cmd_header,
@@ -242,7 +244,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     if constexpr (negative_range > 0) {
         tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
             &fabric_connections[negative_direction],
-            packet_header,
+            packet_header_neg,
             src_addr,
             total_payload_size,
             scatter_cmd_header,
@@ -511,10 +513,15 @@ void kernel_main() {
     auto* unicast_packet_header_pos = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* unicast_packet_header_neg =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-    auto* metadata_packet_header =
+    auto* metadata_packet_header_pos =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 2 * sizeof(PACKET_HEADER_TYPE));
-    auto* scores_packet_header =
+    auto* metadata_packet_header_neg =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 3 * sizeof(PACKET_HEADER_TYPE));
+    auto* atomic_inc_packet_header_pos =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 4 * sizeof(PACKET_HEADER_TYPE));
+    auto* atomic_inc_packet_header_neg =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
+    // packet headers at +6 and +7 are currently unused (reserved for future split sends)
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
     uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
@@ -526,7 +533,8 @@ void kernel_main() {
     // Use bidirectional multicast for 1D ring topology (2 packets instead of dispatch_devices-1 unicasts)
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
-        fabric_connections, metadata_packet_header, init_noc_semaphore_addr);
+        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
+    noc_async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
@@ -692,14 +700,15 @@ void kernel_main() {
     detail::
         fabric_multicast_bidirectional_scatter_write_ring_1d_async<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
             fabric_connections,
-            metadata_packet_header,
+            metadata_packet_header_pos,
+            metadata_packet_header_neg,
             base_metadata_addr,
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
             {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
     cb_pop_front(metadata_buffer_id, tokens_per_device);
     // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including antipodal
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
-        fabric_connections, metadata_packet_header, global_noc_semaphore_address);
+        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, global_noc_semaphore_address);
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
