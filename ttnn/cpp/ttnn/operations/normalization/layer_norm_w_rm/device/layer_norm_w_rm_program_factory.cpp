@@ -200,30 +200,113 @@ LayerNormWRmProgramFactory::cached_program_t LayerNormWRmProgramFactory::create(
         cb_out_rm_idx, program, core_range_set, cb_out_rm_page_size, cb_out_rm_num_pages, cb_data_format);
 
     // ============================================================
-    // 5. Throw before kernel creation (Stage 5 boundary)
+    // 5. Create kernels with proper compile-time args
     // ============================================================
-    // Suppress unused variable warnings for Stage 5 (used in Stage 6)
-    (void)operation_attributes;
-    (void)Ht;
-    (void)input_stick_size_aligned;
-    (void)gamma_stick_size_aligned;
-    (void)beta_stick_size_aligned;
-    (void)output_stick_size_aligned;
 
-    TT_THROW("layer_norm_w_rm: Kernel creation not yet implemented (Stage 6)");
+    // Calculate scaler value: 1/W for mean calculation
+    const float scaler_value = 1.0f / static_cast<float>(W);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler_value);
+    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+
+    // Pack epsilon value for numerical stability in rsqrt
+    bfloat16 bfloat_epsilon_value = bfloat16::truncate(operation_attributes.epsilon);
+    const uint32_t packed_epsilon_value = pack_two_bfloat16_into_uint32({bfloat_epsilon_value, bfloat_epsilon_value});
+
+    // Reader compile-time args: input_stick_size, packed_scaler, packed_epsilon, Ht, Wt,
+    // gamma_stick_size, beta_stick_size, input TensorAccessorArgs, gamma TensorAccessorArgs, beta TensorAccessorArgs
+    std::vector<uint32_t> reader_compile_args = {
+        input_stick_size_aligned,
+        packed_scaler_value,
+        packed_epsilon_value,
+        Ht,
+        Wt,
+        gamma_stick_size_aligned,
+        beta_stick_size_aligned};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_args);
+    TensorAccessorArgs(*gamma_buffer).append_to(reader_compile_args);
+    TensorAccessorArgs(*beta_buffer).append_to(reader_compile_args);
+
+    const auto reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/layer_norm_w_rm/device/kernels/dataflow/reader_layer_norm_w_rm.cpp",
+        core_range_set,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+
+    // Compute compile-time args: Ht, Wt
+    const std::vector<uint32_t> compute_compile_args = {Ht, Wt};
+    const auto compute_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/layer_norm_w_rm/device/kernels/compute/layer_norm_w_rm_compute.cpp",
+        core_range_set,
+        tt::tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_args});
+
+    // Writer compile-time args: output_stick_size, Ht, Wt, TensorAccessorArgs
+    std::vector<uint32_t> writer_compile_args = {output_stick_size_aligned, Ht, Wt};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_args);
+
+    const auto writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/layer_norm_w_rm/device/kernels/dataflow/writer_layer_norm_w_rm.cpp",
+        core_range_set,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+
+    // ============================================================
+    // 6. Set runtime args
+    // ============================================================
+    const uint32_t input_addr = src_buffer->address();
+    const uint32_t gamma_addr = gamma_buffer->address();
+    const uint32_t beta_addr = beta_buffer->address();
+    const uint32_t output_addr = dst_buffer->address();
+
+    // Reader: input, gamma, beta buffer addresses
+    SetRuntimeArgs(program, reader_kernel_id, core, {input_addr, gamma_addr, beta_addr});
+    // Writer: output buffer address
+    SetRuntimeArgs(program, writer_kernel_id, core, {output_addr});
+
+    // ============================================================
+    // 7. Return cached program
+    // ============================================================
+    return {
+        std::move(program),
+        LayerNormWRmSharedVariables{
+            .reader_kernel_id = reader_kernel_id,
+            .compute_kernel_id = compute_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .all_cores = core_range_set,
+            .num_cores = 1}};
 }
 
 void LayerNormWRmProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormWRmParams& operation_attributes,
+    [[maybe_unused]] const LayerNormWRmParams& operation_attributes,
     const LayerNormWRmInputs& tensor_args,
     Tensor& tensor_return_value) {
-    (void)cached_program;
-    (void)operation_attributes;
-    (void)tensor_args;
-    (void)tensor_return_value;
-    // Stub - update runtime arguments for cached program
-    // This will update tensor buffer addresses when program is reused
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+
+    const auto& input = tensor_args.input;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
+    const auto& output = tensor_return_value;
+
+    const uint32_t input_addr = input.buffer()->address();
+    const uint32_t gamma_addr = gamma.buffer()->address();
+    const uint32_t beta_addr = beta.buffer()->address();
+    const uint32_t output_addr = output.buffer()->address();
+
+    // Update runtime args for single core
+    const CoreCoord core = {0, 0};
+    {
+        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        runtime_args[0] = input_addr;
+        runtime_args[1] = gamma_addr;
+        runtime_args[2] = beta_addr;
+    }
+    {
+        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+        runtime_args[0] = output_addr;
+    }
 }
 
 }  // namespace ttnn::operations::normalization::layer_norm_w_rm::program

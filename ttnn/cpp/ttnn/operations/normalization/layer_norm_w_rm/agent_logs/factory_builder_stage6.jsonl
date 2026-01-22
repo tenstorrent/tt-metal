@@ -1,0 +1,7 @@
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_0","name":"cb_in_rm","producer":"reader","consumer":"compute","producer_pushes":"Ht*Wt","consumer_pops":"Ht*Wt","balanced":true}
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_2","name":"cb_scaler","producer":"reader","consumer":"compute","producer_pushes":"1","consumer_pops":"never","balanced":true,"note":"program lifetime"}
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_7","name":"cb_epsilon","producer":"reader","consumer":"compute","producer_pushes":"1","consumer_pops":"never","balanced":true,"note":"program lifetime"}
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_10","name":"cb_gamma_rm","producer":"reader","consumer":"compute","producer_pushes":"Wt","consumer_pops":"never","balanced":true,"note":"program lifetime"}
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_12","name":"cb_beta_rm","producer":"reader","consumer":"compute","producer_pushes":"Wt","consumer_pops":"never","balanced":true,"note":"program lifetime"}
+{"event":"cb_sync_summary","timestamp":"2026-01-22T14:17:41Z","cb_id":"c_16","name":"cb_out_rm","producer":"compute","consumer":"writer","producer_pushes":"Ht*Wt","consumer_pops":"Ht*Wt","balanced":true}
+{"event":"stage6_complete","timestamp":"2026-01-22T14:17:41Z","tests_passed":2,"tests_failed":0,"cb_sync_verified":true}
