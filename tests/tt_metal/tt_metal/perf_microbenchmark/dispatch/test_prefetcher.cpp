@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <chrono>
 
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
