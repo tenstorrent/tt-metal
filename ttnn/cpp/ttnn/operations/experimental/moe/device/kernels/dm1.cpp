@@ -36,18 +36,16 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
-    constexpr auto cb_w2s_out = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -93,7 +91,10 @@ void kernel_main() {
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
     // Precompute buffer offsets
-    uint32_t LOCAL_BUFFER_OFFSET[2] = {local_base_addr, local_base_addr + a2a_xfer_bytes_per_step};
+    uint32_t LOCAL_BUFFER_OFFSET[12];
+    for (uint32_t i = 0; i < 12; ++i) {
+        LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
+    }
     uint32_t semaphore_value = 0;
 
     // Set state for the writes
@@ -108,34 +109,31 @@ void kernel_main() {
         cb_pop_front(cb_c2w_rdy, 1);
 
         // Take the data in cb_s2c_in2 and send it to the next core in the ring
-        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-            // Ring synchronization: all cores participate regardless of whether they had CB work
-            // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
+        // Ring synchronization: all cores participate regardless of whether they had CB work
+        // With 12 cores in a ring, we perform 12 steps so the signal propagates around the entire ring
 
-            for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                // Wait for current data to be ready in cb_s2c_in2
-                noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+        for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+            // Wait for current data to be ready in cb_s2c_in2
+            noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
 
-                // Signal to compute core that data is ready
-                cb_reserve_back(cb_w2c_rdy, 1);
-                cb_push_back(cb_w2c_rdy, 1);
+            // Signal to compute core that data is ready
+            cb_reserve_back(cb_w2c_rdy, 1);
+            cb_push_back(cb_w2c_rdy, 1);
 
-                // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
-                // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+            // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
+            // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
+            const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
+            const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
-                noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
-                noc_async_write_one_packet_with_state</*posted=*/true>(
-                    local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
+            noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
+            noc_async_write_one_packet_with_state</*posted=*/true>(
+                local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(
-                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+            // Signal neighbor that data is ready (increment their semaphore)
+            noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
-                // Ensure write and semaphore have left the core before continuing
-                noc_async_posted_atomic_barrier();
-            }
+            // Ensure write and semaphore have left the core before continuing
+            noc_async_posted_atomic_barrier();
         }
     }
 }
