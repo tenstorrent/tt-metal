@@ -1441,7 +1441,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 
     // Verify JSON structure
     EXPECT_TRUE(levelized_graph_json.is_array());
-    EXPECT_EQ(levelized_graph_json.size(), 2);  // tensor, add
+    EXPECT_EQ(levelized_graph_json.size(), 2);  // tensor, device operation
 
     // Verify first vertex (tensor)
     EXPECT_TRUE(levelized_graph_json[0].is_object());
@@ -1465,9 +1465,10 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kOutputShape].is_array());
     EXPECT_FALSE(levelized_graph_json[0][ttnn::graph::kOutputShape].empty());
 
-    // Verify second vertex (add)
+    // Verify second vertex (device operation - BinaryNgDeviceOperation)
+    // Note: High-level function tracing (ttnn::add) was removed, now we get BinaryNgDeviceOperation
     EXPECT_TRUE(levelized_graph_json[1].is_object());
-    EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kName], "ttnn::add");
+    EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kName], "BinaryNgDeviceOperation");
     EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kStackingLevel], 1);
     EXPECT_EQ(levelized_graph_json[1][ttnn::graph::kCounter], 1);
     EXPECT_TRUE(levelized_graph_json[1][ttnn::graph::kInEdges].is_array());
@@ -1488,9 +1489,10 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json_2.is_array());
     EXPECT_GE(levelized_graph_json_2.size(), 3);  // At least 3 vertices at level 2
 
-    // Verify that add vertex has internals at level 2
+    // Verify that BinaryNgDeviceOperation vertex has internals at level 2
+    // Note: High-level function tracing (ttnn::add) was removed, now we get BinaryNgDeviceOperation
     auto add_vertex_it = std::ranges::find_if(
-        levelized_graph_json_2, [](const auto& v) { return v[ttnn::graph::kName] == "ttnn::add"; });
+        levelized_graph_json_2, [](const auto& v) { return v[ttnn::graph::kName] == "BinaryNgDeviceOperation"; });
     EXPECT_NE(add_vertex_it, levelized_graph_json_2.end());
     const auto& add_vertex = *add_vertex_it;
     EXPECT_TRUE(add_vertex.contains(ttnn::graph::kInternals));
@@ -1565,8 +1567,9 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     EXPECT_NE(v_tensor_0.name.find("tensor"), std::string::npos);
     EXPECT_NE(v_tensor_1.name.find("tensor"), std::string::npos);
     EXPECT_NE(v_tensor_2.name.find("tensor"), std::string::npos);
-    EXPECT_EQ(v_multiply.name, "ttnn::multiply");
-    EXPECT_EQ(v_add.name, "ttnn::add");
+    // Note: High-level function tracing (ttnn::multiply, ttnn::add) was removed, now we get BinaryNgDeviceOperation
+    EXPECT_EQ(v_multiply.name, "BinaryNgDeviceOperation");
+    EXPECT_EQ(v_add.name, "BinaryNgDeviceOperation");
 
     // Confirming that the multiply vertex has two inputs from tensors
     // Also add should have one input from tensor and one from multiply
@@ -1663,6 +1666,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
     // Categorize vertices by type
     std::vector<size_t> create_tensor_ids;
     std::vector<size_t> tensor_ids;
+    std::vector<size_t> binary_op_ids;  // All BinaryNgDeviceOperation instances
     size_t multiply_id = 0, add_id = 0;
 
     for (size_t i = 0; i < levelized_graph.size(); ++i) {
@@ -1671,18 +1675,63 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
             create_tensor_ids.push_back(i);
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
-        } else if (v.name == "ttnn::multiply") {
-            multiply_id = i;
-        } else if (v.name == "ttnn::add") {
-            add_id = i;
+        } else if (v.name == "BinaryNgDeviceOperation") {
+            // Note: High-level function tracing (ttnn::multiply, ttnn::add) was removed, now we get
+            // BinaryNgDeviceOperation
+            binary_op_ids.push_back(i);
         }
     }
 
     // Verify we have the expected number of each type
     EXPECT_EQ(create_tensor_ids.size(), 3);  // 3 create_device_tensor operations
     EXPECT_EQ(tensor_ids.size(), 3);         // 3 tensor nodes
-    EXPECT_NE(multiply_id, 0);               // Found multiply
-    EXPECT_NE(add_id, 0);                    // Found add
+    EXPECT_EQ(binary_op_ids.size(), 2);      // 2 binary operations (multiply and add)
+
+    // Identify multiply and add by their graph relationships:
+    // - multiply: has 2 tensor inputs, outputs to add
+    // - add: has 1 tensor input + 1 input from multiply, no outputs
+    bool found_multiply = false;
+    for (size_t op_id : binary_op_ids) {
+        const auto& op = levelized_graph.get_vertex(op_id);
+        // Multiply has 2 tensor inputs and outputs to another operation
+        if (op.in_edges.size() == 2 && op.out_edges.size() == 1) {
+            // Check that both inputs are tensors
+            bool both_inputs_are_tensors = true;
+            for (size_t input_id : op.in_edges) {
+                if (std::find(tensor_ids.begin(), tensor_ids.end(), input_id) == tensor_ids.end()) {
+                    both_inputs_are_tensors = false;
+                    break;
+                }
+            }
+            if (both_inputs_are_tensors && !found_multiply) {
+                multiply_id = op_id;
+                found_multiply = true;
+            }
+        }
+    }
+
+    EXPECT_TRUE(found_multiply) << "Failed to identify multiply operation";
+
+    // Now identify add: has 2 inputs (1 tensor + 1 from multiply) and no outputs
+    bool found_add = false;
+    for (size_t op_id : binary_op_ids) {
+        if (op_id == multiply_id) {
+            continue;  // Skip multiply
+        }
+        const auto& op = levelized_graph.get_vertex(op_id);
+        // Add has 2 inputs and no outputs, and one input should be from multiply
+        if (op.in_edges.size() == 2 && op.out_edges.size() == 0) {
+            bool has_multiply_input =
+                std::find(op.in_edges.begin(), op.in_edges.end(), multiply_id) != op.in_edges.end();
+            if (has_multiply_input) {
+                add_id = op_id;
+                found_add = true;
+                break;
+            }
+        }
+    }
+
+    EXPECT_TRUE(found_add) << "Failed to identify add operation";
 
     const auto& v_multiply = levelized_graph.get_vertex(multiply_id);
     const auto& v_add = levelized_graph.get_vertex(add_id);
@@ -1812,7 +1861,8 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
             create_tensor_ids.push_back(i);
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
-        } else if (v.name == "ttnn::subtract") {
+        } else if (v.name == "BinaryNgDeviceOperation") {
+            // Note: High-level function tracing (ttnn::subtract) was removed, now we get BinaryNgDeviceOperation
             subtract_ids.push_back(i);
         }
     }
@@ -1820,7 +1870,7 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
     // Verify we have the expected number of each type
     EXPECT_EQ(create_tensor_ids.size(), 2);  // 2 create_device_tensor operations
     EXPECT_EQ(tensor_ids.size(), 2);         // 2 tensor nodes
-    EXPECT_EQ(subtract_ids.size(), 2);       // 2 subtract operations
+    EXPECT_EQ(subtract_ids.size(), 2);       // 2 subtract operations (both are BinaryNgDeviceOperation)
 
     // Get references to the subtract operations
     const auto& subtract_1 = levelized_graph.get_vertex(subtract_ids[0]);
