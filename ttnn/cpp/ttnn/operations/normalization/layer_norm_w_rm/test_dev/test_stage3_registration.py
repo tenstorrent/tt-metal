@@ -77,7 +77,7 @@ _tensor_infos = [
 
 # Store parameter info for helper functions
 _param_defaults = {
-    "epsilon": 1e-5f,
+    "epsilon": 1e-5,
 }
 
 
