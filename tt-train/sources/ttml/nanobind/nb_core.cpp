@@ -89,6 +89,22 @@ void py_module(nb::module_& m) {
         nb::arg("tensor"),
         "Create an empty tensor with the same shape and properties as the input tensor");
 
+    m.def(
+        "zeros_like",
+        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+            return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
+        },
+        nb::arg("tensor"),
+        "Create a zero tensor with the same shape and properties as the input tensor");
+
+    m.def(
+        "ones_like",
+        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+            return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
+        },
+        nb::arg("tensor"),
+        "Create a ones tensor with the same shape and properties as the input tensor");
+
     // Gradient clipping
     m.def(
         "clip_grad_norm",
