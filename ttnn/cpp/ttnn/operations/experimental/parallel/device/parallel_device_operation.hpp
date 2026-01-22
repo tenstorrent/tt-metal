@@ -24,6 +24,7 @@ struct ParallelDeviceOperation {
     using tensor_return_value_t = std::vector<std::vector<Tensor>>;
     // Each inner vector is the specs from one branch
     using spec_return_value_t = std::vector<std::vector<TensorSpec>>;
+    // Factory object that invokes factory methods on each branch
     using program_factory_t = std::variant<ParallelProgramFactory>;
 
     static program_factory_t select_program_factory(

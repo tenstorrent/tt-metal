@@ -170,7 +170,6 @@ private:
 
 public:
     std::vector<Tensor> make_output_tensors() const override {
-        // TODO RM: Call get_output_specs() here
         auto result = DeviceOp::create_output_tensors(op_attributes, tensor_args);
         return flatten_tensors(result);
     }
@@ -241,16 +240,10 @@ public:
                 factory.override_runtime_arguments(
                     program, *shared_vars_ptr, op_attributes, tensor_args, tensor_return);
             } else {
-                // Use the cached_program version
-                using CachedProgramType = ttnn::device_operation::CachedProgram<SharedVarsType>;
-                auto* shared_vars_ptr = std::any_cast<SharedVarsType>(&shared_variables_);
-                TT_FATAL(shared_vars_ptr != nullptr, "Shared variables type mismatch");
-
-                CachedProgramType cached_program{std::move(program), std::move(*shared_vars_ptr)};
-                factory.override_runtime_arguments(cached_program, op_attributes, tensor_args, tensor_return);
-
-                program = std::move(cached_program.program);
-                shared_variables_ = std::move(cached_program.shared_variables);
+                static_assert(
+                    false,
+                    "Factory does not support override_runtime_arguments() override needed for "
+                    "ttnn::experimental::parallel");
             }
         });
 
