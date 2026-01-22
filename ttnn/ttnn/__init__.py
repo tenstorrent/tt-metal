@@ -284,6 +284,7 @@ from ttnn.device import (
     get_max_worker_l1_unreserved_size,
     enable_asynchronous_slow_dispatch,
     disable_asynchronous_slow_dispatch,
+    get_optimal_dram_bank_to_logical_worker_assignment,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
