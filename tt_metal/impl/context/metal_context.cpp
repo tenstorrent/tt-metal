@@ -430,6 +430,25 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+void MetalContext::reinitialize_for_real_hardware() {
+    // Check if any devices are actually active (not just if MetalContext was initialized)
+    // Note: initialized_ flag doesn't get reset until process exit, so we check active devices instead
+    auto active_devices = device_manager_->get_all_active_devices();
+    TT_FATAL(
+        active_devices.empty(),
+        "Cannot switch to real hardware while {} device(s) are active. Close all devices first by calling "
+        "MeshDevice::close() or letting the device go out of scope.",
+        active_devices.size());
+
+    log_info(tt::LogMetal, "Reinitializing MetalContext for real hardware (switching from mock mode)");
+
+    rtoptions_.clear_mock_cluster_desc();
+    teardown_base_objects();
+    initialize_base_objects();
+
+    log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
+}
+
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
@@ -439,19 +458,7 @@ void MetalContext::teardown_base_objects() {
     hal_.reset();
 }
 
-MetalContext::MetalContext() {
-    // Check if mock mode was configured via API (before env vars take effect)
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-    }
-
-    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
-    // to initialize the control plane.
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
-    }
-
+void MetalContext::initialize_base_objects() {
     const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
@@ -477,6 +484,22 @@ MetalContext::MetalContext() {
         teardown_base_objects();
         initialize_objects();
     }
+}
+
+MetalContext::MetalContext() {
+    // Check if mock mode was configured via API (before env vars take effect)
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    }
+
+    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
+    // to initialize the control plane.
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    }
+
+    initialize_base_objects();
 
     // Initialize some container members to allow threadsafe operations on them later
     dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());

@@ -87,4 +87,20 @@ TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
     ASSERT_TRUE(desc.has_value());
 }
 
+TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardware) {
+    experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+    EXPECT_TRUE(experimental::is_mock_mode_registered());
+    EXPECT_TRUE(experimental::get_mock_cluster_desc().has_value());
+
+    experimental::disable_mock_mode();
+    EXPECT_FALSE(experimental::is_mock_mode_registered());
+    EXPECT_FALSE(experimental::get_mock_cluster_desc().has_value());
+
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
+    EXPECT_TRUE(experimental::is_mock_mode_registered());
+    auto desc = experimental::get_mock_cluster_desc();
+    ASSERT_TRUE(desc.has_value());
+    EXPECT_EQ(*desc, "wormhole_N300.yaml");
+}
+
 }  // namespace tt::tt_metal

@@ -92,6 +92,9 @@ public:
         bool minimal = false);
     void teardown();
 
+    // Switch from mock mode to real hardware (requires all devices to be closed)
+    void reinitialize_for_real_hardware();
+
     // Control plane accessors
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
@@ -152,6 +155,7 @@ private:
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
+    void initialize_base_objects();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);
