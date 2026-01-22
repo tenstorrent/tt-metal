@@ -41,7 +41,7 @@ private:
 // implicit conversions (e.g., T -> std::optional<T>).
 template <typename Op, typename Tuple, std::size_t... Is>
 auto invoke_op_impl(Op&& op, Tuple& args, std::index_sequence<Is...>) {
-    return op(std::get<Is>(args)...);
+    return std::forward<Op>(op)(std::get<Is>(args)...);
 }
 
 template <typename Op, typename Tuple>
