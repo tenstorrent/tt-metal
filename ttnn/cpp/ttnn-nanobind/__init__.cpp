@@ -147,6 +147,9 @@ void py_module(nb::module_& mod) {
     auto m_matmul = mod.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
 
+    auto m_madd = mod.def_submodule("madd", "madd operation");
+    madd::py_module(m_madd);
+
     auto m_data_movement = mod.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
 
