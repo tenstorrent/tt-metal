@@ -283,6 +283,11 @@ uv python install "${VENV_PYTHON_VERSION}"
 uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
 source "$PYTHON_ENV_DIR/bin/activate"
 
+# Install uv into the venv at the same version as the invoking uv
+UV_CURRENT_VERSION=$(uv --version | cut -d' ' -f2)
+echo "Installing uv ${UV_CURRENT_VERSION} into venv..."
+uv pip install "uv==${UV_CURRENT_VERSION}"
+
 # Import functions for detecting OS (use absolute path from SCRIPT_DIR)
 . "$SCRIPT_DIR/install_dependencies.sh" --source-only
 detect_os
