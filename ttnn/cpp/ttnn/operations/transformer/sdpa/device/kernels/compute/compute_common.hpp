@@ -370,6 +370,13 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
 /**
  * out_cb = in0_cb * in1_cb
+ * @tparam rows - Number of rows of tiles
+ * @tparam cols - Number of columns of tiles
+ * @tparam immediate_pop - If true, uses tile-by-tile processing with immediate CB pop after each tile.
+ *                         If false, uses batched processing with deferred CB pop, processing multiple tiles in
+ * parallel.
+ * @tparam pack_accumulate - If true, enables L1 accumulation to accumulate results onto existing tiles
+ *                           in out_cb. Only supported when immediate_pop=false.
  */
 template <uint32_t rows, uint32_t cols, bool immediate_pop, bool pack_accumulate>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
