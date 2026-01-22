@@ -651,9 +651,7 @@ void calculate_exponential_polynomial() {
     constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
     if (!USE_SFPARECIP_INSTR) {
-        ASSERT(
-            POLY_DEGREE >= 1 && POLY_DEGREE <= 4,
-            "Only degree 1-4 polynomials are supported in calculate_exponential_polynomial");
+        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
         // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
@@ -735,7 +733,7 @@ void calculate_exponential_polynomial() {
             TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
 #else
-            ASSERT(false, "TTI_SFPARECIP instruction only supported on Blackhole");
+            ASSERT(false);  // TTI_SFPARECIP instruction only supported on Blackhole".
 #endif
         } else {
             if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
