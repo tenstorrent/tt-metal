@@ -164,7 +164,7 @@ void MAIN {
                 cb_wait_front(cb_w2c_rdy, 1);
             }
 
-            uint32_t in2_index = 0;
+            uint32_t in2_offset = 0, in2_index = 0;
 
             tile_regs_acquire();
 
@@ -183,12 +183,11 @@ void MAIN {
                     if (dm1_tiles_remaining == 0) {
                         if (i == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
-                        }
-                        if (i == 0) {
                             cb_wait_front(cb_w2c_rdy, 1);
                         }
                         dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_index += tiles_per_step;
+                        in2_offset += tiles_per_step;
+                        in2_index = in2_offset;
                     }
                     dm1_tiles_remaining--;
 
