@@ -12,10 +12,12 @@ std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
+    AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
     const float dropout_probability,
     const bool return_intermediates) {
-    auto result = ttnn::prim::ttml_sdpa_fw(query, key, value, mask, dropout_probability, return_intermediates);
+    auto result =
+        ttnn::prim::ttml_sdpa_fw(query, key, value, mask_type, mask, dropout_probability, return_intermediates);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};
