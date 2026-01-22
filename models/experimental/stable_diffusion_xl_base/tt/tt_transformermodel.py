@@ -10,6 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtTransformer2DModel(LightweightModule):
@@ -17,6 +18,7 @@ class TtTransformer2DModel(LightweightModule):
         super().__init__()
 
         self.device = device
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.norm_groups = 32
         self.norm_eps = 1e-6
@@ -99,9 +101,7 @@ class TtTransformer2DModel(LightweightModule):
             **self.groupnorm_config,
         )
 
-        if C == 1280 or (
-            C == 1536 or C == 768
-        ):  # C == 1536 or C == 768 is for the Refiner; C == 1280 is for the Unet Base
+        if (not self.is_refiner and C == 1280) or (self.is_refiner and (C == 1536 or C == 768)):
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
