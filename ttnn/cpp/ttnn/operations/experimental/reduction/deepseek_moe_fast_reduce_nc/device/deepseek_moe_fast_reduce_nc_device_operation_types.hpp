@@ -15,7 +15,7 @@ namespace ttnn::experimental::prim {
 
 struct DeepseekMoEFastReduceNCParams {
     uint32_t dim;
-    ttnn::MemoryConfig output_memory_config;
+    tt::tt_metal::MemoryConfig output_memory_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 

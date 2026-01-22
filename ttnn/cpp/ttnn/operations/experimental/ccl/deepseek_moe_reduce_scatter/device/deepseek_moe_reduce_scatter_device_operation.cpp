@@ -41,7 +41,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
-    const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
+    const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
     uint32_t dim = operation_attributes.dim;
     uint32_t num_links = operation_attributes.num_links;
     std::optional<uint32_t> cluster_axis = operation_attributes.cluster_axis;
@@ -153,10 +153,10 @@ std::vector<ttnn::TensorSpec> DeepseekMoEReduceScatterDeviceOperation::compute_o
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
 
     const auto& intermediate_shape = input_tensors.at(0).logical_shape();
-    const ttnn::MemoryConfig& intermediate_memory_config = input_tensors.at(0).memory_config();
+    const tt::tt_metal::MemoryConfig& intermediate_memory_config = input_tensors.at(0).memory_config();
 
     const auto& output_shape = input_tensors.at(0).logical_shape();
-    const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
+    const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     return {
         TensorSpec(
@@ -214,7 +214,7 @@ namespace ttnn::prim {
 
 std::vector<ttnn::Tensor> deepseek_moe_reduce_scatter(
     const std::vector<ttnn::Tensor>& input_tensors,
-    const ttnn::MemoryConfig& output_memory_config,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
     uint32_t dim,
     uint32_t num_links,
     std::optional<uint32_t> cluster_axis) {

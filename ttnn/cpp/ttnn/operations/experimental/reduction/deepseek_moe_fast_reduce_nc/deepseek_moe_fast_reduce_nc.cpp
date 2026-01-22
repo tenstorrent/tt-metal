@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::reduction {
 std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
-    const ttnn::MemoryConfig& output_memory_config,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
         input_tensor.device()->arch(),

@@ -85,6 +85,7 @@ std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
     }
 
     std::vector<CoreRange> worker_core_ranges;
+    worker_core_ranges.reserve(worker_cores.size());
     for (const CoreCoord& worker_core : worker_cores) {
         worker_core_ranges.emplace_back(worker_core);
     }

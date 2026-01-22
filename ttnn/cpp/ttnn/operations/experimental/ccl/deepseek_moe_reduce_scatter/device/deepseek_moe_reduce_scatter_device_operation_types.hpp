@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
@@ -25,7 +26,7 @@ struct DeepseekMoEReduceScatterProgramArtifacts {
 };
 
 struct DeepseekMoEReduceScatterParams {
-    ttnn::MemoryConfig output_memory_config;
+    tt::tt_metal::MemoryConfig output_memory_config;
     uint32_t dim;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;

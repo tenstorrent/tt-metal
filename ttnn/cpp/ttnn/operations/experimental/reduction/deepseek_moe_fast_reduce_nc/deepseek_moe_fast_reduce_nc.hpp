@@ -19,7 +19,7 @@ struct DeepseekMoEFastReduceNCOperation {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         int32_t dim,
-        const ttnn::MemoryConfig& output_memory_config,
+        const tt::tt_metal::MemoryConfig& output_memory_config,
         const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
 

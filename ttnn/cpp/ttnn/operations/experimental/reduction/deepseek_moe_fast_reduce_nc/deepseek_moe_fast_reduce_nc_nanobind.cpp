@@ -39,7 +39,7 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                int32_t dim,
-               const ttnn::MemoryConfig& output_memory_config,
+               const tt::tt_metal::MemoryConfig& output_memory_config,
                const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
                 return self(input_tensor, dim, output_memory_config, compute_kernel_config);
             },

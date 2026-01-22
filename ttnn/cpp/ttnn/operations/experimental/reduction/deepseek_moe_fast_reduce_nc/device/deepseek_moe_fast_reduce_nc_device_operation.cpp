@@ -63,7 +63,7 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
 ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const uint32_t reduction_dim = operation_attributes.dim;
-    const ttnn::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
+    const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
     // hardcoded constants
@@ -75,7 +75,8 @@ ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     output_shape[split_dim] /= num_split_tensors;
 
     return TensorSpec(
-        output_shape, TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
+        output_shape,
+        operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
 std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_tensors(
@@ -103,7 +104,7 @@ namespace ttnn::prim {
 std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
-    const ttnn::MemoryConfig& output_memory_config,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::DeepseekMoEFastReduceNCDeviceOperation;
 
