@@ -22,7 +22,7 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
         mod,
         ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc,
         R"doc(
-        Performs optimized reduction operation on dim 0 or 1 on a tensor of rank at least 3
+        Performs optimized reduction operation on tensor of at least rank 3, reducing on any of the dims but the last 2
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor

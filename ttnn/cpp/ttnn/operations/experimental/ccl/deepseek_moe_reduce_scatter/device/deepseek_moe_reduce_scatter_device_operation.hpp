@@ -45,7 +45,7 @@ ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::Deepse
     tensor_return_value_t
     deepseek_moe_reduce_scatter(
         const std::vector<ttnn::Tensor>& input_tensors,
-        const ttnn::MemoryConfig& output_memory_config,
+        const tt::tt_metal::MemoryConfig& output_memory_config,
         uint32_t dim,
         uint32_t num_links,
         std::optional<uint32_t> cluster_axis);

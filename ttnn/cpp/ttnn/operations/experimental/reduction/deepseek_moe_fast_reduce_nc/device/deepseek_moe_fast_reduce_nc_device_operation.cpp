@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
 
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
@@ -45,9 +46,9 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
 
     // validate reduction dim
     TT_FATAL(
-        reduction_dim < input_rank - 3,
+        reduction_dim <= input_rank - 3,
         "reduction dim must be between 0 and {}, but has {}",
-        input_rank - 2,
+        input_rank - 3,
         reduction_dim);
 
     // validate split dim
@@ -72,7 +73,8 @@ spec_return_value_t DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs
     output_shape[reduction_dim] = 1;  // keepdim = true
     output_shape[split_dim] /= num_split_tensors;
 
-    return TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_memory_config));
+    return TensorSpec(
+        output_shape, TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
 tensor_return_value_t DeepseekMoEFastReduceNCDeviceOperation::create_output_tensors(
@@ -108,7 +110,7 @@ ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::
         DeepseekMoEFastReduceNCDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{dim, std::move(output_memory_config), compute_kernel_config},
+        OperationType::operation_attributes_t{dim, output_memory_config, compute_kernel_config},
         OperationType::tensor_args_t{input_tensor});
 }
 

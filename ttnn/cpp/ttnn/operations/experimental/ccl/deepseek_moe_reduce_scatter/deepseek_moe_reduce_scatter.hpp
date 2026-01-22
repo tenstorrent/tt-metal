@@ -17,7 +17,7 @@ namespace operations::experimental::ccl {
 struct ExecuteDeepseekMoEReduceScatter {
     static ttnn::Tensor invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
-        const ttnn::MemoryConfig& output_memory_config,
+        const tt::tt_metal::MemoryConfig& output_memory_config,
         int32_t dim,
         uint32_t num_links = 1,
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,

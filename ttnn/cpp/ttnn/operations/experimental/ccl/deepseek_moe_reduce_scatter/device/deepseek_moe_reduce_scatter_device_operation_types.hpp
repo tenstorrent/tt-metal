@@ -25,7 +25,7 @@ struct DeepseekMoEReduceScatterProgramArtifacts {
 };
 
 struct operation_attributes_t {
-    ttnn::MemoryConfig output_memory_config;
+    tt::tt_metal::MemoryConfig output_memory_config;
     uint32_t dim;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;
