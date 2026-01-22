@@ -26,6 +26,7 @@ class RotarySetup(LightweightModule):
         max_seq_len: int,
         rope_theta: float,
         rope_scaling: Optional[RopeScaling],
+        use_qk_fused: bool = False,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
