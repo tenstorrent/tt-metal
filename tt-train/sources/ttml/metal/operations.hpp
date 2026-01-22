@@ -20,44 +20,30 @@
 
 namespace ttml::metal {
 
-constexpr auto rmsnorm_fw =
-    ttnn::register_operation<"ttml::metal::rmsnorm_fw", ttml::metal::ops::rmsnorm_fw::RMSNormForwardOperation>();
+// rmsnorm_fw is now a free function declared in ops/rmsnorm_fw/rmsnorm_fw.hpp
 
-constexpr auto rmsnorm_bw =
-    ttnn::register_operation<"ttml::metal::rmsnorm_bw", ttml::metal::ops::rmsnorm_bw::RMSNormBackwardOperation>();
+// rmsnorm_bw is now a free function declared in ops/rmsnorm_bw/rmsnorm_bw.hpp
 
-constexpr auto layernorm_bw =
-    ttnn::register_operation<"ttml::metal::layernorm_bw", ttml::metal::ops::layernorm_bw::LayerNormBackwardOperation>();
+// layernorm_bw is now a free function declared in ops/layernorm_bw/layernorm_bw.hpp
 
-constexpr auto layernorm_fw =
-    ttnn::register_operation<"ttml::metal::layernorm_fw", ttml::metal::ops::layernorm_fw::LayerNormForwardOperation>();
+// layernorm_fw is now a free function declared in ops/layernorm_fw/layernorm_fw.hpp
 
-constexpr auto cross_entropy_fw = ttnn::register_operation<
-    "ttml::metal::cross_entropy_fw",
-    ttml::metal::ops::cross_entropy_fw::CrossEntropyForwardOperation>();
+// cross_entropy_fw is now a free function declared in ops/cross_entropy_fw/cross_entropy_fw.hpp
 
-constexpr auto cross_entropy_bw = ttnn::register_operation<
-    "ttml::metal::cross_entropy_bw",
-    ttml::metal::ops::cross_entropy_bw::CrossEntropyBackwardOperation>();
+// cross_entropy_bw is now a free function declared in ops/cross_entropy_bw/cross_entropy_bw.hpp
 
 // softmax is now a free function declared in ops/softmax/softmax.hpp
 
-constexpr auto profiler_no_op =
-    ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
+// profiler_no_op is now a free function declared in ops/profiler_no_op/profiler_no_op.hpp
 
-constexpr auto silu_bw =
-    ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
+// silu_bw is now a free function declared in ops/silu_bw/silu_bw.hpp
 
-constexpr auto sdpa_fw =
-    ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
+// sdpa_fw is now a free function declared in ops/sdpa_fw/sdpa_fw.hpp
 
-constexpr auto sdpa_bw =
-    ttnn::register_operation<"ttml::metal::sdpa_bw", ttml::metal::ops::sdpa_bw::SDPABackwardOperation>();
+// sdpa_bw is now a free function declared in ops/sdpa_bw/sdpa_bw.hpp
 
-constexpr auto swiglu_fw =
-    ttnn::register_operation<"ttml::metal::swiglu_fw", ttml::metal::ops::swiglu_fw::SwiGLUForwardOperation>();
+// swiglu_fw is now a free function declared in ops/swiglu_fw/swiglu_fw.hpp
 
-constexpr auto sgd_fused =
-    ttnn::register_operation<"ttml::metal::sgd_fused", ttml::metal::optimizers::sgd_fused::SGDFusedOptimizer>();
+// sgd_fused is now a free function declared in optimizers/sgd_fused/sgd_fused.hpp
 
 }  // namespace ttml::metal
