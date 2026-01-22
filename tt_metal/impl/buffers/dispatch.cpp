@@ -730,6 +730,9 @@ void write_interleaved_buffer_to_device(
     update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
 
     if (use_pinned_memory) {
+        if (dispatch_params.is_page_offset_out_of_bounds()) {
+            dispatch_params.update_params_to_be_within_bounds();
+        }
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
     } else {
         // Prefetcher will read from hugepage in one or more iterations depending on transfer size
@@ -849,15 +852,15 @@ void write_to_device_buffer(
                     "Pinned source memory start address {:#x} must be aligned {} B",
                     reinterpret_cast<uintptr_t>(src_region_start),
                     hal.get_read_alignment(HalMemType::HOST));
-            } else if ((src_ptr < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
+            } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
                 log_info(
                     tt::LogMetal,
                     "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
                     "start:{:#X} end:{:#X}",
                     reinterpret_cast<uintptr_t>(pinned_host_base),
                     reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
-                    reinterpret_cast<uintptr_t>(src_ptr),
-                    reinterpret_cast<uintptr_t>(src_ptr + region.offset + region.size));
+                    reinterpret_cast<uintptr_t>(src_region_start),
+                    reinterpret_cast<uintptr_t>(src_region_end));
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;

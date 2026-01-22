@@ -256,7 +256,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
         auto event = this->enqueue_record_event_to_host_nolock();
         for (const auto& shard_data_transfer : shard_data_transfers) {
             if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {
-                experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer)->add_barrier_event(event);
+                auto pinned_memory = experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer);
+                if (pinned_memory) {
+                    pinned_memory->add_barrier_event(event);
+                }
             }
         }
     }
