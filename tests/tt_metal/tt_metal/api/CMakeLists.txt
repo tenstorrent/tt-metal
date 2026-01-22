@@ -39,6 +39,7 @@ target_sources(
         test_kernel_creation.cpp
         test_memory_pin.cpp
         test_noc.cpp
+        test_release_ownership.cpp
         test_runtime_args.cpp
         test_semaphores.cpp
         test_shape_base.cpp
