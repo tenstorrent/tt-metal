@@ -21,7 +21,15 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import stats
 from scipy.stats import kendalltau, mannwhitneyu, shapiro
-from statsmodels.stats.multitest import multipletests
+
+# Try to import statsmodels, but make it optional
+try:
+    from statsmodels.stats.multitest import multipletests
+
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
+    print("Warning: statsmodels not available. Multiple comparison correction will be skipped.")
 
 # Configuration
 TELEMETRY_PORT = 7070
@@ -464,6 +472,21 @@ def apply_multiple_comparison_correction(
     """
     if not p_values:
         return {"error": "No p-values provided"}
+
+    if not HAS_STATSMODELS:
+        # Fallback to simple Bonferroni correction if statsmodels not available
+        bonferroni_alpha = alpha / len(p_values)
+        return {
+            "method": "bonferroni (fallback)",
+            "alpha": alpha,
+            "n_tests": len(p_values),
+            "n_significant_uncorrected": sum(1 for p in p_values if p < alpha),
+            "n_significant_corrected": sum(1 for p in p_values if p < bonferroni_alpha),
+            "p_corrected": [min(p * len(p_values), 1.0) for p in p_values],
+            "reject": [p < bonferroni_alpha for p in p_values],
+            "alpha_corrected": bonferroni_alpha,
+            "warning": "statsmodels not available, using simple Bonferroni correction",
+        }
 
     reject, p_corrected, alpha_corrected, _ = multipletests(p_values, alpha=alpha, method=method)
 
