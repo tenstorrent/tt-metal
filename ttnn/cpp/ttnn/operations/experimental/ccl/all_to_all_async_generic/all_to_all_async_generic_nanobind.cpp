@@ -53,9 +53,9 @@ void bind_all_to_all_async_generic_op(nb::module_& mod, const ccl_operation_t& o
             nb::arg("out_dim"),
             nb::kw_only(),
             nb::arg("persistent_output_buffer") = nb::none(),
-            nb::arg("num_links") = 1,
+            nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Linear,  // TODO_NANOBIND: nb_cast?
+            nb::arg("topology") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none()});
 }
