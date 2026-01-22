@@ -21,7 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include <iostream>
+
 using json = nlohmann::json;
 
 namespace tt::tt_metal::op_profiler {
