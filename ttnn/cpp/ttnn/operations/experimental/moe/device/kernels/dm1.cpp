@@ -130,16 +130,13 @@ void kernel_main() {
                     local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
                 // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, 1);
+                noc_semaphore_inc</*posted=*/true>(
+                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
                 // TODO(nsoraba): This hangs if we don't issue writes before the semaphore increment. Needs a fix.
                 // Ensure write and semaphore have left the core before continuing
                 noc_async_posted_atomic_barrier();
             }
-
-            // Wait for compute to let us know data is ready
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
         }
     }
 }

@@ -127,11 +127,6 @@ void MAIN {
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
-
-            // Signal to DM1 that we finished using this in2
-            // Also serves to signal that we have packed 2 output tiles
-            cb_reserve_back(cb_c2w_rdy, 1);
-            cb_push_back(cb_c2w_rdy, 1);
         }
 
         // For cores which have only 18 mm2 tiles, we need to drain the pipeline for the last 2.
@@ -140,8 +135,6 @@ void MAIN {
                 cb_wait_front(cb_w2c_rdy, 1);
                 cb_pop_front(cb_w2c_rdy, 1);
             }
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
         }
     }  // end for (expert_id)
 
