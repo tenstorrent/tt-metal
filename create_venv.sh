@@ -348,6 +348,73 @@ if [[ "$BUNDLE_PYTHON" == "true" ]]; then
     echo "  Copying Python interpreter files into venv..."
     cp -r "$CPYTHON_DIR"/* "$PYTHON_ENV_DIR/"
 
+    # Patch activation scripts to set PYTHONHOME for NFS/distributed contexts
+    # PYTHONHOME should point to the venv root where lib/python<version> exists
+    echo "  Patching activation scripts to set PYTHONHOME..."
+
+    # Patch bin/activate (bash/zsh)
+    if [ -f "$PYTHON_ENV_DIR/bin/activate" ]; then
+        # Add PYTHONHOME export after VIRTUAL_ENV is set
+        sed -i.bak '/^VIRTUAL_ENV=/a\
+# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)\
+PYTHONHOME="$VIRTUAL_ENV"\
+export PYTHONHOME
+' "$PYTHON_ENV_DIR/bin/activate"
+
+        # Add PYTHONHOME unset in deactivate function
+        sed -i.bak2 '/unset VIRTUAL_ENV/a\
+        if [ -n "${PYTHONHOME:-}" ]; then\
+            unset PYTHONHOME\
+        fi
+' "$PYTHON_ENV_DIR/bin/activate"
+        rm -f "$PYTHON_ENV_DIR/bin/activate.bak" "$PYTHON_ENV_DIR/bin/activate.bak2"
+    fi
+
+    # Patch bin/activate.csh (C shell)
+    if [ -f "$PYTHON_ENV_DIR/bin/activate.csh" ]; then
+        sed -i.bak '/^setenv VIRTUAL_ENV/a\
+# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)\
+setenv PYTHONHOME "$VIRTUAL_ENV"
+' "$PYTHON_ENV_DIR/bin/activate.csh"
+
+        sed -i.bak2 '/unsetenv VIRTUAL_ENV/a\
+    if ( $?PYTHONHOME ) then\
+        unsetenv PYTHONHOME\
+    endif
+' "$PYTHON_ENV_DIR/bin/activate.csh"
+        rm -f "$PYTHON_ENV_DIR/bin/activate.csh.bak" "$PYTHON_ENV_DIR/bin/activate.csh.bak2"
+    fi
+
+    # Patch bin/activate.fish (Fish shell)
+    if [ -f "$PYTHON_ENV_DIR/bin/activate.fish" ]; then
+        sed -i.bak '/^set -gx VIRTUAL_ENV/a\
+# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)\
+set -gx PYTHONHOME "$VIRTUAL_ENV"
+' "$PYTHON_ENV_DIR/bin/activate.fish"
+
+        sed -i.bak2 '/set -e VIRTUAL_ENV/a\
+        if set -q PYTHONHOME\
+            set -e PYTHONHOME\
+        end
+' "$PYTHON_ENV_DIR/bin/activate.fish"
+        rm -f "$PYTHON_ENV_DIR/bin/activate.fish.bak" "$PYTHON_ENV_DIR/bin/activate.fish.bak2"
+    fi
+
+    # Patch Activate.ps1 (PowerShell)
+    if [ -f "$PYTHON_ENV_DIR/bin/Activate.ps1" ]; then
+        sed -i.bak '/^\$env:VIRTUAL_ENV/a\
+# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)\
+$env:PYTHONHOME = $env:VIRTUAL_ENV
+' "$PYTHON_ENV_DIR/bin/Activate.ps1"
+
+        sed -i.bak2 '/Remove-Item -Path Env:VIRTUAL_ENV/a\
+    if (Test-Path -Path Env:PYTHONHOME) {\
+        Remove-Item -Path Env:PYTHONHOME\
+    }
+' "$PYTHON_ENV_DIR/bin/Activate.ps1"
+        rm -f "$PYTHON_ENV_DIR/bin/Activate.ps1.bak" "$PYTHON_ENV_DIR/bin/Activate.ps1.bak2"
+    fi
+
     echo "  Python interpreter bundled successfully"
 fi
 
