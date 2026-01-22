@@ -119,7 +119,13 @@ def load_attention_weights(
     )
 
     # Attention sinks (GPT-OSS specific feature)
+    #
+    # IMPORTANT: TT SDPA kernels apply `scale` inside the exp path for BOTH QK and sinks.
+    # HF GPT-OSS behavior is: QK logits are scaled, sinks are NOT additionally scaled.
+    # To match HF, we provide sinks in "pre-divided" form: sink_input = sink / scale,
+    # so that the kernel's internal multiplication by `scale` yields the original sink values.
     sinks = state_dict["sinks"].reshape(1, config.num_heads, 1, 1)
+    sinks_for_sdpa = sinks / config.scaling
     decode_sinks = torch.nn.functional.pad(
         sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
     )
@@ -160,12 +166,13 @@ def load_attention_weights(
     )
 
     sinks_tt = ttnn.as_tensor(
-        sinks,
+        sinks_for_sdpa,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=mesh_config.sequence_parallel(mesh_device),
-        cache_file_name=get_cache_file_name(tensor_cache_path, "sinks"),
+        # Bump cache key since values are now pre-divided by `config.scaling`.
+        cache_file_name=get_cache_file_name(tensor_cache_path, "sinks_div_scale"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

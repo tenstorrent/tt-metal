@@ -61,9 +61,9 @@ def test_fill_pad_deepseek(mesh_device, shape_dtype_fill, mem_config, enable_tra
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     coords = list(tt_out_tensors.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for coord, t in zip(coords, ttnn.get_device_tensors(tt_out_tensors)):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         padded_torch_output_tensor = ttnn.from_device(t).to_torch_with_padded_shape()
         assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)

@@ -653,14 +653,24 @@ run_t3000_tttv2_fast_unit_tests() {
   # Run non-module models/common unit tests
   pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
 
+  # [INFO] HF_MODEL Only used for test_*_1d_vs_reference_from_model_args, which will retire with TTTv1
   # Run MLP1D fast unit tests (full set is run in t3k_e2e_tests.yaml to match timeout values and frequency of runs)
-  # [INFO] HF_MODEL Only used for test_mlp_1d_vs_reference_from_model_args, which will retire with TTTv1
   HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
   TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
   pytest models/common/tests/modules/mlp/test_mlp_1d.py \
     -m "not slow" \
     --tb=short \
     --cov=models.common.modules.mlp.mlp_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run RMSNorm1D tests
+  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
+  pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --cov=models.common.modules.rmsnorm.rmsnorm_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
@@ -680,10 +690,10 @@ run_t3000_gpt_oss_unit_tests() {
   uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

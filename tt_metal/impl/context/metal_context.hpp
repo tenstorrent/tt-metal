@@ -38,6 +38,7 @@ class DispatchQueryManager;
 class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
+class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
@@ -69,6 +70,8 @@ public:
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+
+    std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -224,6 +227,7 @@ private:
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
     std::unique_ptr<DeviceManager> device_manager_;
+    std::unique_ptr<NOCDebugState> noc_debug_state_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
