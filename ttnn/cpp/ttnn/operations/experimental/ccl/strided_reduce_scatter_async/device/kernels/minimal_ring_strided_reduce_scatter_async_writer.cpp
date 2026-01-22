@@ -285,7 +285,7 @@ void kernel_main() {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
                             uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                             uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                            uint32_t input_row_offset = start_row_offset;
+                            uint32_t input_row_offset = start_row_offset / ring_size;
                             cb_wait_front(cb_output_id, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
                             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
