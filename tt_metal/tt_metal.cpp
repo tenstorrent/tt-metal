@@ -1533,6 +1533,8 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
+namespace quasar {
+
 std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
     TT_FATAL(
@@ -1589,7 +1591,7 @@ KernelHandle CreateQuasarDataMovementKernel(
     Program& program,
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
-    const experimental::QuasarDataMovementConfig& config) {
+    const QuasarDataMovementConfig& config) {
     const std::set<DataMovementProcessor> dm_cores =
         GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
     std::shared_ptr<Kernel> kernel =
@@ -1601,12 +1603,13 @@ KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const experimental::QuasarDataMovementConfig& config) {
+    const QuasarDataMovementConfig& config) {
     const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
         program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
 
+}  // namespace quasar
 }  // namespace experimental
 
 }  // namespace tt::tt_metal

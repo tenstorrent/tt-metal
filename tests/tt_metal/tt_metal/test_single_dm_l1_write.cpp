@@ -56,11 +56,11 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
     Program program = CreateProgram();
 
     // Configure and create Data Movement kernel
-    KernelHandle data_movement_kernel_0 = experimental::CreateKernel(
+    KernelHandle data_movement_kernel_0 = experimental::quasar::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         core,
-        experimental::QuasarDataMovementConfig{
+        experimental::quasar::QuasarDataMovementConfig{
             .num_processors_per_cluster = 1, .named_compile_args = named_compile_time_args});
 
     // Set Runtime Arguments for the Data Movement Kernel (memory address to write to)

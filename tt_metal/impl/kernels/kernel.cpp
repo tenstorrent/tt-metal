@@ -753,7 +753,7 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     return os;
 }
 
-namespace experimental {
+namespace experimental::quasar {
 
 uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
@@ -841,6 +841,6 @@ std::string QuasarDataMovementKernel::config_hash() const {
 
 uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_cores_.size(); }
 
-}  // namespace experimental
+}  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal

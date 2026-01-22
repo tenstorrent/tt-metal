@@ -42,18 +42,18 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     Program program = CreateProgram();
     constexpr CoreCoord core = {0, 0};
 
-    KernelHandle kernel_0 = experimental::CreateKernel(
+    KernelHandle kernel_0 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core,
-        experimental::QuasarDataMovementConfig{
+        experimental::quasar::QuasarDataMovementConfig{
             .num_processors_per_cluster = 5, .compile_args = {MEM_L1_UNCACHED_BASE}});
 
-    KernelHandle kernel_1 = experimental::CreateKernel(
+    KernelHandle kernel_1 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core,
-        experimental::QuasarDataMovementConfig{
+        experimental::quasar::QuasarDataMovementConfig{
             .num_processors_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
 
     SetRuntimeArgs(program, kernel_0, core, {100, 200});

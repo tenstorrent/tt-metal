@@ -23,7 +23,7 @@
 namespace tt::tt_metal {
 class Program;
 
-namespace experimental {
+namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
 
 struct QuasarDataMovementConfig {
@@ -61,5 +61,5 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarDataMovementConfig& config);
-}
+}  // namespace experimental::quasar
 }  // namespace tt::tt_metal

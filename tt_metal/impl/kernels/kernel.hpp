@@ -72,7 +72,7 @@ struct KernelSource {
 class Kernel : public JitBuildSettings {
 public:
     using Config =
-        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::QuasarDataMovementConfig>;
+        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::quasar::QuasarDataMovementConfig>;
 
     ~Kernel() override = default;
 
@@ -324,7 +324,7 @@ private:
     std::string config_hash() const override;
 };
 
-namespace experimental {
+namespace experimental::quasar {
 class QuasarDataMovementKernel : public Kernel {
 public:
     QuasarDataMovementKernel(
@@ -378,6 +378,6 @@ private:
     std::string config_hash() const override;
 };
 
-}  // namespace experimental
+}  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal

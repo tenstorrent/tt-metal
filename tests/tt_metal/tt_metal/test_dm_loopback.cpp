@@ -56,21 +56,21 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
     dm_dram_to_l1_kernels.reserve(4);
     for (uint32_t i = 0; i < 4; i++) {
-        dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
+        dm_dram_to_l1_kernels.push_back(experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             core,
-            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
     dm_l1_to_dram_kernels.reserve(4);
     for (uint32_t i = 0; i < 4; i++) {
-        dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
+        dm_l1_to_dram_kernels.push_back(experimental::quasar::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             core,
-            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
     }
 
     for (uint32_t i = 0; i < 4; i++) {
