@@ -471,7 +471,6 @@ bool Tensor::is_scalar() const {
     const tt::tt_metal::Shape logical_shape = this->logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
-}
 
 // TODO #32045: Remove this function since IDs are assigned in the constructor.
 Tensor set_tensor_id(const Tensor& tensor) {
