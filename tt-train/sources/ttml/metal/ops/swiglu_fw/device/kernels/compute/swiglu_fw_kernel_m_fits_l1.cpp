@@ -1,20 +1,22 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <api/compute/eltwise_binary_sfpu.h>
-#include <api/compute/reconfig_data_format.h>
+#include <compute_kernel_api/eltwise_binary_sfpu.h>
+#include <compute_kernel_api/reconfig_data_format.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/cb_api.h"
-#include "api/compute/common.h"
-#include "api/compute/copy_dest_values.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/matmul.h"
-#include "api/compute/tile_move_copy.h"
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/cb_api.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/copy_dest_values.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+namespace NAMESPACE {
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -145,20 +147,26 @@ inline void mul_XW_accumulate_k_block(
         cb_pop_front(cb_partial_idx, block_size);
     }
 
+    // Wait for ALL W tiles at once (batched mcast: block_size rows × block_size tiles)
+    // This matches the batched dataflow which pushes all tiles in one cb_push_back
+    constexpr uint32_t tiles_per_batch = block_size * block_size;
+    cb_wait_front(cb_w_idx, tiles_per_batch);
+
     mm_init_short(cb_x_idx, cb_w_idx, false);
 
-    // Process each p in this p_block (to match reader's organization)
+    // Process each p in this p_block (only p_block_size valid rows, rest are padding)
+    // CB layout: [row0_tile0..row0_tile(block_size-1), row1_tile0..., ...]
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        // Wait for W data: W[p, k_block] (entire row, matching reader pattern)
-        cb_wait_front(cb_w_idx, block_size);
+        const uint32_t cb_row_offset = p * block_size;  // Offset to start of row p in CB
 
         // Accumulate: result[k] += X[p] * W[p, k] for all k in k_block
         for (uint32_t k = 0; k < k_block_size; ++k) {
-            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k);
+            matmul_tiles(cb_x_idx, cb_w_idx, p, cb_row_offset + k, k);
         }
-
-        cb_pop_front(cb_w_idx, block_size);
     }
+
+    // Pop ALL W tiles at once (matching the batched push)
+    cb_pop_front(cb_w_idx, tiles_per_batch);
 
     tile_regs_commit();
 
@@ -301,7 +309,7 @@ inline void compute_M_for_r() {
 //             Y_partial[r, c] += M[r, k] * W2[k, c]
 //         store Y_partial[r, c] → Y[r, c]
 // ============================================================================
-void kernel_main() {
+inline void MAIN {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
@@ -344,3 +352,5 @@ void kernel_main() {
         cb_pop_front(cb_m_idx, hidden_Wt_rounded_up);
     }
 }
+
+}  // namespace NAMESPACE
