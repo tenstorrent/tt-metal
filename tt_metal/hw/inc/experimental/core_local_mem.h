@@ -7,7 +7,7 @@
 #include "experimental/noc.h"
 #include "experimental/lock.h"
 #include "tools/profiler/noc_event_profiler.hpp"
-#include "tt_metal/tools/profiler/event_metadata.hpp"
+#include "event_metadata.hpp"
 
 namespace experimental {
 
