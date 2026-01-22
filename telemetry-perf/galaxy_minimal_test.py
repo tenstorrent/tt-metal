@@ -38,51 +38,13 @@ def check_ttnn_api():
 import ttnn
 import sys
 
-# Check what's available
-attrs = dir(ttnn)
-
-# Look for device-related functions
-device_funcs = [a for a in attrs if 'device' in a.lower() or 'open' in a.lower()]
-print(f"Device functions: {device_funcs[:10]}")
-
-# Look for basic operations
-ops = [a for a in attrs if any(op in a.lower() for op in ['add', 'multiply', 'matmul'])]
-print(f"Operations: {ops[:10]}")
-
-# Try different ways to open a device
-success = False
-
-# Method 1: Direct device ID
+# Try the CreateDevice API found in conftest.py
 try:
-    device = ttnn.open(0)
-    print("SUCCESS: ttnn.open(0) works")
-    ttnn.close(device)
-    success = True
+    device = ttnn.CreateDevice(device_id=0)
+    print("SUCCESS: ttnn.CreateDevice(device_id=0) works")
+    ttnn.close_device(device)
 except Exception as e:
-    print(f"Failed ttnn.open(0): {e}")
-
-# Method 2: open_device with ID
-if not success:
-    try:
-        device = ttnn.open_device(device_id=0)
-        print("SUCCESS: ttnn.open_device(device_id=0) works")
-        ttnn.close_device(device)
-        success = True
-    except Exception as e:
-        print(f"Failed ttnn.open_device: {e}")
-
-# Method 3: CreateDevice
-if not success:
-    try:
-        device = ttnn.CreateDevice(0)
-        print("SUCCESS: ttnn.CreateDevice(0) works")
-        ttnn.CloseDevice(device)
-        success = True
-    except Exception as e:
-        print(f"Failed ttnn.CreateDevice: {e}")
-
-if not success:
-    print("ERROR: Could not find a way to open device")
+    print(f"ERROR: ttnn.CreateDevice failed: {e}")
     sys.exit(1)
 """
     result = subprocess.run([sys.executable, "-c", test_script], capture_output=True, text=True)
@@ -98,28 +60,11 @@ def run_minimal_test(telemetry_enabled=False, polling_interval_ms=1000):
     test_script = """
 import time
 import statistics
-
-# Try to import ttnn and find the right API
 import ttnn
 import torch
 
-# Try different device open methods
-device = None
-try:
-    device = ttnn.open(0)
-    close_func = lambda d: ttnn.close(d)
-except:
-    try:
-        device = ttnn.open_device(device_id=0)
-        close_func = lambda d: ttnn.close_device(d)
-    except:
-        try:
-            device = ttnn.CreateDevice(0)
-            close_func = lambda d: ttnn.CloseDevice(d)
-        except:
-            print("ERROR: Could not open device with any method")
-            exit(1)
-
+# Use the CreateDevice API from conftest.py
+device = ttnn.CreateDevice(device_id=0)
 print("Device opened successfully")
 
 # Run simple operations
@@ -129,46 +74,23 @@ times = []
 for i in range(5):
     start = time.perf_counter()
 
-    # Create tensor
+    # Create torch tensor
     a = torch.ones(shape, dtype=torch.bfloat16)
 
-    # Transfer to device (try different methods)
-    try:
-        tt_a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    except:
-        try:
-            tt_a = ttnn.from_torch(a, device, ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        except:
-            # Fallback: just use torch tensor
-            tt_a = a
+    # Transfer to device using the device parameter
+    tt_a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Simple operation (add)
-    try:
-        tt_b = ttnn.add(tt_a, tt_a)
-    except:
-        tt_b = tt_a + tt_a
+    # Simple operation
+    tt_b = ttnn.add(tt_a, tt_a)
 
     # Transfer back
-    try:
-        result = ttnn.to_torch(tt_b)
-    except:
-        result = tt_b
+    result = ttnn.to_torch(tt_b)
 
     elapsed = (time.perf_counter() - start) * 1000
     times.append(elapsed)
 
-    # Cleanup
-    try:
-        ttnn.deallocate(tt_a)
-        ttnn.deallocate(tt_b)
-    except:
-        pass
-
 # Close device
-try:
-    close_func(device)
-except:
-    pass
+ttnn.close_device(device)
 
 print(f"RESULT_JSON:{{'mean_ms': {statistics.mean(times)}, 'stdev_ms': {statistics.stdev(times) if len(times) > 1 else 0}}}")
 """
