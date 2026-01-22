@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+from loguru import logger
+from tracy import signpost
+
+import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("batch_size", [32])
+@pytest.mark.parametrize(
+    "op_name, input_shape, permute_dims, output_shape",
+    [
+        (
+            "kv_rope_permute_pre",
+            [1, 1, 32, 64],
+            (0, 2, 1, 3),
+            [1, 32, 1, 64],
+        ),
+        (
+            "kv_rope_permute_post",
+            [1, 32, 1, 64],
+            (0, 2, 1, 3),
+            [1, 1, 32, 64],
+        ),
+        (
+            "kvpe_permute",
+            [1, 1, 32, 576],
+            (0, 2, 1, 3),
+            [1, 32, 1, 576],
+        ),
+        (
+            "q_nope_permute_pre_linear",
+            [1, 32, 16, 192],
+            (1, 2, 0, 3),
+            [32, 16, 1, 192],
+        ),
+        (
+            "q_nope_permute_post_linear",
+            [1, 16, 32, 512],
+            (0, 2, 1, 3),
+            [1, 32, 16, 512],
+        ),
+        (
+            "q_rope_permute",
+            [1, 32, 16, 64],
+            (1, 0, 2, 3),
+            [32, 1, 16, 64],
+        ),
+        (
+            "attn_out_permute_pre_linear",
+            [1, 4, 128, 512],
+            (0, 2, 1, 3),
+            [1, 128, 4, 512],
+        ),
+        (
+            "v_out_permute",
+            [1, 128, 4, 128],
+            (0, 2, 1, 3),
+            [1, 4, 128, 128],
+        ),
+    ],
+    ids=[
+        "kv_rope_permute_pre",
+        "kv_rope_permute_post",
+        "kvpe_permute",
+        "q_nope_permute_pre_linear",
+        "q_nope_permute_post_linear",
+        "q_rope_permute",
+        "attn_out_permute_pre_linear",
+        "v_out_permute",
+    ],
+)
+@pytest.mark.parametrize("warmup_iters", [10])
+@pytest.mark.parametrize("num_iters", [100])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 595968,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_deepseek_v3_mla_permute_trace_mode(
+    device,
+    batch_size,
+    op_name,
+    input_shape,
+    permute_dims,
+    output_shape,
+    warmup_iters,
+    num_iters,
+):
+    """
+    Test the permute operations from mla1d.py with trace mode.
+
+    These operations transpose tensor dimensions:
+    1. kv_rope_permute_pre (line 1153): [1, 1, 32, 64] → [1, 32, 1, 64], dims=(0, 2, 1, 3)
+    2. kv_rope_permute_post (line 1169): [1, 32, 1, 64] → [1, 1, 32, 64], dims=(0, 2, 1, 3)
+    3. kvpe_permute (line 1177): [1, 1, 32, 576] → [1, 32, 1, 576], dims=(0, 2, 1, 3)
+    4. q_nope_permute_pre_linear (line 1238): [1, 32, 16, 192] → [32, 16, 1, 192], dims=(1, 2, 0, 3)
+    5. q_nope_permute_post_linear (line 1242): [1, 16, 32, 512] → [1, 32, 16, 512], dims=(0, 2, 1, 3)
+    6. q_rope_permute (line 1247): [1, 32, 16, 64] → [32, 1, 16, 64], dims=(1, 0, 2, 3)
+    7. attn_out_permute_pre_linear (line 1304): [1, 4, 128, 512] → [1, 128, 4, 512], dims=(0, 2, 1, 3)
+    8. v_out_permute (line 1310): [1, 128, 4, 128] → [1, 4, 128, 128], dims=(0, 2, 1, 3)
+
+    Configuration:
+    - Warmup iterations: 10
+    - Test iterations: 100
+    - Trace mode: Enabled
+    - L1 interleaved memory layout
+    """
+    torch.manual_seed(0)
+
+    # Create random tensor for input
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Golden output - apply permute
+    torch_output_tensor = torch_input_tensor.permute(permute_dims)
+
+    # Verify expected output shape
+    assert (
+        list(torch_output_tensor.shape) == output_shape
+    ), f"Output shape mismatch: {list(torch_output_tensor.shape)} != {output_shape}"
+
+    # Create ttnn tensor with L1 interleaved memory config
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Compile run
+    logger.info(f"Compiling permute operation: {op_name}")
+    logger.info(f"  Input shape: {input_shape}")
+    logger.info(f"  Permute dims: {permute_dims}")
+    logger.info(f"  Output shape: {output_shape}")
+
+    tt_output_tensor = ttnn.permute(tt_input_tensor, permute_dims)
+    ttnn.synchronize_device(device)
+
+    # Capture warmup trace
+    logger.info(f"Capturing warmup trace with {warmup_iters} iterations")
+    trace_id_warmup = ttnn.begin_trace_capture(device, cq_id=0)
+    for i in range(warmup_iters):
+        tt_output_tensor = ttnn.permute(tt_input_tensor, permute_dims)
+    ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # Capture main trace
+    logger.info(f"Capturing main trace with {num_iters} iterations")
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    for i in range(num_iters):
+        tt_output_tensor = ttnn.permute(tt_input_tensor, permute_dims)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace")
+    profiler = BenchmarkProfiler()
+    profiler.start("warmup")
+    ttnn.execute_trace(device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(device, trace_id_warmup)
+    profiler.end("warmup")
+    ttnn.synchronize_device(device)
+
+    # Execute main trace with signposts
+    logger.info("Executing main trace")
+    signpost("start")
+    profiler.start("main")
+    ttnn.execute_trace(device, trace_id, blocking=False)
+    ttnn.release_trace(device, trace_id)
+    profiler.end("main")
+    signpost("stop")
+    ttnn.synchronize_device(device)
+
+    # Calculate performance metrics
+    warmup_time_ms = profiler.get_duration("warmup") * 1000
+    main_time_ms = profiler.get_duration("main") * 1000
+    avg_time_per_iter_us = (main_time_ms / num_iters) * 1000
+
+    logger.info(f"Warmup time: {warmup_time_ms:.2f} ms ({warmup_iters} iterations)")
+    logger.info(f"Main trace time: {main_time_ms:.2f} ms ({num_iters} iterations)")
+    logger.info(f"Average time per iteration: {avg_time_per_iter_us:.2f} µs")
+
+    # Verify correctness
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    torch_output_from_tt = ttnn.to_torch(tt_output_tensor)
+
+    assert (
+        torch_output_from_tt.shape == torch_output_tensor.shape
+    ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
+
+    # Use PCC for comparison (permute should preserve values exactly)
+    assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.9999)
+
+    logger.info(f"✓ Trace mode {op_name} test passed with correct output")
