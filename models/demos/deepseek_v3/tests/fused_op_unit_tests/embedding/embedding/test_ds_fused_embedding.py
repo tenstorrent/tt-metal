@@ -544,6 +544,7 @@ def _collect_device_perf(
         ("decode", 32, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 128, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 512, 0.99, 0.1, 0.1, 0.0),
+        ("prefill", 1024, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 2048, 0.99, 0.1, 0.1, 0.0),
     ],
 )
@@ -637,6 +638,7 @@ def test_ds_fused_embedding(
         ("decode", 32, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 128, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 512, 0.99, 0.1, 0.1, 0.0),
+        ("prefill", 1024, 0.99, 0.1, 0.1, 0.0),
         ("prefill", 2048, 0.99, 0.1, 0.1, 0.0),
     ],
 )
@@ -768,6 +770,7 @@ def test_ds_fused_embedding_single_device(
         ("decode", 32),
         ("prefill", 128),
         ("prefill", 512),
+        ("prefill", 1024),
         ("prefill", 2048),
     ],
 )
@@ -856,6 +859,7 @@ def test_ds_fused_embedding_device_perf(mode, seq_len):
         ("decode", 32),
         ("prefill", 128),
         ("prefill", 512),
+        ("prefill", 1024),
         ("prefill", 2048),
     ],
 )
