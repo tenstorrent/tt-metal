@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from loguru import logger
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
@@ -131,10 +132,20 @@ class SamplingGenerator:
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
+        logger.info(f"[SAMPLING_PARAMS]   Result: penalties_active={self._penalties_active}, log_probs_active={self._log_probs_active}")
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
             raise RuntimeError("Trace metadata missing. Call capture_trace first.")
+
+        # DEBUG: Check buffer identity
+        logger.info(f"[SAMPLING_VALIDATE] Checking buffer identity:")
+        logger.info(f"[SAMPLING_VALIDATE]   logits id={id(logits)}, slot['input'] id={id(slot['input'])}, SAME={logits is slot['input']}")
+        if tt_out_tok is not None:
+            if isinstance(slot["output"], tuple):
+                logger.info(f"[SAMPLING_VALIDATE]   tt_out_tok id={id(tt_out_tok)}, slot['output'][0] id={id(slot['output'][0])}, SAME={tt_out_tok is slot['output'][0]}")
+            else:
+                logger.info(f"[SAMPLING_VALIDATE]   tt_out_tok id={id(tt_out_tok)}, slot['output'] id={id(slot['output'])}")
 
         if logits is not slot["input"]:
             raise ValueError(
@@ -190,6 +201,7 @@ class SamplingGenerator:
             tt_out_tok=tt_out_tok,
         )
 
+        logger.info(f"[SAMPLING_TRACE_CAPTURE] Beginning trace capture")
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
             logits,
@@ -198,6 +210,7 @@ class SamplingGenerator:
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"[SAMPLING_TRACE_CAPTURE] Ended trace capture")
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -212,6 +225,17 @@ class SamplingGenerator:
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
 
+        # DEBUG: Log captured buffer IDs
+        logger.info(f"[SAMPLING_TRACE_CAPTURE] Captured: slot['id']={slot['id']}")
+        logger.info(f"[SAMPLING_TRACE_CAPTURE]   slot['input'] id={id(slot['input'])}")
+        if isinstance(output, tuple):
+            logger.info(f"[SAMPLING_TRACE_CAPTURE]   slot['output'] is tuple, len={len(output)}")
+            for i, o in enumerate(output):
+                if hasattr(o, 'shape'):
+                    logger.info(f"[SAMPLING_TRACE_CAPTURE]     output[{i}]: id={id(o)}, shape={o.shape}, dtype={o.dtype}")
+        elif hasattr(output, 'shape'):
+            logger.info(f"[SAMPLING_TRACE_CAPTURE]   slot['output']: id={id(output)}, shape={output.shape}, dtype={output.dtype}")
+
         return slot["output"]
 
     def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
@@ -220,6 +244,15 @@ class SamplingGenerator:
             raise RuntimeError("Trace has not been captured yet.")
         if slot["id"] is None or slot["output"] is None:
             raise RuntimeError("Trace has not been captured yet.")
+
+        # DEBUG: Log buffer IDs during trace execution
+        logger.info(f"[SAMPLING_TRACE_EXEC] Executing trace for key={key}, trace_id={slot['id']}")
+        logger.info(f"[SAMPLING_TRACE_EXEC]   Captured input buffer id={id(slot['input'])}")
+        if isinstance(slot['output'], tuple):
+            logger.info(f"[SAMPLING_TRACE_EXEC]   Output is tuple, len={len(slot['output'])}")
+            for i, o in enumerate(slot['output']):
+                if hasattr(o, 'shape'):
+                    logger.info(f"[SAMPLING_TRACE_EXEC]     output[{i}]: id={id(o)}, shape={o.shape}, dtype={o.dtype}")
 
         ttnn.execute_trace(self.mesh_device, slot["id"], cq_id=self.cq_id, blocking=False)
         return slot["output"]
@@ -241,7 +274,20 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling._force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
+        # DEBUG: Entry point with sampling params
+        logger.info(f"[SAMPLING] sample() called: enable_trace={enable_trace}, enable_internal_trace={self.enable_internal_trace}, use_internal_trace={use_internal_trace}")
+        logger.info(f"[SAMPLING]   penalties_on={penalties_on}, log_probs_on={log_probs_on}")
+        # Log current sampling params from tt_sampling
+        if hasattr(self, 'tt_sampling') and self.tt_sampling is not None:
+            logger.info(f"[SAMPLING]   tt_sampling.k_tensor exists={hasattr(self.tt_sampling, 'k_tensor')}")
+            logger.info(f"[SAMPLING]   tt_sampling.temp_tensor exists={hasattr(self.tt_sampling, 'temp_tensor')}")
+        if logits is not None and hasattr(logits, 'shape'):
+            logger.info(f"[SAMPLING]   logits.shape={logits.shape}, logits.dtype={logits.dtype}")
+        if tt_out_tok is not None and hasattr(tt_out_tok, 'shape'):
+            logger.info(f"[SAMPLING]   tt_out_tok.shape={tt_out_tok.shape}, tt_out_tok.dtype={tt_out_tok.dtype}")
+
         if not use_internal_trace:
+            logger.info(f"[SAMPLING] Running direct sampling (no trace)")
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
@@ -250,19 +296,30 @@ class SamplingGenerator:
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
+                logger.info(f"[SAMPLING] No trace captured yet, calling capture_trace()")
                 return self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                 )
 
+            logger.info(f"[SAMPLING] Using existing trace, calling _execute_trace()")
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
+            logger.info(f"[SAMPLING] _execute_trace returned: type={type(tt_out)}")
+            if isinstance(tt_out, tuple):
+                logger.info(f"[SAMPLING]   tuple len={len(tt_out)}")
+                if len(tt_out) > 0 and hasattr(tt_out[0], 'shape'):
+                    logger.info(f"[SAMPLING]   tt_out[0].shape={tt_out[0].shape}, dtype={tt_out[0].dtype}")
+            elif tt_out is not None and hasattr(tt_out, 'shape'):
+                logger.info(f"[SAMPLING]   tt_out.shape={tt_out.shape}, dtype={tt_out.dtype}")
 
         if penalties_on and tt_out is not None:
             if isinstance(tt_out, tuple):
                 self.tt_penalties.update_output_tokens(tt_out[0])
             else:
                 self.tt_penalties.update_output_tokens(tt_out)
+
+        logger.info(f"[SAMPLING] Returning: type={type(tt_out)}")
         return tt_out
 
 

@@ -383,6 +383,14 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
+        # DEBUG: Decode forward inputs (shapes only - no reads during trace)
+        # logger.info(
+        #     f"[DECODE] forward_decode: "
+        #     f"x.shape={x.shape}, "
+        #     f"current_pos.shape={current_pos.shape if current_pos is not None else None}, "
+        #     f"page_table.shape={page_table.shape if page_table is not None else None}, "
+        #     f"kv_cache_provided={kv_cache is not None}"
+        # )
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -703,6 +711,7 @@ class TtLlamaAttention(LightweightModule):
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
+            # Make sure user_id is a ttnn.Tensor, replicated on all devices
             if isinstance(user_id, int):
                 user_id = ttnn.from_torch(
                     torch.tensor([user_id], dtype=torch.int32),
@@ -711,8 +720,11 @@ class TtLlamaAttention(LightweightModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx_tensor=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx_tensor=user_id)
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, fill_page_table, batch_idx_tensor=user_id)
 
         else:
             ttnn.fill_cache(
@@ -732,38 +744,27 @@ class TtLlamaAttention(LightweightModule):
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
 
         # DEBUG: SDPA path selection
-        logger.info(
-            f"[PREFIX_CACHING] Attention SDPA: "
-            f"seq_len={seq_len}, "
-            f"batch_size={batch_size}, "
-            f"chunk_start_idx={chunk_start_idx}, "
-            f"ring_distributed_sdpa={ring_distributed_sdpa}, "
-            f"page_table_provided={page_table is not None}"
-        )
+        # logger.info(
+        #     f"[PREFIX_CACHING] Attention SDPA: "
+        #     f"seq_len={seq_len}, "
+        #     f"batch_size={batch_size}, "
+        #     f"chunk_start_idx={chunk_start_idx}, "
+        #     f"ring_distributed_sdpa={ring_distributed_sdpa}, "
+        #     f"page_table_provided={page_table is not None}"
+        # )
 
         if ring_distributed_sdpa:
-            # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
-            # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
-            # This ensures each device processes two complementary chunks of the attention matrix
-            # When using paged KV cache (page_table provided), pass KV cache tensors instead of linear tensors
-            if page_table is not None:
-                # Use KV cache tensors for paged attention
-                k_tensor = keys_BKSD
-                v_tensor = values_BKSD
-            else:
-                # Use linear tensors for non-paged attention
-                k_tensor = k_heads_1KSD_8b
-                v_tensor = v_heads_1VSD_8b
+            k_tensor = k_heads_1KSD_8b
+            v_tensor = v_heads_1VSD_8b
 
-            chunk_start_idx_for_sdpa = chunk_start_idx if chunk_start_idx is not None else 0
-            logger.info(
-                f"[PREFIX_CACHING] Using ring_distributed_sdpa with: "
-                f"chunk_start_idx={chunk_start_idx_for_sdpa}, "
-                f"page_table_provided={page_table is not None}"
-            )
+            # logger.info(
+            #     f"[PREFIX_CACHING] Using ring_distributed_sdpa with: "
+            #     f"chunk_start_idx={chunk_start_idx_for_sdpa}, "
+            #     f"page_table_provided={page_table is not None}"
+            # )
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_tensor,
@@ -774,18 +775,18 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](
                     seq_len, chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0
                 ),
-                page_table=page_table,
-                chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
+                page_table=None,
+                chunk_start_idx=None,
             )
         else:
             # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors
-            if chunk_start_idx is not None:
-                logger.info(
-                    f"[PREFIX_CACHING] Using chunked_scaled_dot_product_attention with: "
-                    f"chunk_start_idx={chunk_start_idx}, "
-                    f"seq_len={seq_len}, "
-                    f"page_table_provided={page_table is not None}"
-                )
+            if chunk_start_idx is not None and chunk_start_idx > 0:
+                # logger.info(
+                #     f"[PREFIX_CACHING] Using chunked_scaled_dot_product_attention with: "
+                #     f"chunk_start_idx={chunk_start_idx}, "
+                #     f"seq_len={seq_len}, "
+                #     f"page_table_provided={page_table is not None}"
+                # )
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                     input_tensor_q=q_heads_1QSD_8b,
                     input_tensor_k=keys_BKSD,
@@ -809,7 +810,6 @@ class TtLlamaAttention(LightweightModule):
                         seq_len // batch_size if seq_len // batch_size == 128 else seq_len
                     ),
                 )
-
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)
         ttnn.deallocate(k_heads_1KSD_8b)

@@ -82,8 +82,12 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
-        self.enable_split_sampling = True
-        self.model.enable_internal_trace = self.enable_split_sampling
+        # TEMPORARY: Selective tracing disable to debug garbage output issue
+        # Split sampling: decode trace captures transformer only, sampling runs separately
+        self.enable_split_sampling = True   # Decode trace returns logits, sampling is separate
+        self.model.enable_internal_trace = False  # NEVER trace sampling - causes buffer corruption
+        self._disable_prefill_tracing = True   # Disable prefill traces
+        self._disable_decode_tracing = False   # Enable decode traces
 
     def warmup_prefill_traces(
         self,
@@ -108,19 +112,17 @@ class Generator:
             logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
             # Capture trace for both
             for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
+                logger.info(f"Running warmup prefill for sequence length: {supported_length}, batch: {batch}")
                 # For batched prefill this needs to be *32
                 if batch == 32 and supported_length == 4096:
                     # For batched prefill max batch sequence length is 2048 or lower (128k limit)
                     logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
                     continue
                 if batch == 32:
-                    current_batch = page_table.shape[0]
-                    if current_batch < batch:
-                        pad_rows = batch - current_batch
-                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
-                        warmup_page_table = torch.cat([page_table, padding], dim=0)
-                    else:
-                        warmup_page_table = page_table
+                    # For warmup, ALL rows need valid block indices (not -1)
+                    # because use_batched_prefill=False processes each user individually
+                    # and -1 page table entries cause device hangs
+                    warmup_page_table = torch.zeros(batch, page_table.shape[1], dtype=torch.int32)
                 else:
                     warmup_page_table = page_table
                 warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
@@ -153,6 +155,12 @@ class Generator:
         output_tokens: torch.Tensor | None = None,
         start_pos: list[int] = None,  # Cached prefixes lengths
     ):
+        # TEMPORARY: Force disable prefill tracing to debug garbage output issue
+        if getattr(self, '_disable_prefill_tracing', False):
+            enable_trace = False
+            logger.info(f"[TRACING_DISABLED] prefill_forward_text: forcing enable_trace=False (prefill traces disabled)")
+
+        logger.info(f"Prefill forward text: start_pos={start_pos}, prompt_lens={prompt_lens}, empty_slots={empty_slots}, sampling_params={sampling_params}, page_table={page_table}")
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
                 tokens,
@@ -225,10 +233,13 @@ class Generator:
 
         for id, user_id in enumerate(all_users):
             logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
+            logger.info(f"id: {id}, user_id: {user_id}")
+            logger.info(f"page_table: {page_table}")
             if use_batched_prefill:
                 user_id = empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
+                num_cached_tokens = 0
                 seq_len = prompt_lens
             else:
                 seq_len = int(prompt_lens[id])
@@ -257,6 +268,12 @@ class Generator:
                     padded_last_token_idx[slot] = last_token_idx[local_idx]
                 last_token_idx = padded_last_token_idx
             else:
+                seq_len = int(prompt_lens[id])
+                last_token_idx = seq_len - 1  # Absolute index including cached tokens
+                prefill_seq_len = prefill_seq_lens[id]
+
+                if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                    enable_trace = False
                 # Extract tokens skipping cached ones
                 num_cached_tokens = num_cached_tokens_list[id]
                 new_tokens_len = seq_len - num_cached_tokens
@@ -267,10 +284,11 @@ class Generator:
                     ],
                     dim=-1,
                 )
+
             if page_table is not None:
                 # For prefix caching, page_table includes both cached and new blocks
                 page_table_user = self._get_prefill_user_page_table(
-                    page_table, kv_cache, seq_len, user_id, use_batched_prefill  # Use full seq_len including cached
+                    page_table, kv_cache, num_cached_tokens + prefill_seq_len, user_id, use_batched_prefill  # Use full seq_len including cached
                 )
                 # remove the first user from the page table
                 page_table = page_table[1:, :]
@@ -306,6 +324,10 @@ class Generator:
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
+                # Add num_cached_tokens for prefix caching support (non-traced path)
+                logger.info(f"[PREFILL_MAIN] Using NON-TRACED prefill path")
+                if not use_batched_prefill:
+                    prefill_kwargs["num_cached_tokens"] = num_cached_tokens_list[id]
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
             if not do_device_sampling:
@@ -409,13 +431,15 @@ class Generator:
             tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
-        logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        logger.info(f"[PREFILL_MAIN] Finished prefill for all users up to {batch_seq_len} tokens")
+        logger.info(f"[PREFILL_MAIN] Output tokens shape: {output_toks.shape}, values: {output_toks.flatten().tolist()}")
+        logger.info(f"[PREFILL_MAIN] Starting decode...")
         return output_toks
 
     def prefill_forward_single_user_text(
         self,
         tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
-        page_table,  # Cached and new pages
+        page_table,  # (32, num_blocks), cached and new pages. All users or just the single user at the given user_id index
         user_id,
         last_token_idx,  # Last token index of the full prompt, including the cached tokens
         kv_cache=None,
@@ -435,13 +459,25 @@ class Generator:
             f"last_token_idx={last_token_idx}"
         )
 
+        # If batch_size is 1, extract the single user's page table row.
+        #    Page_table comes from _get_prefill_user_page_table which places user data at row user_id
+        #    We extract to (1, num_blocks) so prepare_prefill_inputs_host can use page_table[0, :]
+        # If batch size is 32, use the entire page_table.
+        if page_table is not None:
+            if batch_size == 1:
+                page_table_user = page_table[user_id : user_id + 1, :]
+            else:
+                page_table_user = page_table
+        else:
+            page_table_user = None
+
         if use_prefix_caching:
             """
             Prefix caching requires paged attention.
             - page_table must match batch size of inputs (1 for single user)
             - page_table includes both cached and new blocks
             """
-            assert page_table is not None, "page_table must be provided for prefix caching"
+            assert page_table_user is not None, "page_table must be provided for prefix caching"
             assert kv_cache is not None, "kv_cache must be provided for prefix caching"
             assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (
                 f"last_token_idx must be provided and less than seq_len + num_cached_tokens: "
@@ -459,7 +495,6 @@ class Generator:
                 f"End position (num_cached_tokens + seq_len = {num_cached_tokens + seq_len}) must be aligned to "
                 f"block_size ({block_size})."
             )
-            page_table_user = page_table[user_id : user_id + 1, :] if isinstance(user_id, int) else page_table[0:1, :]
             # Pad page table to match number of blocks in full sequence (including cached)
             num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
             if num_padding_blocks > 0:
@@ -485,10 +520,11 @@ class Generator:
                 f"page_table_user_padded_shape={page_table_user_padded.shape}"
             )
 
-            prefill_input, tt_user_id, page_table_tt, _, tt_rot_mats_prefill = self.model.prepare_inputs_prefill(
+            prefill_input, tt_user_id, page_table_tt, tt_chunk_page_table, tt_rot_mats_prefill = self.model.prepare_inputs_prefill(
                 tokens,
                 user_id=user_id,
                 page_table=page_table_user_padded,
+                chunk_page_table=chunk_page_table,  # Pass chunk_page_table for conversion to ttnn tensor
                 batch_size=batch_size,
                 start_pos=chunk_start_idx,  # Pass absolute start position for rotary embeddings
             )
@@ -498,9 +534,9 @@ class Generator:
                 rot_mats=tt_rot_mats_prefill,  # Use sliced rotary matrices for prefix caching
                 user_id=tt_user_id,
                 page_table=page_table_tt,
-                chunk_page_table=chunk_page_table,
+                chunk_page_table=tt_chunk_page_table,  # Use converted ttnn tensor
                 chunk_start_idx=chunk_start_idx,
-                get_last_token=((last_token_idx - num_cached_tokens) // 32) * 32,
+                get_last_token=last_token_idx,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
@@ -510,23 +546,23 @@ class Generator:
             logger.info(
                 f"[PREFIX_CACHING] Output processing: "
                 f"last_token_idx_absolute={last_token_idx}, "
-                f"last_token_idx_relative={last_token_idx_relative}, "
-                f"last_token_idx_mod32={last_token_idx_relative % 32}"
+                f"last_token_idx_relative={last_token_idx_relative}"
             )
             tt_toks = self.model.process_output_prefill(
-                tt_toks, last_token_idx=(last_token_idx_relative % 32), tt_out_logits_saved=tt_out_logits_saved
+                tt_toks, last_token_idx=(last_token_idx_relative), tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
             )
 
             return tt_toks
         else:
             # Non-prefix-cached path
+            logger.info(f"[PREFILL_NON_TRACE] Non-traced prefill: tokens.shape={tokens.shape}, user_id={user_id}, page_table_user.shape={page_table_user.shape if page_table_user is not None else None}")
             prefill_input, tt_user_id, page_table_tt, _, tt_rot_mats_prefill = self.model.prepare_inputs_prefill(
                 tokens,
                 user_id=user_id,
-                page_table=page_table,
+                page_table=page_table_user,
                 batch_size=batch_size,
             )
-
+            logger.info(f"[PREFILL_NON_TRACE] Running prefill forward for single user, page_table_tt shape: {page_table_tt.shape}")
             tt_toks = self.model.ttnn_prefill_forward(
                 prefill_input,
                 rot_mats=tt_rot_mats_prefill,  # Use rotary matrices from prepare_inputs_prefill
@@ -536,10 +572,11 @@ class Generator:
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
-
+            logger.info(f"[PREFILL_NON_TRACE] Running process output prefill for single user")
             tt_toks = self.model.process_output_prefill(
-                tt_toks, last_token_idx=(last_token_idx), tt_out_logits_saved=tt_out_logits_saved
+                tt_toks, last_token_idx=(last_token_idx), tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
             )
+            logger.info(f"[PREFILL_NON_TRACE] Prefill output token: {tt_toks}")
 
             return tt_toks
 
@@ -553,22 +590,88 @@ class Generator:
         user_id=0,
         batch_size=1,
         tt_out_logits_saved=None,
+        num_cached_tokens=0,  # For prefix caching support
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Tracing with prefix caching support.
+        Uses position-based RoPE to enable trace reuse for different start_pos values.
         """
-        # Trace is independent of whether we are returning logits or sampling on device
-        # The difference happens outside of the trace, in process_output_prefill
-        trace_key = f"{prefill_seq_len}_{batch_size}"
+        # Extract single user's page table row for batch_size=1
+        # page_table comes from _get_prefill_user_page_table which places user data at row user_id
+        # We extract to (1, num_blocks) so prepare_prefill_inputs_host can use page_table[0, :]
+        if page_table is not None and batch_size == 1:
+            page_table_orig_shape = page_table.shape
+            page_table = page_table[user_id : user_id + 1, :]
+            logger.info(
+                f"[TRACE_PREFILL] Extracted page_table: {page_table}"
+                f"orig_shape={page_table_orig_shape}, "
+                f"new_shape={page_table.shape}, user_id={user_id}"
+            )
+
+        # Compute prefix caching values
+        use_prefix_caching = num_cached_tokens > 0
+        chunk_start_idx = num_cached_tokens if use_prefix_caching else 0
+        chunk_page_table = None
+        block_size = None
+
+        if use_prefix_caching:
+            block_size = get_block_size(kv_cache)
+            chunk_start_block = num_cached_tokens // block_size
+            chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
+            chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
+
+            # Pad page_table if needed
+            num_padding_blocks = num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size) - page_table.shape[1]
+            if num_padding_blocks > 0:
+                padding = torch.zeros(1, num_padding_blocks, dtype=torch.int32)
+                page_table = torch.cat([page_table, padding], dim=-1)
+                logger.info(
+                    f"[TRACE_PREFILL] Padded page_table: added {num_padding_blocks} blocks, "
+                    f"new_shape={page_table.shape}"
+                )
+
+            logger.info(
+                f"[TRACE_PREFILL] Prefix caching: block_size={block_size}, "
+                f"chunk_start_idx={chunk_start_idx}, chunk_start_block={chunk_start_block}, "
+                f"chunk_end_block={chunk_end_block}, chunk_page_table.shape={chunk_page_table.shape}, "
+                f"page_table.shape={page_table.shape}"
+            )
+
+        # Trace key includes num_cached_blocks because page_table shape depends on total blocks
+        # (page_table is padded to num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size))
+        # num_cached_tokens is block-aligned, so we use cached blocks count for the key
+        if use_prefix_caching:
+            num_cached_blocks = num_cached_tokens // block_size
+        else:
+            # For non-prefix-caching, we still need block_size for trace key consistency
+            if block_size is None and kv_cache is not None:
+                block_size = get_block_size(kv_cache)
+            num_cached_blocks = 0
+        trace_key = f"{prefill_seq_len}_{batch_size}_{num_cached_blocks}"
+        logger.info(f"[TRACE_PREFILL] Trace key: {trace_key}")
+
         if self.trace_id_prefill[trace_key] is None:
+            logger.info(f"[TRACE_PREFILL] Capturing new trace for key: {trace_key}")
+            # DEBUG: Log KV cache identity to verify same buffer is used in decode
+            if kv_cache is not None:
+                logger.info(f"[KV_CACHE_DEBUG] Prefill trace capture: kv_cache id={id(kv_cache)}, len={len(kv_cache)}, layer0_keys_id={id(kv_cache[0][0])}")
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id, batch_size=batch_size
+                tokens,
+                last_token_idx,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                kv_cache=kv_cache,
+                user_id=user_id,
+                batch_size=batch_size,
+                start_pos=chunk_start_idx,  # For position_ids generation
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
+        else:
+            logger.info(f"[TRACE_PREFILL] Reusing existing trace for key: {trace_key}")
 
-        logger.info("Executing prefill trace")
+        logger.info("[TRACE_PREFILL] Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
@@ -576,7 +679,9 @@ class Generator:
             tokens,
             user_id,
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
             batch_size=batch_size,
+            start_pos=chunk_start_idx,  # For position_ids generation
         )
         return tt_out_trace
 
@@ -586,36 +691,74 @@ class Generator:
         last_token_idx,
         user_id,
         page_table=None,
+        chunk_page_table=None,  # For prefix caching
         kv_cache=None,
         batch_size=1,
+        start_pos=0,  # For position_ids generation
     ):
         """
-        Captures a trace for the prefill_forward method.
+        Captures a trace for the prefill_forward method with prefix caching support.
+        Uses position-based RoPE computed via ttnn.embedding inside the trace.
         """
+        # Get all 5 host tensors including position_ids
+        host_inputs = self.model.prepare_prefill_inputs_host(
+            tokens,
+            user_id=user_id,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            batch_size=batch_size,
+            start_pos=start_pos,
+        )
+        tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host = host_inputs
+
+        # Copy ALL 5 tensors to device (position_ids now included)
+        device_inputs = copy_host_to_device(
+            (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host),
+            mesh_device=self.mesh_device
+        )
+
+        # Transform computes rot_mats from position_ids inside the trace
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, rot_mats = transformed_inputs
 
         # Compile run
-        # self.prefill_forward_single_user_text(tokens, page_table, user_id, last_token_idx, kv_cache)
-
-        # Get inputs ready for trace run
-        host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table, batch_size=batch_size)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
+            tt_tokens,
+            rot_mats=rot_mats,  # Now computed from position_ids
+            user_id=tt_user_id,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            chunk_start_idx=start_pos,
+            kv_cache=kv_cache,
+            get_last_token=last_token_idx,
+            batch_size=batch_size,
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
 
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        # Trace capture run
+        device_inputs = copy_host_to_device(
+            (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host),
+            mesh_device=self.mesh_device
+        )
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_tokens, tt_user_id, tt_page_table, tt_chunk_page_table, rot_mats = transformed_inputs
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
+            tt_tokens,
+            rot_mats=rot_mats,
+            user_id=tt_user_id,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            chunk_start_idx=start_pos,
+            kv_cache=kv_cache,
+            get_last_token=last_token_idx,
+            batch_size=batch_size,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Capturing Prefill Trace")
+
         return trace_id, tt_out_trace, *device_inputs
 
     def _prefill_forward_trace_text(
@@ -626,20 +769,37 @@ class Generator:
         tokens,
         user_id,
         page_table=None,
+        chunk_page_table=None,  # For prefix caching
         batch_size=1,
+        start_pos=0,  # For position_ids generation
     ):
         """
-        Executes the trace for the prefill_forward method but does not read back outputs.
+        Executes the trace for the prefill_forward method with prefix caching support.
         """
-        host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
+        # Get all 5 host tensors including position_ids
+        host_inputs = self.model.prepare_prefill_inputs_host(
+            tokens,
+            user_id=user_id,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            batch_size=batch_size,
+            start_pos=start_pos,
+        )
+        tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host = host_inputs
 
+        # Copy all 5 host tensors to device
+        logger.info("Returned from prepare_prefill_inputs_host")
         device_inputs = copy_host_to_device(
-            host_tensors=host_inputs,
+            host_tensors=(tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host),
             device_tensors=device_inputs,
         )
-
+        logger.info("Returned from copy_host_to_device")
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-
+        # Synchronize before process_output_prefill to prevent CCL state conflicts
+        # between trace's CCL operations and process_output_prefill's line_all_gather
+        logger.info("Executed trace")
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("Done synchronizing device")
         return tt_out_trace
 
     def decode_forward_text(
@@ -660,11 +820,30 @@ class Generator:
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        # TEMPORARY: Force disable decode tracing to debug garbage output issue
+        if getattr(self, '_disable_decode_tracing', False):
+            enable_trace = False
+            logger.info(f"[TRACING_DISABLED] decode_forward_text: forcing enable_trace=False (decode traces disabled)")
+
+        # DEBUG: Decode forward entry point
+        logger.info(f"[DECODE] decode_forward_text entry:")
+        logger.info(f"[DECODE]   tokens.shape={tokens.shape}, tokens[:8]={tokens[:8].flatten().tolist()}")
+        logger.info(f"[DECODE]   start_pos.shape={start_pos.shape}, start_pos[:8]={start_pos[:8].tolist()}")
+        if page_table is not None:
+            logger.info(f"[DECODE]   page_table.shape={page_table.shape}")
+            # Log first few rows (users 0-7, first 8 blocks)
+            logger.info(f"[DECODE]   page_table[:8, :8]=\n{page_table[:8, :8]}")
+        else:
+            logger.info(f"[DECODE]   page_table=None")
+        logger.info(f"[DECODE]   enable_trace={enable_trace}, is_cur_pos_sharded={is_cur_pos_sharded}, is_page_table_sharded={is_page_table_sharded}")
+
         if sampling_params is None:
             return_logits = True
             reset_inputs = True  # We didn't sample on device, so we need to load inputs.
         else:
             return_logits = False
+            # ALWAYS reset inputs for decode - tokens and current_pos change every step
+            reset_inputs = True
 
         if self.prev_page_table is None:
             self.prev_page_table = (
@@ -679,6 +858,11 @@ class Generator:
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
+
+        # DEBUG: Log reset_inputs decision factors
+        logger.info(f"[DECODE] reset_inputs decision: reset_inputs={reset_inputs}, "
+                    f"sampling_params_none={sampling_params is None}, "
+                    f"page_table_changed={torch.any(self.prev_page_table != page_table).item() if hasattr(self, 'prev_page_table') else 'N/A'}")
 
         kv_cache = kv_cache[0]
         decode_kwargs = {
@@ -702,6 +886,14 @@ class Generator:
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
+
+        # DEBUG: Log KV cache identity to compare with prefill
+        if kv_cache is not None:
+            logger.info(f"[KV_CACHE_DEBUG] Decode: kv_cache id={id(kv_cache)}, len={len(kv_cache)}, layer0_keys_id={id(kv_cache[0][0])}")
+
+        # DEBUG: Track return_logits throughout the flow
+        logger.info(f"[DECODE_FLOW] decode_forward_text: return_logits={return_logits}, enable_trace={enable_trace}, enable_split_sampling={self.enable_split_sampling}")
+
         if enable_trace:
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
@@ -714,6 +906,13 @@ class Generator:
                 return_logits=return_logits,
             )
             tt_log_probs = None
+
+        # DEBUG: What did _decode_easy_trace_text return?
+        logger.info(f"[DECODE_FLOW] After trace: tt_tok type={type(tt_tok)}, is_tuple={isinstance(tt_tok, tuple)}")
+        if isinstance(tt_tok, tuple):
+            logger.info(f"[DECODE_FLOW]   tuple len={len(tt_tok)}, tt_tok[0].shape={tt_tok[0].shape if hasattr(tt_tok[0], 'shape') else 'N/A'}, tt_tok[0].dtype={tt_tok[0].dtype if hasattr(tt_tok[0], 'dtype') else 'N/A'}")
+        elif tt_tok is not None and hasattr(tt_tok, 'shape'):
+            logger.info(f"[DECODE_FLOW]   tt_tok.shape={tt_tok.shape}, tt_tok.dtype={tt_tok.dtype}")
 
         if read_from_device:
             # IMPORTANT: If split sampling is enabled, `tt_log_probs` is produced by the sampling
@@ -775,6 +974,9 @@ class Generator:
         """
         Captures a trace for the decode_forward method.
         """
+        # DEBUG: Log KV cache identity during decode trace capture
+        if kv_cache is not None:
+            logger.info(f"[KV_CACHE_DEBUG] Decode trace CAPTURE: kv_cache id={id(kv_cache)}, len={len(kv_cache)}, layer0_keys_id={id(kv_cache[0][0])}")
 
         # Compile run
         self._decode_forward_no_trace_text(
@@ -810,6 +1012,16 @@ class Generator:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
+        # DEBUG: Log buffer IDs after trace capture
+        logger.info(f"[DECODE_TRACE_CAPTURE] trace_id={trace_id}")
+        if isinstance(tt_out_tok, (list, tuple)):
+            logger.info(f"[DECODE_TRACE_CAPTURE] tt_out_tok is list/tuple, len={len(tt_out_tok)}")
+            for i, t in enumerate(tt_out_tok):
+                if hasattr(t, 'shape'):
+                    logger.info(f"[DECODE_TRACE_CAPTURE]   tt_out_tok[{i}]: id={id(t)}, shape={t.shape}, dtype={t.dtype}")
+        elif tt_out_tok is not None and hasattr(tt_out_tok, 'shape'):
+            logger.info(f"[DECODE_TRACE_CAPTURE] tt_out_tok: id={id(tt_out_tok)}, shape={tt_out_tok.shape}, dtype={tt_out_tok.dtype}")
+
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
@@ -824,7 +1036,9 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
+        logger.info(f"[DECODE_TRACE_EXEC] Executing decode trace_id={trace_id}, tt_out_trace.shape={tt_out_trace.shape if hasattr(tt_out_trace, 'shape') else 'N/A'}")
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        logger.info(f"[DECODE_TRACE_EXEC] Trace executed (non-blocking)")
 
         return tt_out_trace
 
@@ -844,6 +1058,13 @@ class Generator:
         """
         tokens = tokens.view(-1, 1)
         # The trace is different depending on whether we are returning logits or sampling on device
+        trace_exists = self.trace_ids_decode[return_logits] is not None
+        logger.info(f"[DECODE_TRACE] _decode_easy_trace_text: trace_exists={trace_exists}, reset_inputs={reset_inputs}, return_logits={return_logits}")
+
+        # DEBUG: Log KV cache identity during decode trace
+        if kv_cache is not None:
+            logger.info(f"[KV_CACHE_DEBUG] Decode trace: kv_cache id={id(kv_cache)}, len={len(kv_cache)}, layer0_keys_id={id(kv_cache[0][0])}")
+
         if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
@@ -858,6 +1079,7 @@ class Generator:
             self.trace_inputs_decode[return_logits] = device_inputs
             self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
+            logger.info(f"[DECODE_TRACE] Resetting inputs for trace execution")
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
             )
@@ -867,6 +1089,20 @@ class Generator:
                 device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
+        else:
+            logger.info(f"[DECODE_TRACE] SKIPPING input reset - using stale inputs!")
+        # DEBUG: What trace output tensor are we using?
+        trace_output = self.trace_output_decode[return_logits]
+        logger.info(f"[DECODE_TRACE_EXEC_PRE] return_logits={return_logits}, trace_id={self.trace_ids_decode[return_logits]}")
+        logger.info(f"[DECODE_TRACE_EXEC_PRE] trace_output type={type(trace_output)}")
+        if isinstance(trace_output, (list, tuple)):
+            logger.info(f"[DECODE_TRACE_EXEC_PRE]   trace_output is list/tuple, len={len(trace_output)}")
+            for i, t in enumerate(trace_output):
+                if hasattr(t, 'shape'):
+                    logger.info(f"[DECODE_TRACE_EXEC_PRE]   trace_output[{i}]: id={id(t)}, shape={t.shape}, dtype={t.dtype}")
+        elif trace_output is not None and hasattr(trace_output, 'shape'):
+            logger.info(f"[DECODE_TRACE_EXEC_PRE]   trace_output: id={id(trace_output)}, shape={trace_output.shape}, dtype={trace_output.dtype}")
+
         trace_tok_rm = self._decode_forward_trace_text(
             self.trace_ids_decode[return_logits],
             self.trace_inputs_decode[return_logits],
@@ -876,12 +1112,44 @@ class Generator:
             page_table=page_table,
         )
 
+        # DEBUG: What did _decode_forward_trace_text return?
+        logger.info(f"[DECODE_TRACE_DETAIL] After _decode_forward_trace_text: trace_tok_rm type={type(trace_tok_rm)}")
+        if isinstance(trace_tok_rm, (list, tuple)):
+            logger.info(f"[DECODE_TRACE_DETAIL]   trace_tok_rm is list/tuple, len={len(trace_tok_rm)}")
+            if len(trace_tok_rm) > 0 and hasattr(trace_tok_rm[0], 'shape'):
+                logger.info(f"[DECODE_TRACE_DETAIL]   trace_tok_rm[0].shape={trace_tok_rm[0].shape}, dtype={trace_tok_rm[0].dtype}")
+        elif trace_tok_rm is not None and hasattr(trace_tok_rm, 'shape'):
+            logger.info(f"[DECODE_TRACE_DETAIL]   trace_tok_rm.shape={trace_tok_rm.shape}, dtype={trace_tok_rm.dtype}")
+
+        # DEBUG: Decision point - do we call sampling or return logits?
+        logger.info(f"[DECODE_TRACE_DETAIL] Decision: enable_split_sampling={self.enable_split_sampling}, return_logits={return_logits}")
+        logger.info(f"[DECODE_TRACE_DETAIL]   Will call sampling: {self.enable_split_sampling and not return_logits}")
+
         if self.enable_split_sampling and not return_logits:
-            return self.model.sampling.sample(
+            # CRITICAL: Synchronize after decode trace execution before sampling!
+            # The decode trace runs with blocking=False. During trace CAPTURE, the
+            # sampling compile takes long enough (~58s) for decode to complete.
+            # During trace REPLAY, sampling is fast (~22ms), so decode may not be done yet.
+            logger.info(f"[DECODE_TRACE_DETAIL] Synchronizing device before sampling...")
+            ttnn.synchronize_device(self.mesh_device)
+            # ALWAYS disable sampling trace - tracing sampling causes buffer corruption
+            # when combined with decode traces due to buffer allocation during active trace
+            logger.info(f"[DECODE_TRACE_DETAIL] Calling sampling.sample() with logits=trace_tok_rm[0], enable_trace=False")
+            sample_result = self.model.sampling.sample(
                 logits=trace_tok_rm[0],
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
+                enable_trace=False,  # Never trace sampling
             )
+            logger.info(f"[DECODE_TRACE_DETAIL] sampling.sample() returned: type={type(sample_result)}")
+            if isinstance(sample_result, tuple):
+                logger.info(f"[DECODE_TRACE_DETAIL]   tuple len={len(sample_result)}")
+                if len(sample_result) > 0 and hasattr(sample_result[0], 'shape'):
+                    logger.info(f"[DECODE_TRACE_DETAIL]   sample_result[0].shape={sample_result[0].shape}, dtype={sample_result[0].dtype}")
+            elif sample_result is not None and hasattr(sample_result, 'shape'):
+                logger.info(f"[DECODE_TRACE_DETAIL]   sample_result.shape={sample_result.shape}, dtype={sample_result.dtype}")
+            return sample_result
 
+        logger.info(f"[DECODE_TRACE_DETAIL] Returning trace_tok_rm directly (NOT calling sampling)")
         return trace_tok_rm
 
     def read_decode_output(self, tt_out, async_read=True):
@@ -899,6 +1167,9 @@ class Generator:
         return (logits, log_probs), [read_event]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
+        # DEBUG: What mode are we in?
+        logger.info(f"[PROCESS_OUTPUT] process_decode_output_host called: is_tokens={is_tokens}")
+        logger.info(f"[PROCESS_OUTPUT]   tt_out type={type(tt_out)}, is_tuple={isinstance(tt_out, tuple)}")
         if isinstance(tt_out, tuple):
             tt_log_probs = tt_out[1]
             tt_out = tt_out[0]
@@ -978,8 +1249,12 @@ class Generator:
         return CompletionPrediction(generation=generation)
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
+        # Output shape: (32, num_blocks)
+        # Either all 32 users or just the single user at the given user_id index
+        logger.info("_get_prefill_user_page_table")
+        logger.info(f"page_table: {page_table}")
+        logger.info(f"user_id: {user_id}")
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
-
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]
@@ -994,6 +1269,7 @@ class Generator:
                 padded_page_table[user, :] = page_table[i, :]
         else:
             padded_page_table[user_id, :] = page_table[0, :]
+        logger.info(f"padded_page_table: {padded_page_table}")
         return padded_page_table
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:

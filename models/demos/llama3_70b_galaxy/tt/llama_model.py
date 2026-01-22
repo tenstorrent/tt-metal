@@ -197,15 +197,24 @@ class TtTransformer(LightweightModule):
         user_id=0,
         page_table=None,
         chunk_page_table=None,
-        tt_rot_mats_prefill=None,
         batch_size=1,
         start_pos=0,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
+        tensors on host (to be copied to device later).
         start_pos: Absolute position in sequence (for prefix caching, indicates where cached tokens end)
+
+        Returns position_ids instead of rot_mats - rot_mats will be computed
+        from position_ids in transform_prefill_inputs_device using ttnn.embedding.
         """
+        logger.info("prepare_prefill_inputs_host")
+        logger.info(f"user_id: {user_id}")
+        logger.info(f"page_table: {page_table}")
+        logger.info(f"page_table shape: {page_table.shape if page_table is not None else None}")
+        logger.info(f"chunk_page_table: {chunk_page_table}")
+        logger.info(f"batch_size: {batch_size}")
+        logger.info(f"start_pos: {start_pos}")
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
@@ -217,127 +226,114 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # Slice rot mats from cached ones if start_pos > 0 (prefix caching)
-        #
-        # Note: tt_rot_mats_prefill are in TILE_LAYOUT and may not support direct slicing.
-        # Instead, we use self.rope_setup.cos_matrix/sin_matrix.
-        if start_pos > 0:
-            # DEBUG: Rotary embedding slicing for prefix caching
-            logger.info(
-                f"[PREFIX_CACHING] Rotary embedding slicing: "
-                f"start_pos={start_pos}, "
-                f"seq_len={S}, "
-                f"required_end={start_pos + S}"
-            )
-            # Slice from rope_setup matrices
-            mat_len = self.rope_setup.cos_matrix.shape[2]
-            required_end = start_pos + S
-            slice_start = start_pos
-            slice_end = min(mat_len, required_end)
+        # Create position indices for this request (replaces rot_mats computation)
+        # Position indices will be used with ttnn.embedding to compute rot_mats on device
+        position_ids = torch.arange(start_pos, start_pos + S, dtype=torch.int32)
 
-            logger.info(
-                f"[PREFIX_CACHING] Rotary embedding slice: "
-                f"mat_len={mat_len}, "
-                f"slice_start={slice_start}, "
-                f"slice_end={slice_end}, "
-                f"needs_padding={required_end > mat_len}"
-            )
+        # Validation: Check position_ids are within valid range
+        max_pos = position_ids.max().item()
+        if hasattr(self, 'rope_setup') and hasattr(self.rope_setup, 'max_seq_len'):
+            if max_pos >= self.rope_setup.max_seq_len:
+                logger.error(
+                    f"[POSITION_IDS] ERROR: position_ids exceed max_seq_len! "
+                    f"max_pos={max_pos}, max_seq_len={self.rope_setup.max_seq_len}, "
+                    f"start_pos={start_pos}, seq_len={S}"
+                )
+                raise ValueError(
+                    f"Position IDs exceed max_seq_len: max_pos={max_pos}, "
+                    f"max_seq_len={self.rope_setup.max_seq_len}"
+                )
 
-            cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
-            sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+        logger.info(
+            f"[POSITION_IDS] Creating position_ids: start_pos={start_pos}, seq_len={S}, "
+            f"position_ids_range=[{position_ids.min().item()}, {position_ids.max().item()}], "
+            f"position_ids.shape={position_ids.shape}, position_ids[:5]={position_ids[:5].tolist()}"
+        )
+        tt_position_ids = ttnn.from_torch(
+            position_ids.unsqueeze(0),  # [1, seq_len]
+            device=None,  # Host tensor - will be copied to device later
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        logger.info(f"[POSITION_IDS] tt_position_ids created: shape={tt_position_ids.shape}")
 
-            # Pad if needed
-            if required_end > mat_len:
-                pad_len = required_end - mat_len
-                padding = [(0, 0)] * 4
-                padding[2] = (0, pad_len)
-                cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
-                sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-
-            # Convert to TILE_LAYOUT to match expected format
-            cos_slice = ttnn.to_layout(cos_slice, ttnn.TILE_LAYOUT)
-            sin_slice = ttnn.to_layout(sin_slice, ttnn.TILE_LAYOUT)
-
-            tt_rot_mats_prefill = [cos_slice, sin_slice]
-        else:
-            # Initialize or get cached rot mats in the TILE_LAYOUT
-            if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-                if self.args.is_qwen:
-                    tt_rot_mats_prefill = get_rot_mats(
-                        head_dim=self.args.head_dim,
-                        device=self.mesh_device,
-                        seq_len=self.args.max_seq_len,
-                        theta=self.args.rope_theta,
-                        rope_scaling=self.args.rope_scaling_factor,
-                    )
-                else:
-                    tt_rot_mats_prefill = get_prefill_rot_mat(
-                        self.args.head_dim,
-                        self.args.max_seq_len,
-                        self.mesh_device,
-                        seq_len=self.args.max_seq_len,
-                        scale_factor=self.args.rope_scaling_factor,
-                    )
-                self.tt_rot_mats_prefill = tt_rot_mats_prefill
-            else:
-                tt_rot_mats_prefill = self.tt_rot_mats_prefill
-
+        columns = 4
+        rows = 8
+        user_id_column = user_id // rows  # 0 for user_id 0-7, 1 for user_id 8-15, etc.
         if page_table is not None:
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
                 # we only want to update the kv cache for 8 users per 4 devices
                 # pad with -1 for the seqlen of all other users
-                devices = 4
-                batch_size_per_device = batch_size // devices
-                page_table_padded = torch.ones((devices, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
-                for i in range(devices):
+                batch_size_per_column = batch_size // columns
+                page_table_padded = torch.ones((columns, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
+                for i in range(columns):
                     page_table_padded[
                         i,
-                        (i * batch_size_per_device)
+                        (i * batch_size_per_column)
                         * page_table.shape[1] : (i + 1)
-                        * batch_size_per_device
+                        * batch_size_per_column
                         * page_table.shape[1],
-                    ] = page_table[i * batch_size_per_device : (i + 1) * batch_size_per_device, :].reshape(1, -1)
-
+                    ] = page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(1, -1)
+                chunk_page_table_padded = None  # batch_size>1 => no prefix caching => no chunk_page_table
             else:
                 # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
                 # we are setting the page table to -1 for all other devices to skip the update
-                page_table_padded = torch.ones((128, page_table.shape[1]), dtype=torch.int32) * -1
-                page_table_padded[user_id // 8 * 32 : (user_id // 8 + 1) * 32, :] = page_table
+                page_table_padded = torch.ones((columns, page_table.shape[1]), dtype=torch.int32) * -1
+                # Note: For prefix caching, page_table is already extracted to a single row (shape: 1, num_blocks),
+                # so we always access row 0. The original user_id is used only to compute user_id_column.
+                page_table_padded[user_id_column, :] = page_table[0, :]
+
+            logger.info(f"page_table_padded shape: {page_table_padded.shape}")
+            logger.info(f"page_table_padded: {page_table_padded}")
 
             tt_page_table = ttnn.from_torch(
                 page_table_padded,
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_mapper=ttnn.ShardTensor2dMesh(  # Each mesh column gets one row of the page table
                     self.mesh_device, dims=(None, 0), mesh_shape=self.args.cluster_shape
                 ),
             )
-
+            logger.info(f"tt_page_table shape: {tt_page_table.shape}")
         else:
             tt_page_table = None
 
         if chunk_page_table is not None:
+            assert batch_size == 1, "chunk_page_table is only supported for batch_size=1"
+            chunk_page_table_padded = torch.ones((columns, chunk_page_table.shape[1]), dtype=torch.int32) * -1
+            chunk_page_table_padded[user_id_column, :] = chunk_page_table[0, :]
+
             tt_chunk_page_table = ttnn.from_torch(
-                chunk_page_table,
+                chunk_page_table_padded,
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(  # Each mesh column gets one row of the chunk page table
+                    self.mesh_device, dims=(None, 0), mesh_shape=self.args.cluster_shape),
             )
         else:
             tt_chunk_page_table = None
 
+        # For paged_fill_cache, the batch_idx must be the local row index in the sharded page_table,
+        # not the global user_id. When batch_size=1, page_table is sharded so each device has only 1 row,
+        # so the local batch index is always 0. The global user_id is only used to determine which
+        # mesh column gets valid data (via user_id_column = user_id // 8).
+        local_batch_idx = 0 if batch_size == 1 else user_id
         user_id = ttnn.from_torch(
-            torch.tensor([user_id], dtype=torch.int32),
+            torch.tensor([local_batch_idx], dtype=torch.int32),
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        logger.info("Returning from prepare_prefill_inputs_host")
 
-        return tokens, user_id, tt_page_table, tt_chunk_page_table, tt_rot_mats_prefill
+        # Return position_ids instead of rot_mats (5th element)
+        # rot_mats will be computed from position_ids in transform_prefill_inputs_device
+        return tokens, user_id, tt_page_table, tt_chunk_page_table, tt_position_ids
 
     def transform_prefill_inputs_device(
         self,
@@ -345,10 +341,22 @@ class TtTransformer(LightweightModule):
         user_id,
         page_table=None,
         chunk_page_table=None,
+        position_ids=None,
     ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, user_id, page_table, chunk_page_table
+
+        # Compute rot_mats from position_ids using embedding lookup
+        rot_mats = None
+        if position_ids is not None:
+            seq_len = position_ids.shape[-1]
+            logger.info(
+                f"[ROT_MATS] Computing rot_mats from position_ids: "
+                f"position_ids.shape={position_ids.shape}, seq_len={seq_len}"
+            )
+            rot_mats = self.rope_setup.get_prefill_rot_mats(position_ids, seq_len)
+
+        return tt_tokens, user_id, page_table, chunk_page_table, rot_mats
 
     def prepare_inputs_prefill(
         self,
@@ -356,7 +364,6 @@ class TtTransformer(LightweightModule):
         user_id=0,
         page_table=None,
         chunk_page_table=None,
-        tt_rot_mats_prefill=None,
         batch_size=1,
         start_pos=0,
     ):
@@ -368,25 +375,29 @@ class TtTransformer(LightweightModule):
         start_pos: Absolute position in sequence (for prefix caching, indicates where cached tokens end)
         """
         host_inputs = self.prepare_prefill_inputs_host(
-            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size, start_pos
+            tokens, user_id, page_table, chunk_page_table, batch_size, start_pos
         )
-        # host_inputs is: (tokens, user_id, tt_page_table, tt_chunk_page_table, tt_rot_mats_prefill)
-        # The first 4 are host tensors, the last (rotary matrices) is already on device
+        # host_inputs is: (tokens, user_id, tt_page_table, tt_chunk_page_table, tt_position_ids)
+        # All 5 are host tensors - position_ids will be used to compute rot_mats on device
         (
             tokens_host,
             user_id_host,
             tt_page_table_host,
             tt_chunk_page_table_host,
-            tt_rot_mats_prefill_device,
+            tt_position_ids_host,
         ) = host_inputs
 
-        # Copy first 4 host tensors to device
+        # Copy all 5 host tensors to device
         device_inputs = copy_host_to_device(
-            (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host), mesh_device=self.mesh_device
+            (tokens_host, user_id_host, tt_page_table_host, tt_chunk_page_table_host, tt_position_ids_host),
+            mesh_device=self.mesh_device
         )
+        logger.info("Returned from copy_host_to_device")
+        # transform_prefill_inputs_device computes rot_mats from position_ids
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
-        # Return transformed inputs plus the rotary matrices (already on device)
-        return (*transformed_device_inputs, tt_rot_mats_prefill_device)
+        logger.info("Returned from transform_prefill_inputs_device")
+        # Returns: (tt_tokens, user_id, page_table, chunk_page_table, rot_mats)
+        return transformed_device_inputs
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
         """
@@ -443,6 +454,17 @@ class TtTransformer(LightweightModule):
         NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
         """
         B = tokens.shape[0]
+        # DEBUG: Decode inputs
+        logger.info(f"[DECODE] prepare_decode_inputs_host:")
+        logger.info(f"[DECODE]   tokens.shape={tokens.shape}, tokens[:8]={tokens[:8].tolist()}")
+        logger.info(f"[DECODE]   current_pos.shape={current_pos.shape}, current_pos[:8]={current_pos[:8].tolist()}")
+        if page_table is not None:
+            logger.info(f"[DECODE]   page_table.shape={page_table.shape}")
+            # Log first few rows of page table (first 8 users, first 8 blocks)
+            logger.info(f"[DECODE]   page_table[:8, :8]=\n{page_table[:8, :8]}")
+        else:
+            logger.info(f"[DECODE]   page_table=None")
+        logger.info(f"[DECODE]   is_cur_pos_sharded={is_cur_pos_sharded}, is_page_table_sharded={is_page_table_sharded}")
         # assert current_pos.shape[0] == B, "Batch size mismatch"
         assert (
             B == self.args.max_batch_size
@@ -546,8 +568,23 @@ class TtTransformer(LightweightModule):
         """
         Input is ttnn device tensor of logits. Output is torch logits or tokens tensor.
         NOTE: In this model, prefill always uses get_last_token
+
+        user_id is used to select output from the correct mesh column for paged prefill.
+        For batch_size=1, only the user's column has valid KV cache data.
+        Mesh is 8x4 (8 rows for heads, 4 columns for data parallel).
+        user_id 0-7 → column 0, user_id 8-15 → column 1, etc.
         """
+        # Determine which device to read output from based on user_id
+        # Device index for row 0 of each column: col 0 → dev 0, col 1 → dev 1, etc.
+        output_device_idx = user_id // 8  # 0, 1, 2, or 3
+
+        # DEBUG: Check input tensor shape and sample values before norm
+        logger.info(f"[PREFILL_OUTPUT] Input tt_out shape: {tt_out.shape}, user_id={user_id}, output_device_idx={output_device_idx}")
+
         x, _ = self.norm(tt_out, res=None, mode="prefill")
+
+        # DEBUG: Check tensor shape after norm
+        logger.info(f"[PREFILL_OUTPUT] After norm x shape: {x.shape}")
         if isinstance(last_token_idx, list):
             # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
             batch_size = len(last_token_idx)
@@ -561,6 +598,18 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
+            # DEBUG: Check slice bounds
+            x_seq_len = x_split[i].shape[2] if hasattr(x_split[i], 'shape') else 'unknown'
+            logger.info(
+                f"[PREFILL_OUTPUT] Slicing: last_token_idx_i={last_token_idx_i}, "
+                f"x_seq_len={x_seq_len}, i={i}"
+            )
+            if isinstance(x_seq_len, int) and last_token_idx_i >= x_seq_len:
+                logger.error(
+                    f"[PREFILL_OUTPUT] SLICE OUT OF BOUNDS! "
+                    f"last_token_idx_i={last_token_idx_i} >= x_seq_len={x_seq_len}"
+                )
+
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
@@ -580,16 +629,44 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
+
+            # DEBUG: Check if logits contain garbage (NaN, inf, or extreme values)
+            logits_sample = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx])
+            if torch.isnan(logits_sample).any() or torch.isinf(logits_sample).any():
+                logger.error(
+                    f"[PREFILL_OUTPUT] Logits contain NaN or Inf! "
+                    f"last_token_idx_i={last_token_idx_i}, "
+                    f"has_nan={torch.isnan(logits_sample).any()}, "
+                    f"has_inf={torch.isinf(logits_sample).any()}"
+                )
+
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
+            logger.info(f"Running to_torch(ttnn.get_device_tensors(tt_out)[{output_device_idx}])")
+            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
+            logger.info(f"Returned from to_torch(ttnn.get_device_tensors(tt_out)[{output_device_idx}])")
+            # DEBUG: Print the actual token produced by prefill
+            tok_val = int(toks[0].item())
+            logger.info(f"[PREFILL_OUTPUT] Produced token: {tok_val} (valid range: 0-{self.vocab_size-1})")
 
-            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+            # Validate token ID is within expected range
+            tok_val = int(toks[0].item())
+            if tok_val < 0 or tok_val >= self.vocab_size:
+                logger.error(
+                    f"[PREFILL_OUTPUT] Invalid token ID detected: {tok_val}, "
+                    f"last_token_idx_i={last_token_idx_i}, "
+                    f"x_shape_before_slice={x_split[i].shape}, "  # x_split[i] is original, x is sliced
+                    f"tt_logits_shape={tt_logits.shape}, "
+                    f"vocab_size={self.vocab_size}"
+                )
             toks_list.append(toks)
 
         if tt_out_logits_saved is not None:
             # make sure tt_out_logits_saved is mutable
-            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
+            logger.info(f"Running to_torch(ttnn.get_device_tensors(tt_logits)[{output_device_idx}])")
+            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, :, :]
+            logger.info(f"Returned from to_torch(ttnn.get_device_tensors(tt_logits)[{output_device_idx}])")
             tt_out_logits_saved.copy_(logits_saved)
 
         return toks_list if isinstance(last_token_idx, list) else toks
