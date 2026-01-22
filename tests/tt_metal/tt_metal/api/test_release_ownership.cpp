@@ -38,10 +38,6 @@ static void open_and_close_device() {
 }
 
 TEST(TensixReleaseOwnership, BasicReleaseOwnership) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        GTEST_SKIP() << "Test not supported with slow dispatch";
-    }
-
     // Open and close a device
     open_and_close_device();
     
@@ -53,10 +49,6 @@ TEST(TensixReleaseOwnership, BasicReleaseOwnership) {
 }
 
 TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        GTEST_SKIP() << "Test not supported with slow dispatch";
-    }
-
     // Open and close a device in the parent process
     open_and_close_device();
     
