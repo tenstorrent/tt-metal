@@ -117,6 +117,9 @@ __attribute__((noinline)) bool perf_telemetry_push() {
 }
 
 void kernel_main() {
-    // Initialize and push one page of telemetry data
-    perf_telemetry_push();
+    perf_telemetry_mailbox->telemtery_state = 0;
+    // Run telemetry push loop until terminate signal is received
+    while (perf_telemetry_mailbox->telemtery_state == 0) {
+        perf_telemetry_push();
+    }
 }
