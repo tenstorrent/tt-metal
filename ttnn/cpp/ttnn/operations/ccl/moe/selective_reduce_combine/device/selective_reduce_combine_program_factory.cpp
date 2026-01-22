@@ -23,10 +23,14 @@ std::vector<uint32_t> data_parallel_split(
     std::vector<uint32_t> data_parallel_sizes_bytes;
     data_parallel_sizes_bytes.reserve(num_data_parallel_cores);
 
-    const uint32_t token_increment = tt::div_up(token_size_bytes / num_data_parallel_cores, max_packet_size_bytes);
     for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
-        data_parallel_sizes_bytes.push_back(std::min(token_increment, token_size_bytes));
+        const uint32_t token_increment = std::min(token_size_bytes, max_packet_size_bytes);
+        data_parallel_sizes_bytes.push_back(token_increment);
         token_size_bytes-=token_increment;
+
+        if (token_size_bytes == 0) {
+            break;
+        }
     }
 
     return data_parallel_sizes_bytes;
@@ -54,10 +58,11 @@ auto launch_mux_workers(
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
 
+    const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, neighbors.size() - 1);
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_core_range_set,
+        needed_mux_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -67,7 +72,7 @@ auto launch_mux_workers(
     std::vector<std::map<ttnn::MeshCoordinate,CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
 
-    const auto mux_cores = corerange_to_cores(mux_core_range_set);
+    const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
     auto mux_core_iter = mux_cores.begin();
     for (uint32_t link = 0; link < num_links; ++link) {
         std::map<ttnn::MeshCoordinate,CoreCoord> mux_neigbor_core_map;
@@ -197,19 +202,19 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     // in validate, assert that worker_core_range_set.size() == num_token_parallel_cores*num_data_parallel_cores;
     const auto num_token_parallel_cores = operation_attributes.num_token_parallel_cores;
-    const auto num_data_parallel_cores = operation_attributes.num_data_parallel_cores;
-    const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
+    auto num_data_parallel_cores = operation_attributes.num_data_parallel_cores;
     const auto & worker_core_range_set= operation_attributes.worker_core_range_set;
 
     // in validate mux_core_range_set.size() == 2(directions) * num_links
     const auto & mux_core_range_set= operation_attributes.mux_core_range_set;
 
-    // auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-    //     worker_core_range_set, num_token_parallel_cores*num_data_parallel_cores, worker_core_range_set , true);
-    std::vector<CoreCoord> sender_cores = corerange_to_cores(worker_core_range_set, num_worker_cores);
-
     const auto data_parallel_sizes_bytes = detail::data_parallel_split(
         token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
+
+    num_data_parallel_cores = data_parallel_sizes_bytes.size();
+    const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
+    std::vector<CoreCoord> sender_cores = corerange_to_cores(worker_core_range_set, num_worker_cores);
+
     const auto max_token_segment_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
     const auto expert_token_segment_block_size_bytes =
@@ -238,8 +243,10 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
-    // create circular buffers
-    CreateCircularBuffer(program, worker_core_range_set, cb_data_config);
+    const auto needed_worker_core_range_set =
+
+        // create circular buffers
+        CreateCircularBuffer(program, worker_core_range_set, cb_data_config);
     CreateCircularBuffer(program, worker_core_range_set, cb_metadata_config);
     CreateCircularBuffer(program, worker_core_range_set, client_interface_cb_config);
 

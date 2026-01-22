@@ -221,12 +221,16 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
+    DPRINT << "MUX RUNNING \n";
+
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
     while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
+            DPRINT << "GOT GRACEFUL TERMINATION SIGNAL" << "\n";
+
             bool all_channels_drained = true;
             for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                 all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
@@ -275,4 +279,6 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
+
+    DPRINT << "MUX TERMINATED \n";
 }

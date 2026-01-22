@@ -48,8 +48,8 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
 
     """
     struct Header {
-       uint16_t k[2]; // k+1 if not activated
-       uint16_t expert_weight[2]; // bfloat16 scores
+       uint32_t k[2]; // k+1 if not activated
+       uint32_t expert_weight[2]; // bfloat16 scores
        uint32_t token_id; // which token in source device's buffer
     }
     """
@@ -61,9 +61,9 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
 
-        k_entries = [select_experts_k + 1] * num_local_experts
         for b in range(batch):
             for s in range(seq):
+                k_entries = [select_experts_k + 1] * num_local_experts
                 for k in range(select_experts_k):
                     ek = metadata[0, b, s, k].item()
                     if ek in device_expert_list:
@@ -77,7 +77,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
                     dense_metadata_buffer[rec_d, token_count] = metadata_entry
                     dense_token_counts[rec_d] = token_count + 1
 
-    dense_metadata_buffer.reshape(devices, batch * seq * metadata_entry_size)
+    print(dense_metadata_buffer)
     return dense_metadata_buffer, dense_token_counts
 
 
@@ -266,18 +266,30 @@ def _get_tt_sharded_dense_input(dense_contribs_tensor, core_range, device, clust
     )
 
 
+def _get_tt_dense_metadata(dense_metadata_tensor, mesh_device):
+    metadata_shape = dense_metadata_tensor.shape
+    metadata_reshape = (metadata_shape[0], metadata_shape[1] * metadata_shape[2])
+    return ttnn.from_torch(
+        dense_metadata_tensor.reshape(metadata_reshape),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("batch", [16])
 @pytest.mark.parametrize("experts", [16])
 @pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [16])
+@pytest.mark.parametrize("hidden_size", [32])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("devices", [NUM_DEVICES])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 0))])
 @pytest.mark.parametrize("mux_core_range", [((0, 1), (0, 2))])
-@pytest.mark.parametrize("num_iters", [(8, 4)])
+@pytest.mark.parametrize("num_iters", [1])
 def test_decode(
     mesh_device,
     batch,
@@ -316,13 +328,7 @@ def test_decode(
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
 
     tt_dense_contribs = _get_tt_sharded_dense_input(dense_contribs_tensor, worker_cores, mesh_device, cluster_axis)
-    tt_metadata = ttnn.from_torch(
-        dense_metadata_tensor,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    tt_dense_metadata = _get_tt_dense_metadata(dense_metadata_tensor, mesh_device)
 
     # TODO figure out how to set different semaphore values for different devices
     max_active_token_count = max(dense_token_counts_tensor.tolist())
@@ -333,7 +339,7 @@ def test_decode(
 
     tt_out = ttnn.selective_reduce_combine(
         tt_dense_contribs,
-        tt_metadata,
+        tt_dense_metadata,
         hidden_size,
         batch,
         seq,

@@ -5,6 +5,17 @@
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 
+inline void print_u32_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << (uint32_t)*ptr << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+
 namespace detail {
 
 template <uint32_t NumLocalExperts>
@@ -71,7 +82,8 @@ void kernel_main() {
     const auto [token_start, token_end] = detail::token_work_split<num_local_experts, num_token_parallel_cores>(
         dense_token_counts_addr, token_parallel_core_id);
 
-    auto* metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(dense_metadata_cb_id));
+    const uint32_t metadata_addr = get_read_ptr(dense_metadata_cb_id);
+    auto* metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
     // this is cheesy, but pass token starts and ends to the reader through the end of the metadata buffer TODO ALLOCATE
     metadata_ptr[global_num_tokens * metadata_entry_size] = token_start;
     metadata_ptr[global_num_tokens * metadata_entry_size + 1] = token_end;
