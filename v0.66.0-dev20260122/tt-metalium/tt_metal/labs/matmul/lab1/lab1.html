@@ -1,0 +1,1421 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lab 1: Single Core Matrix Multiplication &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/labs/matmul/lab1/lab1.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="Advanced Topics" href="../../../advanced_topics/index.html" />
+    <link rel="prev" title="Lab Exercises" href="../../index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">Lab Exercises</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Lab 1: Single Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#introduction">Introduction</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#basic-algorithm">Basic Algorithm</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#row-major-memory-layout">Row-Major Memory Layout</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#cache-friendly-access-patterns">Cache-Friendly Access Patterns</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#linear-transformation-and-computational-flexibility">Linear Transformation and Computational Flexibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#loop-tiling">Loop Tiling</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#simple-tiling-example">Simple Tiling Example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-1-tiled-matrix-multiplication">Exercise 1: Tiled Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#introduction-to-tenstorrent-architecture">Introduction to Tenstorrent Architecture</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#tile-based-architecture">Tile-Based Architecture</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#tt-metalium-programming-model">TT-Metalium Programming Model</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-tt-metalium-program">Example TT-Metalium Program</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-2-running-the-example-program">Exercise 2: Running the Example Program</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#program-description">Program Description</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#example-program-summary">Example Program Summary</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#kernel-compilation-and-execution">Kernel Compilation and Execution</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-3-observing-jit-compile-errors">Exercise 3: Observing JIT Compile Errors</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#debug-facilities-in-tt-metalium">Debug Facilities in TT-Metalium</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#debug-print-api">Debug Print API</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#debugging-hangs-using-stack-traces">Debugging Hangs using Stack Traces</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#device-performance-profiling">Device Performance Profiling</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#matrix-multiplication-in-tt-metalium">Matrix Multiplication in TT-Metalium</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-7-implementing-matrix-multiplication-in-tt-metalium">Exercise 7: Implementing Matrix Multiplication in TT-Metalium</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#troubleshooting-and-additional-resources">Troubleshooting and Additional Resources</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Lab Exercises</a></li>
+      <li class="breadcrumb-item active">Lab 1: Single Core Matrix Multiplication</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/labs/matmul/lab1/lab1.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="lab-1-single-core-matrix-multiplication">
+<h1>Lab 1: Single Core Matrix Multiplication<a class="headerlink" href="#lab-1-single-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading"></a>
+</h2>
+<p>Matrix multiplication is a fundamental linear-algebra operation used in scientific computing, machine learning, and graphics.
+The standard algorithm multiplies two input matrices to produce a third matrix.</p>
+<section id="basic-algorithm">
+<h3>Basic Algorithm<a class="headerlink" href="#basic-algorithm" title="Permalink to this heading"></a>
+</h3>
+<p>Given two matrices <code class="docutils literal notranslate"><span class="pre">A</span></code> of shape <code class="docutils literal notranslate"><span class="pre">MxK</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> of shape <code class="docutils literal notranslate"><span class="pre">KxN</span></code>, the resulting matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> will have shape <code class="docutils literal notranslate"><span class="pre">MxN</span></code>.
+The classical matrix multiplication algorithm can be expressed using a triple-nested loop structure,
+where each element of the resulting matrix is computed as the dot product of the corresponding row of <code class="docutils literal notranslate"><span class="pre">A</span></code> and the corresponding column of <code class="docutils literal notranslate"><span class="pre">B</span></code>:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">M</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">C</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">K</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">C</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">j</span><span class="p">]</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">A</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="n">k</span><span class="p">]</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="n">j</span><span class="p">];</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The naive implementation has a time complexity of O(M*N*K).</p>
+</section>
+</section>
+<section id="row-major-memory-layout">
+<h2>Row-Major Memory Layout<a class="headerlink" href="#row-major-memory-layout" title="Permalink to this heading"></a>
+</h2>
+<p>Memory space is a linear (one-dimensional) array of memory words.
+However, we often need to represent data with more dimensions, such as two-dimensional matrices or n-dimensional tensors.
+In C++, two-dimensional arrays are usually stored in memory using <strong>row-major order</strong>.
+This means that elements of each row are stored contiguously in memory, with rows placed one after another.</p>
+<p>Consider a <code class="docutils literal notranslate"><span class="pre">3x4</span></code> matrix <code class="docutils literal notranslate"><span class="pre">A</span></code>:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg"><img alt="A 3x4 Matrix A" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg" style="width: 250px;"></a>
+</figure>
+<p>Using row-major layout, this matrix is stored in memory as:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg"><img alt="A 3x4 Matrix A in Row-Major Layout" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg" style="width: 750px;"></a>
+</figure>
+<p>When accessing element <code class="docutils literal notranslate"><span class="pre">A[i][j]</span></code> in a matrix with <code class="docutils literal notranslate"><span class="pre">N</span></code> columns, the memory address is calculated as:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">address</span> <span class="o">=</span> <span class="n">base_address</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">*</span> <span class="n">N</span> <span class="o">+</span> <span class="n">j</span><span class="p">)</span> <span class="o">*</span> <span class="n">sizeof</span><span class="p">(</span><span class="n">element</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="cache-friendly-access-patterns">
+<h3>Cache-Friendly Access Patterns<a class="headerlink" href="#cache-friendly-access-patterns" title="Permalink to this heading"></a>
+</h3>
+<p>Modern CPUs fetch data in cache lines of consecutive words, so accessing nearby addresses is much faster
+than scattered accesses. Accessing matrix elements in row-major order (left-to-right, top-to-bottom) is
+cache-friendly because consecutive elements in a row are already loaded in the cache.
+Conversely, accessing matrix elements column-by-column is inefficient because each access may
+trigger a cache miss by requesting a different cache line.</p>
+<section id="implications-for-matrix-multiplication">
+<h4>Implications for Matrix Multiplication<a class="headerlink" href="#implications-for-matrix-multiplication" title="Permalink to this heading"></a>
+</h4>
+<p>In the standard matrix multiplication algorithm <code class="docutils literal notranslate"><span class="pre">C</span> <span class="pre">=</span> <span class="pre">A</span> <span class="pre">*</span> <span class="pre">B</span></code>, where <code class="docutils literal notranslate"><span class="pre">C[i][j]</span> <span class="pre">=</span> <span class="pre">∑ₖ</span> <span class="pre">A[i][k]</span> <span class="pre">*</span> <span class="pre">B[k][j]</span></code>,
+and assuming <code class="docutils literal notranslate"><span class="pre">i</span></code>, <code class="docutils literal notranslate"><span class="pre">j</span></code>, <code class="docutils literal notranslate"><span class="pre">k</span></code> loop order:</p>
+<ul class="simple">
+<li><p>Accessing matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> is cache-friendly because consecutive elements in memory are accessed
+one after another for two consecutive values of the inner loop iterator <code class="docutils literal notranslate"><span class="pre">k</span></code>.</p></li>
+<li><p>Accessing matrix <code class="docutils literal notranslate"><span class="pre">B</span></code> may degrade performance because memory accesses skip an entire matrix row
+for two consecutive values of <code class="docutils literal notranslate"><span class="pre">k</span></code>.</p></li>
+</ul>
+<p>This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.</p>
+</section>
+</section>
+</section>
+<section id="linear-transformation-and-computational-flexibility">
+<h2>Linear Transformation and Computational Flexibility<a class="headerlink" href="#linear-transformation-and-computational-flexibility" title="Permalink to this heading"></a>
+</h2>
+<p>Matrix multiplication represents a linear transformation where the computation can be viewed as a sequence of dot products.
+This linearity allows significant computational flexibility, such as:</p>
+<ol class="arabic simple">
+<li><p>Loop Reordering: Changing the order of loops does not affect the result, but can impact performance on architectures with cache hierarchies.</p></li>
+<li><p>Loop Tiling: A subset of the resulting matrix can be calculated at a time, improving cache locality and performance.</p></li>
+<li><p>Parallelization: Different matrix regions can be computed simultaneously.</p></li>
+</ol>
+<p>Note that changing the operation order can affect the result because floating-point arithmetic is not associative.
+In this lab, we ignore this issue, but be aware of it when matrix values differ greatly in magnitude.</p>
+</section>
+<section id="loop-tiling">
+<h2>Loop Tiling<a class="headerlink" href="#loop-tiling" title="Permalink to this heading"></a>
+</h2>
+<p>Loop tiling (a.k.a. loop blocking) is a loop transformation technique that splits loops into smaller chunks.
+On architectures with caches, this often improves performance by reducing cache misses, especially when combined with loop reordering.
+Poor tile sizes, however, can make tiled loops slower instead of faster.</p>
+<p>Some architectures offer hardware support for vector or matrix operations of limited vector/matrix sizes.
+When targeting such architectures, loop tiling can be used to divide work into smaller chunks that map to the underlying hardware.
+As we will see later, the Tenstorrent Tensix processor has hardware support for tiled operations, so understanding tiling is important
+when programming Tensix cores.</p>
+<section id="simple-tiling-example">
+<h3>Simple Tiling Example<a class="headerlink" href="#simple-tiling-example" title="Permalink to this heading"></a>
+</h3>
+<section id="original-doubly-nested-loop">
+<h4>Original Doubly Nested Loop<a class="headerlink" href="#original-doubly-nested-loop" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Original loop without tiling</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">M</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">some_computation</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="tiled-version">
+<h4>Tiled Version<a class="headerlink" href="#tiled-version" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Tiled version with MxN tiling</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">M_TILE_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">N_TILE_SIZE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="p">;</span>
+
+<span class="c1">// Assumes M and N are divisible by tile sizes</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">num_row_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">M</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">M_TILE_SIZE</span><span class="p">;</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">num_col_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">N</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">N_TILE_SIZE</span><span class="p">;</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">row_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">row_tile</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_row_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">row_tile</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">col_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">col_tile</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_col_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">col_tile</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Inner tile computation</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">row_tile</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">M_TILE_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">row</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">row_tile</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">M_TILE_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">row</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">col</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col_tile</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">N_TILE_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">col</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">col_tile</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">N_TILE_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">col</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">some_computation</span><span class="p">(</span><span class="n">row</span><span class="p">,</span><span class="w"> </span><span class="n">col</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="exercise-1-tiled-matrix-multiplication">
+<h3>Exercise 1: Tiled Matrix Multiplication<a class="headerlink" href="#exercise-1-tiled-matrix-multiplication" title="Permalink to this heading"></a>
+</h3>
+<p>In this part of the lab, you will implement two versions of matrix multiplication:
+a straightforward triply-nested loop, and a tiled version.
+The triply-nested loop version is simply a reference implementation provided at the beginning of the lab.
+For this exercise, write standard C++ code that can be compiled and run on any general-purpose CPU.</p>
+<p>The tiled version should be implemented as follows:</p>
+<ol class="arabic simple">
+<li><p>Input to the matrix multiplication should be a one-dimensional vector to ensure data is contiguous in memory.</p></li>
+<li><p>Create a function <code class="docutils literal notranslate"><span class="pre">tile_matmul</span></code> that multiplies a single tile.
+Write your code so that the function can be called with different tile sizes.</p></li>
+<li><p>Implement a main matrix multiplication function using tiling and then calling <code class="docutils literal notranslate"><span class="pre">tile_matmul</span></code> for each tile.</p></li>
+<li><p>Use the tiled implementation to multiply matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> of size <code class="docutils literal notranslate"><span class="pre">640x320</span></code> with
+matrix <code class="docutils literal notranslate"><span class="pre">B</span></code> of size <code class="docutils literal notranslate"><span class="pre">320x640</span></code> to produce matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> of size <code class="docutils literal notranslate"><span class="pre">640x640</span></code>. Use tile size <code class="docutils literal notranslate"><span class="pre">32x32</span></code>.</p></li>
+<li><p>Verify correctness of the tiled implementation by comparing the result with the reference implementation.</p></li>
+<li><p>Measure wall-clock time of the tiled implementation and compare it with the reference implementation.
+Make sure to compile your code with -O3 optimization level when comparing performance.</p></li>
+<li><p>Try a few different tile sizes and compare the performance.</p></li>
+</ol>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Single tile matrix multiplication</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">tile_matmul</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">,</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">C</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">K</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">N</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">row_offset</span><span class="p">,</span><span class="w"> </span><span class="c1">// Tile starting indices</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">col_offset</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">k_offset</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TH</span><span class="p">,</span><span class="w"> </span><span class="c1">// Output tile and A tile height</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TW</span><span class="p">,</span><span class="w"> </span><span class="c1">// Output tile and B tile width</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TK</span><span class="w"> </span><span class="c1">// A tile width, B tile height</span>
+<span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Implement multiplication of TH x TK tile by TK x TW matrix to produce TH x TW result.</span>
+<span class="w">    </span><span class="c1">// Use offsets to index into matrices A, B and C.</span>
+<span class="w">    </span><span class="c1">// Tile in A begins at (row_offset, k_offset) and has size TH x TK.</span>
+<span class="w">    </span><span class="c1">// Tile in B begins at (k_offset, col_offset) and has size TK x TW.</span>
+<span class="w">    </span><span class="c1">// Resulting tile in C begins at (row_offset, col_offset) and has size TH x TW.</span>
+<span class="w">    </span><span class="c1">// Accumulate the result into C (assume it is initialized to 0).</span>
+<span class="w">    </span><span class="c1">// Hint: your code will be a lot simpler if you create a helper function to index</span>
+<span class="w">    </span><span class="c1">// into a matrix in row-major layout using row and column coordinates and number of columns.</span>
+<span class="p">}</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="w"> </span><span class="n">tiled_matrix_multiply</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">M</span><span class="p">,</span><span class="w"> </span><span class="c1">// Full matrix dimensions</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">K</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">N</span><span class="p">,</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TH</span><span class="p">,</span><span class="w"> </span><span class="c1">// Output tile and A tile height</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TW</span><span class="p">,</span><span class="w"> </span><span class="c1">// Output tile and B tile width</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">TK</span><span class="w"> </span><span class="c1">// A tile width, B tile height</span>
+<span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Implement full matrix multiplication using tiling</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="introduction-to-tenstorrent-architecture">
+<h2>Introduction to Tenstorrent Architecture<a class="headerlink" href="#introduction-to-tenstorrent-architecture" title="Permalink to this heading"></a>
+</h2>
+<p>Tenstorrent’s devices are AI accelerators typically delivered as PCIe cards that can be attached to a standard host.
+In this model, the host CPU runs a standard C++ program. In that program, developers can use the TT-Metalium C++ API to configure the accelerator,
+allocate memory on the device, and dispatch kernels to Tensix cores. Kernel code is also written in C++.
+A high-level view of a Tenstorrent device in the system is shown in Figure 1:</p>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg"><img alt="High-level View of Tensix Device on PCIe Card" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg" style="width: 900px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 1: High-level View of Tensix Device on PCIe card</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>A PCIe card contains one or more Tensix devices, each device consisting of a Tensix processor and a dedicated DRAM.
+Note that the device DRAM is separate from the system (host) DRAM, and thus explicit communication is required to transfer data between them.
+The Tensix processor contains an array of Tensix cores with a network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM
+and between Tensix cores.
+On-chip SRAM is often referred to as L1 memory, but it does not operate as a cache; instead, it serves as a working memory
+for the Tensix cores.
+Each Tensix core has a dedicated compute unit specifically optimized for matrix and vector operations on tensors.</p>
+<p>The host program first transfers tensors from host DRAM into the device DRAM.
+Tensix cores then move data from device DRAM into on-chip SRAM, perform matrix and vector operations using dedicated hardware units
+and may store intermediate results in on-chip SRAM or device DRAM.
+Once all the required computation is done, the results are moved back to host memory for further processing, verification, or I/O.</p>
+<p>A key design principle of the Tenstorrent architecture is that most computation steps occur entirely on the device,
+with explicit and carefully orchestrated data movement.
+Typical workloads move input data from the host to device DRAM once, perform many computation steps directly on Tensix cores,
+and transfer only final outputs back to the host.
+When used this way, host-device communication over PCIe represents a relatively small fraction of the total runtime,
+allowing the accelerator’s on-device compute and data-movement engines to dominate performance.</p>
+<p>In this lab, we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features
+will be limited to this context.
+We will extend the architectural and programming model description to multiple Tensix cores in subsequent labs.</p>
+<section id="tile-based-architecture">
+<h3>Tile-Based Architecture<a class="headerlink" href="#tile-based-architecture" title="Permalink to this heading"></a>
+</h3>
+<p>The Tenstorrent architecture is a tile-based architecture.
+This means that the data is processed in tiles, which are commonly <code class="docutils literal notranslate"><span class="pre">32x32</span></code> blocks of data.
+Similar to vector architectures, which can perform an operation on one or more vectors of data efficiently,
+a Tensix core can perform matrix operations on one or more tiles efficiently.
+For example, when performing a matrix multiplication, Tensix core treats each <code class="docutils literal notranslate"><span class="pre">32x32</span></code> tile as a single operand
+and computes their matrix product as a <code class="docutils literal notranslate"><span class="pre">32x32</span></code> result tile, issuing a short sequence of hardware instructions.</p>
+<section id="memory-layout-and-tiling">
+<h4>Memory Layout and Tiling<a class="headerlink" href="#memory-layout-and-tiling" title="Permalink to this heading"></a>
+</h4>
+<p>Most applications deal with data that is larger than a single <code class="docutils literal notranslate"><span class="pre">32x32</span></code> tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
+In the previous exercise, you performed loop tiling, which changed the memory access pattern without changing the underlying data layout,
+which was still stored in row-major order.
+An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
+This <strong>tiled layout</strong> is the main memory layout used by the Tenstorrent architecture.</p>
+<p>Consider an example of a <code class="docutils literal notranslate"><span class="pre">9x4</span></code> matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:</p>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/row_major_layout.png"><img alt="Row-Major Layout of a 9x4 Matrix" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/row_major_layout.png" style="width: 600px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 2: Row-Major Layout of a 9x4 Matrix</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Numbers in the matrix in Figure 2 indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.</p>
+<p>In tiled memory layout with tile size <code class="docutils literal notranslate"><span class="pre">3x2</span></code>, this matrix is stored in memory as shown in Figure 3:</p>
+<figure class="align-center" id="id3">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_layout.png"><img alt="Tiled Layout of a 9x4 Matrix" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_layout.png" style="width: 600px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 3: Tiled Layout of a 9x4 Matrix</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Once again, numbers in the matrix in Figure 3 indicate memory addresses that the corresponding elements are stored at.
+Observe that all elements of a tile are stored contiguously in memory. In this tiled layout there are two “second-order” row-major orderings:</p>
+<ol class="arabic simple">
+<li><p>Elements within each tile are stored in row-major order.</p></li>
+<li><p>Ordering of tiles relative to other tiles follows row-major ordering. That is, the first tile is stored at the beginning of the memory
+followed by the tile to its right, and so on until the last tile in the row of tiles. Then the next row of tiles is stored,
+starting with the tile in the first column of the next row of tiles.</p></li>
+</ol>
+<p>Note that the number of rows/columns in a matrix may not always evenly divide the number of rows/columns in a tile.
+In this case, the matrix needs to be padded with data to the next tile boundary.
+This data must not affect the result of the computation, so depending on the operation, it may be padded with zeros or some other value.
+In this lab, we will assume that all matrices are aligned to tile boundaries.</p>
+<p>With this memory layout, code can now read one tile at a time and find the next tile in memory at a fixed offset rather than having to
+assemble a tile by merging different sections of memory, as would be the case for row-major memory layout.
+This allows for efficient memory access and computation.</p>
+</section>
+</section>
+</section>
+<section id="tt-metalium-programming-model">
+<h2>TT-Metalium Programming Model<a class="headerlink" href="#tt-metalium-programming-model" title="Permalink to this heading"></a>
+</h2>
+<p>Tenstorrent devices can be programmed at multiple abstraction levels, from high-level neural network libraries to low-level kernel development.
+At the highest level, TT-NN provides a PyTorch-like Python API for neural network operations, while TT-Metalium serves as the low-level programming
+model that gives developers direct control over the Tensix hardware architecture.</p>
+<p>TT-Metalium is unique because it exposes the distinctive architecture of Tenstorrent’s Tensix processors.
+Unlike traditional GPUs that rely on massive thread parallelism, TT-Metalium enables a cooperative programming model where developers typically
+write three types of kernels per Tensix core: reader kernels for data input, compute kernels for calculations, and writer kernels for data output.
+These kernels coordinate through circular buffers (CBs) in local SRAM, enabling efficient pipelined execution that overlaps data movement with computation.</p>
+<p>TT-Metalium’s compute API abstraction layer maintains kernel code compatibility across different hardware generations while ensuring optimal performance.
+This means the same kernel code can run efficiently on different Tenstorrent processor generations without requiring developers to rewrite code
+for each architecture.
+TT-Metalium serves as the foundation for higher-level frameworks, providing the base layer for all Tenstorrent software development.</p>
+<p>Before we look at a TT-Metalium program, it is important to emphasize a fundamental distinction between the <strong>host</strong> and the <strong>device</strong>.
+The <strong>host</strong> is the conventional CPU system (often x86 or ARM) where the main application runs.
+The <strong>device</strong> is the accelerator: a mesh of Tensix cores with their own on-chip memories and access to off-chip DRAM
+(recall that this is <strong>device DRAM</strong>, distinct from <strong>host DRAM</strong>).
+Tensix cores execute relatively small, specialized programs called kernels that are designed for high-throughput numeric computation,
+not for general-purpose tasks.</p>
+<p>Crucially, the <strong>host and device live in different address spaces and have different execution models</strong>.
+A pointer or object on the host (e.g., an array in system DRAM or a C++ object) is not directly visible to a Tensix core.
+To use data on the device, the host must allocate device memory, transfer data into it, and pass data layout information
+and device-side memory addresses down to the kernels.
+Conversely, when a kernel finishes, any results you want on the host must be explicitly copied back.</p>
+<p>There is also a two-stage notion of compile-time vs runtime. The host program is compiled ahead of time, but kernels are
+JIT-compiled while the host program runs. At kernel compile time, configuration such as tensor layout and tile sizes are treated
+as constants and baked into the binary, allowing aggressive compiler optimization. At kernel launch time, other parameters such as
+DRAM base addresses and tile counts are passed as runtime arguments.</p>
+<p>Based on this, it may seem that we should specify as many parameters as possible at compile time.
+However, in some cases we may choose to pass some information known at compile time as runtime arguments instead.
+For example, we may prefer to reuse one kernel binary for many parameter values instead of compiling a new binary for each combination.
+Choosing which values to pass at compile time and which to pass at runtime is a trade-off between performance
+(more specialization) and flexibility (more reuse).</p>
+<p>Understanding which information lives on the host, which is baked into the kernel binary, and which is supplied dynamically at
+launch is key to reasoning about performance, correctness, and why the APIs are structured the way they are.</p>
+</section>
+<section id="example-tt-metalium-program">
+<h2>Example TT-Metalium Program<a class="headerlink" href="#example-tt-metalium-program" title="Permalink to this heading"></a>
+</h2>
+<p>We now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape <code class="docutils literal notranslate"><span class="pre">MxN</span></code>.
+This program will be used to illustrate the TT-Metalium programming model, different types of kernels, and how they map to the underlying architecture.
+Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.</p>
+<section id="exercise-2-running-the-example-program">
+<h3>Exercise 2: Running the Example Program<a class="headerlink" href="#exercise-2-running-the-example-program" title="Permalink to this heading"></a>
+</h3>
+<p>If you haven’t already done so, clone an appropriate release of the TT-Metalium repository from <a class="reference external" href="https://github.com/tenstorrent/tt-metal">https://github.com/tenstorrent/tt-metal</a>
+Make sure you are in the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory and then build the example program, using the following commands:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span><span class="nv">$PWD</span>
+./build_metal.sh
+./build/ttnn/examples/example_lab_eltwise_binary
+</pre></div>
+</div>
+<p>Make sure that the program executes correctly and that the output says “Test Passed” on the host terminal.</p>
+</section>
+<section id="program-description">
+<h3>Program Description<a class="headerlink" href="#program-description" title="Permalink to this heading"></a>
+</h3>
+<p>The main program for the code example being discussed is located in the file <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp</span></code>.
+The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.</p>
+<p>Looking at the main function, we see that the host program first initializes input data for the operation and performs a reference computation on the host CPU.
+This will be used to verify the correctness of the TT-Metalium implementation. Note that the data type used is bfloat16 (brain floating-point), which is a
+16-bit floating-point format commonly used in AI applications. Since the host CPU doesn’t natively support bfloat16,
+we use the <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> class from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> library and cast data between this type and single-precision (32-bit) floating-point as needed.</p>
+<p>Next, the host program initializes the Tensix device and program state by calling the function <code class="docutils literal notranslate"><span class="pre">init_program</span></code>.
+This function contains a lot of boilerplate code that configures the device to run our code on a single Tensix core. Most programs utilizing
+a Tensix device would use similar code to configure the device and program, and exact initialization details are not important for this lab.</p>
+<p>After initialization, the program calls the function <code class="docutils literal notranslate"><span class="pre">eltwise_add_tensix</span></code>, which is the main function that configures and creates kernels
+and triggers elementwise addition on the Tensix device.
+Finally, the program validates the results by comparing the Tensix output with the reference computation on the host CPU.</p>
+<section id="kernel-types-and-data-flow">
+<h4>Kernel Types and Data Flow<a class="headerlink" href="#kernel-types-and-data-flow" title="Permalink to this heading"></a>
+</h4>
+<p>Before diving into the function <code class="docutils literal notranslate"><span class="pre">eltwise_add_tensix</span></code>, let us discuss the different types of kernels and how they map to the underlying hardware.
+Programming with Metalium typically requires three kernel types per Tensix core: a <strong>reader kernel</strong> for data input,
+a <strong>compute kernel</strong> for calculations, and a <strong>writer kernel</strong> for data output.
+Reader and writer kernels are collectively referred to as data movement kernels.
+Data movement and compute kernels communicate through circular buffers (CBs) in internal SRAM.
+The circular buffers act as producer-consumer FIFO (First In First Out) queues, enabling safe and efficient data exchange between kernels.
+A kernel can even read from and write to the same circular buffer, allowing processing to be divided into multiple
+steps, all of which use uniform interfaces (CBs) to promote code reuse.
+Each circular buffer is assumed to have only one reader kernel and one writer kernel.
+Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.</p>
+<figure class="align-center" id="id4">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/cb_data_flow.jpg"><img alt="Kernel Data Flow Through Circular Buffers" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/cb_data_flow.jpg" style="width: 900px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 4: Kernel Data Flow Through Circular Buffers</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Each kernel interacts with the buffers as follows:</p>
+<ul class="simple">
+<li><p><strong>Reader kernel:</strong> Reads data (e.g. from device DRAM) into the circular buffers and signals when new data has been read and is available.</p></li>
+<li><p><strong>Compute kernel:</strong> Waits for data to become available in its input circular buffers before processing it. After computation, it writes the results to
+one or more output circular buffers and marks data as ready.</p></li>
+<li><p><strong>Writer kernel:</strong> Waits for the computed results to appear in the buffers before writing them to the output location (e.g. device DRAM).</p></li>
+</ul>
+<p>This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
+pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 5.</p>
+<figure class="align-center" id="id5">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_core.png"><img alt="Top-Level Diagram of Tensix Core" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_core.png" style="width: 600px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 5: Top-Level Diagram of Tensix Core</span><a class="headerlink" href="#id5" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>The Tensix core consists of four major parts:</p>
+<ol class="arabic simple">
+<li><p>Internal SRAM (L1) memory - Stores input/output tiles in circular buffers for fast access by the Tensix Engine.
+It also holds program code for all RISC-V processors within the core.</p></li>
+<li><p>Two routers - Manage data movement between internal SRAM (L1) memory, device DRAM, and other Tensix cores.</p></li>
+<li><p>Tensix Engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.</p></li>
+<li>
+<p>Five RISC-V Processors that control the Tensix Engine and routers:</p>
+<ul class="simple">
+<li><p>RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
+Either of these can be used for a reader or writer kernel.</p></li>
+<li><p>RISC-V 1 through RISC-V 3 - These processors control the Tensix Engine through specialized Tensix instructions.
+Note that these RISC-V processors don’t perform actual tile computations.
+Instead, they serve as microcontrollers directing the operations of the Tensix Engine.
+One RISC-V processor is responsible for issuing commands to the compute engine, while the other two
+are responsible for transferring tile data between circular buffers in SRAM and Tensix Engine registers.
+Compute kernel code defines functionality for all three of these processors.</p></li>
+</ul>
+</li>
+</ol>
+</section>
+<section id="kernel-creation-and-configuration">
+<h4>Kernel Creation and Configuration<a class="headerlink" href="#kernel-creation-and-configuration" title="Permalink to this heading"></a>
+</h4>
+<p>The function <code class="docutils literal notranslate"><span class="pre">eltwise_add_tensix</span></code> creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
+At a high level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
+one compute kernel, and three circular buffers to pass data between the kernels, and then triggers kernel execution on the device.</p>
+<p>The function creates three Tensor objects of shape <code class="docutils literal notranslate"><span class="pre">MxN</span></code> using the tile layout described earlier.
+These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
+The input tensors are created and initialized by transferring the data from the host to the device in one step using <code class="docutils literal notranslate"><span class="pre">Tensor::from_vector</span></code>.
+The vectors passed to <code class="docutils literal notranslate"><span class="pre">Tensor::from_vector</span></code> are the same input vectors that were used for the reference computation.
+Because the <code class="docutils literal notranslate"><span class="pre">TensorSpec</span></code> object passed to <code class="docutils literal notranslate"><span class="pre">Tensor::from_vector</span></code> specifies the tile layout, the data is automatically organized in a tiled
+memory layout when stored on the device. This is desirable because the matrix engine is optimized for operations on tiled data.</p>
+<p>The function then creates three circular buffers to enable data movement between kernels.
+A circular buffer is a FIFO buffer with configurable size.
+Creating a circular buffer simply means allocating sufficient device SRAM memory based on the specified configuration, and associating
+the specified circular buffer index with this SRAM memory and its configuration.
+In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, a reader kernel
+can be reading one tile while the compute kernel is processing the other tile, enabling pipelined execution.
+The number of tiles in a circular buffer can be adjusted to trade off memory for performance, but generally there are diminishing
+returns beyond a few tiles.</p>
+<p>The function creates the three types of kernels discussed earlier: reader, compute, and writer.
+Creating a kernel registers it with the program object, so that it can be executed later.
+Each kernel can take two types of arguments: compile-time and runtime kernel arguments, as mentioned earlier.</p>
+<p id="kernel-args-blurb">The two types of kernel arguments differ in <em>when</em> their values are determined and <em>how</em> they are used.</p>
+<p><strong>Compile-time kernel arguments</strong></p>
+<ul class="simple">
+<li><p>Values that are known when the kernel is built (JIT-compiled).</p></li>
+<li><p>They are hard-coded into the kernel binary and can be used by the compiler to specialize and optimize
+the code, by e.g. unrolling loops, removing branches, choosing specific data paths, etc.</p></li>
+<li><p>Changing a compile-time argument effectively means generating a new version of the kernel binary.</p></li>
+<li><p>These arguments are provided by the host during kernel configuration as <code class="docutils literal notranslate"><span class="pre">compile_args</span></code></p></li>
+</ul>
+<p><strong>Runtime kernel arguments</strong></p>
+<ul class="simple">
+<li><p>Values that are provided by the host each time the kernel is launched, possibly varying per core.</p></li>
+<li><p>Stored in a small argument block in the core’s local memory and read by the kernel at the start of execution, for example using <code class="docutils literal notranslate"><span class="pre">get_arg_val&lt;T&gt;(index)</span></code>.</p></li>
+<li><p>They do not change the compiled binary; instead, they affect kernel behavior at runtime. Examples include buffer base addresses,
+flags to enable/disable certain features, etc.</p></li>
+<li><p>Same compiled kernel can be reused many times with different runtime arguments, without recompiling.</p></li>
+</ul>
+<p>In summary, compile-time arguments specialize the kernel <em>code itself</em>, while runtime arguments specialize <em>what that code does on a particular launch</em>.</p>
+<p>In our example program, reader and writer kernels take information about tensor layout and data distribution as compile-time arguments.
+Compile-time arguments are passed as a vector of <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> values. The <code class="docutils literal notranslate"><span class="pre">TensorAccessorArgs</span></code> utility is a clean way to append relevant tensor layout
+information into this <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> vector, without the programmer having to worry about internal details.</p>
+<p>Dataflow kernels take the base addresses of the input and output buffers in device DRAM, along with the number of tiles to process
+as runtime arguments.</p>
+<p>The compute kernel takes the number of tiles to process as a compile-time argument and doesn’t take any runtime arguments.
+At first, it may seem like an odd choice to pass the number of tiles as a compile-time argument to the compute kernel,
+but as a runtime argument to dataflow kernels.
+Since using compile-time arguments enables various compiler optimizations, it is particularly suitable to use them for compute kernels, which are compute bound.
+While passing the number of tiles as a compile-time argument to dataflow kernels would also work, they may not benefit much since their performance is memory bound.
+At the same time, using compile-time arguments for dataflow kernels would cause them to be recompiled for each different number of tiles.
+Since the performance benefit of using compile-time arguments is not significant for dataflow kernels,
+we optimize for code reuse and avoid recompilation by using runtime arguments for dataflow kernels.
+This distinction will become more apparent in subsequent labs when we start working with multiple Tensix cores.</p>
+<p>Finally, the function executes the kernels by adding the program to the workload and enqueuing it for execution, which triggers kernel JIT compilation
+followed by kernel execution on the device. It is useful to remind ourselves that until this point, all the code we discussed executed on the host,
+not on the device. We will examine kernel code next.</p>
+</section>
+<section id="reader-kernel-code">
+<h4>Reader Kernel Code<a class="headerlink" href="#reader-kernel-code" title="Permalink to this heading"></a>
+</h4>
+<p>The function can be summarized by the following pseudo-code:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">read_runtime_arguments</span><span class="p">()</span>
+<span class="n">read_compile_time_arguments</span><span class="p">()</span>
+<span class="n">create_address_generators</span><span class="p">()</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">transfer_tile_from_dram_to_circular_buffer</span><span class="p">(</span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">)</span>
+<span class="w">    </span><span class="n">transfer_tile_from_dram_to_circular_buffer</span><span class="p">(</span><span class="n">in1</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The reader kernel in <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp</span></code> is responsible for transferring data
+from device DRAM into circular buffers located in internal device SRAM, where it can be efficiently accessed by the compute kernel.
+The kernel reads the base addresses of the two input tensors in DRAM and the total number of tiles to process as runtime arguments.</p>
+<p>The kernel uses two circular buffers (<code class="docutils literal notranslate"><span class="pre">c_0</span></code> and <code class="docutils literal notranslate"><span class="pre">c_1</span></code>) as destination buffers for the two input tensors.
+It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.</p>
+<p>Recall that the host uses <code class="docutils literal notranslate"><span class="pre">TensorAccessorArgs</span></code> to pack tensor shape and layout into a compile-time <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> argument vector.
+On the device, this vector is unpacked into a device-side <code class="docutils literal notranslate"><span class="pre">TensorAccessorArgs</span></code> (a different underlying type but same name),
+which is then combined with the runtime base addresses to create an address generator object (<code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code>).
+An address generator object abstracts away the complexity of physical memory layout, such as data distribution among DRAM banks,
+by automatically computing the physical DRAM address for any given tile index.</p>
+<p>The main processing loop iterates over all tiles, implementing a producer-consumer pattern with the compute kernel.
+For each tile, the kernel first reserves space in both circular buffers using blocking calls to <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>
+to ensure that space is available before attempting to write.
+Once space is reserved, the kernel obtains write pointers to the circular buffers and initiates two non-blocking asynchronous
+read operations using <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code>. Observe that this call takes in the index of the tile being read and an address generator,
+along with the circular buffer address to write the tile to. The address generator automatically maps the logical tile index to the correct physical
+DRAM address based on the specific memory layout.</p>
+<p>Because <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code> is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
+the circular buffers simultaneously. After both reads are initiated, the kernel calls <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> to wait
+for both transfers to complete. This is important because the kernel should not signal that the tiles are ready for consumption
+until data is actually available.</p>
+<p>The reader kernel repeats this process for all tiles. Given that circular buffers were created with two tiles each, the reader kernel can
+read a new tile while the compute kernel is processing the previous one.</p>
+</section>
+<section id="compute-kernel-code">
+<h4>Compute Kernel Code<a class="headerlink" href="#compute-kernel-code" title="Permalink to this heading"></a>
+</h4>
+<p>The compute kernel in <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp</span></code> is responsible for performing the elementwise addition of two tiles.</p>
+<p>The function can be summarized by the following pseudo-code:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">read_compile_time_arguments</span><span class="p">()</span>
+<span class="n">initialize_tensix_engine_for_elementwise_addition</span><span class="p">()</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">add_tiles_in_input_circular_buffers</span><span class="p">()</span>
+<span class="w">    </span><span class="n">write_result_to_output_circular_buffer</span><span class="p">()</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The kernel reads the number of tiles to process as a compile-time argument, enabling compiler optimizations such as
+loop unrolling.</p>
+<p>An important architectural detail is that the compute kernel actually runs on three different RISC-V processors
+within the Tensix core: an unpacker (RISC-V 1 in Figure 5), a compute processor (RISC-V 2), and a packer (RISC-V 3).
+The compiler automatically generates appropriate code for each of these three processors from the same source code,
+relieving the programmer from having to write different code for each processor.
+The unpacker controls reading data from circular buffers, the compute processor issues the actual arithmetic operations
+using the Floating-Point Unit (FPU) of the Tensix Engine, and the packer controls writing results back to circular buffers.
+It is worth repeating that these RISC-V processors don’t perform actual computations or packing/unpacking operations.
+They simply issue commands to the Tensix Engine to perform the actual computations and packing/unpacking operations.</p>
+<p>The compute kernel uses circular buffers <code class="docutils literal notranslate"><span class="pre">c_0</span></code> and <code class="docutils literal notranslate"><span class="pre">c_1</span></code> for the two input tensors and <code class="docutils literal notranslate"><span class="pre">c_16</span></code> for the output tensor.
+There are 32 circular buffers in total (0-31), and the exact indices used are up to programmer’s discretion, provided they are used consistently
+(i.e. reader and writer kernels must use the corresponding indices as the compute kernel).</p>
+<p>The kernel initializes the Tensix Engine for elementwise binary operations, first calling <code class="docutils literal notranslate"><span class="pre">binary_op_init_common</span></code>
+to set up the general binary operation hardware infrastructure, followed by <code class="docutils literal notranslate"><span class="pre">add_tiles_init</span></code> to configure the FPU
+specifically for addition.
+This initialization only needs to be done once before the main loop, since all tiles use the same operation.</p>
+<p>The main processing loop iterates over all tiles.
+For each tile, the kernel first waits for one tile to become available in each input circular buffer using
+blocking calls to <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code>.
+These blocking calls ensure that the compute kernel doesn’t attempt to use the data before the reader kernel
+has finished transferring it.
+The compute kernel then acquires access to the destination register array using <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code>
+and calls <code class="docutils literal notranslate"><span class="pre">add_tiles</span></code> to perform the elementwise addition.
+The destination register array is a special storage area in the Tensix Engine that can hold multiple tiles
+and serves as the temporary output location for FPU computations. The acquire operation also
+initializes all tiles in the destination register array to zero, which is not important for
+this example program, but is useful for operations like matrix multiplication where results accumulate.</p>
+<p>After the computation completes, the kernel marks the input tiles as consumed using <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code>
+to free space in the circular buffers, then releases the destination register using <code class="docutils literal notranslate"><span class="pre">tile_regs_commit</span></code>
+to signal that the compute core has finished writing, which allows the packer to read the result.</p>
+<p>The packer core for its part waits for the destination register to be ready using <code class="docutils literal notranslate"><span class="pre">tile_regs_wait</span></code>,
+ensures there is space in the output circular buffer using <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, and then copies the
+result from the destination register to the output circular buffer using <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code>.
+Finally, it marks the output tile as ready using <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> and releases the destination
+register using <code class="docutils literal notranslate"><span class="pre">tile_regs_release</span></code>.</p>
+<p>While it may seem like some of these operations are redundant (e.g. waiting on the destination register
+when it has seemingly just been released), it is important to remember that compute kernel code is executed
+on three different RISC-V processors. This synchronization mechanism using acquire, commit, wait,
+and release ensures that the three RISC processors coordinate properly, with the compute processor
+writing results to the intermediate destination register array, and the packer processor reading
+them from it without conflicts.</p>
+</section>
+<section id="writer-kernel-code">
+<h4>Writer Kernel Code<a class="headerlink" href="#writer-kernel-code" title="Permalink to this heading"></a>
+</h4>
+<p>The writer kernel in <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp</span></code> is responsible for transferring
+computed results from the circular buffer in internal device SRAM back to device DRAM.
+The kernel code can be summarized by the following pseudo-code:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">transfer_tile_from_circular_buffer_to_dram</span><span class="p">(</span><span class="n">out0</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Most of the code is similar to the reader kernel, with the main difference being that the writer kernel writes to DRAM instead of reading from it.
+The circular buffer the writer kernel reads from has capacity for two tiles, allowing the compute kernel to write to one new tile, while the writer
+kernel is reading from the previously produced tile.
+This coordination between the compute and writer kernels enables pipelined execution, where computation and data movement can overlap.</p>
+</section>
+</section>
+<section id="example-program-summary">
+<h3>Example Program Summary<a class="headerlink" href="#example-program-summary" title="Permalink to this heading"></a>
+</h3>
+<p>It is useful to wrap up this example description by emphasizing one more time the nature of the
+TT-Metalium programming model and division of tasks and data between host and device.
+At a high level, all kernel code (<code class="docutils literal notranslate"><span class="pre">read_tiles.cpp</span></code>, <code class="docutils literal notranslate"><span class="pre">write_tiles.cpp</span></code>, <code class="docutils literal notranslate"><span class="pre">tiles_add.cpp</span></code>)
+executes on the device, and all its C++ objects are created on the device.
+Specifically:</p>
+<ul class="simple">
+<li><p>Ordinary local variables in kernel code are stored either in local SRAM or in RISC-V registers.</p></li>
+<li><p>Tensor data is stored in device DRAM, which is directly attached to the Tensix processor.</p></li>
+<li><p>Circular buffers are implemented in fast on-chip device SRAM and are used to store tiles of data,
+containing a subset of the data in a tensor or intermediate results of computations.</p></li>
+</ul>
+<p>Conversely, all code in <code class="docutils literal notranslate"><span class="pre">lab_eltwise_binary.cpp</span></code> executes on the host, and all its C++ objects are created on the host
+(either in CPU registers or host DRAM). Obvious examples include vectors of data and various local variables.
+However, some host-side objects contain information about data and code on the device. Specifically:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Tensor</span></code> objects are created on the host and contain information about the tensor shape and layout,
+but actual tensor data is stored in device DRAM.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TensorAccessorArgs</span></code> objects exist on both host and device, but they are different underlying types,
+defined in different headers (<code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/tensor_accessor_args.hpp</span></code> for host-side
+and <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/tensor/tensor_accessor_args.h</span></code> for device-side).</p></li>
+<li><p>Integers <code class="docutils literal notranslate"><span class="pre">src0_addr</span></code>, <code class="docutils literal notranslate"><span class="pre">src1_addr</span></code>, and <code class="docutils literal notranslate"><span class="pre">dst_addr</span></code> in the <code class="docutils literal notranslate"><span class="pre">eltwise_add_tensix()</span></code> function
+are host-side integers, but they contain addresses of the input and output tensor data in device DRAM.</p></li>
+<li><p>Kernel code and their arguments are JIT-compiled on the host, but then transferred to the device for execution.</p></li>
+</ul>
+<p>Understanding the location of data and code on the host and device is useful when debugging or analyzing performance.</p>
+</section>
+</section>
+<section id="kernel-compilation-and-execution">
+<h2>Kernel Compilation and Execution<a class="headerlink" href="#kernel-compilation-and-execution" title="Permalink to this heading"></a>
+</h2>
+<p>As mentioned earlier, kernels are JIT compiled and executed on the device. This presents both advantages and disadvantages during development.
+On the one hand, if one updates only kernel code, there is no need to rebuild before running the program to test that the changes had the desired effect.
+On the other hand, it also means that errors in the kernel code will not be caught at host-code compile time, but only at time of host code execution,
+when JIT compilation is triggered.</p>
+<section id="exercise-3-observing-jit-compile-errors">
+<h3>Exercise 3: Observing JIT Compile Errors<a class="headerlink" href="#exercise-3-observing-jit-compile-errors" title="Permalink to this heading"></a>
+</h3>
+<p>Perform the following steps:</p>
+<ol class="arabic simple">
+<li><p>Introduce a syntax error in the reader kernel.</p></li>
+<li><p>Rebuild the example program by running <code class="docutils literal notranslate"><span class="pre">./build_metal.sh</span></code> and observe that no error is reported.</p></li>
+<li><p>Run the example program by running <code class="docutils literal notranslate"><span class="pre">./build/ttnn/examples/example_lab_eltwise_binary</span></code> and
+observe how JIT compilation errors are reported.</p></li>
+<li><p>Fix the syntax error and rerun the program to confirm that the program now runs correctly with <strong>no rebuilding step required</strong>.</p></li>
+</ol>
+</section>
+</section>
+<section id="debug-facilities-in-tt-metalium">
+<h2>Debug Facilities in TT-Metalium<a class="headerlink" href="#debug-facilities-in-tt-metalium" title="Permalink to this heading"></a>
+</h2>
+<p>Host code can be debugged using the usual debugger tools like <code class="docutils literal notranslate"><span class="pre">gdb</span></code>.
+To debug host code, build the program with debug symbols:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./build_metal.sh<span class="w"> </span>--build-type<span class="w"> </span>Debug
+</pre></div>
+</div>
+<p>Then run the program using <code class="docutils literal notranslate"><span class="pre">gdb</span></code>:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>gdb<span class="w"> </span>./build/ttnn/examples/example_lab_eltwise_binary
+</pre></div>
+</div>
+<p>Kernels cannot be easily debugged using <code class="docutils literal notranslate"><span class="pre">gdb</span></code>, and TT-Metalium provides a number of other methods for debugging kernels.
+These methods are useful for debugging hangs and other issues that may not be apparent from the host-side code.</p>
+<section id="debug-print-api">
+<h3>Debug Print API<a class="headerlink" href="#debug-print-api" title="Permalink to this heading"></a>
+</h3>
+<p>Because kernel code runs on the device, it can’t use standard C++ functions to print debug information,
+as the device doesn’t have a terminal.
+The Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
+to the host while it runs. You can think of it as a constrained, lightweight alternative to <code class="docutils literal notranslate"><span class="pre">printf</span></code> that works inside kernels.
+It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
+numerical issues or hangs.</p>
+<p>The DPRINT API is controlled through environment variables on the host side.
+The host-side environment variable <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> specifies which cores’ DPRINT information will be forwarded to the host terminal.
+If this environment variable is not set, calls to DPRINT APIs produce no output and behave as no-ops at runtime.
+When debugging, it is common to set this variable to <code class="docutils literal notranslate"><span class="pre">all</span></code> to print from all cores (i.e. <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DPRINT_CORES=all</span></code>).
+When not debugging, you should unset this variable to disable printing (i.e. <code class="docutils literal notranslate"><span class="pre">unset</span> <span class="pre">TT_METAL_DPRINT_CORES</span></code>).
+Unsetting this variable is particularly important to do when evaluating performance.</p>
+<p>An alternative to printing to the host terminal is to print to a log file, which can be done by setting
+the <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_FILE</span></code> environment variable (e.g. <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">TT_METAL_DPRINT_FILE=log.txt</span></code>).</p>
+<p>To use DPRINT in a kernel, you include the debug header and use a C++ stream-like syntax:
+DPRINT supports printing integers, floats, and strings, but it does <strong>not</strong> directly support the C++ <code class="docutils literal notranslate"><span class="pre">bool</span></code> type.
+The common pattern is to cast a Boolean to an integer (for example, <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code>) before printing it.
+The following example shows a simple print of local kernel variables, including a Boolean flag:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">done</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// DPRINT uses a streaming syntax; ENDL() flushes the print buffer.</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"iter = "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Booleans should be cast to an integer type before printing.</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"done flag = "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">done</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<section id="printing-a-tile-in-a-dataflow-kernel">
+<h4>Printing a Tile in a Dataflow Kernel<a class="headerlink" href="#printing-a-tile-in-a-dataflow-kernel" title="Permalink to this heading"></a>
+</h4>
+<p>Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
+DPRINT can be combined with the <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> helper to print part or all of a tile from a CB.</p>
+<p>You can only safely sample a tile from a CB <strong>between</strong> the appropriate CB API calls:</p>
+<ul class="simple">
+<li><p>When reading from CBs (e.g. in writer kernels): between <code class="docutils literal notranslate"><span class="pre">cb_wait_front()</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front()</span></code>.</p></li>
+<li><p>When writing to CBs (e.g. in reader kernels): between <code class="docutils literal notranslate"><span class="pre">cb_reserve_back()</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_push_back()</span></code>.</p></li>
+</ul>
+<p>A simplified example of printing a full tile from an output CB in a writer kernel is shown below.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/dataflow/dataflow_api.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint_tile.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt-metalium/constants.hpp"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Assume this circular buffer holds output tiles from a compute kernel.</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="w"> </span><span class="n">cb_out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Number of tiles to consume and optionally print.</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Wait until one tile is available at the front of cb_out.</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"Output tile "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">" from cb_out = "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_out</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Print each row of a tile.</span>
+<span class="w">        </span><span class="c1">// TileSlice has limited capacity, so we must print one row at a time.</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">row</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">row</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HEIGHT</span><span class="p">;</span><span class="w"> </span><span class="n">row</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">SliceRange</span><span class="w"> </span><span class="n">slice_range</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="p">.</span><span class="n">h0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">),</span>
+<span class="w">                </span><span class="p">.</span><span class="n">h1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="c1">// One row</span>
+<span class="w">                </span><span class="p">.</span><span class="n">hs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w">                             </span><span class="c1">// Stride is 1</span>
+<span class="w">                </span><span class="p">.</span><span class="n">w0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">w1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_WIDTH</span><span class="p">,</span><span class="w">     </span><span class="c1">// Full width</span>
+<span class="w">                </span><span class="p">.</span><span class="n">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w">                              </span><span class="c1">// Stride is 1</span>
+<span class="w">            </span><span class="p">};</span>
+
+<span class="w">            </span><span class="c1">// TileSlice(cb_id, tile_idx, slice_range, cb_type, ptr_type)</span>
+<span class="w">            </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">row</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">": "</span>
+<span class="w">                   </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span>
+<span class="w">                      </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">cb_out</span><span class="p">),</span>
+<span class="w">                      </span><span class="cm">/* tile_idx = */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">                      </span><span class="n">slice_range</span><span class="p">,</span>
+<span class="w">                     </span><span class="cm">/* cb_type = */</span><span class="w"> </span><span class="n">TSLICE_OUTPUT_CB</span><span class="p">,</span>
+<span class="w">                     </span><span class="cm">/* ptr_type = */</span><span class="w"> </span><span class="n">TSLICE_RD_PTR</span><span class="p">)</span>
+<span class="w">                   </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_out_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_read_ptr</span><span class="p">(</span><span class="n">cb_out</span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Perform the actual work of this writer kernel...</span>
+
+<span class="w">        </span><span class="c1">// Mark this tile as consumed in the CB.</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">cb_type</span></code> parameter to <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> specifies whether the CB is the input or output of the compute engine.
+The <code class="docutils literal notranslate"><span class="pre">ptr_type</span></code> parameter specifies whether we wish to get data from the read-side (front), or the write-side (back) of the CB.
+In writer kernels, these are most commonly set to <code class="docutils literal notranslate"><span class="pre">TSLICE_OUTPUT_CB</span></code> and <code class="docutils literal notranslate"><span class="pre">TSLICE_RD_PTR</span></code>, respectively,
+to access the data that is about to be read from the CB.
+In reader kernels, these are most commonly set to <code class="docutils literal notranslate"><span class="pre">TSLICE_INPUT_CB</span></code> and <code class="docutils literal notranslate"><span class="pre">TSLICE_WR_PTR</span></code>, respectively,
+to access the data that has just been written (but not yet “pushed back”) to the CB.</p>
+</section>
+<section id="caveats-and-best-practices">
+<h4>Caveats and Best Practices<a class="headerlink" href="#caveats-and-best-practices" title="Permalink to this heading"></a>
+</h4>
+<p>A few important caveats to keep in mind when using DPRINT:</p>
+<ul>
+<li>
+<p><strong>Flushing behavior</strong></p>
+<p>DPRINT output is only guaranteed to flush when you print <code class="docutils literal notranslate"><span class="pre">ENDL()</span></code> or <code class="docutils literal notranslate"><span class="pre">'\n'</span></code>, or when the device closes.
+Always end each logical debug line with <code class="docutils literal notranslate"><span class="pre">ENDL()</span></code> if you want to see it promptly.</p>
+</li>
+<li>
+<p><strong>Kernel size and string length</strong></p>
+<p>Each distinct DPRINT call embeds a format string (and often the file name and line number) into the kernel binary.
+Long or numerous debug strings increase kernel size and may cause it to not fit into available internal SRAM.
+To avoid this, keep DPRINT messages short, particularly if printing within a loop with many iterations.
+You can also reduce the number of iterations by reducing the problem size while debugging.
+Finally, remove or disable most DPRINTs once you have diagnosed the issue.</p>
+</li>
+</ul>
+<p>Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without
+needing deep knowledge of the underlying Tenstorrent architecture, while still avoiding common pitfalls.</p>
+</section>
+<section id="exercise-4-using-dprint-to-debug-a-kernel">
+<h4>Exercise 4: Using DPRINT to Debug a Kernel<a class="headerlink" href="#exercise-4-using-dprint-to-debug-a-kernel" title="Permalink to this heading"></a>
+</h4>
+<p>Add DPRINT statements to the writer kernel in our example program to print:</p>
+<ul class="simple">
+<li><p>Value of the iterator <code class="docutils literal notranslate"><span class="pre">i</span></code> in every iteration of the <code class="docutils literal notranslate"><span class="pre">for</span></code> loop</p></li>
+<li><p>Contents of the resulting tile for the first three tiles processed by the kernel.</p></li>
+</ul>
+<p>For testing purposes, modify the program’s input data to not use random numbers
+so you can verify that the results are as expected. Keep in mind that the input data vector is in row-major order,
+but it is then stored in tiled layout in the tensor.
+Also keep in mind that <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> has limited precision, so you may run into seemingly unexpected results if you
+perform a naive operation like <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">=</span> <span class="pre">x</span> <span class="pre">+</span> <span class="pre">0.1</span></code> inside of a loop if the result rounds to the original value <code class="docutils literal notranslate"><span class="pre">x</span></code>.
+Note that this is a common issue with floating-point arithmetic, and is not specific to <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>, but you are
+more likely to encounter it with <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> because of its limited precision.
+Similarly, many integers cannot be represented exactly as floating-point numbers, and this becomes apparent
+much sooner with lower precision types, such as <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>.</p>
+<p>It is also worth noting that printing individual <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> values requires casting the value to a <code class="docutils literal notranslate"><span class="pre">float</span></code>
+to get expected floating-point result (e.g. <code class="docutils literal notranslate"><span class="pre">std::cout</span> <span class="pre">&lt;&lt;</span> <span class="pre">"x:</span> <span class="pre">"</span> <span class="pre">&lt;&lt;</span> <span class="pre">static_cast&lt;float&gt;(x);</span></code>).
+<code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> takes care of this internally, so no further casting is needed when printing tiles.</p>
+<p>Since this exercise will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
+The easiest way to rebuild the program is to rerun <code class="docutils literal notranslate"><span class="pre">./build_metal.sh</span></code> from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory.</p>
+</section>
+</section>
+<section id="debugging-hangs-using-stack-traces">
+<h3>Debugging Hangs using Stack Traces<a class="headerlink" href="#debugging-hangs-using-stack-traces" title="Permalink to this heading"></a>
+</h3>
+<p>TT-Metalium includes a Python tool called <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code>, which inspects a hung TT-Metalium run and prints per-core
+call stacks for the RISC-V processors on all cores. This is often the fastest way to see exactly where the device got stuck.
+When a program hangs, <strong>leave it running</strong>, open another terminal and run the following command from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>tools/triage/dump_callstacks.py
+</pre></div>
+</div>
+<p>This will print the call stacks for all RISC-V processors on all cores.</p>
+<section id="tt-triage-dependencies">
+<h4>
+<code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> Dependencies<a class="headerlink" href="#tt-triage-dependencies" title="Permalink to this heading"></a>
+</h4>
+<p>Depending on your environment, you may encounter an error running the above command, such as
+<code class="docutils literal notranslate"><span class="pre">Module</span> <span class="pre">'No</span> <span class="pre">module</span> <span class="pre">named</span> <span class="pre">'ttexalens''</span> <span class="pre">not</span> <span class="pre">found.</span> <span class="pre">Please</span> <span class="pre">install</span> <span class="pre">tt-exalens</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">Debugger</span> <span class="pre">version</span> <span class="pre">mismatch</span></code>.
+If this occurs, you can address it by creating a Python virtual environment and installing dependencies,
+by running the following from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./create_venv.sh
+<span class="nb">source</span><span class="w"> </span>python_env/bin/activate
+scripts/install_debugger.sh
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>tools/triage/requirements.txt
+</pre></div>
+</div>
+<p>Note that you may need to reenter the virtual environment by re-running <code class="docutils literal notranslate"><span class="pre">source</span> <span class="pre">python_env/bin/activate</span></code>
+if you open a new terminal later.</p>
+</section>
+<section id="exercise-5-using-tt-triage-to-debug-a-hang">
+<h4>Exercise 5: Using tt-triage to Debug a Hang<a class="headerlink" href="#exercise-5-using-tt-triage-to-debug-a-hang" title="Permalink to this heading"></a>
+</h4>
+<p>To illustrate how <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> can be used to debug a hang, we will use the <code class="docutils literal notranslate"><span class="pre">lab_eltwise_binary</span></code> example program.
+You can introduce a very simple artificial hang by commenting out the calls to <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code>
+(as if you accidentally forgot them) in the compute kernel in
+<code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp</span></code>.</p>
+<p>With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks waiting
+for space in the circular buffers, which from the host side looks like a hang.
+To help pinpoint the problem, you can dump stack traces.</p>
+<ol class="arabic simple">
+<li><p>Make changes to the compute kernel as suggested above.</p></li>
+<li><p>Run the program as usual.</p></li>
+<li><p>When it becomes apparent that the program has been running for a long time without indication of progress,
+keep it running and open another terminal and run <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tools/triage/dump_callstacks.py</span></code> from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory.</p></li>
+</ol>
+<p>The output will show the call stacks for all RISC-V processors on all cores, including cores
+that are running firmware responsible for dispatching kernel code. You should ignore the cores that are running firmware,
+and focus on the cores that are running kernel code. In our example, these will be in location <code class="docutils literal notranslate"><span class="pre">(0,0)</span></code>, since that is
+the core we specified in <code class="docutils literal notranslate"><span class="pre">init_program()</span></code> in <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp</span></code>.
+Another way to recognize relevant RISC-V processors is to look under the <strong>Kernel Name</strong> column, and
+look for kernel names of interest, such as <code class="docutils literal notranslate"><span class="pre">read_tiles</span></code> or <code class="docutils literal notranslate"><span class="pre">write_tiles</span></code>.</p>
+<p>In this case, you should see the call stack for the <code class="docutils literal notranslate"><span class="pre">read_tiles</span></code> kernel contains a call to <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, even if you dump stack trace
+repeatedly, indicating a possible source of the problem.
+In general, stack traces alone may not be sufficient to uncover the reason for the hang. In such a case,
+you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
+printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.</p>
+<p>Note that you can terminate the hung program by pressing <code class="docutils literal notranslate"><span class="pre">Ctrl</span></code> + <code class="docutils literal notranslate"><span class="pre">C</span></code> in the terminal where it is running.
+Once you are done debugging, uncomment the calls to <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> in the compute kernel to restore normal behavior.</p>
+</section>
+</section>
+<section id="device-performance-profiling">
+<h3>Device Performance Profiling<a class="headerlink" href="#device-performance-profiling" title="Permalink to this heading"></a>
+</h3>
+<p>TT-Metalium includes a device program profiler that measures how long sections of your device kernels take to run.
+Profiling is disabled by default, but can be enabled by setting the <code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PROFILER</span></code> environment variable to <code class="docutils literal notranslate"><span class="pre">1</span></code>
+when launching the binary.
+With this flag set, when the program finishes and the device is closed (e.g. via <code class="docutils literal notranslate"><span class="pre">mesh_device-&gt;close()</span></code>), the runtime
+automatically pulls the profiling data from the device and writes it to a CSV log file on the host.
+The CSV file is named <code class="docutils literal notranslate"><span class="pre">profile_log_device.csv</span></code> and is stored in the <code class="docutils literal notranslate"><span class="pre">generated/profiler/.logs/</span></code> directory.
+The log file contains device-side profiling data for all RISC-V processors on all cores, tagged as
+<code class="docutils literal notranslate"><span class="pre">*RISC-KERNEL</span></code> and <code class="docutils literal notranslate"><span class="pre">*RISC-FW</span></code>, corresponding to kernel execution time and overall firmware (kernel + runtime support) execution time.
+Note that the log file uses names BRISC and NCRISC for the two RISC-V processors that control routers
+(RISC-V 0 and RISC-V 4 in Figure 5), and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 5).</p>
+<section id="exercise-6-using-device-profiling-to-profile-kernels">
+<h4>Exercise 6: Using Device Profiling to Profile Kernels<a class="headerlink" href="#exercise-6-using-device-profiling-to-profile-kernels" title="Permalink to this heading"></a>
+</h4>
+<ol class="arabic">
+<li>
+<p><strong>Make sure code is built with Release option</strong></p>
+<p>If you previously used the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Debug</span></code> flag, do not forget to rebuild the programming examples
+with the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Release</span></code> flag before profiling performance.</p>
+</li>
+<li>
+<p><strong>Make sure DPRINTs are disabled</strong></p>
+<p>Ensure that the <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> environment variable is not set.
+The device profiler and kernel DPRINT both consume the same limited on-chip SRAM,
+so only one should be enabled at a time. Also, the time spent on DPRINT may affect performance measurements,
+leading to misleading results when compared to another run without DPRINT.</p>
+</li>
+<li>
+<p><strong>Run the program with profiler enabled</strong></p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./build/ttnn/examples/example_lab_eltwise_binary
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Locate the CSV log file</strong></p>
+<p>Once the run finishes, locate the CSV log file and open it in a spreadsheet editor such as Excel, or a text editor.
+The file contains one row per profiling event. It begins with a header line that includes the chip frequency, for example:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120
+PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run host ID, trace id, trace id counter, zone name, type, source line, source file, meta data
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Compute elapsed firmware time</strong></p>
+<p>In the CSV log file, each RISC-V processor on each core has several rows of data, each indicating a unique timer event.
+Column <code class="docutils literal notranslate"><span class="pre">time[cycles</span> <span class="pre">since</span> <span class="pre">reset]</span></code> indicates the number of cycles since the reset of the device until the specific timer event.
+For this lab, it is sufficient to determine the overall firmware execution time. To compute it,
+simply subtract the maximum and minimum <code class="docutils literal notranslate"><span class="pre">time[cycles</span> <span class="pre">since</span> <span class="pre">reset]</span></code> values across all rows in the log file, and then multiply
+the difference by the clock cycle time, which can be calculated from the chip frequency in the header.
+The time computed this way is the total elapsed time in the firmware and does not include any host execution time,
+or data transfer from the host to the device.</p>
+</li>
+</ol>
+</section>
+</section>
+</section>
+<section id="matrix-multiplication-in-tt-metalium">
+<h2>Matrix Multiplication in TT-Metalium<a class="headerlink" href="#matrix-multiplication-in-tt-metalium" title="Permalink to this heading"></a>
+</h2>
+<p>Now that you have a basic understanding of using the TT-Metalium APIs and building data movement and compute kernels,
+we can look at a more complex example of matrix multiplication.
+As described earlier, matrix multiplication can be decomposed into a series of tile multiplications via tiling.
+In Exercise 1, you implemented a tiled version of matrix multiplication by identifying appropriate indices in the input and output matrices,
+which were organized in a row-major layout, and then performing the necessary arithmetic operations on these smaller tiles.
+We will now show how the same can be achieved in TT-Metalium, while taking advantage of the built-in tiled memory layout.</p>
+<p>The key insight is that tiled matrix multiplication can be performed by considering each tile as an element of a larger matrix,
+and then performing regular matrix multiplication on these larger matrices, where each tile is multiplied by another tile
+using standard matrix multiplication.
+While we will not present a formal proof of correctness, we will illustrate how this works intuitively to allow us to
+write correct kernel code to perform this operation.</p>
+<p>Consider multiplication of an <code class="docutils literal notranslate"><span class="pre">MxK</span></code> matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> and a <code class="docutils literal notranslate"><span class="pre">KxN</span></code> matrix <code class="docutils literal notranslate"><span class="pre">B</span></code>. The <code class="docutils literal notranslate"><span class="pre">C[i,</span> <span class="pre">j]</span></code> element of the resulting matrix is computed as
+the dot product of row <code class="docutils literal notranslate"><span class="pre">i</span></code> of <code class="docutils literal notranslate"><span class="pre">A</span></code> with column <code class="docutils literal notranslate"><span class="pre">j</span></code> of <code class="docutils literal notranslate"><span class="pre">B</span></code>. The dot product is computed by multiplying corresponding pairs of elements
+and summing them. Extending this idea to two neighboring elements of <code class="docutils literal notranslate"><span class="pre">C</span></code>, say <code class="docutils literal notranslate"><span class="pre">C[i,</span> <span class="pre">j]</span></code> and <code class="docutils literal notranslate"><span class="pre">C[i</span> <span class="pre">+</span> <span class="pre">1,</span> <span class="pre">j]</span></code>, we need rows <code class="docutils literal notranslate"><span class="pre">i</span></code>
+and <code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">+</span> <span class="pre">1</span></code> of <code class="docutils literal notranslate"><span class="pre">A</span></code> and the same column <code class="docutils literal notranslate"><span class="pre">j</span></code> of <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+More generally, if we want to compute a rectangular tile of height <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code> and width <code class="docutils literal notranslate"><span class="pre">TILE_WIDTH</span></code> starting at <code class="docutils literal notranslate"><span class="pre">C[i,</span> <span class="pre">j]</span></code>,
+we must fetch the entire band of tiles in <code class="docutils literal notranslate"><span class="pre">A</span></code> covering rows <code class="docutils literal notranslate"><span class="pre">i</span></code> to <code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">+</span> <span class="pre">TILE_HEIGHT</span> <span class="pre">-</span> <span class="pre">1</span></code> (across all columns),
+and the entire band of tiles in <code class="docutils literal notranslate"><span class="pre">B</span></code> covering columns <code class="docutils literal notranslate"><span class="pre">j</span></code> to <code class="docutils literal notranslate"><span class="pre">j</span> <span class="pre">+</span> <span class="pre">TILE_WIDTH</span> <span class="pre">-</span> <span class="pre">1</span></code> (across all rows).
+Conceptually, we are treating the <code class="docutils literal notranslate"><span class="pre">K</span></code> dimension as being split into tile-sized chunks, and for each output tile we
+accumulate products over all those K-tiles.</p>
+<p>Consider the concrete example shown in Figure 6.</p>
+<figure class="align-center" id="id6">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png"><img alt="Tiled Matrix Multiplication Example" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png" style="width: 1200px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 6: Tiled Matrix Multiplication Example</span><a class="headerlink" href="#id6" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Figure 6 shows an example where <code class="docutils literal notranslate"><span class="pre">A</span></code> is a <code class="docutils literal notranslate"><span class="pre">9x4</span></code> matrix, and <code class="docutils literal notranslate"><span class="pre">B</span></code> is a <code class="docutils literal notranslate"><span class="pre">4x6</span></code> matrix.
+If we choose <code class="docutils literal notranslate"><span class="pre">3x3</span></code> tiles for matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>, we need 3 rows of matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> and 3 columns of matrix <code class="docutils literal notranslate"><span class="pre">B</span></code> to compute a single tile of matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>.
+This means that <code class="docutils literal notranslate"><span class="pre">A</span></code> tiles must have 3 rows, <code class="docutils literal notranslate"><span class="pre">B</span></code> tiles must have 3 columns, and
+the inner tile dimensions must match (the number of columns in an <code class="docutils literal notranslate"><span class="pre">A</span></code> tile equals
+the number of rows in a <code class="docutils literal notranslate"><span class="pre">B</span></code> tile).
+If we choose <code class="docutils literal notranslate"><span class="pre">3x2</span></code> tiles for matrix <code class="docutils literal notranslate"><span class="pre">A</span></code>, we can divide <code class="docutils literal notranslate"><span class="pre">A</span></code> into six tiles <code class="docutils literal notranslate"><span class="pre">A0</span></code> through <code class="docutils literal notranslate"><span class="pre">A5</span></code>.
+The figure shows labeling of the tiles in row-major order, which is how tiled layout works on the Tenstorrent architecture, as described earlier.
+We can similarly divide <code class="docutils literal notranslate"><span class="pre">B</span></code> into four tiles <code class="docutils literal notranslate"><span class="pre">B0</span></code> through <code class="docutils literal notranslate"><span class="pre">B3</span></code>, each of shape <code class="docutils literal notranslate"><span class="pre">2x3</span></code>.
+Each <code class="docutils literal notranslate"><span class="pre">C</span></code> tile is computed by summing products of the corresponding tile row of <code class="docutils literal notranslate"><span class="pre">A</span></code> and tile column of <code class="docutils literal notranslate"><span class="pre">B</span></code>, exactly like scalar matrix multiplication,
+but with tiles instead of individual numbers. For instance, tile <code class="docutils literal notranslate"><span class="pre">C0</span></code> corresponds to tile row 0 of <code class="docutils literal notranslate"><span class="pre">A</span></code> and tile column 0 of <code class="docutils literal notranslate"><span class="pre">B</span></code>, and therefore</p>
+<p><code class="docutils literal notranslate"><span class="pre">C0</span> <span class="pre">=</span> <span class="pre">A0</span> <span class="pre">*</span> <span class="pre">B0</span> <span class="pre">+</span> <span class="pre">A1</span> <span class="pre">*</span> <span class="pre">B2</span></code></p>
+<p>Each product in this equation is an inner <code class="docutils literal notranslate"><span class="pre">3x2</span></code> by <code class="docutils literal notranslate"><span class="pre">2x3</span></code> matrix multiplication producing a <code class="docutils literal notranslate"><span class="pre">3x3</span></code> tile that is accumulated into <code class="docutils literal notranslate"><span class="pre">C0</span></code>.
+We can summarize computations for all <code class="docutils literal notranslate"><span class="pre">C</span></code> tiles in a table as follows:</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p>Computing</p></td>
+<td><p>From A</p></td>
+<td><p>From B</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>From A</p></td>
+<td><p>From B</p></td>
+</tr>
+<tr class="row-even">
+<td><p>C0</p></td>
+<td><p>A0</p></td>
+<td><p>B0</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A1</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>C1</p></td>
+<td><p>A0</p></td>
+<td><p>B1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A1</p></td>
+<td><p>B3</p></td>
+</tr>
+<tr class="row-even">
+<td><p>C2</p></td>
+<td><p>A2</p></td>
+<td><p>B0</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A3</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>C3</p></td>
+<td><p>A2</p></td>
+<td><p>B1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A3</p></td>
+<td><p>B3</p></td>
+</tr>
+<tr class="row-even">
+<td><p>C4</p></td>
+<td><p>A4</p></td>
+<td><p>B0</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A5</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>C5</p></td>
+<td><p>A4</p></td>
+<td><p>B1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">+</span></code></p></td>
+<td><p>A5</p></td>
+<td><p>B3</p></td>
+</tr>
+</tbody>
+</table>
+<p>Further splitting each row so that only one multiplication is performed in each step, we get the following table:</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p>Computing</p></td>
+<td><p>From A</p></td>
+<td><p>From B</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C0</p></td>
+<td><p>A0</p></td>
+<td><p>B0</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A1</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C1</p></td>
+<td><p>A0</p></td>
+<td><p>B1</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A1</p></td>
+<td><p>B3</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C2</p></td>
+<td><p>A2</p></td>
+<td><p>B0</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A3</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C3</p></td>
+<td><p>A2</p></td>
+<td><p>B1</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A3</p></td>
+<td><p>B3</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C4</p></td>
+<td><p>A4</p></td>
+<td><p>B0</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A5</p></td>
+<td><p>B2</p></td>
+</tr>
+<tr class="row-even">
+<td rowspan="2"><p>C5</p></td>
+<td><p>A4</p></td>
+<td><p>B1</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>A5</p></td>
+<td><p>B3</p></td>
+</tr>
+</tbody>
+</table>
+<p>From this table, we can observe that if we compute the <code class="docutils literal notranslate"><span class="pre">C</span></code> tiles in row-major order (<code class="docutils literal notranslate"><span class="pre">C0</span></code>, <code class="docutils literal notranslate"><span class="pre">C1</span></code>, <code class="docutils literal notranslate"><span class="pre">C2</span></code>, …, <code class="docutils literal notranslate"><span class="pre">C5</span></code>),
+we will visit tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> in a regular pattern, visiting one row of tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> with all columns of tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+For example, to compute <code class="docutils literal notranslate"><span class="pre">C0</span></code> and <code class="docutils literal notranslate"><span class="pre">C1</span></code> we start with the row of tiles <code class="docutils literal notranslate"><span class="pre">A0</span></code>, <code class="docutils literal notranslate"><span class="pre">A1</span></code> while cycling through columns of tiles <code class="docutils literal notranslate"><span class="pre">B0</span></code>, <code class="docutils literal notranslate"><span class="pre">B2</span></code> followed by <code class="docutils literal notranslate"><span class="pre">B1</span></code>, <code class="docutils literal notranslate"><span class="pre">B3</span></code>.
+From this viewpoint, we can think of <code class="docutils literal notranslate"><span class="pre">A0</span></code>, <code class="docutils literal notranslate"><span class="pre">A1</span></code>, …, <code class="docutils literal notranslate"><span class="pre">A5</span></code> as the “elements” of a <code class="docutils literal notranslate"><span class="pre">3x2</span></code> tile matrix, <code class="docutils literal notranslate"><span class="pre">B0</span></code>, …, <code class="docutils literal notranslate"><span class="pre">B3</span></code> as the “elements” of a <code class="docutils literal notranslate"><span class="pre">2x2</span></code> tile matrix,
+and <code class="docutils literal notranslate"><span class="pre">C0</span></code>, …, <code class="docutils literal notranslate"><span class="pre">C5</span></code> as the “elements” of a <code class="docutils literal notranslate"><span class="pre">3x2</span></code> tile matrix.
+The computation of <code class="docutils literal notranslate"><span class="pre">C</span></code> from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> then follows the standard non-tiled matrix multiplication algorithm,
+except that each “element” is itself a 2D tile, and each element-wise multiply is a smaller matrix multiplication.</p>
+<p>This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplication on two tiles in a single instruction.
+All that needs to be done is to present the tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> to the matrix engine in the correct order, and accumulate results into the correct output tile.</p>
+<section id="exercise-7-implementing-matrix-multiplication-in-tt-metalium">
+<h3>Exercise 7: Implementing Matrix Multiplication in TT-Metalium<a class="headerlink" href="#exercise-7-implementing-matrix-multiplication-in-tt-metalium" title="Permalink to this heading"></a>
+</h3>
+<p>In this exercise, you will implement matrix multiplication on a Tenstorrent device. You can start with the lab_eltwise_binary example program and adjust it
+to perform matrix multiplication.
+Start by copying the files from the <code class="docutils literal notranslate"><span class="pre">lab_eltwise_binary</span></code> directory into a new directory (e.g. <code class="docutils literal notranslate"><span class="pre">lab1_matmul</span></code>),
+and rename the copied <code class="docutils literal notranslate"><span class="pre">lab_eltwise_binary.cpp</span></code> file to match the directory name (e.g. <code class="docutils literal notranslate"><span class="pre">lab1_matmul.cpp</span></code>).
+Similarly, rename <code class="docutils literal notranslate"><span class="pre">tiles_add.cpp</span></code> to e.g. <code class="docutils literal notranslate"><span class="pre">tiles_matmul.cpp</span></code>.
+Then, adjust the code to perform matrix multiplication, by making the following changes:</p>
+<ol class="arabic simple">
+<li><p>Update the host program to create input vectors to multiply matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> of size <code class="docutils literal notranslate"><span class="pre">640x320</span></code> and matrix <code class="docutils literal notranslate"><span class="pre">B</span></code>
+of size <code class="docutils literal notranslate"><span class="pre">320x640</span></code> to produce matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> of size <code class="docutils literal notranslate"><span class="pre">640x640</span></code>.</p></li>
+<li><p>Copy the reference matrix multiplication code you created in Exercise 1.
+Adapt it to the <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> data type, so it can be used to verify TT-Metalium results.
+To limit precision loss, accumulate the result into an ordinary 32-bit <code class="docutils literal notranslate"><span class="pre">float</span></code> and cast
+to <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> only after the full sum is computed.</p></li>
+<li>
+<p>Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
+pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
+You should write your code to make the following assumptions about the matrix and tile sizes:</p>
+<ul class="simple">
+<li><p>Tiles will be square with dimensions <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHTxTILE_WIDTH</span></code> (i.e. <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span> <span class="pre">==</span> <span class="pre">TILE_WIDTH</span></code>).</p></li>
+<li><p>All matrices will have dimensions that are divisible by the tile size.
+Note that constants <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code> and <code class="docutils literal notranslate"><span class="pre">TILE_WIDTH</span></code> are defined in the <code class="docutils literal notranslate"><span class="pre">tt_metal/api/tt-metalium/constants.hpp</span></code> header in the <code class="docutils literal notranslate"><span class="pre">tt::constants</span></code> namespace,
+and height is equal to width for all existing Tenstorrent devices.
+You should add assertions (using <code class="docutils literal notranslate"><span class="pre">TT_FATAL</span></code>) that check these assumptions.</p></li>
+</ul>
+</li>
+<li><p>Update kernel creation code to refer to kernel <code class="docutils literal notranslate"><span class="pre">.cpp</span></code> files in the new directory.</p></li>
+<li><p>Update the reader kernel to read the tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> in the correct order.
+The order of reading tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> should match the pattern of visiting one row of tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code>
+with all columns of tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code>, as discussed above. Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code> function only requires the index of the tile to read,
+not the actual memory address, so your code only needs to generate indices in the right order.</p></li>
+<li><p>Update the writer kernel to write the tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code> in the correct order. The order should match the pattern of visiting tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code> in row-major order.
+Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_write_tile</span></code> function only requires the index of the tile to write, not the actual memory address,
+so your code only needs to generate indices in the right order.</p></li>
+<li><p>Update the compute kernel to perform matrix multiplication rather than elementwise addition.
+To initialize the Tensix Engine for matrix multiplication, you will need to use the <code class="docutils literal notranslate"><span class="pre">mm_init</span></code> function provided in <code class="docutils literal notranslate"><span class="pre">tt_metal/include/compute_kernel_api/matmul.h</span></code>.
+Do not use any other initialization functions for matrix multiplication (specifically do <strong>not</strong> use <code class="docutils literal notranslate"><span class="pre">binary_op_init_common</span></code>, because that function is only
+applicable to elementwise operations, not to matrix multiplication).
+To multiply two tiles, you will need to use the <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code> function provided in <code class="docutils literal notranslate"><span class="pre">tt_metal/include/compute_kernel_api/matmul.h</span></code>.
+This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
+By judiciously choosing when to call <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code>, which initializes all tiles in the destination register array to zero, and when to call
+<code class="docutils literal notranslate"><span class="pre">tile_regs_commit</span></code>, which signals that the compute core is done writing to the destination register,
+you can ensure that the result for each output tile is accumulated correctly.
+Don’t forget to also pack each resulting tile and push it to the output circular buffer.
+Your compute kernel code should process the required number of tiles provided by reader kernels and
+produce the correct number of output tiles expected by the writer kernel.
+Remember that the JIT compiler can better optimize the kernel code if loop bounds are constant.
+Therefore, you should use compile-time arguments for the loop bounds whenever possible.</p></li>
+<li><p>Update <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> in the new directory you created to specify the name of the new executable
+and the source files to compile, matching whatever file and directory names you chose.</p></li>
+<li><p>Update <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> in the parent directory to add the new executable to be built.</p></li>
+<li><p>Build your program by running <code class="docutils literal notranslate"><span class="pre">./build_metal.sh</span></code> from the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> directory.</p></li>
+<li><p>Run the program and verify the results by comparing the results with the reference matrix multiplication you created in Exercise 1.
+Note that because of the limited precision of bfloat16, the results may not be exactly the same as the reference results, but they should be
+numerically close, with relative differences on the order of a few percent for input data in the range of 0-1. Note that the relative difference
+may be higher if the reference solution doesn’t use 32-bit <code class="docutils literal notranslate"><span class="pre">float</span></code> to accumulate the sum.</p></li>
+<li><p>Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
+against future labs when we optimize the implementation for performance.
+If you previously used the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Debug</span></code> flag, <strong>do not forget to rebuild the programming examples</strong>
+with the <code class="docutils literal notranslate"><span class="pre">--build-type</span> <span class="pre">Release</span></code> flag, and also to disable DPRINT before profiling performance.</p></li>
+</ol>
+</section>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>This single-core matrix multiplication implementation highlights several key architectural patterns for programming Tenstorrent devices:</p>
+<ul class="simple">
+<li><p><strong>Separation of data movement and compute</strong>: By using dedicated RISC-V processors for data movement (reader/writer kernels)
+and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput.
+The data movement processors can handle complex access patterns while the compute units remain fully utilized.</p></li>
+<li><p><strong>Tiled operations</strong>: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance.
+All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.</p></li>
+<li><p><strong>Pipelined data movement</strong>: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel
+processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles.
+This pipelining ensures efficient utilization of compute resources by minimizing idle time.</p></li>
+</ul>
+</section>
+<section id="troubleshooting-and-additional-resources">
+<h2>Troubleshooting and Additional Resources<a class="headerlink" href="#troubleshooting-and-additional-resources" title="Permalink to this heading"></a>
+</h2>
+<p>In rare cases, a Tensix device may enter an undefined operational state if a program performs actions outside the supported behavior.
+In such a case, the <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> command can be used to reset the device.
+This operation restores the device to a clean state, allowing normal operation to resume.
+If you encounter unexplained behaviors, try resetting the device using this command.
+In an unlikely case that <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> gives an error, contact your system administrator.</p>
+<p>Additional information about TT-Metalium and the Tenstorrent architecture can be found in the following resources:</p>
+<ul class="simple">
+<li><p>TT-Metalium Documentation: <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html">https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html</a></p></li>
+<li><p>TT-Metalium GitHub Repository: <a class="reference external" href="https://github.com/tenstorrent/tt-metal">https://github.com/tenstorrent/tt-metal</a></p></li>
+<li><p>TT-Metalium Discord: <a class="reference external" href="https://discord.gg/tenstorrent">https://discord.gg/tenstorrent</a></p></li>
+</ul>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../../index.html" class="btn btn-neutral float-left" title="Lab Exercises" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../../advanced_topics/index.html" class="btn btn-neutral float-right" title="Advanced Topics" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
