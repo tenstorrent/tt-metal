@@ -22,12 +22,13 @@
 // Helper for conv tilize operations using config-based API
 // CB indices are template parameters, flags computed from init/uninit bools
 #ifdef SPLIT_READER
-template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
-__attribute__((noinline)) void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
+#define TILIZE_IN_ATTR __attribute__((noinline))
 #else
-template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
-void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
+#define TILIZE_IN_ATTR
 #endif
+
+template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
+TILIZE_IN_ATTR void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
     // Compute flags at compile time: base flags + conditional SKIP_INIT/SKIP_UNINIT
     constexpr TilizeFlags flags = TilizeFlags::FAST | TilizeFlags::DT_RECONFIG |
                                   (init_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_INIT) |
