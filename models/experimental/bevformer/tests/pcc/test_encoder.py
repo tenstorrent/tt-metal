@@ -107,10 +107,7 @@ def test_bevformer_encoder_forward(
     num_queries = bev_h * bev_w
     embed_dims = model_config.embed_dims
     num_cams = dataset_config.num_cams
-    num_heads = model_config.num_heads
-    num_levels = model_config.num_levels  # From model config
-    num_points = model_config.num_points  # From model config
-    feedforward_channels = model_config.feedforward_channels
+    num_levels = model_config.num_levels
 
     # Use spatial shapes from dataset config (limited to num_levels)
     image_shape = dataset_config.input_size  # Use actual input size from config
@@ -136,9 +133,6 @@ def test_bevformer_encoder_forward(
     if len(level_start_index) > num_levels:
         level_start_index = level_start_index[:num_levels]
 
-    # Previous BEV for temporal attention (optional)
-    prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
-
     # Camera metadata for point sampling (convert width, height to height, width for img_metas)
     img_shape = (image_shape[1], image_shape[0])  # (height, width) for img_metas
     img_metas = create_sample_img_metas(batch_size, num_cams, img_shape)
@@ -147,7 +141,6 @@ def test_bevformer_encoder_forward(
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_prev_bev = ttnn.from_torch(prev_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_level_start_index = ttnn.from_torch(
         level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
