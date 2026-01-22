@@ -37,6 +37,9 @@ DEFAULT_TEST_CONFIG = get_preset_config("nuscenes_base")  # NuScenes + Base mode
 DEFAULT_DATASET_CONFIG = DEFAULT_TEST_CONFIG.dataset_config
 DEFAULT_MODEL_CONFIG = DEFAULT_TEST_CONFIG.model_config
 
+# Flag to control detailed comparison output
+PRINT_DETAILED_COMPARISON_FLAG = False
+
 
 def create_sample_img_metas(
     batch_size: int, num_cams: int = DEFAULT_DATASET_CONFIG.num_cams, image_shape: tuple = (900, 1600)
@@ -87,7 +90,6 @@ def test_bevformer_encoder_forward(
 ):
     """Test TTBEVFormerEncoder against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
 
     # Get configuration
     config = get_preset_config(config_name)
@@ -126,9 +128,6 @@ def test_bevformer_encoder_forward(
     # Limit to actual num_levels being used in this test
     if len(level_start_index) > num_levels:
         level_start_index = level_start_index[:num_levels]
-
-    # Valid ratios (dummy for testing)
-    valid_ratios = torch.ones(batch_size, num_levels, 2, dtype=torch.float32)
 
     # Previous BEV for temporal attention (optional)
     prev_bev = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
@@ -188,7 +187,6 @@ def test_bevformer_encoder_forward(
     tt_level_start_index = ttnn.from_torch(
         level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
-    tt_valid_ratios = ttnn.from_torch(valid_ratios, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # Forward pass with ttnn model
     tt_output = tt_model(
@@ -211,7 +209,7 @@ def test_bevformer_encoder_forward(
     logger.info(f"Reference model output shape: {ref_output.shape}")
     logger.info(f"TT model output shape: {tt_output_torch.shape}")
 
-    if print_detailed_comparison_flag:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
         print_detailed_comparison(
             ref_output,

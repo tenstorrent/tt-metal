@@ -1,6 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Configuration classes for BEVFormer model components.
+
+This module provides dataclass-based configuration objects for various BEVFormer
+components including attention mechanisms and encoder configurations. These
+configurations enable flexible model setup with validation and default values.
+
+Key configurations:
+- AttentionConfig: Base configuration for attention modules
+- DeformableAttentionConfig: Configuration for multi-scale deformable attention
+- SpatialCrossAttentionConfig: Configuration for spatial cross attention
+- TemporalSelfAttentionConfig: Configuration for temporal self attention
+"""
+
 from dataclasses import dataclass
 from typing import List
 
@@ -25,6 +39,12 @@ class DeformableAttentionConfig(AttentionConfig):
     query_embed_dims: int = None
 
     def __post_init__(self):
+        """
+        Validate and set default values for deformable attention configuration.
+
+        Sets query_embed_dims to embed_dims if not specified and validates
+        that embed_dims is divisible by num_heads.
+        """
         # Set query_embed_dims to embed_dims if not specified
         if self.query_embed_dims is None:
             self.query_embed_dims = self.embed_dims
@@ -41,6 +61,11 @@ class SpatialCrossAttentionConfig(AttentionConfig):
     pc_range: List[float] = None
 
     def __post_init__(self):
+        """
+        Set default point cloud range if not specified.
+
+        Uses nuScenes default range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+        """
         if self.pc_range is None:
             self.pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 

@@ -46,7 +46,7 @@ class TTSpatialCrossAttention:
         embed_dims (int): The embedding dimension.
         num_cams (int): Number of cameras.
         batch_first (bool): Whether the first dimension of input is batch_size.
-        deformable_attention (dict): Config for MSDeformableAttention3D.
+        deformable_attention (dict): Config for MSDeformableAttention.
         **kwargs: Additional arguments.
     """
 
@@ -146,7 +146,7 @@ class TTSpatialCrossAttention:
         )
 
         # Find valid queries for each camera
-        # Convert to torch to ensure exact same computation as reference
+        # Many BEV queries don't have valid projections to all cameras (due to occlusion, field of view, etc.)
         bev_mask_torch = ttnn.to_torch(bev_mask)
 
         indexes = []
@@ -193,7 +193,10 @@ class TTSpatialCrossAttention:
 
         logger.info("SCA Rebatching Start")
 
-        # Create rebatched tensors
+        # Create compact rebatched tensors to eliminate invalid query-camera pairs
+        # Instead of processing all [bs, num_queries] for each camera (many of which are invalid),
+        # we create compact tensors [bs, num_cams, max_len] containing only valid queries per camera
+        # This significantly reduces computation in the subsequent deformable attention
         queries_rebatch = ttnn.zeros(
             (bs, self.num_cams, max_len, self.embed_dims),
             device=self.device,
@@ -207,14 +210,17 @@ class TTSpatialCrossAttention:
             layout=ttnn.TILE_LAYOUT,
         )
 
-        # Fill rebatched tensors with valid queries
+        # Fill rebatched tensors with valid queries per camera
+        # TODO: Currently done on CPU, to be modified once TTNN supports required indexing ops
         for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                index_torch = ttnn.to_torch(index_query_per_img[j])  # [num_queries]
+            for i, index_query_per_img in enumerate(indexes):  # For each camera
+                index_torch = ttnn.to_torch(index_query_per_img[j])
 
+                # Find indices of valid queries for this camera
                 valid_indices_torch = torch.nonzero(index_torch, as_tuple=False).squeeze(-1)
 
                 if len(valid_indices_torch) > 0:
+                    # Limit to max_len to ensure consistent tensor sizes across cameras
                     num_valid = min(len(valid_indices_torch), max_len)
 
                     query_torch = ttnn.to_torch(query)
@@ -223,6 +229,8 @@ class TTSpatialCrossAttention:
                     queries_rebatch_torch = ttnn.to_torch(queries_rebatch)
                     ref_rebatch_torch = ttnn.to_torch(reference_points_rebatch)
 
+                    # Pack valid queries and their reference points into compact tensors
+                    # Original query[j, valid_indices] -> rebatched[j, camera_i, 0:num_valid]
                     queries_rebatch_torch[j, i, :num_valid] = query_torch[j, valid_indices_torch[:num_valid]]
                     ref_rebatch_torch[j, i, :num_valid] = ref_points_torch[i, j, valid_indices_torch[:num_valid]]
 
@@ -286,35 +294,42 @@ class TTSpatialCrossAttention:
 
         logger.info("SCA Feature Aggregation Start")
 
-        # Reshape output back to [bs, num_cams, max_len, embed_dims]
+        # Reshape deformable attention output back to per-camera format
         queries_output = ttnn.reshape(queries_output, (bs, self.num_cams, max_len, self.embed_dims))
 
         # Aggregate features back to original query positions
+        # We need to reverse the rebatching: from compact [bs, num_cams, max_len] back to [bs, num_queries]
+        # Each query accumulates features from all cameras where it has valid projections
+        # TODO: Currently done on CPU, to be modified once TTNN supports required indexing ops
         slots_torch = ttnn.to_torch(slots)
         queries_output_torch = ttnn.to_torch(queries_output)
 
-        for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                index_torch = ttnn.to_torch(index_query_per_img[j])  # [num_queries]
+        for j in range(bs):  # For each batch item
+            for i, index_query_per_img in enumerate(indexes):  # For each camera
+                index_torch = ttnn.to_torch(index_query_per_img[j])  # Valid queries mask for this batch-camera pair
                 valid_indices = torch.nonzero(index_torch, as_tuple=False).squeeze(-1)
 
                 if len(valid_indices) > 0:
                     num_valid = min(len(valid_indices), max_len)
+                    # Accumulate features: rebatched[j, camera_i, 0:num_valid] -> original[j, valid_indices]
+                    # Each query gets contributions from all cameras where it's valid (multi-view aggregation)
                     slots_torch[j, valid_indices[:num_valid]] += queries_output_torch[j, i, :num_valid]
 
         slots = ttnn.from_torch(slots_torch, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         logger.info("SCA Feature Aggregation Complete")
 
-        # Count valid queries per camera
-        count = bev_mask_torch.sum(-1) > 0  # [num_cams, B, num_queries]
-        count = count.permute(1, 2, 0).sum(-1)  # [B, num_queries]
+        # Count how many cameras contributed valid features for each query
+        # Since queries accumulate features from multiple cameras, we need to normalize by the number of contributors
+        count = bev_mask_torch.sum(-1) > 0  # Check validity per camera: [num_cams, B, num_queries]
+        count = count.permute(1, 2, 0).sum(-1)  # Sum across cameras: [B, num_queries]
         count = torch.clamp(count, min=1.0)
 
         count_ttnn = ttnn.from_torch(count, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         count_expanded = ttnn.unsqueeze(count_ttnn, -1)  # [bs, num_queries, 1]
 
-        # Average by dividing by count (exact torch logic: slots = slots / count[..., None])
+        # Normalize accumulated features by the number of contributing cameras
+        # This gives us the average feature across all valid camera views for each query
         slots = ttnn.div(slots, count_expanded)
 
         # Output projection
