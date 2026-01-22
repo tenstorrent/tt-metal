@@ -39,7 +39,7 @@ void bind_rotate(nb::module_& mod) {
                                                     at ((W-1)/2, (H-1)/2)
             fill (float): Fill value for areas outside the rotated tensor. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
-            interpolation_mode (str): Interpolation method - only "nearest" (sharp, faster) is supported. Default: "nearest"
+            interpolation_mode (str): Interpolation method - "nearest" (sharp, faster) or "bilinear" (smooth, slower). Default: "nearest"
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: DRAM_INTERLEAVED
 
         Returns:
@@ -56,8 +56,11 @@ void bind_rotate(nb::module_& mod) {
             >>> # Rotate 90 degrees clockwise with nearest interpolation (faster)
             >>> output_cw = ttnn.rotate(input_tensor, -90.0, interpolation_mode="nearest")
             >>>
+            >>> # Rotate with bilinear interpolation (smoother but slower)
+            >>> output_smooth = ttnn.rotate(input_tensor, 45.0, interpolation_mode="bilinear")
+            >>>
             >>> # Rotate around custom center (x=128, y=64) with white fill
-            >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 64), fill=1.0, interpolation_mode="nearest")
+            >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 64), fill=1.0)
         )doc",
         ttnn::rotate.base_name(),
         ttnn::rotate.python_fully_qualified_name());
