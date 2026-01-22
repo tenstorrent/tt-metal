@@ -52,7 +52,7 @@ Tests:
   #   - AllToAll_size_256_num_packets_100
   #   - AllToAll_size_512_num_packets_50
   #   - ... and so on.
-  # =================================C=====================================================
+  # =======================================================================================
   - name: "ParametrizedAllToAll"
     fabric_setup:
       topology: Mesh
@@ -370,3 +370,21 @@ Tests:
 
     patterns:
       - type: sequential_neighbor_exchange
+  # Test 14: NOC ID Selection
+  # This demonstrates how to explicitly select which NOC (0 or 1) to use by worker cores.
+  # By default, NOC 0 is used. This test uses NOC 1.
+  # ======================================================================================
+  - name: "NocIdSelection"
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: [0, [0, 0]]
+        noc_id: 1 # Explicitly select NOC 1 for this sender
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, [0, 1]]
