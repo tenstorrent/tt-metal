@@ -530,11 +530,11 @@ void populate_interleaved_buffer_write_dispatch_cmds(
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += dispatch_params.page_size_to_write) {
                 const uint64_t src_address_offset =
-                    (uint64_t)num_full_pages_written * buffer.page_size() +
-                    num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
-                    num_partial_pages_written_curr_txn * buffer.page_size();
+                    ((uint64_t)num_full_pages_written * buffer.page_size()) +
+                    (num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size()) +
+                    (num_partial_pages_written_curr_txn * buffer.page_size());
                 command_sequence.add_data(
-                    (char*)src + src_address_offset,
+                    static_cast<const char*>(src) + src_address_offset,
                     dispatch_params.data_size_to_copy,
                     dispatch_params.page_size_to_write);
                 num_partial_pages_written_curr_txn += 1;
@@ -546,14 +546,14 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                      sysmem_address_offset += dispatch_params.page_size_to_write) {
                     command_sequence.add_data(
-                        (char*)src + src_address_offset,
+                        static_cast<const char*>(src) + src_address_offset,
                         dispatch_params.data_size_to_copy,
                         dispatch_params.page_size_to_write);
                     src_address_offset += dispatch_params.data_size_to_copy;
                 }
             } else {
                 command_sequence.add_data(
-                    (char*)src + src_address_offset,
+                    static_cast<const char*>(src) + src_address_offset,
                     dispatch_params.data_size_to_copy * dispatch_params.pages_per_txn,
                     data_size_bytes);
             }
@@ -592,7 +592,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 ((dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
                  dispatch_params.partial_page_size());
             command_sequence.update_cmd_sequence(
-                dst_offset, (char*)(src) + src_offset, dispatch_params.data_size_to_copy);
+                dst_offset, static_cast<const char*>(src) + src_offset, dispatch_params.data_size_to_copy);
             dst_offset += dispatch_params.page_size_to_write;
         }
     } else if (buffer.page_size() == dispatch_params.page_size_to_write) {
@@ -609,7 +609,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 dispatch_params.page_size_to_write * (range.device_page_offset - start_device_page_offset);
             command_sequence.update_cmd_sequence(
                 dst_offset + cmd_region_offset,
-                (char*)(src) + src_offset,
+                static_cast<const char*>(src) + src_offset,
                 range.num_pages * dispatch_params.page_size_to_write);
         }
     } else {
@@ -621,7 +621,8 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 continue;
             }
             const uint64_t src_offset = *cur_host_page * (uint64_t)buffer.page_size();
-            command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
+            command_sequence.update_cmd_sequence(
+                dst_offset, static_cast<const char*>(src) + src_offset, buffer.page_size());
             dst_offset += dispatch_params.page_size_to_write;
         }
     }
@@ -692,7 +693,7 @@ void issue_buffer_dispatch_command_sequence(
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 
     if (use_pinned_memory) {
-        // Send CQ_PREFETCH_CMD_RELAY_LINEAR_H command in a separate fetch Q entry to ensure it will be processed in
+        // Send CQ_PREFETCH_CMD_RELAY_LINEAR command in a separate fetch Q entry to ensure it will be processed in
         // prefetch_h for remote device. If we don't do this, prefetch_h will "fetch" it along with the
         // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH command and send it to prefetch_d
         calculator.clear();
@@ -853,16 +854,15 @@ void write_to_device_buffer(
                     tt::LogMetal,
                     "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
                     "start:{:#X} end:{:#X}",
-                    (uintptr_t)pinned_host_base,
-                    (uintptr_t)pinned_host_base + pinned_size,
-                    (uintptr_t)src_ptr,
-                    (uintptr_t)src_ptr + region.offset + region.size);
+                    reinterpret_cast<uintptr_t>(pinned_host_base),
+                    reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
+                    reinterpret_cast<uintptr_t>(src_ptr),
+                    reinterpret_cast<uintptr_t>(src_ptr + region.offset + region.size));
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;
                 pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                 use_pinned_transfer = true;
-                fmt::println(stderr, "Using pinned memory");
             }
         }
     }
