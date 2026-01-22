@@ -661,7 +661,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
     // Use the new utility function to perform the multi-mesh mapping
     auto mapping_results = map_multi_mesh_to_physical(
-        adjacency_map_logical, adjacency_map_physical, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank, config);
+        adjacency_map_logical, adjacency_map_physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
     // Process results and update MappedChipInfo entries
     for (const auto& [logical_mesh_id, result] : mapping_results) {
