@@ -153,7 +153,7 @@ ALWI void initialize_return_indices_data() {
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(in_idx_cb_id));
     if constexpr (indexes_32_bit) {
         for (uint32_t h = 0; h < kernel_h; ++h) {
-            uint16_t hw_base = h * kernel_w;
+            uint32_t hw_base = h * kernel_w;
             for (uint32_t w = 0; w < kernel_w; ++w) {
                 uint32_t hw = hw_base + w;
                 if (!is_large_kernel || hw < sticks_per_chunk) {
@@ -223,8 +223,9 @@ ALWI void initialize_return_indices_data() {
             cb_push_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
         }
     } else {
-        auto fill_inc = [&](uint32_t cb_id, uint16_t inc) __attribute__((always_inline)) {
-            uint32_t inc_32_bit = (uint32_t)inc | ((uint32_t)inc << 16);
+        auto fill_inc = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {
+            uint16_t inc_16 = (uint16_t)inc;
+            uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
