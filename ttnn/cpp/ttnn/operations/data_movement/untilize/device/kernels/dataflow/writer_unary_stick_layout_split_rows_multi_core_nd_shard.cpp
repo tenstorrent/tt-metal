@@ -41,6 +41,7 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
     constexpr auto src0_args = TensorAccessorArgs<20>();
+    const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
 #else
     constexpr auto dst_args = TensorAccessorArgs<13>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
