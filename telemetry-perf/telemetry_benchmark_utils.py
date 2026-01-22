@@ -38,7 +38,23 @@ import pathlib
 
 _SCRIPT_DIR = pathlib.Path(__file__).parent.absolute()
 _TT_METAL_ROOT = _SCRIPT_DIR.parent
-TELEMETRY_BINARY = str(_TT_METAL_ROOT / "build_Release" / "tt_telemetry" / "tt_telemetry_server")
+
+# Find telemetry binary - check multiple locations
+_TELEMETRY_LOCATIONS = [
+    _TT_METAL_ROOT / "build_Release" / "tt_telemetry" / "tt_telemetry_server",  # Old location
+    pathlib.Path("/localdev/kkfernandez/tt-telemetry/build_Release/bin/tt_telemetry_server"),  # Galaxy
+    _TT_METAL_ROOT.parent / "tt-telemetry" / "build_Release" / "bin" / "tt_telemetry_server",  # Sibling repo
+]
+
+TELEMETRY_BINARY = None
+for location in _TELEMETRY_LOCATIONS:
+    if location.exists():
+        TELEMETRY_BINARY = str(location)
+        break
+
+if not TELEMETRY_BINARY:
+    TELEMETRY_BINARY = "tt-telemetry"  # Fallback to PATH lookup
+
 TT_SMI_BINARY = "tt-smi"
 
 
