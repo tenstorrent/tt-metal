@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+///
+#pragma once
+#include <tt-metalium/mesh_coord.hpp>
+
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+
+namespace ttnn {
+namespace operations::ccl {
+
+struct ExecuteReduceToAll {
+    static std::vector<ttnn::Tensor> invoke(
+        const ttnn::Tensor& input_tensor_l,
+        const ttnn::Tensor& input_tensor_s,
+        const ttnn::Tensor& input_tensor_m,
+        const MeshCoordinate& root_coord,
+        float scale_fp32,
+        tt::tt_fabric::Topology topology,
+        const std::optional<ttnn::Tensor>& optional_output_tensor_l = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_output_tensor_s = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_output_tensor_m = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_round1_intermediate_tensor = std::nullopt,
+        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
+        const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
+};
+
+std::vector<ttnn::TensorSpec> reduce_to_all_tensor_spec(
+    const ttnn::Tensor& input_tensor_l,
+    const ttnn::Tensor& input_tensor_s,
+    const ttnn::Tensor& input_tensor_m,
+    const MeshCoordinate& root_coord,
+    float scale_fp32,
+    tt::tt_fabric::Topology topology,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
+    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt);
+
+}  // namespace operations::ccl
+
+constexpr auto reduce_to_all =
+    ttnn::register_operation<"ttnn::reduce_to_all", ttnn::operations::ccl::ExecuteReduceToAll>();
+
+}  // namespace ttnn
