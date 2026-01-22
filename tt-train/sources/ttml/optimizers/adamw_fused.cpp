@@ -164,6 +164,10 @@ float AdamWFused::get_weight_decay() const {
     return m_config.weight_decay;
 }
 
+void AdamWFused::set_weight_decay(float weight_decay) {
+    m_config.weight_decay = weight_decay;
+}
+
 bool AdamWFused::get_amsgrad() const {
     return m_config.amsgrad;
 }
