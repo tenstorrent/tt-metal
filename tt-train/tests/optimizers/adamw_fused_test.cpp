@@ -419,7 +419,7 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
         << "Stochastic rounding should produce weights closer to CPU reference than deterministic rounding";
 }
 
-// Verifies mean and max error is lower in the stochastich rounding version given enough steps
+// Verifies mean and max error is lower in the stochastic rounding version given enough steps
 TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     using namespace ttml;
 
