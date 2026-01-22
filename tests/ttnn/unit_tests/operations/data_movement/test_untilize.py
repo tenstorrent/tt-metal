@@ -5,7 +5,6 @@
 import math
 import pytest
 import torch
-import numpy as np
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -134,7 +133,7 @@ def test_untilize_single_core_interleaved_to_sharded(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
+@pytest.mark.parametrize("tensor_shape, output_nd_shard_shape", [([2, 2, 256, 512], [2, 64, 64])])
 @pytest.mark.parametrize(
     "output_shard_orientation",
     [
@@ -162,17 +161,12 @@ def test_untilize_single_core_interleaved_to_nd_sharded(
     dtype,
     use_pack_untilize,
     tensor_shape,
+    output_nd_shard_shape,
     output_shard_orientation,
     standard_shard_core_grid,
 ):
-    num_tensor_dims = len(tensor_shape)
-    tensor_height = 1
-    for i in range(num_tensor_dims - 1):
-        tensor_height *= tensor_shape[i]
-    tensor_width = tensor_shape[num_tensor_dims - 1]
-
     # Output ND shard shape
-    output_nd_shard_shape = ttnn.Shape([2, 64, 64])
+    output_nd_shard_shape = ttnn.Shape(output_nd_shard_shape)
 
     # Output ND shard spec and memory config
     output_nd_shard_spec = ttnn.NdShardSpec(
@@ -196,7 +190,7 @@ def test_untilize_single_core_interleaved_to_nd_sharded(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
+@pytest.mark.parametrize("tensor_shape, output_nd_shard_shape", [([2, 2, 256, 512], [2, 64, 64])])
 @pytest.mark.parametrize(
     "output_shard_orientation",
     [
@@ -239,6 +233,7 @@ def test_untilize_single_core_legacy_sharded_to_nd_sharded(
     dtype,
     use_pack_untilize,
     tensor_shape,
+    output_nd_shard_shape,
     output_shard_orientation,
     input_memory_layout,
     input_shard_orientation,
@@ -285,7 +280,7 @@ def test_untilize_single_core_legacy_sharded_to_nd_sharded(
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     # Output ND shard spec and memory config
-    output_nd_shard_shape = ttnn.Shape([2, 64, 64])
+    output_nd_shard_shape = ttnn.Shape(output_nd_shard_shape)
     output_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=output_nd_shard_shape, grid=standard_shard_core_grid, orientation=output_shard_orientation
     )
@@ -368,7 +363,7 @@ def test_untilize_single_core_nd_sharded_to_nd_sharded(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
+@pytest.mark.parametrize("tensor_shape, input_nd_shard_shape", [([2, 2, 256, 512], [2, 64, 64])])
 @pytest.mark.parametrize(
     "input_shard_orientation",
     [
@@ -406,6 +401,7 @@ def test_untilize_single_core_nd_sharded_to_legacy_sharded(
     dtype,
     use_pack_untilize,
     tensor_shape,
+    input_nd_shard_shape,
     input_shard_orientation,
     output_shard_orientation,
     output_memory_layout,
@@ -422,7 +418,7 @@ def test_untilize_single_core_nd_sharded_to_legacy_sharded(
     tensor_width = tensor_shape[num_tensor_dims - 1]
 
     # Input ND shard spec
-    input_nd_shard_shape = ttnn.Shape([2, 64, 64])
+    input_nd_shard_shape = ttnn.Shape(input_nd_shard_shape)
     input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=input_nd_shard_shape, grid=standard_shard_core_grid, orientation=input_shard_orientation
     )
@@ -467,25 +463,23 @@ def test_untilize_single_core_nd_sharded_to_legacy_sharded(
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=input_tensor_spec, device=device)
 
-    for layout, shard_info in output_shard_memory_layout_map.items():
-        output_shard_spec = ttnn.ShardSpec(
-            shard_info["shard_grid"], shard_info["shard_shape"], output_shard_orientation
-        )
-        output_memory_config = ttnn.MemoryConfig(layout, ttnn.BufferType.L1, output_shard_spec)
+    shard_info = output_shard_memory_layout_map[output_memory_layout]
+    output_shard_spec = ttnn.ShardSpec(shard_info["shard_grid"], shard_info["shard_shape"], output_shard_orientation)
+    output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
-        ttnn_output_tensor = ttnn.untilize(
-            input_ttnn_tensor,
-            memory_config=output_memory_config,
-            use_multicore=False,
-            use_pack_untilize=use_pack_untilize,
-        )
-        ans = ttnn.to_torch(ttnn_output_tensor)
-        assert_with_pcc(input_torch_tensor, ans, 0.9999)
+    ttnn_output_tensor = ttnn.untilize(
+        input_ttnn_tensor,
+        memory_config=output_memory_config,
+        use_multicore=False,
+        use_pack_untilize=use_pack_untilize,
+    )
+    ans = ttnn.to_torch(ttnn_output_tensor)
+    assert_with_pcc(input_torch_tensor, ans, 0.9999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
+@pytest.mark.parametrize("tensor_shape, input_nd_shard_shape", [([2, 2, 256, 512], [2, 64, 64])])
 @pytest.mark.parametrize(
     "input_shard_orientation",
     [
@@ -498,13 +492,14 @@ def test_untilize_single_core_nd_sharded_to_interleaved(
     dtype,
     use_pack_untilize,
     tensor_shape,
+    input_nd_shard_shape,
     input_shard_orientation,
 ):
     torch.manual_seed(0)
 
     # Input ND shard spec
     standard_shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
-    input_nd_shard_shape = ttnn.Shape([2, 64, 64])
+    input_nd_shard_shape = ttnn.Shape(input_nd_shard_shape)
     input_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=input_nd_shard_shape, grid=standard_shard_core_grid, orientation=input_shard_orientation
     )
@@ -1034,7 +1029,6 @@ def test_untilize_multi_core_interleaved_to_nd_sharded(
 
     # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    print(f"Output ND shard shape: {nd_shard_spec.shard_shape}, tensor shape: {tensor_shape}")
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(
@@ -1203,37 +1197,10 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
     try:
         input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
     except Exception as e:
-        pytest.skip(f"from_torch failed while building sharded tensor: {e}")
+        pytest.xfail(f"from_torch failed while building sharded tensor: {e}")
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
-
-    # torch_np = input_torch_tensor.to(torch.float32).cpu().numpy().reshape(-1)
-    # ttnn_np = ttnn.to_torch(ttnn_output_tensor).to(torch.float32).cpu().numpy().reshape(-1)
-    # np.savetxt("torch.txt", torch_np, fmt="%.8f")
-    # np.savetxt("ttnn.txt", ttnn_np, fmt="%.8f")
-
-    #    def dump_faces(tensor: torch.Tensor, path: str):
-    #        arr = tensor.to(torch.float32).cpu().numpy()
-    #        if arr.ndim >= 3 and arr.shape[0] >= 2 and arr.shape[-2] == 64 and arr.shape[-1] == 64:
-    #            with open(path, "w") as f:
-    #             # np.savetxt(f, arr[0].reshape(64, 64), fmt="%.8f")
-    #             #    f.write("\nSECOND FACE\n")
-    #             #    np.savetxt(f, arr[1].reshape(64, 64), fmt="%.8f")
-    #                for face_idx, face in enumerate([arr[0], arr[1]]):
-    #                    mat = face.reshape(64, 64)
-    #                    for row in mat:
-    #                        formatted = [f"{v:.8f}" for v in row]
-    #                        left = " ".join(formatted[:32])
-    #                        right = " ".join(formatted[32:])
-    #                        f.write(f"{left}   {right}\n")
-    #                    if face_idx == 0:
-    #                        f.write("\nSECOND FACE\n")
-    #        else:
-    #            np.savetxt(path, arr.reshape(-1), fmt="%.8f")
-
-    #    dump_faces(input_torch_tensor, "torch_2.txt")
-    #    dump_faces(ttnn.to_torch(ttnn_output_tensor), "ttnn_2.txt")
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
@@ -1290,10 +1257,6 @@ def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
         input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
     ans = ttnn.to_torch(ttnn_output_tensor)
-
-    # print("untilize input nnz", torch.count_nonzero(input_torch_tensor).item())
-    # print("untilize output nnz", torch.count_nonzero(ans).item())
-    # print("untilize max abs diff", torch.max(torch.abs(ans - input_torch_tensor)).item())
 
     assert_with_pcc(input_torch_tensor, ans, 0.9999)
 
@@ -2378,20 +2341,11 @@ def untilize_nd_shard_spec_test_helper(
     nd_spec = ttnn.TensorSpec(
         shape=shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
     ).sharded_across_dims(shard_across_dims, core_ranges)
-    print("Shard shape:", nd_spec.memory_config.nd_shard_spec.shard_shape)
 
     torch_tensor = torch.randn(tuple(nd_spec.shape))
     ttnn_tensor = ttnn.from_torch(torch_tensor, spec=nd_spec, device=device)
 
-    print("is_sharded():", ttnn_tensor.is_sharded())
-    print("memory config:", ttnn_tensor.memory_config())
-    print("shard spec:", ttnn_tensor.memory_config().shard_spec)
-    print("ND shard spec:", ttnn_tensor.memory_config().nd_shard_spec)
-    print("Attempting ttnn.untilize on ND sharded tensor...")
-
     untilized_tensor = ttnn.untilize(ttnn_tensor, use_pack_untilize=use_pack_untilize)
-    print("Successfully untilized ND sharded tensor!")
-    print("Output layout:", untilized_tensor.layout)
     assert_with_pcc(torch_tensor, ttnn.to_torch(untilized_tensor), 0.9999)
 
 
