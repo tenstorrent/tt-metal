@@ -121,10 +121,13 @@ FactoryParameters get_factory_parameters(
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
-    auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+    // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
+    // since block float formats don't have a fixed datum size per element (they use block compression)
+    auto dtype = is_block_float(input_dtype) ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
     tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
+
     uint32_t nbytes = datum_size(data_format);
     uint32_t index_nbytes = datum_size(index_format);
 
