@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 
 #include <chrono>
 #include <cerrno>
@@ -100,6 +101,7 @@ std::vector<std::uint32_t> transpose_tiles(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
+    SKIP_FOR_WATCHER();
     IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
 
