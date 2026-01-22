@@ -85,11 +85,17 @@ def get_default_dispatch_core_type():
         ttnn._ttnn.cluster.ClusterType.T3K,
         ttnn._ttnn.cluster.ClusterType.N300_2x2,
     ]
-    return (
-        ttnn._ttnn.device.DispatchCoreType.ETH
-        if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
-        else ttnn._ttnn.device.DispatchCoreType.WORKER
-    )
+    try:
+        cluster_type = ttnn._ttnn.cluster.get_cluster_type()
+        return (
+            ttnn._ttnn.device.DispatchCoreType.ETH
+            if cluster_type in eth_default_dispatch_clusters
+            else ttnn._ttnn.device.DispatchCoreType.WORKER
+        )
+    except (IndexError, KeyError):
+        # Fallback for Galaxy or other cluster types not in the enum
+        # Galaxy and other large clusters should use WORKER dispatch
+        return ttnn._ttnn.device.DispatchCoreType.WORKER
 
 
 def get_default_dispatch_core_axis(fabric_tensix_config=None):
