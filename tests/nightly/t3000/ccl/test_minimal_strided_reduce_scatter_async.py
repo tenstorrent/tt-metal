@@ -381,7 +381,7 @@ def run_reduce_scatter_impl(
                 verify_output_shape=True,
                 verify_output_pcc=False,
             ),
-            id="experimental_strided_minimal_shape_check",
+            id="experimental_strided_minimal_shape_check_1",
         ),
         pytest.param(
             ReduceScatterTestConfig(
