@@ -28,6 +28,9 @@ from models.experimental.bevformer.tests.test_utils import (
 
 from loguru import logger
 
+# Enable/disable logging output
+ENABLE_LOGGING = True
+
 # Default Test Configuration                                                  #
 PRINT_DETAILED_COMPARISON_FLAG = False
 
@@ -177,7 +180,8 @@ def test_generate_reference_points(
 
     assert passed, f"Reference point generation comparison failed. Results: {results['individual_checks']}"
 
-    logger.info("✅ Reference point generation test passed!")
+    if ENABLE_LOGGING:
+        logger.info("✅ Reference point generation test passed!")
 
 
 @pytest.mark.parametrize(
@@ -288,7 +292,8 @@ def test_point_sampling_3d_to_2d(
         assert torch.all(valid_torch_points >= 0.0), "Torch valid projected points should be >= 0"
         assert torch.all(valid_torch_points <= 1.0), "Torch valid projected points should be <= 1"
     else:
-        logger.warning("No valid points found in torch implementation - this might indicate camera matrix issues")
+        if ENABLE_LOGGING:
+            logger.warning("No valid points found in torch implementation - this might indicate camera matrix issues")
 
     # For TTNN, check only valid points (where mask is True)
     valid_ttnn_points = ttnn_ref_points_cam_torch[ttnn_bev_mask_torch]
@@ -296,12 +301,14 @@ def test_point_sampling_3d_to_2d(
         assert torch.all(valid_ttnn_points >= 0.0), "TTNN valid projected points should be >= 0"
         assert torch.all(valid_ttnn_points <= 1.0), "TTNN valid projected points should be <= 1"
     else:
-        logger.warning("No valid points found in TTNN implementation - this might indicate camera matrix issues")
+        if ENABLE_LOGGING:
+            logger.warning("No valid points found in TTNN implementation - this might indicate camera matrix issues")
 
     # Check that we have some valid points (at least some points should be visible)
     torch_valid_ratio = torch_bev_mask.float().mean()
     ttnn_valid_ratio = ttnn_bev_mask_torch.float().mean()
-    logger.info(f"Valid point ratios - Torch: {torch_valid_ratio:.3f}, TTNN: {ttnn_valid_ratio:.3f}")
+    if ENABLE_LOGGING:
+        logger.info(f"Valid point ratios - Torch: {torch_valid_ratio:.3f}, TTNN: {ttnn_valid_ratio:.3f}")
 
     # We should have at least some valid points for the test to be meaningful
     assert torch_valid_ratio > 0.001, f"Too few valid points in torch implementation: {torch_valid_ratio:.3f}"
@@ -353,6 +360,8 @@ def test_point_sampling_3d_to_2d(
     )
 
     if points_passed:
-        logger.info("✅ Point sampling 3D to 2D test passed!")
+        if ENABLE_LOGGING:
+            logger.info("✅ Point sampling 3D to 2D test passed!")
     else:
-        logger.warning("⚠️ Point sampling passed but with reduced accuracy on coordinates")
+        if ENABLE_LOGGING:
+            logger.warning("⚠️ Point sampling passed but with reduced accuracy on coordinates")
