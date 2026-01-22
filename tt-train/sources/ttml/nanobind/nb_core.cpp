@@ -5,6 +5,7 @@
 #include "nb_core.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -127,19 +128,12 @@ void py_module(nb::module_& m) {
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
             "shard_tensor_to_mesh_mapper",
-            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&, int)>(
-                &ttnn::distributed::shard_tensor_to_mesh_mapper),
-            nb::arg("device"),
-            nb::arg("dim"));
-
-        // Returns std::unique_ptr<TensorToMesh>
-        py_distributed.def(
-            "shard_tensor_to_mesh_mapper",
-            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&, int, std::optional<int>)>(
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(
+                ttnn::distributed::MeshDevice&, int, std::optional<int>)>(
                 &ttnn::distributed::shard_tensor_to_mesh_mapper),
             nb::arg("device"),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = std::nullopt);
+            nb::arg("cluster_axis") = nb::none());
 
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
@@ -169,7 +163,7 @@ void py_module(nb::module_& m) {
             "synchronize_gradients",
             &ttml::core::distributed::synchronize_gradients,
             nb::arg("parameters"),
-            nb::arg("dp_dim") = std::nullopt);
+            nb::arg("dp_dim") = nb::none());
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;

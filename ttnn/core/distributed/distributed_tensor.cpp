@@ -496,19 +496,15 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
             .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<TensorToMesh>(TensorToMesh::create(
-        mesh_device,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{dim}},
-            .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
-}
-
 // Shard a tensor across one mesh dimension, and replicate the tensor along the other dimensions.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
-    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis) {
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis = std::nullopt) {
     if (!cluster_axis.has_value()) {
-        return shard_tensor_to_mesh_mapper(mesh_device, dim);
+        return std::make_unique<TensorToMesh>(TensorToMesh::create(
+            mesh_device,
+            MeshMapperConfig{
+                .placements = {MeshMapperConfig::Shard{dim}},
+                .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
     }
     TT_FATAL(
         cluster_axis.value() >= 0 && cluster_axis.value() < mesh_device.shape().dims(),

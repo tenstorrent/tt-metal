@@ -74,7 +74,6 @@ int main(int argc, char** argv) {
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
     const auto num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
 
-    // Enable fabric BEFORE opening the device - fabric config must be set before device initialization
     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     ttml::autograd::ctx().open_device(logical_mesh_shape);
 
@@ -90,25 +89,25 @@ int main(int argc, char** argv) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [device](std::vector<DatasetSample>&& samples) {
-            const uint32_t batch_size = samples.size();
-            std::vector<float> data;
-            std::vector<float> targets;
-            data.reserve(batch_size * num_features);
-            targets.reserve(batch_size * num_targets);
-            for (auto& [features, target] : samples) {
-                std::move(features.begin(), features.end(), std::back_inserter(data));
-                std::move(target.begin(), target.end(), std::back_inserter(targets));
-            }
+        [device](std::vector<DatasetSample>&& samples) -> BatchType {
+        const uint32_t batch_size = samples.size();
+        std::vector<float> data;
+        std::vector<float> targets;
+        data.reserve(batch_size * num_features);
+        targets.reserve(batch_size * num_targets);
+        for (auto& [features, target] : samples) {
+            std::move(features.begin(), features.end(), std::back_inserter(data));
+            std::move(target.begin(), target.end(), std::back_inserter(targets));
+        }
 
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-                data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
-            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-                targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+        auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
+        auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
 
-            return std::make_pair(data_tensor, targets_tensor);
-        };
+        return {data_tensor, targets_tensor};
+    };
 
     auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
 

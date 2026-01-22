@@ -16,25 +16,17 @@ namespace ttml::core::distributed {
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32_t> dp_dim) {
     auto* device = &autograd::ctx().get_device();
-    auto devices_count = device->get_devices().size();
-    assert(devices_count >= 1U);
+    TT_FATAL(!dp_dim.has_value() || dp_dim.value() < device->shape().dims(), "Cluster axis must be within mesh shape");
+    const auto dp_size = dp_dim.has_value() ? device->shape()[dp_dim.value()] : device->get_devices().size();
+    assert(dp_size >= 1U);
     // no need to synchronize if there is only one device
-    if (devices_count == 1U) {
+    if (dp_size == 1U) {
         return tensor;
     }
 
-    auto mesh_shape = device->shape();
-    if (dp_dim.has_value()) {
-        TT_FATAL(dp_dim.value() >= 0 && dp_dim.value() < mesh_shape.dims(), "Cluster axis must be within mesh shape");
-        auto result = ttnn::all_reduce(tensor, dp_dim.value());
-        const auto dp_size = mesh_shape[dp_dim.value()];
-        result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
-        return result;
-    } else {
-        auto result = ttnn::all_reduce(tensor);
-        result = ttnn::multiply(result, 1.0F / static_cast<float>(devices_count));
-        return result;
-    }
+    auto result = ttnn::all_reduce(tensor, dp_dim);
+    result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
+    return result;
 }
 
 void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim) {
