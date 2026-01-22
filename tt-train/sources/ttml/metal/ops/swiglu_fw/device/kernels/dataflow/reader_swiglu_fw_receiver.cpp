@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
@@ -94,21 +95,14 @@ void kernel_main() {
             const uint32_t x_tile_start = x_row * Wt + p_block_start;
             read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
 
-            // Receive W1 and read W3 data organized by k_blocks to match compute kernel expectations
+            // Receive W1 and W3 data organized by k_blocks to match compute kernel expectations
+            // Always receive batched: block_size rows × block_size tiles per mcast
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-
-                // First, receive all W1 data for this k_block (compute processes W1 first)
-                for (uint32_t p = 0; p < p_block_size; ++p) {
-                    mcast_receiver_reserve_and_receive(
-                        cb_w1_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
-                }
-                // Then, receive all W3 data for this k_block (compute processes W3 second)
-                for (uint32_t p = 0; p < p_block_size; ++p) {
-                    mcast_receiver_reserve_and_receive(
-                        cb_w3_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
-                }
+                constexpr uint32_t tiles_per_batch = block_size * block_size;
+                mcast_receiver_reserve_and_receive(
+                    cb_w1_idx, tiles_per_batch, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
+                mcast_receiver_reserve_and_receive(
+                    cb_w3_idx, tiles_per_batch, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
             }
         }
 
@@ -119,10 +113,9 @@ void kernel_main() {
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
+                [[maybe_unused]] const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                // Receive W2 via multicast for each column in c_block
                 for (uint32_t c = 0; c < c_block_size; ++c) {
                     mcast_receiver_reserve_and_receive(
                         cb_w2_idx, block_size, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);

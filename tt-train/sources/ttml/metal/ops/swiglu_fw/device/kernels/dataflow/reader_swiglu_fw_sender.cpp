@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
@@ -113,48 +114,52 @@ void kernel_main() {
             read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
 
             // Stream W1 and W3 data organized by k_blocks to match compute kernel expectations
+            // Always use batched mcast with padding for unaligned edge blocks
             for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
                 const uint32_t k_block_size =
                     (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
 
-                // First, read all W1 data for this k_block (compute processes W1 first)
-                for (uint32_t p = 0; p < p_block_size; ++p) {
-                    const uint32_t w1_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
-                    mcast_sender_read_row_and_send(
-                        cb_w1_idx,
-                        w1_address_generator,
-                        w1_tile_start,
-                        k_block_size,
-                        tile_bytes,
-                        block_size,
-                        mcast_sender_sem_ptr,
-                        mcast_receiver_sem_ptr,
-                        mcast_receiver_semaphore_addr,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        mcast_num_dests);
-                }
-                // Then, read all W3 data for this k_block (compute processes W3 second)
-                for (uint32_t p = 0; p < p_block_size; ++p) {
-                    const uint32_t w3_tile_start = (p_block_start + p) * hidden_Wt + k_block_start;
-                    mcast_sender_read_row_and_send(
-                        cb_w3_idx,
-                        w3_address_generator,
-                        w3_tile_start,
-                        k_block_size,
-                        tile_bytes,
-                        block_size,
-                        mcast_sender_sem_ptr,
-                        mcast_receiver_sem_ptr,
-                        mcast_receiver_semaphore_addr,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        mcast_num_dests);
-                }
+                // Batched mcast W1: read block_size rows × block_size tiles, padding edge blocks
+                const uint32_t w1_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
+                mcast_sender_read_batched_rows_and_send(
+                    cb_w1_idx,
+                    w1_address_generator,
+                    w1_first_row_tile_start,
+                    block_size,    // tiles_per_row (always full block)
+                    block_size,    // num_rows (always full block)
+                    k_block_size,  // valid_tiles_per_row (actual valid tiles, may be < block_size)
+                    p_block_size,  // valid_num_rows (actual valid rows, may be < block_size)
+                    hidden_Wt,     // row_stride
+                    tile_bytes,
+                    mcast_sender_sem_ptr,
+                    mcast_receiver_sem_ptr,
+                    mcast_receiver_semaphore_addr,
+                    mcast_dest_noc_start_x,
+                    mcast_dest_noc_start_y,
+                    mcast_dest_noc_end_x,
+                    mcast_dest_noc_end_y,
+                    mcast_num_dests);
+
+                // Batched mcast W3: read block_size rows × block_size tiles, padding edge blocks
+                const uint32_t w3_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
+                mcast_sender_read_batched_rows_and_send(
+                    cb_w3_idx,
+                    w3_address_generator,
+                    w3_first_row_tile_start,
+                    block_size,    // tiles_per_row (always full block)
+                    block_size,    // num_rows (always full block)
+                    k_block_size,  // valid_tiles_per_row
+                    p_block_size,  // valid_num_rows
+                    hidden_Wt,     // row_stride
+                    tile_bytes,
+                    mcast_sender_sem_ptr,
+                    mcast_receiver_sem_ptr,
+                    mcast_receiver_semaphore_addr,
+                    mcast_dest_noc_start_x,
+                    mcast_dest_noc_start_y,
+                    mcast_dest_noc_end_x,
+                    mcast_dest_noc_end_y,
+                    mcast_num_dests);
             }
         }
 

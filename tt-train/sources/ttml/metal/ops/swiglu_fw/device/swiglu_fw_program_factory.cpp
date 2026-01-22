@@ -219,8 +219,9 @@ bool row_of_m_fits_in_l1_check(
     // Memory for input CBs (always needed regardless of algorithm)
     const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
     const uint64_t w1_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w1
-    const uint64_t w2_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w2
-    const uint64_t w3_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w3
+    // W2 uses batched mcast which needs larger CB; use conservative estimate
+    const uint64_t w2_memory = (2U * block_size * block_size) * bfloat16_single_tile_size_bytes;  // cb_w2
+    const uint64_t w3_memory = twice_block_size * bfloat16_single_tile_size_bytes;                // cb_w3
 
     // Memory for output CBs (always needed regardless of algorithm)
     const uint64_t y_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_y_partial
@@ -340,6 +341,13 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     const bool row_of_m_fits_in_l1 =
         row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
 
+    // W1/W3 CB size depends on algorithm path:
+    // - M-fits-L1: use batched mcast (block_size rows × block_size tiles per batch)
+    //   Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
+    // - Non-M-fits-L1: use column-by-column mcast (block_size tiles per mcast)
+    //   Double-buffering: 2 × block_size = 8 tiles
+    const uint32_t w1_w3_cb_tiles = row_of_m_fits_in_l1 ? (2U * block_size * block_size) : twice_block_size;
+
     // CB sizing based on whether row of M fits in L1
     const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1U) / block_size) *
                                                              block_size   // Round up to nearest block_size
@@ -359,12 +367,13 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // - Using all CBs as fp32 showed no observable precision improvement in tests.
     [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    // W1/W3 CBs use larger size when batching is enabled for reduced mcast overhead
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
-        program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
     [[maybe_unused]] auto cb_w2 = create_circular_buffer(
         program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
-        program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
     // Partial CBs are only needed when row of M fits in L1 (with flash-attention optimization)
     if (row_of_m_fits_in_l1) {
         // Partial CBs need to store the same amount as the final XW1/XW3 results during accumulation
