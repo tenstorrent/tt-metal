@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Comprehensive test utilities for comparing ttnn and PyTorch tensor outputs.
 Provides detailed statistical analysis and comparison functions with sparsity awareness.
