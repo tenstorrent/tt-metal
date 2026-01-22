@@ -11,7 +11,6 @@ import torch
 import numpy as np
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
-import logging
 
 
 @pytest.mark.parametrize(

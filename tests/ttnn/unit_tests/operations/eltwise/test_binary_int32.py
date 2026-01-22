@@ -312,8 +312,8 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     y_torch = torch.tensor([[1, 2, 31, 4, 5, 0, -20, 1, -3, -25, 0, 1, 31, 30]], dtype=torch.int32)
 
     if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_uint32 = x_torch.to(torch.uint32) & 0xFFFFFFFF
-        y_uint32 = y_torch.to(torch.uint32) & 0xFFFFFFFF
+        x_uint32 = x_torch.to(torch.uint32)
+        y_uint32 = y_torch.to(torch.uint32)
         x_torch = x_uint32.to(torch.int32)
         y_torch = y_uint32.to(torch.int32)
 

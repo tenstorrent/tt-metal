@@ -443,8 +443,10 @@ def is_unsigned_tensor(py_tensor):
 def match_type_post_conversion(roundtrip_tensor, py_tensor):
     if isinstance(roundtrip_tensor, torch.Tensor):
         return roundtrip_tensor.to(py_tensor.dtype)
-    else:
+    elif isinstance(roundtrip_tensor, np.ndarray):
         return roundtrip_tensor.astype(py_tensor.dtype)
+    else:
+        raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
 
 
 def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
