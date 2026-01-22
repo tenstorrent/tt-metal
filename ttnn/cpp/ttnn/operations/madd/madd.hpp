@@ -9,7 +9,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::madd {
+namespace ttnn {
+
+namespace operations::madd {
 
 struct MAdd {
     static ttnn::Tensor invoke(
@@ -19,8 +21,7 @@ struct MAdd {
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
-}  // namespace ttnn::operations::madd
+}  // namespace operations::madd
 
-namespace ttnn {
 constexpr auto madd = ttnn::register_operation<"ttnn::madd", ttnn::operations::madd::MAdd>();
 }  // namespace ttnn

@@ -57,6 +57,7 @@
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
+#include "ttnn/operations/madd/madd_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
