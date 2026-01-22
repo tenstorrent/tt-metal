@@ -181,7 +181,7 @@ def post_process_ops_log_detailed(
 
 
 def run_device_perf_detailed(
-    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None, per_op=False
 ):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
@@ -199,7 +199,13 @@ def run_device_perf_detailed(
 
     run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
     r = post_process_ops_log_detailed(
-        subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+        subdir,
+        duration_cols,
+        op_name=op_name,
+        has_signposts=has_signposts,
+        detailed=True,
+        warmup_iters=warmup_iters,
+        per_op=per_op,
     )
     for d_col in duration_cols:
         results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
