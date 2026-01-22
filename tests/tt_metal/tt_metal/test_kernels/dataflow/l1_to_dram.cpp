@@ -11,15 +11,16 @@
 void kernel_main() {
     const uint32_t dram_dst_address = get_arg_val<uint32_t>(0);
     const uint32_t l1_src_address = get_arg_val<uint32_t>(1);
-    const uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
-    const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t signal_value = get_arg_val<uint32_t>(4);
+    const uint32_t signal_address = get_arg_val<uint32_t>(2);
+    const uint32_t dram_buffer_size = get_arg_val<uint32_t>(3);
+    const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(4);
+    const uint32_t signal_value = get_arg_val<uint32_t>(5);
 
     experimental::Noc noc;
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_src_address);
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dst_dram;
 
-    volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)(MEM_L1_UNCACHED_BASE);
+    volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
     while (*signal_addr != signal_value);
 
     DPRINT << "Reading " << dram_buffer_size << " bytes from L1 address " << l1_src_address

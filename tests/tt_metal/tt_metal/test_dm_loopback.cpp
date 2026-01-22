@@ -39,12 +39,14 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     auto mesh_device = devices_[0];
     constexpr CoreCoord core = {0, 0};
 
-    uint32_t l1_address = MEM_L1_UNCACHED_BASE + 4;
+    // These addresses have been randomly chosen
+    uint32_t signal_address = MEM_L1_UNCACHED_BASE + (999 * 1024);
+    uint32_t l1_address = MEM_L1_UNCACHED_BASE + (1000 * 1024);
     uint32_t dram_address = 30000 * 1024;
     std::vector<uint32_t> value = {0x12345678};
 
     std::vector<uint32_t> signal = {0};
-    tt_metal::detail::WriteToDeviceL1(dev, core, MEM_L1_UNCACHED_BASE, signal);
+    tt_metal::detail::WriteToDeviceL1(dev, core, signal_address, signal);
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
     MetalContext::instance().get_cluster().dram_barrier(dev->id());
 
@@ -74,11 +76,13 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     }
 
     for (uint32_t i = 0; i < 4; i++) {
-        SetRuntimeArgs(program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, signal[0]});
+        SetRuntimeArgs(
+            program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, signal_address, 4, 0, signal[0]});
         signal[0]++;
         dram_address += 1024;
 
-        SetRuntimeArgs(program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, signal[0]});
+        SetRuntimeArgs(
+            program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, signal_address, 4, 0, signal[0]});
         signal[0]++;
         l1_address += sizeof(uint32_t);
     }
