@@ -14,7 +14,7 @@ void llk_math_eltwise_binary_sfpu_copy_dest_values(
     uint32_t dst_index0, uint32_t dst_index1, VectorMode vector_mode = VectorMode::RC) {
     constexpr bool APPROXIMATE = 0;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        sfpu::copy_dest_value<APPROXIMATE>, dst_index0, dst_index1, 0 /*odst not used*/, vector_mode);
+        sfpu::copy_dest_value<APPROXIMATE>, dst_index0, dst_index1, vector_mode);
 }
 
 inline void llk_math_eltwise_binary_sfpu_copy_dest_values_init() {
