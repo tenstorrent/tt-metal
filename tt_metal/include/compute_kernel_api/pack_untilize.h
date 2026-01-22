@@ -225,6 +225,11 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
+    // CRITICAL: Clear bit 11 set by pack_untilize_init's A2D operation
+    // The init calls llk_math_eltwise_unary_datacopy_init<A2D> which sets bit 11 for A2D operations
+    // We must call the matching uninit to clear bit 11, preventing state pollution
+    MATH((llk_math_eltwise_unary_datacopy_uninit<BroadcastType::NONE, true /*unpack_to_dest=A2D*/>()));
+
     PACK((llk_init_packer_dest_offset_registers<false>()));
     PACK((llk_pack_init(ocb)));
 
