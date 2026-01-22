@@ -133,10 +133,10 @@ def parametrize_mesh_with_fabric():
     return decorator
 
 
-def parametrize_batch_seq(configs=None):
+def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
-    ids = [
+    ids = ids or [
         f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
         if seq_len > 1
         else "decode_mode"

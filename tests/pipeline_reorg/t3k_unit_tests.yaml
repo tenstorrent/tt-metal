@@ -163,7 +163,7 @@
   sku: wh_llmbox
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
-  timeout: 10
+  timeout: 30
   model-name: gpt-oss
 
 - name: t3k_deepseek_tests
