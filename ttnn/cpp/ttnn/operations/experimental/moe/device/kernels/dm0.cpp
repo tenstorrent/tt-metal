@@ -53,18 +53,16 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
-    constexpr auto cb_w2s_out = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
