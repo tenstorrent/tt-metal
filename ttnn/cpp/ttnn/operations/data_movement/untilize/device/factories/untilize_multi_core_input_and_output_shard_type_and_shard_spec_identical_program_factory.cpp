@@ -79,8 +79,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         num_blocks_per_shard = shard_height / tile_height * shard_vol / (shard_height * shard_width);
         num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-        // Estimate shard distribution across cores (round-robin strategy)
-
         auto distribution_spec = BufferDistributionSpec::from_shard_spec(
             a.padded_shape(),
             nd_shard_spec.shard_shape,

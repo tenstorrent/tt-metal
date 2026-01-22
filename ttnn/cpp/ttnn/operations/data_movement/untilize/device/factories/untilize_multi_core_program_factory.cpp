@@ -52,8 +52,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     bool input_is_sharded = a.is_sharded();
     bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
-    bool output_is_nd_sharded = output.nd_shard_spec().has_value();
-    std::cout << "output_is_nd_sharded: " << output_is_nd_sharded << std::endl;
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
@@ -80,7 +78,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         CoreRangeSet grid;
         uint32_t input_shard_height;
         uint32_t input_shard_width;
-        if (not input_is_nd_sharded) {
+        if (not input_is_nd_sharded) {  // Special case for legacy 2D sharding. Can use optimized writer kernel.
             const auto& shard_spec = a.shard_spec().value();
             input_shard_height = shard_spec.shape[0];
             input_shard_width = shard_spec.shape[1];
@@ -147,7 +145,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             input_cb_num_tiles = num_tiles_per_input_block * 2;
         }
     }
-    std::cout << "BEFORE CB input_cb_num_tiles: " << input_cb_num_tiles << std::endl;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -156,7 +153,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_cb_num_tiles,
         input_cb_data_format,
         input_is_sharded ? src0_buffer : nullptr);
-    std::cout << "AFTER CB input_cb_num_tiles: " << input_cb_num_tiles << std::endl;
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -412,7 +408,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             if (input_is_sharded) {
                 // Sharded input
                 reader_run_time_args = {num_tiles_to_read};
-                std::cout << "reader_run_time_args num_tiles_to_read: " << num_tiles_to_read << std::endl;
             } else {
                 // Interleaved input
                 reader_run_time_args = {
@@ -536,11 +531,16 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
         }
     }
 
+    bool input_is_nd_sharded =
+        tensor_args.input.nd_shard_spec().has_value() && !tensor_args.input.shard_spec().has_value();
     // Writer
     auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (const CoreCoord& core : cores_with_runtime_args) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
         runtime_args[0] = dst_buffer->address();
+        if (input_is_nd_sharded) {
+            runtime_args[1] = src_buffer->address();
+        }
     }
 }
 }  // namespace ttnn::prim

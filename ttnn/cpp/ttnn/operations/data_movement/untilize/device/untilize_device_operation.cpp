@@ -17,9 +17,6 @@
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
-// #include <algorithm>
-// #include <tt-metalium/buffer_distribution_spec.hpp>
-// #include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
@@ -97,55 +94,6 @@ bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt
     }
     return false;
 }
-
-// bool has_padding_pages_for_nd_shard(const tt::tt_metal::Tensor& tensor, const tt::tt_metal::NdShardSpec& nd_spec) {
-//     const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
-//     tt::tt_metal::Shape2D page_shape(tile_shape[0], tile_shape[1]);
-//     auto distribution_spec = BufferDistributionSpec::from_shard_spec(
-//         tensor.padded_shape(),
-//         nd_spec.shard_shape,
-//         page_shape,
-//         nd_spec.grid,
-//         nd_spec.orientation,
-//         nd_spec.shard_distribution_strategy);
-//     const auto page_mapping = distribution_spec.compute_page_mapping();
-
-//     // Compute shard volume in pages to know how many entries per shard to inspect.
-//     auto shard_shape_pages = nd_spec.shard_shape;
-//     if (shard_shape_pages.rank() >= 1) {
-//         shard_shape_pages[-1] = tt::div_up(shard_shape_pages[-1], static_cast<uint32_t>(page_shape.width()));
-//     }
-//     if (shard_shape_pages.rank() >= 2) {
-//         shard_shape_pages[-2] = tt::div_up(shard_shape_pages[-2], static_cast<uint32_t>(page_shape.height()));
-//     }
-//     std::cout<<"shard_shape_pages: "<< shard_shape_pages[0] << ", " << shard_shape_pages[1] << std::endl;
-//     const uint32_t shard_pages = shard_shape_pages.volume();
-
-//     const auto& cores = distribution_spec.cores();
-//     for (size_t core_idx = 0; core_idx < cores.size(); ++core_idx) {
-//         const auto& core_pages = page_mapping.core_host_page_indices[core_idx];
-//         uint32_t num_shards_for_core = distribution_spec.num_shards_per_core(core_idx);
-//         uint32_t pages_to_check = num_shards_for_core * shard_pages;
-//         std::cout<<"pages_to_check BEFORE: "<< pages_to_check << std::endl;
-//         if (pages_to_check > core_pages.size()) {
-//             pages_to_check = core_pages.size();
-//         }
-//         std::cout<<"pages_to_check AFTER: "<< pages_to_check << std::endl;
-//         // std::cout<<"pages_to_check: "<< pages_to_check << std::endl;
-//         if (std::any_of(
-//                 core_pages.begin(),
-//                 core_pages.begin() + pages_to_check,
-//                 [](uint32_t page_idx) {
-//                     // std::cout<<"page_idx: "<< page_idx << std::endl;
-//                     return page_idx == tt::tt_metal::UncompressedBufferPageMapping::PADDING;
-//                 })) {
-//             std::cout<<"true"<< std::endl;
-//             return true;
-//         }
-//     }
-//     std::cout<<"false"<< std::endl;
-//     return false;
-// }
 }  // namespace
 
 uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
@@ -212,13 +160,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
 
     // Input must be in valid tile layout
     TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
-    std::cout << "tensor_width % TILE_WIDTH == 0: " << (tensor_width % TILE_WIDTH == 0) << std::endl;
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
-    std::cout << "tensor_height % TILE_HEIGHT == 0: " << (tensor_height % TILE_HEIGHT == 0) << std::endl;
-    std::cout << "tensor_width: " << tensor_width << std::endl;
-    std::cout << "tensor_height: " << tensor_height << std::endl;
-    std::cout << "TILE_WIDTH: " << TILE_WIDTH << std::endl;
-    std::cout << "TILE_HEIGHT: " << TILE_HEIGHT << std::endl;
 
     // Special conditions for sub_core_grids special case
     if (operation_attributes.sub_core_grids.has_value()) {
@@ -284,18 +226,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                     tensor_height);
             } else {
                 const auto& nd_spec = input_tensor_a.nd_shard_spec().value();
-                // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-                // auto dist_spec = BufferDistributionSpec::from_shard_spec(
-                //     input_tensor_a.padded_shape(),   // tensor shape in elements
-                //     nd_spec.shard_shape,             // shard shape in elements
-                //     tile_shape,                      // page (tile) shape
-                //     nd_spec.grid,
-                //     nd_spec.orientation,
-                //     nd_spec.shard_distribution_strategy);
                 bool input_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
-                    input_tensor_a.padded_shape(),
-                    nd_spec
-                        .shard_shape);  // dist_spec.is_uneven();//input_tensor_a.buffer_distribution_spec().value().is_uneven();
+                    input_tensor_a.padded_shape(), nd_spec.shard_shape);
                 TT_FATAL(
                     !input_is_uneven_sharded,
                     "Uneven ND sharding of input tensor is not supported for single core implementation");
@@ -303,7 +235,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         }
         // Check for output uneven sharding
         if (output_is_sharded) {
-            // TODO: Add check for uneven sharding in ND shard spec
             uint32_t output_shard_width;
             uint32_t output_shard_height;
             TT_FATAL(
@@ -327,18 +258,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                     tensor_height);
             } else {
                 const auto& nd_spec = operation_attributes.output_mem_config.nd_shard_spec().value();
-                // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-                // auto dist_spec = BufferDistributionSpec::from_shard_spec(
-                //     input_tensor_a.padded_shape(),   // tensor shape in elements
-                //     nd_spec.shard_shape,             // shard shape in elements
-                //     tile_shape,                      // page (tile) shape
-                //     nd_spec.grid,
-                //     nd_spec.orientation,
-                //     nd_spec.shard_distribution_strategy);
                 bool output_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
-                    input_tensor_a.padded_shape(),
-                    nd_spec.shard_shape);  // dist_spec.is_uneven();//has_padding_pages_for_nd_shard(input_tensor_a,
-                                           // nd_spec);
+                    input_tensor_a.padded_shape(), nd_spec.shard_shape);
                 TT_FATAL(
                     !output_is_uneven_sharded,
                     "Uneven ND sharding of output tensor is not supported for single core implementation");
@@ -366,18 +287,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 (tensor_width % output_shard_width != 0) || (tensor_height % output_shard_height != 0);
         } else {
             const auto& nd_spec = operation_attributes.output_mem_config.nd_shard_spec().value();
-            // const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-            // auto dist_spec = BufferDistributionSpec::from_shard_spec(
-            //     input_tensor_a.padded_shape(),   // tensor shape in elements
-            //     nd_spec.shard_shape,             // shard shape in elements
-            //     tile_shape,                      // page (tile) shape
-            //     nd_spec.grid,
-            //     nd_spec.orientation,
-            //     nd_spec.shard_distribution_strategy);
-            output_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
-                input_tensor_a.padded_shape(),
-                nd_spec.shard_shape);  // has_padding_pages_for_nd_shard(input_tensor_a, nd_spec);
-            std::cout << "output_is_uneven_sharded: " << output_is_uneven_sharded << std::endl;
+            output_is_uneven_sharded =
+                operations::data_movement::is_uneven_nd_sharding(input_tensor_a.padded_shape(), nd_spec.shard_shape);
         }
 
         if (output_is_uneven_sharded) {
@@ -458,19 +369,16 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
 
     if (!operation_attributes.use_multicore) {
         // Single core implementation
-        std::cout << "selecting single core implementation" << std::endl;
         return UntilizeSingleCoreProgramFactory{};
     }
     if (operation_attributes.sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
         // Note that this implementation does not support sharding, which is enforced in validate().
-        std::cout << "selecting UntilizeMultiCoreSubCoreGridsProgramFactory" << std::endl;
         return UntilizeMultiCoreSubCoreGridsProgramFactory{};
     }
     if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
-        std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
         return UntilizeMultiCoreBlockProgramFactory{};
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
@@ -485,8 +393,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.shard_spec().has_value() && output_tensor.shard_spec().has_value() &&
                                  input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
         if (identical_shard_specs) {
-            std::cout << "selecting UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory"
-                      << std::endl;
             return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
@@ -514,7 +420,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
                                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (num_compute_cores < ncores_wh.ncores) {
-                std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
                 return UntilizeMultiCoreBlockProgramFactory{};
             }
         }
@@ -523,15 +428,12 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     // Need to debug this to work on wide tensors that are higher than a single tile
     auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
-        std::cout << "selecting 2 UntilizeMultiCoreParallelizeColumnProgramFactory" << std::endl;
         return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
-        std::cout << "selecting 2 UntilizeSingleCoreProgramFactory" << std::endl;
         return UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation
-    std::cout << "selecting UntilizeMultiCoreProgramFactory" << std::endl;
     return UntilizeMultiCoreProgramFactory{};
 }
 

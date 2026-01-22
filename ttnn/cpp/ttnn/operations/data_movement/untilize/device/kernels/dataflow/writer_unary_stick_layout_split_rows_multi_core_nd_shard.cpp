@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     // run-time args
@@ -32,7 +31,6 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
-    // #endif
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,
@@ -98,7 +96,6 @@ void kernel_main() {
                 // then this has no effect as the while loop terminates. If we wrote to a subset of the
                 // input block, then that subset corresponds to an entire output block, so we increment
                 // the output_page_id to the following output block.
-                // DPRINT << "WRITING TO output_page_id: " << output_page_id << ENDL();
                 output_page_id++;
                 // Only the first output block we write to can have some of it's columns already processed/written-to
                 num_cols_remaining_in_current_output_block = num_cols_per_output_block;
@@ -154,7 +151,6 @@ void kernel_main() {
             // Check if page is at start of row in shard
             bool is_start_of_row = (local_page_coord[dspec.rank() - 1] == 0);
             if (is_start_of_row) {
-                DPRINT << "START OF ROW" << ENDL();
                 if (!is_padding) {
                     uint32_t page_id = 0;
                     for (uint32_t i = 0; i < dspec.rank(); ++i) {
@@ -168,8 +164,7 @@ void kernel_main() {
                     if (tile_index_width + num_tiles_per_input_block >= num_tiles_per_row) {
                         // we have an uneven shard with padding along the width dimension, so ignore those last
                         // padding columns
-                        num_unpadded_cols_per_input_block =
-                            (num_tiles_per_row - tile_index_width) * tile_width;  // add compile time arg for tile_width
+                        num_unpadded_cols_per_input_block = (num_tiles_per_row - tile_index_width) * tile_width;
                     }
 
                     uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
