@@ -26,7 +26,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
         constexpr uint32_t bcast_scaler0 = 0;
         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
     }
-    reduce_uninit();
+    reduce_uninit<false>(cb_in);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_max);
