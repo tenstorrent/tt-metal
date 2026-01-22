@@ -133,7 +133,6 @@ void kernel_main() {
                 noc_semaphore_inc</*posted=*/true>(
                     neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
-                // TODO(nsoraba): This hangs if we don't issue writes before the semaphore increment. Needs a fix.
                 // Ensure write and semaphore have left the core before continuing
                 noc_async_posted_atomic_barrier();
             }
