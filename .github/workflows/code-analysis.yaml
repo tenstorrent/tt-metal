@@ -2,7 +2,7 @@ name: "Code analysis"
 
 on:
   schedule:
-    - cron: "0 2 * * 1,3,5" # Static analysis: 2 AM UTC on Mon/Wed/Fri
+    - cron: "0 2 * * 2,4,6" # Static analysis: 6 PM PST Mon/Wed/Fri (2 AM UTC Tue/Thu/Sat)
   workflow_call:
     inputs:
       distro:
