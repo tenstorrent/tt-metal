@@ -17,7 +17,7 @@ using namespace ckernel;
 namespace custom_mm {
 // Finalization instruction count: set during init, used during math
 // m=1, m=4: 10 instructions (4 MVMUL + 4 MOV + 2 ELWADD)
-// m=8: 14 instructions (4 MVMUL + 8 MOV + 2 ELWADD)
+// m=8: 4 instructions (4 MVMUL only, no tail reduction)
 inline std::uint32_t finalization_len = 10;
 }  // namespace custom_mm
 
@@ -41,12 +41,21 @@ inline void custom_mm_configure_addrmod(
     }
         .set(ADDR_MOD_0);
 
-    addr_mod_t{
-        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        .srcb = {.incr = 16, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
+    if (in0_tile_r_dim == 8) {
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 16, .clr = 0, .cr = 0},
+            .dest = {.incr = 0, .clr = 1, .cr = 0},
+        }
+            .set(ADDR_MOD_1);
+    } else {
+        addr_mod_t{
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 16, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_1);
     }
-        .set(ADDR_MOD_1);
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 1, .cr = 0},
@@ -66,50 +75,54 @@ inline void custom_mm_configure_mop(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face = false) {
     // Select MOV instruction count based on output tile height (in0_tile_r_dim)
-    // m=1: 4 MOVs (MOV_1_ROW), m=4: 4 MOVs (MOV_4_ROWS), m=8: 8 MOVs (2x MOV_4_ROWS)
-    // Replay buffer size: 8 MVMULs + MOVs + 2 ELWADDs
-    const std::uint32_t replay_buf_len = (in0_tile_r_dim == 8) ? 18 : 14;
-    // Finalization length: 4 MVMULs + MOVs + 2 ELWADDs (starting from offset 4)
-    custom_mm::finalization_len = (in0_tile_r_dim == 8) ? 14 : 10;
+    // m=1: 4 MOVs (MOV_1_ROW), m=4: 4 MOVs (MOV_4_ROWS), m=8: no tail reduction
+    // Replay buffer size: m=8: 8 MVMULs, m=1/4: 8 MVMULs + 4 MOVs + 2 ELWADDs = 14
+    const std::uint32_t replay_buf_len = (in0_tile_r_dim == 8) ? 8 : 14;
+    // Finalization length (starting from offset 4):
+    // m=8: 4 instructions (4 MVMULs), m=1/4: 10 instructions (4 MVMULs + 4 MOVs + 2 ELWADDs)
+    custom_mm::finalization_len = (in0_tile_r_dim == 8) ? 4 : 10;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         replay_buf_len,
         // Lambda function to load reply buffer
         [in0_tile_r_dim] {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
             if (in0_tile_r_dim == 8) {
-                // m=8: need 2x MOV_4_ROWS per face (8 MOV total)
-                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
-                TTI_MOVD2A(0, 4, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 4);
-                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
-                TTI_MOVD2A(0, 20, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 20);
-                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
-                TTI_MOVD2B(0, 4, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 36);
-                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
-                TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 52);
-            } else if (in0_tile_r_dim == 4) {
-                // m=4: MOV_4_ROWS
-                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
-                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
-                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
-                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
+                // m=8: 8 MVMULs only, no tail reduction
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
             } else {
-                // m=1: MOV_1_ROW
-                TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
-                TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
-                TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 32);
-                TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 48);
+                // m=1/4: 8 MVMULs + MOVs + ELWADDs
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);    // 16 (48)
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);  // 16 (48)
+                if (in0_tile_r_dim == 4) {
+                    // m=4: MOV_4_ROWS
+                    TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 0);
+                    TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_4_ROWS, 16);
+                    TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 32);
+                    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 48);
+                } else {
+                    // m=1: MOV_1_ROW
+                    TTI_MOVD2A(0, 0, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 0);
+                    TTI_MOVD2A(0, 16, ADDR_MOD_3, p_movd2a::MOV_1_ROW, 16);
+                    TTI_MOVD2B(0, 0, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 32);
+                    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 48);
+                }
+                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+                TTI_ELWADD(3, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
             }
-            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-            TTI_ELWADD(3, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
         });
 }
 
@@ -142,19 +155,20 @@ inline void _llk_math_custom_mm_(
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     if constexpr (partial_acc) {
-        // Partial K accumulation: run all kt_dim iterations with CLR_AB (instructions 0-3)
+        // Partial K accumulation: run all kt_dim iterations with first 4 MVMULs
         // MVMUL accumulates into dest, results persist for next K subblock
-        // NO finalization - skip instructions 4-13
+        // NO finalization - skip instructions 4+
         for (uint32_t i = 0; i < kt_dim; i++) {
             lltt::replay(ckernel::math::replay_buf_offset, 4);
         }
     } else {
         // Full accumulation with finalization
+        // First kt_dim-1 iterations: 4 MVMULs (instructions 0-3)
         for (uint32_t i = 0; i < kt_dim - 1; i++) {
             lltt::replay(ckernel::math::replay_buf_offset, 4);
         }
-        // Final K tile + finalization (MOVD2A/MOVD2B/ELWADD)
-        // Finalization length depends on tile height: 10 for m=1/4, 14 for m=8
+        // Final K tile + finalization (instructions 4 to 4+finalization_len)
+        // m=8: 4 MVMULs, m=1/4: 4 MVMULs + MOVs + ELWADDs
         lltt::replay(ckernel::math::replay_buf_offset + 4, custom_mm::finalization_len);
     }
 }
