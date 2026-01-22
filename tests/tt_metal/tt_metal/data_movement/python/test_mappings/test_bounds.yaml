@@ -58,7 +58,7 @@
       bandwidth: 22
   blackhole:
     riscv_1:
-      bandwidth: 41
+      bandwidth: 37
 
 "One to All Multicast Linked Loopback Directed Ideal 2.0":
   wormhole_b0:

@@ -877,7 +877,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
     bool is_linked = true;
     bool use_2_0_api = false;
     bool use_semaphore = true;
-    uint32_t pages_override_factor = 64;
+    uint32_t pages_override_factor = 32;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
