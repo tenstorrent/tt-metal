@@ -1720,7 +1720,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
         }
         const auto& op = levelized_graph.get_vertex(op_id);
         // Add has 2 inputs and no outputs, and one input should be from multiply
-        if (op.in_edges.size() == 2 && op.out_edges.size() == 0) {
+        if (op.in_edges.size() == 2 && op.out_edges.empty()) {
             bool has_multiply_input =
                 std::find(op.in_edges.begin(), op.in_edges.end(), multiply_id) != op.in_edges.end();
             if (has_multiply_input) {
