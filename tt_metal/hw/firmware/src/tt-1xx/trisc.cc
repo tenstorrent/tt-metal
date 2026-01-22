@@ -19,7 +19,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "hostdevcommon/circular_buffer_constants.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)

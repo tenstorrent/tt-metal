@@ -9,7 +9,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_debug.h"
-#include "hostdevcommon/kernel_structs.h"
+#include "api/kernel_structs.h"
 #include "internal/risc_attribs.h"
 
 #define ALWI inline __attribute__((always_inline))

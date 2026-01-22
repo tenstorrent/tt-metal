@@ -10,7 +10,7 @@
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "ckernel_include.h"
-#include "hostdevcommon/kernel_structs.h"
+#include "api/kernel_structs.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"

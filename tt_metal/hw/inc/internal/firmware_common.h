@@ -11,7 +11,7 @@
 #include "internal/risc_attribs.h"
 #include "api/compile_time_args.h"
 #include "dev_mem_map.h"
-#include "hostdevcommon/kernel_structs.h"
+#include "api/kernel_structs.h"
 #include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "api/debug/dprint.h"

@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "internal/circular_buffer_interface.h"
-#include "tt-metalium/circular_buffer_constants.h"
+#include "hostdevcommon/circular_buffer_constants.h"
 #include "api/remote_circular_buffer.h"
 #include "internal/risc_attribs.h"
 

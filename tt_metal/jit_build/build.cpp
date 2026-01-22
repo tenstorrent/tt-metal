@@ -260,7 +260,9 @@ void JitBuildEnv::init(
     }
 
     // Includes
-    // TODO(pgk) this list is insane
+    // Note: "." and ".." are relative to the compile directory (see compile_one()).
+    // ".." is required because generated headers (e.g., kernel_includes.hpp from genfiles.cpp)
+    // are placed in the parent of the per-target compile directory.
     std::vector<std::string> includeDirs = {
         ".",
         "..",
@@ -270,9 +272,10 @@ void JitBuildEnv::init(
         root_ + "tt_metal",
         root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
-        root_ + "tt_metal/hostdevcommon/api",
-        root_ + "tt_metal/hw/inc/debug",
-        root_ + "tt_metal/api/"};
+        root_ + "tt_metal/hostdevcommon/api"};
+    // NOTE: tt_metal/api/ removed - it contains host-only headers.
+    // Shared constants moved to hostdevcommon/: tile_constants.h, circular_buffer_constants.h
+    // Shared types moved to hw/inc/api/: kernel_structs.h
 
     std::ostringstream oss;
     for (const auto& includeDir : includeDirs) {
