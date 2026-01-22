@@ -81,11 +81,6 @@ struct LocalCBInterface {
 
     // used by packer for in-order packing
     uint32_t fifo_wr_tile_ptr;
-
-    // Tile indices tracking how many tiles from CB base the rd/wr pointers are
-    // These wrap around at fifo_num_pages
-    uint32_t fifo_rd_tile_idx;
-    uint32_t fifo_wr_tile_idx;
 };
 
 struct CBInterface {
