@@ -90,7 +90,6 @@ void MAIN {
     //-------------------------------------------------------------------------
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        // Read W0 and W1 from cb_r2c_w0_w1 and write final output to cb_c2w_elt
         for (uint32_t i = 0; i < num_elt_tiles; ++i) {
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_elt_tile; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
