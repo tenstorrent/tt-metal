@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+//
+// SPDX-License-Identifier: Apache-2.0
 #include "ttnn/tensor/py_to_tt_tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
