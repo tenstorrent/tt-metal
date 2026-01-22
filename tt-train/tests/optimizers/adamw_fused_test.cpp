@@ -64,8 +64,8 @@ static xt::xarray<float> make_random_xarray(
     return x;
 }
 
-static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
-    return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
+static ttnn::Tensor to_tt_bf16(const xt::xarray<float>& x) {
+    return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
 }
 
 // CPU reference implementation of AdamW
@@ -199,8 +199,8 @@ static void run_step_and_compare(const AdamWCase& pc) {
     cpu_opt.set_state(m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
 
     // AdamWFused implementation
-    auto theta_fused = autograd::create_tensor(to_tt(w0), true);
-    theta_fused->set_grad(to_tt(g0));
+    auto theta_fused = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta_fused->set_grad(to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
 
     ttml::optimizers::AdamWFusedConfig fused_cfg;
@@ -215,15 +215,15 @@ static void run_step_and_compare(const AdamWCase& pc) {
 
     // Inject momentum state for AdamWFused
     {
-        auto m0_tensor = autograd::create_tensor(to_tt(m0), false);
-        auto v0_tensor = autograd::create_tensor(to_tt(v0), false);
+        auto m0_tensor = autograd::create_tensor(to_tt_bf16(m0), false);
+        auto v0_tensor = autograd::create_tensor(to_tt_bf16(v0), false);
         serialization::StateDict fused_state;
         fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
         fused_state["amsgrad"] = pc.amsgrad;
         if (pc.amsgrad) {
-            auto max_v0_tensor = autograd::create_tensor(to_tt(max_v0), false);
+            auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
             fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
         }
         opt_fused.set_state_dict(fused_state);
@@ -373,8 +373,8 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-3f;
 
     // Run with stochastic rounding
-    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
-    theta_stoch->set_grad(to_tt(g0));
+    auto theta_stoch = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta_stoch->set_grad(to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
 
     ttml::optimizers::AdamWFusedConfig stoch_cfg;
@@ -386,8 +386,8 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
 
     ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
 
-    auto theta_det = autograd::create_tensor(to_tt(w0), true);
-    theta_det->set_grad(to_tt(g0));
+    auto theta_det = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta_det->set_grad(to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
 
     ttml::optimizers::AdamWFusedConfig det_cfg;
@@ -411,7 +411,6 @@ TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
     auto result_stoch = core::to_xtensor(theta_stoch->get_value());
     auto result_det = core::to_xtensor(theta_det->get_value());
 
-    // Compute total error (distance from CPU result) for each method
     float error_stoch = xt::sum(xt::abs(result_stoch - w_cpu))();
     float error_det = xt::sum(xt::abs(result_det - w_cpu))();
 
@@ -434,8 +433,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     xt::xarray<float> w_cpu = w0;
     CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
 
-    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
-    theta_stoch->set_grad(to_tt(g0));
+    auto theta_stoch = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta_stoch->set_grad(to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
 
     ttml::optimizers::AdamWFusedConfig stoch_cfg;
@@ -446,8 +445,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     stoch_cfg.stochastic_rounding = true;
     ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
 
-    auto theta_det = autograd::create_tensor(to_tt(w0), true);
-    theta_det->set_grad(to_tt(g0));
+    auto theta_det = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta_det->set_grad(to_tt_bf16(g0));
     ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
 
     ttml::optimizers::AdamWFusedConfig det_cfg;
