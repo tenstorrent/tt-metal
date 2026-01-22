@@ -89,7 +89,6 @@ def test_resblock(
 
     # Compute golden reference with per-layer weights
     expected = FusedResblock.golden(torch_a, weights)
-    print("expected:", expected)
 
     # Stack weights along row dimension for TTNN: [num_layers * K, K]
     stacked_weight0 = torch.cat([w0 for w0, _ in weights], dim=0)
@@ -119,7 +118,6 @@ def test_resblock(
     logger.info(f"Created TTNN input tensor with shard shape {input_a_shard_shape}")
 
     def create_weight_tensor(weight, tile, core_grid):
-        # Weights are width-sharded across all cores
         # Stacked weights have shape [num_layers * K, K]
         weight_shard_shape = (weight.shape[0], weight.shape[1] // number_of_matmul_cores)
         weight_shard_spec = ttnn.ShardSpec(
@@ -127,6 +125,7 @@ def test_resblock(
             weight_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
         )
+        # Weights are width-sharded across all cores
         weight_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weight_shard_spec
         )
@@ -172,8 +171,6 @@ def test_resblock(
 
     logger.info("Converting TTNN output to torch")
     torch_output = ttnn.to_torch(ttnn_output)[:B, :]  # Slice off padding that we might have when using full tiles
-    print("actual:", torch_output)
-    print("expected:", expected)
 
     assert torch_output.shape == (B, K), f"Expected shape ({B}, {K}), got {torch_output.shape}"
 

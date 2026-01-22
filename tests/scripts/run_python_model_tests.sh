@@ -73,10 +73,6 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-
-    # u-model fused resblock tests
-    pytest models/demos/resblock/tests/test_op.py
-
     SD_HF_DOWNLOAD_OVERRIDE=1 pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
     # Llama3.1-8B

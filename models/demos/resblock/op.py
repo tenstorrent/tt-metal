@@ -7,7 +7,6 @@ import ttnn
 
 
 class FusedResblock:
-    # Constants
     WEIGHT_TILE_HEIGHT = 32
     WEIGHT_TILE_WIDTH = 32
     SEMAPHORE_RECEIVER_ID = 0
@@ -50,7 +49,6 @@ class FusedResblock:
             x = input @ weight0
             x = torch.nn.functional.relu(x)
             x = x @ weight1
-            print(f"second matmul output (expected): {x}")
             x = x + input
             return x
 
@@ -405,19 +403,6 @@ class FusedResblock:
             format_descriptors=[mm2_full_cb_format],
         )
 
-        logger.debug(
-            f"mm1_full_cb_descriptor: {mm1_full_cb_descriptor.total_size}, page_size: {mm1_full_cb_descriptor.format_descriptors[0].page_size}"
-        )
-        logger.debug(
-            f"mm2_full_cb_descriptor: {mm2_full_cb_descriptor.total_size}, page_size: {mm2_full_cb_descriptor.format_descriptors[0].page_size}"
-        )
-        logger.debug(
-            f"intermediate_pregather_cb_descriptor: {intermediate_pregather_cb_descriptor.total_size}, page_size: {intermediate_pregather_cb_descriptor.format_descriptors[0].page_size}"
-        )
-        logger.debug(
-            f"out_cb_descriptor: {out_cb_descriptor.total_size}, page_size: {out_cb_descriptor.format_descriptors[0].page_size}"
-        )
-
         return (
             mm1_full_cb_descriptor,
             weight0_cb_descriptor,
@@ -485,13 +470,6 @@ class FusedResblock:
         assert (
             len(noc0_cores) + len(noc1_cores) == all_matmul_cores.num_cores()
         ), f"Core partition mismatch: noc0={len(noc0_cores)}, noc1={len(noc1_cores)}, total={all_matmul_cores.num_cores()}"
-
-        if debug:
-            logger.debug(f"NOC split: NOC0 cores={len(noc0_cores)}, NOC1 cores={len(noc1_cores)}")
-            if len(noc0_cores) > 0:
-                logger.debug(f"NOC0 cores (first 5): {noc0_cores[:5]}")
-            if len(noc1_cores) > 0:
-                logger.debug(f"NOC1 cores (first 5): {noc1_cores[:5]}")
 
         return noc0_core_range_set, noc1_core_range_set, noc0_cores, noc1_cores
 
