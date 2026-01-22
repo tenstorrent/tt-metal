@@ -351,9 +351,9 @@ if [[ "$BUNDLE_PYTHON" == "true" ]]; then
     echo "  Python interpreter bundled successfully"
 fi
 
-# Compile bytecode for improved startup performance
-echo "  Compiling bytecode (for network mount performance)..."
+# Compile bytecode at the end to take advantage of parallelism
+echo "Compiling bytecode (for for improved startup performance)..."
 python -m compileall -j 0 -q "$PYTHON_ENV_DIR/lib" 2>/dev/null || true
-echo "  Bytecode compilation completed"
+echo "Bytecode compilation completed"
 
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"
