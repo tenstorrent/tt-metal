@@ -266,32 +266,32 @@ private:
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-[[deprecated("Use tt::tt_metal::copy_to_buffer ??")]] void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-[[deprecated("Use tt::tt_metal::copy_from_buffer ??")]] void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-[[deprecated("Use tt::tt_metal::copy_tensor_data ??")]] void memcpy(
+[[deprecated("Use tt::tt_metal::tensor_impl::(copy_to_device  or  copy_to_host)")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-[[deprecated("Use tt::tt_metal::copy_to_buffer ??")]] void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated")]] void memcpy(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
 
-[[deprecated("Use tt::tt_metal::copy_from_buffer ??")]] void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated")]] void memcpy(
     Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
-[[deprecated("Use tt::tt_metal::copy_tensor_data ??")]] void memcpy(
+[[deprecated("Use tt::tt_metal::tensor_impl::(copy_to_device  or  copy_to_host)")]] void memcpy(
     Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
