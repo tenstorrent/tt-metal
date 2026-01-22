@@ -15,13 +15,14 @@ constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t current_device_id = get_compile_time_arg_val(2);
 constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-constexpr uint32_t outer_dims_size = get_compile_time_arg_val(4);
-constexpr uint32_t split_dim_size = get_compile_time_arg_val(5);
-constexpr uint32_t inner_dims_size = get_compile_time_arg_val(6);
-constexpr uint32_t last_dim_size = get_compile_time_arg_val(7);
-constexpr uint32_t number_pages_per_packet = get_compile_time_arg_val(8);
-constexpr uint32_t has_reader_tail = get_compile_time_arg_val(9);
-constexpr uint32_t has_writer_tail = get_compile_time_arg_val(10);
+constexpr uint32_t split_dim_size = get_compile_time_arg_val(4);
+constexpr uint32_t inner_dims_size = get_compile_time_arg_val(5);
+constexpr uint32_t last_dim_size = get_compile_time_arg_val(6);
+constexpr uint32_t number_pages_per_packet = get_compile_time_arg_val(7);
+constexpr uint32_t has_reader_tail = get_compile_time_arg_val(8);
+constexpr uint32_t has_writer_tail = get_compile_time_arg_val(9);
+constexpr uint32_t num_devices_per_core = get_compile_time_arg_val(10);
+constexpr uint32_t num_blocks_per_core = get_compile_time_arg_val(11);
 
 template <typename AddrGenType>
 void read_data(
@@ -70,25 +71,19 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
     address_t input_address = get_arg_val<address_t>(arg_idx++);
-    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
+    address_t block_start_id = get_arg_val<address_t>(arg_idx++);
+
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     auto input_addrgen = TensorAccessor(input_tensor_args, input_address, input_page_size);
     constexpr uint32_t split_num_half_tiles = split_dim_size * 2 / num_devices;
-#define LINEAR 1
-#define RING 2
+    constexpr uint32_t split_num_tiles = (split_num_half_tiles + 1) / 2;
 
-#if TOPOLOGY == LINEAR
-    for (uint32_t device_id = 0; device_id < num_devices; ++device_id) {
-#elif TOPOLOGY == RING
-    for (int d = num_devices - 1; d >= 0; --d) {
-        int distance = (d + 1) / 2;
-        int val = (d % 2 == 0) ? distance : -distance;
-        uint32_t device_id = (current_device_id + val + num_devices) % num_devices;
-#else
-#error "Unsupported Topology Type"
-#endif
+    for (uint32_t did = 0; did < num_devices_per_core; ++did) {
+        int32_t device_offset = get_arg_val<int32_t>(arg_idx++);
+        int32_t distance = abs(device_offset);
+        uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
+
         const uint32_t device_read_offset = (split_num_half_tiles * device_id) / 2;
-        const uint32_t split_num_tiles = (split_num_half_tiles + 1) / 2;
-        uint64_t block_size = outer_dims_size * split_num_tiles * inner_dims_size;
 
         auto calculate_tile = [&](int b) {
             const uint32_t o = b / (split_num_tiles * inner_dims_size);
@@ -99,10 +94,11 @@ void kernel_main() {
             return std::tuple{s, i, tile_id};
         };
 
-        for (uint64_t block_idx = 0; block_idx < block_size; block_idx += number_pages_per_packet) {
-            uint32_t tiles_this_iteration = std::min(number_pages_per_packet, uint32_t(block_size - block_idx));
+        uint64_t block_end_id = block_start_id + num_blocks_per_core;
+        for (uint64_t block_idx = block_start_id; block_idx < block_end_id; block_idx += number_pages_per_packet) {
+            uint32_t tiles_this_iteration = std::min(number_pages_per_packet, uint32_t(block_end_id - block_idx));
 
-            cb_reserve_back(cb0_id, tiles_this_iteration);
+            cb_reserve_back(cb0_id, number_pages_per_packet);
             address_t l1_write_addr = get_write_ptr(cb0_id);
             for (uint32_t t = 0; t < tiles_this_iteration; ++t) {
                 auto [split_idx, inner_idx, tile_id] = calculate_tile(block_idx + t);
@@ -116,7 +112,7 @@ void kernel_main() {
             }
 
             noc_async_read_barrier();
-            cb_push_back(cb0_id, tiles_this_iteration);
+            cb_push_back(cb0_id, number_pages_per_packet);
         }
     }
 }
