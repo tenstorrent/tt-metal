@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import maybe_trace
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, buffer_type, dtype, layout, shard_specs, device):
     num_devices = math.prod(mesh_shape)
     replicate = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    torch.manual_seed(0)
     torch_input = torch.cat([torch.rand(input_shape).bfloat16() for _ in range(replicate)], dim=dim)
 
     input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, layout, torch_input.shape)
@@ -68,6 +69,7 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 ]
 
 
+@pytest.mark.requires_device(["N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )
@@ -90,7 +92,18 @@ def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, 
         )
 
     tt_output_tensor = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
-    tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_output_tensor)])
-
-    eq, mess = comp_equal(torch_reference, tt_output_tensor)
-    assert eq, mess
+    coords = list(tt_output_tensor.tensor_topology().mesh_coords())
+    coord_to_index = {coord: idx for idx, coord in enumerate(coords)}
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    device_tensors = ttnn.get_device_tensors(tt_output_tensor)
+    coord_iter = coords
+    if view is not None and len(device_tensors) != len(coords):
+        coord_iter = [coord for coord in coords if view.is_local(coord)]
+    per_device_batch = torch_reference.shape[0] // math.prod(mesh_device.shape)
+    torch_reference_slices = torch_reference.split(per_device_batch, dim=0)
+    for coord, tt_out in zip(coord_iter, device_tensors):
+        if view is not None and not view.is_local(coord):
+            continue
+        device_idx = coord_to_index[coord]
+        eq, mess = comp_equal(torch_reference_slices[device_idx], ttnn.to_torch(tt_out))
+        assert eq, mess

@@ -157,8 +157,12 @@ inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc
     return *ptr;
 }
 
+inline __attribute__((always_inline)) uint32_t NOC_STATUS_REG_ADDR(uint32_t noc, uint32_t reg_id) {
+    return (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
+}
+
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_READ_REG(uint32_t noc, uint32_t reg_id) {
-    uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
+    uintptr_t offset = NOC_STATUS_REG_ADDR(noc, reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
 }
@@ -1526,5 +1530,20 @@ inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
             invalidate_l1_cache();
         }
+    }
+}
+
+template <bool write, bool posted>
+inline __attribute__((always_inline)) uint32_t get_noc_counter_for_debug(uint32_t noc) {
+    if constexpr (write) {
+        if constexpr (posted) {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+        } else {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+        }
+    } else {
+        // Read
+        static_assert(posted == false, "There is no such thing as posted reads");
+        return NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
     }
 }

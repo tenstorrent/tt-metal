@@ -8,9 +8,9 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct DeepseekMinimalBroadcastParams {
     MeshCoordinate sender_coord = MeshCoordinate{0, 0};
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
@@ -20,11 +20,8 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 };
 
-struct tensor_args_t {
+struct DeepseekMinimalBroadcastInputs {
     Tensor input_tensor;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
+}  // namespace ttnn::experimental::prim

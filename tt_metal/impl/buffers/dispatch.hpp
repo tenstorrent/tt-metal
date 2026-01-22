@@ -26,6 +26,10 @@ enum class TensorMemoryLayout;
 
 namespace tt::tt_metal {
 
+namespace experimental {
+class PinnedMemory;
+}
+
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadBufferDescriptor {
     uint32_t page_size;
@@ -71,6 +75,9 @@ struct BufferReadDispatchParams {
     uint32_t total_pages_to_read = 0;
     uint32_t total_pages_read = 0;
     uint32_t num_banks = 0;
+    bool requires_completion_read = true;
+    void* dst = nullptr;
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr;
 
     virtual ~BufferReadDispatchParams() = default;
 
@@ -128,7 +135,9 @@ void copy_interleaved_buffer_to_completion_queue(
     BufferReadDispatchParams& dispatch_params,
     Buffer& buffer,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    CoreType dispatch_core_type);
+    CoreType dispatch_core_type,
+    void* dst = nullptr,
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,

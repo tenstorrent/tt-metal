@@ -22,12 +22,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& output) {
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& output) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -198,12 +198,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // Writer compute defines
-    std::map<std::string, std::string> writer_compute_defines;
-    if (output_is_sharded) {
-        writer_compute_defines["SHARDED"] = "1";
-    }
-
     // Writer compile-time args
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -237,11 +231,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         writer_compile_time_args.push_back(num_tiles_per_row);
         writer_compile_time_args.push_back(tile_width);
     }
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-    } else {
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    }
+
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+
     if (input_is_nd_sharded) {
         TensorAccessorArgs(*src0_buffer)
             .append_to(
@@ -263,7 +255,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         program,
         writer_kernel_file,
         compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
@@ -528,9 +520,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
 void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -562,4 +554,4 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
         runtime_args[0] = dst_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

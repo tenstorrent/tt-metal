@@ -17,7 +17,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "reshape.hpp"
@@ -47,7 +47,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = ttnn::prim::reshape(
+    auto temp_tensor2 = ttnn::prim::reshape_view(
         temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false, sub_core_grid);
 
     if (memory_config.is_sharded()) {
@@ -94,7 +94,7 @@ ttnn::Tensor reshape_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value,
+    const PadValue& /*pad_value*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto& tensor_shape = tensor.logical_shape();
@@ -173,7 +173,7 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value,
+    const PadValue& /*pad_value*/,
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // squeeze input tensor and requested shape to 3D
@@ -212,7 +212,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    auto output_tensor_3d = ttnn::prim::reshape(
+    auto output_tensor_3d = ttnn::prim::reshape_view(
         tensor3d,
         requested_shape_3d,
         requested_padded_shape_3d,

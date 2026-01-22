@@ -303,7 +303,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     env_(env),
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
-    dispatch_message_addr_(build_config.dispatch_message_addr),
+    core_type_(build_config.core_type),
+    processor_class_(build_config.processor_class),
+    processor_id_(build_config.processor_id),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
@@ -326,10 +328,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_,
-        build_config.core_type,
-        build_config.processor_class,
-        static_cast<uint32_t>(build_config.processor_id)};
+        this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -346,7 +345,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         for (const auto& define : jit_build_query.defines(params)) {
             fmt::format_to(it, "-D{} ", define);
         }
-        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", this->dispatch_message_addr_);
+        fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -459,6 +458,10 @@ void JitBuildState::compile_one(
     // Append common args provided by the build state
     cmd += this->cflags_;
     cmd += this->includes_;
+    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
+    if (settings) {
+        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
+    }
     cmd += fmt::format("-c -o {} {} ", obj, src);
     cmd += defines;
 
@@ -578,8 +581,16 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 std::string JitBuildState::weakened_firmware_name() const {
+    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+    const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
+        {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
     std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
+    return fmt::format(
+        "{}{}/{}_{}",
+        this->env_.out_firmware_root_,
+        weakened_firmware_target_name,
+        weakened_firmware_target_name,
+        name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {

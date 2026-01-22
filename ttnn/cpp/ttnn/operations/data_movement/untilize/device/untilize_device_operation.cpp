@@ -5,9 +5,10 @@
 #include "untilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
@@ -179,6 +180,10 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     return 2;
 }
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+
 void UntilizeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
@@ -287,7 +292,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 //     nd_spec.grid,
                 //     nd_spec.orientation,
                 //     nd_spec.shard_distribution_strategy);
-                bool input_is_uneven_sharded = is_uneven_nd_sharding(
+                bool input_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
                     input_tensor_a.padded_shape(),
                     nd_spec
                         .shard_shape);  // dist_spec.is_uneven();//input_tensor_a.buffer_distribution_spec().value().is_uneven();
@@ -330,7 +335,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 //     nd_spec.grid,
                 //     nd_spec.orientation,
                 //     nd_spec.shard_distribution_strategy);
-                bool output_is_uneven_sharded = is_uneven_nd_sharding(
+                bool output_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
                     input_tensor_a.padded_shape(),
                     nd_spec.shard_shape);  // dist_spec.is_uneven();//has_padding_pages_for_nd_shard(input_tensor_a,
                                            // nd_spec);
@@ -369,7 +374,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
             //     nd_spec.grid,
             //     nd_spec.orientation,
             //     nd_spec.shard_distribution_strategy);
-            output_is_uneven_sharded = is_uneven_nd_sharding(
+            output_is_uneven_sharded = operations::data_movement::is_uneven_nd_sharding(
                 input_tensor_a.padded_shape(),
                 nd_spec.shard_shape);  // has_padding_pages_for_nd_shard(input_tensor_a, nd_spec);
             std::cout << "output_is_uneven_sharded: " << output_is_uneven_sharded << std::endl;
@@ -454,19 +459,19 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     if (!operation_attributes.use_multicore) {
         // Single core implementation
         std::cout << "selecting single core implementation" << std::endl;
-        return program::UntilizeSingleCoreProgramFactory{};
+        return UntilizeSingleCoreProgramFactory{};
     }
     if (operation_attributes.sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
         // Note that this implementation does not support sharding, which is enforced in validate().
         std::cout << "selecting UntilizeMultiCoreSubCoreGridsProgramFactory" << std::endl;
-        return program::UntilizeMultiCoreSubCoreGridsProgramFactory{};
+        return UntilizeMultiCoreSubCoreGridsProgramFactory{};
     }
     if (!operation_attributes.enough_space_height && !input_is_sharded && !output_is_sharded) {
         // Optimized special case implementation, only supported when neither input or output is sharded
         std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
-        return program::UntilizeMultiCoreBlockProgramFactory{};
+        return UntilizeMultiCoreBlockProgramFactory{};
     }
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
         output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout) {
@@ -482,7 +487,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         if (identical_shard_specs) {
             std::cout << "selecting UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory"
                       << std::endl;
-            return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+            return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
 
@@ -510,29 +515,29 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (num_compute_cores < ncores_wh.ncores) {
                 std::cout << "selecting UntilizeMultiCoreBlockProgramFactory" << std::endl;
-                return program::UntilizeMultiCoreBlockProgramFactory{};
+                return UntilizeMultiCoreBlockProgramFactory{};
             }
         }
     }
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
-    auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
+    auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
         std::cout << "selecting 2 UntilizeMultiCoreParallelizeColumnProgramFactory" << std::endl;
-        return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
+        return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
         std::cout << "selecting 2 UntilizeSingleCoreProgramFactory" << std::endl;
-        return program::UntilizeSingleCoreProgramFactory{};
+        return UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation
     std::cout << "selecting UntilizeMultiCoreProgramFactory" << std::endl;
-    return program::UntilizeMultiCoreProgramFactory{};
+    return UntilizeMultiCoreProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(
-    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
+    const UntilizeDeviceOperation::operation_attributes_t& /*op_attr*/,
     const UntilizeDeviceOperation::tensor_args_t& inputs,
     tensor_return_value_t& output) {
     const auto& input_tensor = inputs.input;
@@ -553,16 +558,14 @@ UntilizeDeviceOperation::create_op_performance_model(
         compute_cycles = num_tiles * latency_untilize;
     }
 
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    int ideal_dev_clock_cycles =
+        ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
     tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+Tensor untilize(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     bool use_multicore,
@@ -572,9 +575,8 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
     bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type) {
-    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UntilizeDeviceOperation>(
+        UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,
             .use_pack_untilize = use_pack_untilize,
@@ -583,6 +585,7 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
-        OperationType::tensor_args_t{.input = input});
+        UntilizeTensorArgs{.input = input});
 }
+
 }  // namespace ttnn::prim

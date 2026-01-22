@@ -27,27 +27,12 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(11);
     constexpr uint32_t tile_width = get_compile_time_arg_val(12);
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(13),   // Memory layout
-        get_compile_time_arg_val(14),   // The number of sharding cores
-        get_compile_time_arg_val(15),   // The page size we offset each write to
-        get_compile_time_arg_val(16),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(17),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(18),   // pages_per_shard_x
-        get_compile_time_arg_val(19)>;  // pages_per_shard_y
 
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-    constexpr auto src0_args = TensorAccessorArgs<20>();
-    const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
-#else
     constexpr auto dst_args = TensorAccessorArgs<13>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
-#endif
+    // #endif
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,

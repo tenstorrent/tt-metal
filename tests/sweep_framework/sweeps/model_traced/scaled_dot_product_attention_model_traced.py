@@ -50,13 +50,10 @@ def invalidate_vector(test_vector) -> tuple:
     Filter out configs that are known to cause timeouts or resource issues.
     """
     input_shape = test_vector.get("input_shape")
-    input_a_memory_config = test_vector.get("input_a_memory_config")
 
     # If we have shape info, check for very large configs
     if isinstance(input_shape, dict):
         shape_q = input_shape.get("input_a") or input_shape.get("self")
-        shape_k = input_shape.get("input_b") or input_shape.get("other")
-        shape_v = input_shape.get("input_c")
 
         # Calculate approximate memory requirement
         if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:
@@ -203,6 +200,12 @@ def run(
     torch_v = ttnn.to_torch(
         ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
     )
+
+    # Ensure all tensors have the same dtype for PyTorch SDPA
+    # PyTorch requires all inputs to have the same dtype
+    torch_q = torch_q.to(torch.float32)
+    torch_k = torch_k.to(torch.float32)
+    torch_v = torch_v.to(torch.float32)
 
     # PyTorch reference
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(

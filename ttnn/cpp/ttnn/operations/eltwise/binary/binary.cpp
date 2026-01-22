@@ -406,7 +406,7 @@ inline auto invoke_binary_ng(
             input_b,
             binary_op_type,
             out_dtype,
-            mem_config,
+            memory_config,
             output,
             fast_and_approximate_mode,
             lhs_activations,
@@ -434,7 +434,7 @@ inline auto invoke_binary_ng(
         input_b,
         binary_op_type,
         input_a.dtype(),
-        mem_config,
+        memory_config,
         output_tensor,
         fast_and_approximate_mode,
         lhs_activations,
@@ -444,7 +444,6 @@ inline auto invoke_binary_ng(
         sub_core_grids);
     return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
 }
-
 }  // namespace detail
 
 template <BinaryOpType binary_op_type>
@@ -623,7 +622,7 @@ template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
     const float lhs,
     const ttnn::Tensor& rhs,
-    const std::optional<const DataType>& dtype,
+    const std::optional<const DataType>& /*dtype*/,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     return detail::binary_impl(binary_op_type, lhs, rhs, memory_config, output);

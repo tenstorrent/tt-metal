@@ -52,7 +52,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& bias,
     const std::optional<ttnn::Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::DataType> dtype,
+    const std::optional<ttnn::DataType> /*dtype*/,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,
@@ -134,7 +134,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     ttnn::Tensor mask = get_mask_tensor(input_tensor, input_mask, negative_mask, core_grid, num_groups);
 
     if (input_tensor.is_sharded()) {
-        const ttnn::operations::normalization::group_norm::GroupNormShardedMultiCoreProgramConfig program_config = {
+        const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
@@ -154,7 +154,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             negative_mask,
             reciprocals);
     }
-    const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
+    const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
         .out_data_format = DataType::BFLOAT16,
