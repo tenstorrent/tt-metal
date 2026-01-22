@@ -37,7 +37,7 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL(gelu, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, fast_and_approx, idst));
 }
 
 // TODO: Add gelu_derivative
