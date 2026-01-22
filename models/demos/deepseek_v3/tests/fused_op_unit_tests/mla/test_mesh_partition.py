@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         (
             "kvpe_mesh_partition",
-            [4, 256, 64, 576],
+            [1, 32, 64, 576],
             1,
             1,
             ttnn.L1_MEMORY_CONFIG,
@@ -64,7 +64,7 @@ def test_deepseek_v3_mla_mesh_partition_trace_mode(
     Test the permute operations from mla1d.py with trace mode.
 
     These operations transpose tensor dimensions:
-    1. kvpe_mesh_partition (line 1179): [1, 32, 33, 576] → [1, 4, 33, 576], dim=1, cluster_axis=1
+    1. kvpe_mesh_partition (line 1179): [1, 32, 64, 576] → [1, 4, 64, 576], dim=1, cluster_axis=1
 
     Configuration:
     - Warmup iterations: 10
@@ -147,6 +147,10 @@ def test_deepseek_v3_mla_mesh_partition_trace_mode(
     warmup_time_ms = profiler.get_duration("warmup") * 1000
     main_time_ms = profiler.get_duration("main") * 1000
     avg_time_per_iter_us = (main_time_ms / num_iters) * 1000
+
+    # Verify the input and output shapes
+    assert tt_input_tensor.shape == input_shape, f"Input shape mismatch: {tt_input_tensor.shape} != {input_shape}"
+    assert tt_output_tensor.shape == output_shape, f"Output shape mismatch: {tt_output_tensor.shape} != {output_shape}"
 
     logger.info(f"Warmup time: {warmup_time_ms:.2f} ms ({warmup_iters} iterations)")
     logger.info(f"Main trace time: {main_time_ms:.2f} ms ({num_iters} iterations)")
