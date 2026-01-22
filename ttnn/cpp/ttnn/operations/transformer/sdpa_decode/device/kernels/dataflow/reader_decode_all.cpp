@@ -240,6 +240,8 @@ void kernel_main() {
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
 
+        cb_reserve_back(cb_id_page_table, num_pages_to_read);
+
         // Read page table from DRAM
         if constexpr (!is_page_table_sharded) {
             page_table_ptr = read_page_table_for_batch(
@@ -250,12 +252,12 @@ void kernel_main() {
                 page_table_page_size);
             page_table_ptr_u32 = page_table_ptr;
         } else {  // Read page table from dyanmically allocated L1 buffer
-            cb_reserve_back(cb_id_page_table, num_pages_to_read);
             page_table_cb_wr_ptr =
                 get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
             page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
-            cb_push_back(cb_id_page_table, num_pages_to_read);
         }
+
+        cb_push_back(cb_id_page_table, num_pages_to_read);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;

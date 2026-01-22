@@ -121,8 +121,10 @@ void kernel_main() {
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
                 // Chunked means that we have paged attention
+                cb_reserve_back(cb_id_page_table, 1);
                 page_table_ptr = read_page_table_for_batch(
                     cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
+                cb_push_back(cb_id_page_table, 1);
             }
 
             // Calculate mask batch offset based on broadcasting:
