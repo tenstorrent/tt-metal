@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -252,8 +253,10 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     // Get mask tensor if provided
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
     std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
     if (mask.has_value()) {
         mask_tensor = mask.value()->get_value();
+        mask_type = ttml::metal::AttentionMaskType::Arbitrary;
     }
 
     // ========== Forward Pass using sdpa_fw kernel ==========
@@ -261,6 +264,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         query->get_value(),
         key->get_value(),
         value->get_value(),
+        mask_type,
         mask_tensor,
         dropout_probability,
         /*return_intermediates=*/true);  // Need intermediates for backward pass

@@ -127,16 +127,63 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 
     cb_reserve_back(cb_id, onetile);
 
+    // IEEE 754 bit representations for compile-time template parameters
+    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;  // 1.0f
+    constexpr uint16_t BF16_ONE_BITS = 0x3F80;      // 1.0 in bfloat16
+
     switch (data_format) {
-        case DataFormat::Float32:
-            fill_matmul_row_reduce_tile<uint32_t, 0x3F800000>(cb_id);  // fp32 1.0
-            break;
+        case DataFormat::Float32: fill_matmul_row_reduce_tile<uint32_t, FP32_ONE_BITS>(cb_id); break;
         case DataFormat::Int32:
         case DataFormat::UInt32: fill_matmul_row_reduce_tile<uint32_t, 1>(cb_id); break;
         case DataFormat::UInt16: fill_matmul_row_reduce_tile<uint16_t, 1>(cb_id); break;
         case DataFormat::UInt8: fill_matmul_row_reduce_tile<uint8_t, 1>(cb_id); break;
-        default:                                                   // Float16_b and other bf16 variants
-            fill_matmul_row_reduce_tile<uint16_t, 0x3F80>(cb_id);  // bf16 1.0
+        default:  // Float16_b and other bf16 variants
+            fill_matmul_row_reduce_tile<uint16_t, BF16_ONE_BITS>(cb_id);
+            break;
+    }
+
+    cb_push_back(cb_id, onetile);
+}
+
+// Helper template for generating causal (lower triangular) mask tile.
+// mask[row, col] = one_value if col <= row, else zero_value
+// This creates a triangular pattern within the 32x32 tile for causal attention.
+template <typename T, T one_value, T zero_value>
+inline void fill_causal_mask_tile(uint32_t cb_id) {
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
+
+    for (uint32_t face = 0; face < 4; ++face) {
+        const uint32_t face_row_offset = (face >= 2) ? FACE_HEIGHT : 0;  // faces 2,3 are bottom
+        const uint32_t face_col_offset = (face & 1U) ? FACE_WIDTH : 0;   // faces 1,3 are right
+
+        for (uint32_t h = 0; h < FACE_HEIGHT; ++h) {
+            const uint32_t row = face_row_offset + h;
+            for (uint32_t w = 0; w < FACE_WIDTH; ++w) {
+                const uint32_t col = face_col_offset + w;
+                *tile_ptr++ = (col <= row) ? one_value : zero_value;
+            }
+        }
+    }
+}
+
+// Generates a causal (lower triangular) mask tile with auto-detected data format.
+// Reserves CB, fills triangular pattern, pushes to CB.
+// Result: mask[row, col] = 1.0 if col <= row, else 0.0
+inline void generate_causal_mask_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    // IEEE 754 bit representations for compile-time template parameters
+    constexpr uint32_t FP32_ONE_BITS = 0x3F800000;   // 1.0f
+    constexpr uint32_t FP32_ZERO_BITS = 0x00000000;  // 0.0f
+    constexpr uint16_t BF16_ONE_BITS = 0x3F80;       // 1.0 in bfloat16
+    constexpr uint16_t BF16_ZERO_BITS = 0x0000;      // 0.0 in bfloat16
+
+    switch (data_format) {
+        case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ONE_BITS, FP32_ZERO_BITS>(cb_id); break;
+        default:  // BFloat16
+            fill_causal_mask_tile<uint16_t, BF16_ONE_BITS, BF16_ZERO_BITS>(cb_id);
             break;
     }
 
