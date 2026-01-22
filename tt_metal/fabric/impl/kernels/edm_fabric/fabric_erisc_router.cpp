@@ -2345,35 +2345,18 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
-    if constexpr( 0U < I ) {
-        auto connection_live_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[I]);
-        new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I], volatile tt_l1_ptr uint32_t* const>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                sender_channel_ack_cmd_buf_ids[I],
-                get_credits_init_val<I>(),
-                notify_worker_of_read_counter_update_src_address);        
-    }
-    else {
-        static_assert(I == 0U, "First sender channel must be index 0");
-        uint32_t const connection_live_semaphore_ptr =
-            static_cast<uint32_t>(local_sender_connection_live_semaphore_addresses[0U]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[0U]);            
-        new (&local_sender_channel_worker_interfaces.template get<0U>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0U], uint32_t>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                connection_live_semaphore_ptr,
-                sender_channel_ack_cmd_buf_ids[0U],
-                get_credits_init_val<0U>(),
-                notify_worker_of_read_counter_update_src_address);
-    }
+    auto connection_live_semaphore_ptr =
+        local_sender_connection_live_semaphore_addresses[I];
+    auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        local_sender_connection_info_addresses[I]);
+    new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
+        StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
+            connection_worker_info_ptr,
+            0,  // Not used for credits.
+            connection_live_semaphore_ptr,
+            sender_channel_ack_cmd_buf_ids[I],
+            get_credits_init_val<I>(),
+            notify_worker_of_read_counter_update_src_address);
 }
 
 // SFINAE overload - no-op when I >= NUM_SENDER_CHANNELS
@@ -2667,12 +2650,10 @@ void kernel_main() {
     // Read sender channel connection semaphore addresses (9 channels: 8 base + 1 for Z routers)
 
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_semaphore_addrs;
-//    local_sender_channel_connection_semaphore_addrs[0U] = get_arg_val<uint32_t>(arg_idx++);
-    local_sender_channel_connection_semaphore_addrs[0U] = 0U;
-    arg_idx++;
-    for (size_t i = 1UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_connection_semaphore_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
+    for (size_t i = 0UL; i < MAX_NUM_SENDER_CHANNELS; i++) {
+        local_sender_channel_connection_semaphore_addrs[i] = i;
     }
+    arg_idx++;
 
     // Read sender channel connection buffer index IDs (9 channels: 8 base + 1 for Z routers)
     std::array<size_t, MAX_NUM_SENDER_CHANNELS> local_sender_channel_connection_buffer_index_ids;
@@ -2853,7 +2834,7 @@ void kernel_main() {
     // create the sender channel worker interfaces with input array of number of buffers
     // Channel 0 uses uint32_t (overlay register), other channels use pointer type
     auto local_sender_channel_worker_interfaces =
-        tt::tt_fabric::EdmChannelWorkerInterfacesWithSpecialChannel0<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
 #if !defined(FABRIC_2D_VC1_ACTIVE)

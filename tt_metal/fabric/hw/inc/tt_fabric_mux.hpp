@@ -22,7 +22,7 @@ using FabricMuxChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_MUX_C
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
 using FabricMuxStaticSizedChannelWorkerInterface =
-    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS, volatile tt_l1_ptr uint32_t*>;
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
 
 using FabricMuxChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 

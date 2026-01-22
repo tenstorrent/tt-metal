@@ -50,4 +50,8 @@ struct OverlayRegisterFile : public RegisterFile {
     }    
 };
 
+struct overlayregister {
+    static constexpr uint32_t REGISTER = 0U;
+};
+
 #endif // end #define __TT_METAL_FABRIC_UARCH_OVERLAYREGISTERFILE_HPP__
