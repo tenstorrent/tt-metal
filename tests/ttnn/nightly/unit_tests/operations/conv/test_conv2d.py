@@ -3131,7 +3131,6 @@ def test_conv2d_model_fruit(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, act_db, w_db",
     (
         ################################################################## START: 1024x1024 resolution ##################################################################
-
         # kernel 3x3
         (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
         (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
@@ -3154,13 +3153,11 @@ def test_conv2d_model_fruit(
 
         # output_channels 4
         (1, 320, 4, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
-
-        # conv_in
+        # input_channels 4
         (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
 
         # # input_channels 9
         (1, 9, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
-
         ################################################################### END: 1024x1024 resolution ###################################################################
 
 
@@ -3169,98 +3166,32 @@ def test_conv2d_model_fruit(
         # conv_in
         (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
 
-        # down_blocks.0.resnets.0.conv1
-        # down_blocks.0.resnets.0.conv2
-        # down_blocks.0.resnets.1.conv1
-        # down_blocks.0.resnets.1.conv2
+        # regular 3x3 kernel
         (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 320, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 640, 1280, 16, 16,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 2560, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 1920, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 1920, 640, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 1280, 640, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 960, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 960, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+        (1, 640, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
+
         # down_blocks.0.downsamplers.0
         (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-
-        # down_blocks.1.resnets.0.conv1
-        (1, 320, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-        # down_blocks.1.resnets.0.conv2
-        # down_blocks.1.resnets.1.conv1
-        # down_blocks.1.resnets.1.conv2
-        (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
         # down_blocks.1.downsamplers.0
         (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
 
-        # down_blocks.2.resnets.0.conv1
-        (1, 640, 1280, 16, 16,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-        # down_blocks.2.resnets.0.conv2
-        # down_blocks.2.resnets.1.conv1
-        # down_blocks.2.resnets.1.conv2
-        # mid_block.resnets.0.conv1
-        # mid_block.resnets.0.conv2
-        # mid_block.resnets.1.conv1
-        # mid_block.resnets.1.conv2
-        (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-
-        # up_blocks.0.resnets.0.conv1
-        # up_blocks.0.resnets.1.conv1
-        (1, 2560, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-        # up_blocks.0.resnets.0.conv2
-        # up_blocks.0.resnets.1.conv2
-        # up_blocks.0.resnets.2.conv2
-        # up_blocks.0.upsamplers.0
-        (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-        # up_blocks.0.resnets.2.conv1
-        (1, 1920, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-
-        # up_blocks.1.resnets.0.conv1
-        (1, 1920, 640, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
-
+        # conv_out
+        (1, 320, 4, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, False, False)
         #################################################################### END: 512x512 resolution ####################################################################
-
-
-
-        ################################################################## START: 1024x1024 resolution ##################################################################
-        # conv_in
-        (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, False),
-
-        # down_blocks.0.resnets.0.conv1
-        # down_blocks.0.resnets.0.conv2
-        # down_blocks.0.resnets.1.conv1
-        # down_blocks.0.resnets.1.conv2
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 1024, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-        # down_blocks.0.downsamplers.0
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0, 1, False, ttnn.MathFidelity.HiFi2, True, False, True, True),
-
-        # down_blocks.1.resnets.0.conv1
-        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-        # down_blocks.1.resnets.0.conv2
-        # down_blocks.1.resnets.1.conv1
-        # down_blocks.1.resnets.1.conv2
-        (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, True, False, True, True),
-        # down_blocks.1.downsamplers.0
-
-        # down_blocks.2.resnets.0.conv1
-        (1, 640, 1280, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-        # down_blocks.2.resnets.0.conv2
-        # down_blocks.2.resnets.1.conv1
-        # down_blocks.2.resnets.1.conv2
-        # mid_block.resnets.0.conv1
-        # mid_block.resnets.0.conv2
-        # mid_block.resnets.1.conv1
-        # mid_block.resnets.1.conv2
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-
-        # up_blocks.0.resnets.0.conv1
-        # up_blocks.0.resnets.1.conv1
-        (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-        # up_blocks.0.resnets.0.conv2
-        # up_blocks.0.resnets.1.conv2
-        # up_blocks.0.resnets.2.conv2
-        # up_blocks.0.upsamplers.0
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-        # up_blocks.0.resnets.2.conv1
-        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True),
-
-        ################################################################### END: 1024x1024 resolution ###################################################################
     ),
 )
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_sdxl(
     device,
