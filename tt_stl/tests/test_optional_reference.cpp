@@ -45,6 +45,7 @@ TEST(OptionalReferenceTest, ImplicitConversionToConst) {
 
     // Modify original value
     value = 100;
+    (void)value;  // Suppress static analyzer warning - value is read via reference
     EXPECT_EQ(*ref, 100);  // Reference should see the change
 }
 
@@ -90,7 +91,7 @@ TEST(OptionalReferenceTest, MoveConstruction) {
     EXPECT_TRUE(ref2.has_value());
     EXPECT_EQ(*ref2, 42);
     // Note: ref1 should still be valid after move (it's just a pointer copy)
-    // NOLINTNEXTLINE(bugprone-use-after-move)
+    // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
     EXPECT_TRUE(ref1.has_value());
 }
 

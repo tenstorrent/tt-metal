@@ -149,6 +149,9 @@ static Tensor create_config_tensor(
     // In case last input shard is not full, fill the rest of the config vector with placeholder values
     const auto pad_uneven_shards = [config_buffer_entry_size](
                                        auto& config_vector, uint32_t elems_per_core_reader, size_t slice_begin = 0) {
+        if (elems_per_core_reader == 0) {
+            return;
+        }
         const uint32_t slice_length = config_vector.size() - slice_begin;
         const uint32_t remainder =
             (elems_per_core_reader - (slice_length % elems_per_core_reader)) % elems_per_core_reader;

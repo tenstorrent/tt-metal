@@ -190,17 +190,17 @@ public:
     }
 };
 
-class MeshFabric1DFixture : public BaseFabricFixture {
+class MeshFabric1DFixture final : public BaseFabricFixture {
 public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
-    void SetupDevices() override {
+    void SetupDevices() final {
         ValidateEnvironment();
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
         device_open = true;
     }
 
-    void TearDown() override {
+    void TearDown() final {
         if (device_open) {
             mesh_device_->close();
             device_open = false;
