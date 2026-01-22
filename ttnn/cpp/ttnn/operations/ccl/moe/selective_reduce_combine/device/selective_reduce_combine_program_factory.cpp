@@ -213,7 +213,9 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     num_data_parallel_cores = data_parallel_sizes_bytes.size();
     const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
-    std::vector<CoreCoord> sender_cores = corerange_to_cores(worker_core_range_set, num_worker_cores);
+
+    const auto needed_worker_core_range_set = select_from_corerangeset(worker_core_range_set, 0, num_worker_cores - 1);
+    const std::vector<CoreCoord> sender_cores = corerange_to_cores(needed_worker_core_range_set, num_worker_cores);
 
     const auto max_token_segment_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
@@ -243,12 +245,10 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
-    const auto needed_worker_core_range_set =
-
-        // create circular buffers
-        CreateCircularBuffer(program, worker_core_range_set, cb_data_config);
-    CreateCircularBuffer(program, worker_core_range_set, cb_metadata_config);
-    CreateCircularBuffer(program, worker_core_range_set, client_interface_cb_config);
+    // create circular buffers
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_metadata_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, client_interface_cb_config);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
@@ -285,7 +285,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     KernelHandle ternary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
-        worker_core_range_set,
+        needed_worker_core_range_set,
         reader_config);
 
     // launch writer kernel
@@ -339,7 +339,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
-        worker_core_range_set,
+        needed_worker_core_range_set,
         writer_config);
 
     const auto& termination_master_core = sender_cores[0];

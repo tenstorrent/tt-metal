@@ -8,6 +8,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
+#include "api/debug/dprint_pages.h"
+
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -136,7 +138,7 @@ void kernel_main() {
     open_direction_connections_barrier<Num_Directions, fabric_mux_num_buffers_per_channel, fabric_mux_status_address>(
         directions, fabric_connections, rt_arg_count);
 
-    DPRINT << "MUX STARTED" << "\n";
+    // DPRINT<<"MUX STARTED"<<"\n";
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
     send_init_semaphore_to_configured_targets<
@@ -148,10 +150,14 @@ void kernel_main() {
         replicate_axis,
         num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
-    DPRINT << "INIT SEMAPHORE SENT" << "\n";
+    // DPRINT<<"INIT SEMAPHORE SENT"<<"\n";
 
     cb_reserve_back(data_cb_id, 1);
     const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
+
+    // if(linearized_mesh_coord==1)
+    // tt::data_movement::common::print_bf16_pages(src_data_l1_base_addr,
+    // num_local_experts*global_num_tokens*source_token_segment_size_bytes/2,1);
 
     cb_wait_front(metadata_cb_id, 1);
     const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
@@ -166,7 +172,12 @@ void kernel_main() {
     noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
     noc_semaphore_set(init_semaphore_ptr, 0);
 
-    DPRINT << "INIT SEMAPHORE RECEIVED" << "\n";
+    // DPRINT<<"INIT SEMAPHORE RECEIVED"<<"\n";
+
+    uint32_t edt[num_local_experts];
+    for (uint32_t e = 0; e < num_local_experts; ++e) {
+        edt[e] = 0;
+    }
 
     bool needs_barrier = false;
     for (uint32_t dt = token_start; dt < token_end; ++dt) {
@@ -181,7 +192,7 @@ void kernel_main() {
                     detail::get_output_page_idx<tokens_per_device, select_experts_k>(st, k);
 
                 const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
-                                                  dt * source_token_segment_buffer_size_bytes;
+                                                  edt[e]++ * source_token_segment_buffer_size_bytes;
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
@@ -189,8 +200,15 @@ void kernel_main() {
                     tokens_per_device,
                     mesh_rows,
                     mesh_cols,
-                    replicate_axis>(dt);
-                const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
+                    replicate_axis>(st);
+
+                // if(linearized_mesh_coord==1){
+                //                     DPRINT<<"dt: "<<dt<<" edt: "<<edt[e]<<" st: "<<st<<" e: "<<e<<" dest_device_idx:
+                //                     "<<dest_device_idx<<" output_page_idx:"<<" k: "<<k<<" output_page_idx:
+                //                     "<<output_page_idx<<"\n";
+                //                     tt::data_movement::common::print_bf16_pages(src_data_l1_addr,
+                //                     source_token_segment_size_bytes/2,1);
+                //                 }
 
                 if (dest_device_idx == linearized_mesh_coord) {
                     const uint64_t output_noc_addr =
@@ -216,9 +234,10 @@ void kernel_main() {
                             alignment,
                             dest_token_segment_offset_bytes);
 
-                        DPRINT << "SENT PAYLOAD" << "\n";
+                        // DPRINT<<"SENT PAYLOAD"<<"\n";
 
                     } else {
+                        const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
                         const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
                         fabric_send_chip_unicast_noc_unicast<
                             src_chip_id,
@@ -248,16 +267,16 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     cb_push_back(data_cb_id, 1);
-    DPRINT << "PASSED PAYLOAD LOOP \n";
+    // DPRINT<<"PASSED PAYLOAD LOOP \n";
 
     MuxSyncCoreArgs sync_args(rt_arg_count);
     if (sync_args.is_sync_core) {
-        DPRINT << "TERMINATION MASTER WAITING FOR WORKERS \n";
+        // DPRINT<<"TERMINATION MASTER WAITING FOR WORKERS \n";
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
         noc_semaphore_wait(termination_sync_semaphore_ptr, (num_token_parallel_cores * num_data_parallel_cores) - 1);
 
-        DPRINT << "TERMINATION MASTER WAITING FOR SENDING DEVICE SEMAPHORES \n";
+        // DPRINT<<"TERMINATION MASTER WAITING FOR SENDING DEVICE SEMAPHORES \n";
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
         // "multicast" semaphore increment to let other devices know we are done
@@ -290,7 +309,7 @@ void kernel_main() {
         }
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-        DPRINT << "TERMINATION MASTER CLOSING MUX \n";
+        // DPRINT<<"TERMINATION MASTER CLOSING MUX \n";
 
         close_direction_connections<
             Num_Directions,
@@ -300,11 +319,11 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
         noc_semaphore_set(semaphore_ptr, 0);
 
-        DPRINT << "TERMINATION MASTER DONE \n";
+        // DPRINT<<"TERMINATION MASTER DONE \n";
     } else {
         // get sync core semaphore noc address
-        DPRINT << "termination_master_noc_x: " << sync_args.termination_master_noc_x
-               << " termination_master_noc_y: " << sync_args.termination_master_noc_y << "\n";
+        // DPRINT<<"termination_master_noc_x: "<<sync_args.termination_master_noc_x << " termination_master_noc_y:
+        // "<<sync_args.termination_master_noc_y<<"\n";
         uint64_t safe_termination_sync_address = safe_get_noc_addr(
             sync_args.termination_master_noc_x,
             sync_args.termination_master_noc_y,
