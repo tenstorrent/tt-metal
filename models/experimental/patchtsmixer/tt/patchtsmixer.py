@@ -2,18 +2,28 @@ import ttnn
 
 
 class TtPatchTSMixerGatedAttention:
+    """
+    Stage 2 Optimization: L1 memory for weights and outputs
+    """
+
     def __init__(self, device, base_address: str, parameters: dict):
         self.device = device
         self.base_address = base_address
 
-        self.weight = parameters[f"{base_address}.attn_layer.weight"]
+        # Store weights in L1
+        self.weight = ttnn.to_memory_config(parameters[f"{base_address}.attn_layer.weight"], ttnn.L1_MEMORY_CONFIG)
         self.bias = parameters[f"{base_address}.attn_layer.bias"]
 
+        # L1 output config
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
+
     def __call__(self, x):
-        # x: TTNN tensor, last dimension = d_model
-        y = ttnn.linear(x, self.weight, bias=self.bias)
-        w = ttnn.softmax(y, dim=-1)
-        return ttnn.multiply(x, w)
+        # Linear with L1 output
+        y = ttnn.linear(x, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        # Softmax in L1
+        w = ttnn.softmax(y, dim=-1, memory_config=self.l1_mem_config)
+        # Multiply in L1
+        return ttnn.multiply(x, w, memory_config=self.l1_mem_config)
 
 
 class TtPatchTSMixerPositionalEncoding:
@@ -23,14 +33,19 @@ class TtPatchTSMixerPositionalEncoding:
     Expects:
         x: (B, C, N_p, D) as TTNN tensor
         pe: stored as (1, 1, N_p, D) TTNN tensor for broadcast
+
+    Stage 2 Optimization: L1 memory for PE buffer
     """
 
     def __init__(self, device, base_address: str, parameters: dict, *, num_patches: int, d_model: int):
         self.device = device
         self.base = base_address
-        self.pe = parameters[f"{self.base}.pe"]
+
+        # Store PE in L1 (small tensor, fast broadcast)
+        self.pe = ttnn.to_memory_config(parameters[f"{self.base}.pe"], ttnn.L1_MEMORY_CONFIG)
 
     def __call__(self, x):
+        # Addition with input memory config preserved
         return ttnn.add(x, self.pe)
 
 
@@ -85,17 +100,25 @@ class TtPatchTSMixerBatchNorm:
 
 
 class TtPatchTSMixerLayerNorm:
+    """
+    Stage 2 Optimization: L1 memory for params and outputs
+    """
+
     def __init__(self, device, base_address: str, parameters: dict, eps=1e-5):
         self.device = device
         self.base = base_address
         self.eps = eps
-        self.gamma = parameters[f"{self.base}.norm.weight"]  # (1, 1, 1, D)
-        self.beta = parameters[f"{self.base}.norm.bias"]  # (1, 1, 1, D)
+
+        # Store params in L1
+        self.gamma = ttnn.to_memory_config(parameters[f"{self.base}.norm.weight"], ttnn.L1_MEMORY_CONFIG)
+        self.beta = ttnn.to_memory_config(parameters[f"{self.base}.norm.bias"], ttnn.L1_MEMORY_CONFIG)
+
+        # L1 output config
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
-        # x: (B, C, N_p, D)
-        x = ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
-        return x
+        # Layer norm with L1 output
+        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps, memory_config=self.l1_mem_config)
 
 
 class TtPatchTSMixerLayerNormDispatcher:
@@ -136,21 +159,30 @@ class TtPatchTSMixerMLP:
     Applies:
         x = gelu(x @ W1 + b1)
         x = x @ W2 + b2
+
+    Stage 2 Optimization:
+    - L1 memory storage for weights and outputs (5-10x speedup expected)
     """
 
     def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0):
         self.device = device
         self.base = base_address
 
-        self.w1 = parameters[f"{self.base}.fc1.weight"]  # (1, 1, in, hidden)
-        self.b1 = parameters[f"{self.base}.fc1.bias"]  # (1, 1, 1, hidden)
-        self.w2 = parameters[f"{self.base}.fc2.weight"]  # (1, 1, hidden, out)
-        self.b2 = parameters[f"{self.base}.fc2.bias"]  # (1, 1, 1, out)
+        # Store weights in L1 for fast access
+        self.w1 = ttnn.to_memory_config(parameters[f"{self.base}.fc1.weight"], ttnn.L1_MEMORY_CONFIG)
+        self.b1 = parameters[f"{self.base}.fc1.bias"]
+        self.w2 = ttnn.to_memory_config(parameters[f"{self.base}.fc2.weight"], ttnn.L1_MEMORY_CONFIG)
+        self.b2 = parameters[f"{self.base}.fc2.bias"]
+
+        # L1 memory config for outputs
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
-        # x: (..., in_features) -> rank-4 i PatchTSMixer
-        x = ttnn.linear(x, self.w1, bias=self.b1, activation="gelu")
-        x = ttnn.linear(x, self.w2, bias=self.b2)
+        # First linear with GELU, output in L1
+        x = ttnn.linear(x, self.w1, bias=self.b1, activation="gelu", memory_config=self.l1_mem_config)
+
+        # Second linear, output in L1
+        x = ttnn.linear(x, self.w2, bias=self.b2, memory_config=self.l1_mem_config)
         return x
 
 
@@ -454,6 +486,8 @@ class TtPatchTSMixerForecastHead:
 
     Input:  (B, C, Np, D)  rank-4
     Output: (B, H, C).
+
+    Stage 2 Optimization: L1 memory for weights and outputs
     """
 
     def __init__(self, device, base_address: str, parameters: dict, *, prediction_length: int):
@@ -461,22 +495,24 @@ class TtPatchTSMixerForecastHead:
         self.base = base_address
         self.H = prediction_length
 
-        # weight should represent [Np*D, H] or [H, Np*D] depending on transpose_b usage.
-        self.weight = parameters[f"{self.base}.proj.weight"]
+        # Store weight in L1
+        self.weight = ttnn.to_memory_config(parameters[f"{self.base}.proj.weight"], ttnn.L1_MEMORY_CONFIG)
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
 
+        # L1 output config
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
+
     def __call__(self, x):
-        # x: (B, C, Np, D)
-        # flatten last two dims -> (B, C, 1, Np*D)
         B, C, Np, D = x.shape
-        x = ttnn.reshape(x, (B, C, 1, Np * D))
 
-        # linear over last dim -> (B, C, 1, H)
-        y = ttnn.linear(x, self.weight, bias=self.bias)
+        # Flatten in L1
+        x = ttnn.reshape(x, (B, C, 1, Np * D), memory_config=self.l1_mem_config)
 
-        # (B, C, 1, H) -> (B, H, C)
-        y = ttnn.permute(y, (0, 3, 2, 1))  # (B, H, 1, C)
+        # Linear with L1 output
+        y = ttnn.linear(x, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
 
+        # Permute in L1
+        y = ttnn.permute(y, (0, 3, 2, 1), memory_config=self.l1_mem_config)
         return y
 
 
@@ -598,9 +634,10 @@ class TtPatchTSMixerPretrainHead:
 
 class TtPatchTSMixerPatchify:
     """
-
     Input tensor shape expected: (B, L, C)  (HF-style)
     Output TTNN tensor: (B, C, N_patches, patch_length)
+
+    Stage 2 Optimization: L1 memory throughout, minimize layout conversions
     """
 
     def __init__(self, *, device, context_length, patch_length, patch_stride):
@@ -614,57 +651,55 @@ class TtPatchTSMixerPatchify:
         self.sequence_start = context_length - new_len
         self.new_len = new_len
 
-        # Cache (Np, P) indices on device
+        # Cache indices in L1 with TILE_LAYOUT
         self.idx2 = self._build_idx2()
+
+        # L1 config for all intermediate operations
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def _build_idx2(self):
         P = self.patch_length
         N_p = self.num_patches
         S = self.patch_stride
 
-        offsets = ttnn.arange(0, P, dtype=ttnn.uint32, device=self.device)  # (P, )
-        patch_ids = ttnn.arange(0, N_p, dtype=ttnn.uint32, device=self.device)  # (Np, )
-        patch_starts = patch_ids * S  # (Np, )
+        offsets = ttnn.arange(0, P, dtype=ttnn.uint32, device=self.device)
+        patch_ids = ttnn.arange(0, N_p, dtype=ttnn.uint32, device=self.device)
+        patch_starts = patch_ids * S
 
-        idx2 = ttnn.reshape(patch_starts, (N_p, 1)) + ttnn.reshape(offsets, (1, P))  # (Np, P)
+        idx2 = ttnn.reshape(patch_starts, (N_p, 1)) + ttnn.reshape(offsets, (1, P))
+
+        # Store in L1 and TILE_LAYOUT
+        idx2 = ttnn.to_layout(idx2, ttnn.TILE_LAYOUT)
+        idx2 = ttnn.to_memory_config(idx2, ttnn.L1_MEMORY_CONFIG)
         return idx2
 
     def __call__(self, x):
-        # x: (B, L, C)
+        B, L, C = x.shape if len(x.shape) == 3 else (x.shape[0], x.shape[2], x.shape[3])
+
         if len(x.shape) == 3:
-            B, L, C = x.shape
-            x = ttnn.reshape(x, (B, 1, L, C))
-        else:
-            B, one, L, C = x.shape
-            assert 1 == 1, f"Expected dim1=1, got {one}"
+            x = ttnn.reshape(x, (B, 1, L, C), memory_config=self.l1_mem_config)
 
-        if L != self.context_length:
-            raise ValueError(f"Expected sequence length {self.context_length}, got {L}")
-
+        # Slice directly
         x = ttnn.slice(x, (0, 0, self.sequence_start, 0), (B, 1, self.sequence_start + self.new_len, C))
-        # shape: (B,1,new_len,C)
 
-        # Ensure layout for gather
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # Ensure TILE_LAYOUT
+        if x.get_layout() != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=self.l1_mem_config)
 
-        # Expand along patch axis because gather doesn't broadcast:
+        # Expand in L1
         Np = self.num_patches
-        x = ttnn.repeat(x, (1, Np, 1, 1))  # (B, Np, new_len, C)
+        x = ttnn.repeat(x, (1, Np, 1, 1), memory_config=self.l1_mem_config)
 
-        # Build idx4 from cached idx2:
-        # idx2: (Np, P) -> idx4: (B, Np, P, C)
+        # Build idx4 from cached idx2
         P = self.patch_length
         idx4 = ttnn.reshape(self.idx2, (1, Np, P, 1))
-        idx4 = ttnn.repeat(idx4, (B, 1, 1, C))  # (B, Np, P, C)
+        idx4 = ttnn.repeat(idx4, (B, 1, 1, C), memory_config=self.l1_mem_config)
 
-        # Convert index tensor to TILE_LAYOUT for gather
-        idx4 = ttnn.to_layout(idx4, ttnn.TILE_LAYOUT)
+        # Gather with L1 output
+        y = ttnn.gather(x, dim=2, index=idx4, memory_config=self.l1_mem_config)
 
-        # Gather along time dimension dim=2 (the new_len axis)
-        y = ttnn.gather(x, dim=2, index=idx4)  # (B, Np, P, C)
-
-        # (B, Np, P, C) -> (B, C, Np, P)
-        y = ttnn.permute(y, (0, 3, 1, 2))
+        # Final permute in L1
+        y = ttnn.permute(y, (0, 3, 1, 2), memory_config=self.l1_mem_config)
         return y
 
 
@@ -674,6 +709,8 @@ class TtPatchTSMixerEmbedding:
 
     Input tensor:  past_values already transposed to (B, C, L) in the model.
     Output TTNN:  (B, C, Np, d_model)
+
+    Stage 2 Optimization: L1 memory for weights and outputs
     """
 
     def __init__(
@@ -693,9 +730,12 @@ class TtPatchTSMixerEmbedding:
             device=device,
         )
 
-        # proj weight/bias
-        self.weight = parameters[f"{self.base}.proj.weight"]
+        # Store projection weight in L1
+        self.weight = ttnn.to_memory_config(parameters[f"{self.base}.proj.weight"], ttnn.L1_MEMORY_CONFIG)
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
+
+        # L1 output config
+        self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
@@ -703,16 +743,14 @@ class TtPatchTSMixerEmbedding:
         returns: TTNN tensor (B, C, Np, d_model)
         """
 
-        # (B,C,L) -> (B,L,C) for patchify logic
-        x_lc = ttnn.permute(x, (0, 2, 1))
+        # Permute in L1
+        x_lc = ttnn.permute(x, (0, 2, 1), memory_config=self.l1_mem_config)
 
-        # patchify: (B,L,C) -> (B,C,Np,patch_len)
+        # Patchify (already optimized with L1)
         patches_tt = self.patchify(x_lc)
 
-        # linear over last dim patch_len -> d_model
-        # reshape to rank-4 already, so we can call ttnn.linear directly:
-        # (B,C,Np,patch_len) @ (patch_len,d_model) => (B,C,Np,d_model)
-        out = ttnn.linear(patches_tt, self.weight, bias=self.bias)
+        # Linear projection with L1 output
+        out = ttnn.linear(patches_tt, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
         return out
 
 
