@@ -32,6 +32,11 @@ def get_tolerances(input_shape, angle, interpolation_mode):
             return 0.05, 0.05
 
 
+# ============================================================================
+# Basic Functionality Tests
+# ============================================================================
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -52,7 +57,7 @@ def get_tolerances(input_shape, angle, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_various_angles(device, input_shape, angle, interpolation_mode):
+def test_various_angles(device, input_shape, angle, interpolation_mode):
     """Test rotate with various rotation angles for both interpolation modes"""
 
     torch.manual_seed(0)
@@ -87,7 +92,7 @@ def test_rotate_various_angles(device, input_shape, angle, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_identity(device, input_shape, interpolation_mode):
+def test_identity_rotation(device, input_shape, interpolation_mode):
     """Test that 0-degree rotation returns the same image"""
 
     torch.manual_seed(0)
@@ -127,7 +132,7 @@ def test_rotate_identity(device, input_shape, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_exact_multiples_of_90(device, input_shape, angle, interpolation_mode):
+def test_exact_multiples_of_90(device, input_shape, angle, interpolation_mode):
     """Test 90-degree multiples which should be exact"""
 
     torch.manual_seed(0)
@@ -167,7 +172,7 @@ def test_rotate_exact_multiples_of_90(device, input_shape, angle, interpolation_
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_with_fill_value(device, input_shape, fill_value, interpolation_mode):
+def test_fill_values(device, input_shape, fill_value, interpolation_mode):
     """Test rotation with different fill values for out-of-bounds areas"""
 
     torch.manual_seed(0)
@@ -201,7 +206,7 @@ def test_rotate_with_fill_value(device, input_shape, fill_value, interpolation_m
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_batch_consistency(device, input_shape, interpolation_mode):
+def test_batch_consistency(device, input_shape, interpolation_mode):
     """Test that each batch item rotates independently and consistently"""
 
     torch.manual_seed(0)
@@ -245,7 +250,7 @@ def test_rotate_batch_consistency(device, input_shape, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_multichannel_consistency(device, input_shape, angle, interpolation_mode):
+def test_multichannel_consistency(device, input_shape, angle, interpolation_mode):
     """Test that all channels rotate identically"""
 
     torch.manual_seed(0)
@@ -282,7 +287,7 @@ def test_rotate_multichannel_consistency(device, input_shape, angle, interpolati
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_small_angles(device, input_shape, interpolation_mode):
+def test_small_angles(device, input_shape, interpolation_mode):
     """Test rotation with very small angles"""
 
     torch.manual_seed(0)
@@ -317,7 +322,7 @@ def test_rotate_small_angles(device, input_shape, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_large_angles(device, input_shape, interpolation_mode):
+def test_full_rotation(device, input_shape, interpolation_mode):
     """Test rotation with large angles (equivalence check)"""
 
     torch.manual_seed(0)
@@ -353,7 +358,7 @@ def test_rotate_large_angles(device, input_shape, interpolation_mode):
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_opposite_angles(device, input_shape, angle_pair, interpolation_mode):
+def test_opposite_angles(device, input_shape, angle_pair, interpolation_mode):
     """Test that rotating by +theta then -theta returns near-original"""
 
     torch.manual_seed(0)
@@ -391,7 +396,7 @@ def test_rotate_opposite_angles(device, input_shape, angle_pair, interpolation_m
     "interpolation_mode",
     ["nearest", "bilinear"],
 )
-def test_rotate_with_custom_center(device, input_shape, center, interpolation_mode):
+def test_custom_center(device, input_shape, center, interpolation_mode):
     """Test rotation around custom center points"""
 
     torch.manual_seed(0)
@@ -438,7 +443,7 @@ def test_rotate_with_custom_center(device, input_shape, center, interpolation_mo
     "rotation_angle",
     [0.0, -6.64, -1.33, 1.33, 4.80, 25.0],
 )
-def test_rotate_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
+def test_vadv2_use_case(device, input_shape, batch_size, rotation_angle):
     """Test vadv2-specific rotation use case: BEV feature rotation with custom center"""
 
     torch.manual_seed(0)
