@@ -293,6 +293,12 @@ def main():
     # - TP devices per group (tensor parallelism) along mesh dimension 1
     logical_mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
     num_devices = mesh_rows * mesh_cols
+    # In these examples, I assume dp is always the first mesh axis and tp is the second one, which will be
+    # preserved later on when adding tp+dp llm training support. A user will set if they want to use data
+    # parallel or not and which mesh device shape they want to use, the axis will be
+    # decided automatically: data parallel will always be the first one if
+    # present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
+    # tp and ep.
     dp_size = mesh_rows
     tp_size = mesh_cols
 

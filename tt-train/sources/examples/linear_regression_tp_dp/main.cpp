@@ -83,6 +83,12 @@ int main(int argc, char** argv) {
     // config file)
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
     const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
+    // In these examples, I assume dp is always the first mesh axis and tp is the second one, which will be
+    // preserved later on when adding tp+dp llm training support. A user will set if they want to use data
+    // parallel or not and which mesh device shape they want to use, the axis will be
+    // decided automatically: data parallel will always be the first one if
+    // present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
+    // tp and ep.
     const uint32_t dp_size = logical_mesh_shape[0];
     const uint32_t tp_size = logical_mesh_shape[1];
 
