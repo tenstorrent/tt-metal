@@ -205,6 +205,46 @@ Tensor Tensor::from_vector(
     return res;
 }
 
+template <typename T>
+Tensor Tensor::from_buffer(std::span<T> buffer, const TensorSpec& spec, T pad_value) {
+    ZoneScopedN("ttnn::Tensor::from_buffer");
+    // Create host tensor with DataType matching buffer
+    auto buffer_dtype = convert_to_data_type<T>();
+    size_t volume = spec.logical_shape().volume();
+
+    TT_FATAL(spec.data_type() == buffer_dtype, "spec data type doesn't match the buffer data type");
+    TT_FATAL(
+        !logical_matches_physical(spec),
+        "Logical matches physical, don't support that case, use Tensor::from_span instead!");
+
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+    return Tensor(std::move(host_buffer), spec);
+}
+template Tensor Tensor::from_buffer<bfloat16>(
+    tt::stl::Span<bfloat16> buffer, const TensorSpec& spec, bfloat16 pad_value);
+
+template Tensor Tensor::from_buffer<uint32_t>(
+    tt::stl::Span<uint32_t> buffer, const TensorSpec& spec, uint32_t pad_value);
+
+template Tensor Tensor::from_buffer<int32_t>(tt::stl::Span<int32_t> buffer, const TensorSpec& spec, int32_t pad_value);
+
+template Tensor Tensor::from_buffer<uint8_t>(
+    tt::stl::Span<uint8_t> buffer,
+    const TensorSpec& spec,
+
+    uint8_t pad_value);
+
+template Tensor Tensor::from_buffer<uint16_t>(
+    tt::stl::Span<uint16_t> buffer, const TensorSpec& spec, uint16_t pad_value);
+
+template Tensor Tensor::from_buffer<float>(tt::stl::Span<float> buffer, const TensorSpec& spec, float pad_value);
+
 template <>
 std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const {
     Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);

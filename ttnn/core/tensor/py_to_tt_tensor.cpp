@@ -10,6 +10,8 @@
 
 #include <tt-metalium/graph_tracking.hpp>
 
+#include <tt_stl/unreachable.hpp>
+
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
@@ -21,8 +23,8 @@ auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_d
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
     switch (type) {
-        case DataType::BFLOAT16:
-            // https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
+        // case DataType::BFLOAT16:
+        //  https://github.com/tenstorrent/tt-metal/issues/31406 (NaN values are not preserved and replaced with inf)
         case DataType::FLOAT32:
             // https://github.com/tenstorrent/tt-metal/issues/23405 (layout precision loss)
             // https://github.com/tenstorrent/tt-metal/issues/30147 (typecast rounding error)
@@ -50,7 +52,7 @@ bool can_construct_on_device(
     const ttnn::Shape& tensor_shape,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config) {
-    return (
+    bool res =
         // Device is required
         device != nullptr &&
         // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
@@ -60,11 +62,14 @@ bool can_construct_on_device(
         // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
         tensor_shape.rank() <= 4 &&
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-        !memory_config.is_sharded() &&
+        !memory_config.is_sharded();
+    if (optional_tile.has_value()) {
         // on-device tiling operation expects 32x32. In some cases (`test_tiny_tiles_bfloat` test for example)
         // the tile size is provided explicitly and does not match x32 pattern.
-        (optional_tile.has_value() && ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
-         ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0)));
+        res &= ((optional_tile->get_width() % tt::constants::TILE_WIDTH) == 0) &&
+               ((optional_tile->get_height() % tt::constants::TILE_HEIGHT) == 0);
+    }
+    return res;
 }
 
 Tensor create_tt_tensor_from_host_data(
@@ -96,8 +101,8 @@ Tensor create_tt_tensor_from_host_data(
             // spec is constructed directly.
 
             const bool must_construct_on_host =
-                // Sharded typecast does not support conversion between types with different tile sizes, like FLOAT32 ->
-                // BFLOAT4/8. In this case the type conversion should be done on host.
+                // Sharded typecast does not support conversion between types with different tile sizes, like
+                // FLOAT32 -> BFLOAT4/8. In this case the type conversion should be done on host.
                 (memory_config.is_sharded() &&
                  get_datatype_tile_size(src_dtype) != get_datatype_tile_size(dst_dtype)) ||
                 !exec_on_device;
@@ -125,6 +130,13 @@ Tensor create_tt_tensor_from_host_data(
         }
 
         TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
+        // from_span do first copy of the data to pass to from_vector
+        // than from_vecotr allocation another vector to change layout, in that use case we don't need first allocation.
+        if constexpr (std::is_same_v<T, bfloat16>) {
+            if (layout == Layout::TILE) {
+                return Tensor::from_buffer(host_buffer.view_as<T>(), tensor_spec, static_cast<T>(pad_value));
+            }
+        }
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
             tensor_spec,
@@ -147,18 +159,6 @@ Tensor create_tt_tensor_from_host_data(
 }
 
 DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, bool is_sharded) {
-    auto is_torch_dtype_matches_ttnn = [](ttnn::PyDType type) {
-        switch (type) {
-            case ttnn::PyDType::UINT64:
-            case ttnn::PyDType::FLOAT64:
-            case ttnn::PyDType::FLOAT16:
-            case ttnn::PyDType::INT64:
-            case ttnn::PyDType::INT16:
-            case ttnn::PyDType::INT8: return false;
-            default: return true;
-        }
-    };
-
     auto to_ttnn_dtype = [](ttnn::PyDType type) {
         switch (type) {
             case ttnn::PyDType::FLOAT32: return DataType::FLOAT32;
@@ -168,14 +168,21 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
             case ttnn::PyDType::BOOL: return DataType::UINT8;
-            default: TT_THROW("Unsupported PyDType {}", type);
+            case ttnn::PyDType::UINT64:
+            case ttnn::PyDType::FLOAT64:
+            case ttnn::PyDType::FLOAT16:
+            case ttnn::PyDType::INT64:
+            case ttnn::PyDType::INT16:
+            case ttnn::PyDType::INT8:
+            default: return DataType::INVALID;
         }
+        ttsl::unreachable();
     };
 
     const DataType mapped_dst_type =
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::FLOAT32 : dst_dtype;
 
-    if (!is_torch_dtype_matches_ttnn(src_dtype)) {
+    if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
     }
 
