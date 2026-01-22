@@ -156,12 +156,12 @@ def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
     # Get architecture from run_metadata (always available via ARCH_NAME env var)
     arch = run_metadata.get("device") or run_metadata.get("card_type") or "n/a"
 
-    # Try to get runner_label from CI environment (Option 2 - primary)
+    # Priority 1: try to get runner_label from CI environment
     runner_label = run_metadata.get("runner_label")
     if runner_label:
         return f"{arch} ({runner_label})"
 
-    # Fallback: query ttnn for device count at runtime (Option 3)
+    # Priority 2 fallback: query ttnn for device count at runtime
     try:
         import ttnn
 
