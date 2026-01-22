@@ -66,6 +66,7 @@ public:
 
     // TODO: Original Tensor has three overloads
     // TODO-ask alex: Original Tensor takes HostBuffer as value, is that a must?
+    // Make this private + the main constructor?
     explicit HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology topology);
 
     /**

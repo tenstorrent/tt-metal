@@ -16,6 +16,7 @@
 #include "tensor/details/storage.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
@@ -23,11 +24,20 @@ namespace tt::tt_metal {
 
 // Special Member Functions
 
-// TODO: inspect these, the defaults doesn't seem like a good idea.
-HostTensor::HostTensor() = default;
+// Main Constructor
+HostTensor::HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology topology) :
+    impl(std::make_unique<TensorAttributes>(Storage(HostStorage(buffer)), std::move(spec), std::move(topology))) {}
+
+// The default tensor spec for an empty Tensor
+// TODO: revisit?
+TensorSpec DEFAULT_TENSOR_SPEC(
+    Shape(), TensorLayout(DataType::INVALID, PageConfig(RowMajorPageConfig()), MemoryConfig()));
+
+// TODO: when and if we need to check whether a host tensor is empty
+HostTensor::HostTensor() : HostTensor(HostBuffer(), DEFAULT_TENSOR_SPEC, TensorTopology{}) {}
 HostTensor::~HostTensor() = default;
 
-// Deep copy since we use unique_ptr (unlike Tensor which shallow copies shared_ptr)
+// Deep copy (of the config and topology?)
 HostTensor::HostTensor(const HostTensor& other) :
     impl(other.impl ? std::make_unique<TensorAttributes>(*other.impl) : nullptr) {}
 
@@ -38,13 +48,9 @@ HostTensor& HostTensor::operator=(const HostTensor& other) {
     return *this;
 }
 
-// Move - default works for unique_ptr
+// Move - default works for unique_ptr, this means operating anything on a move-from HostTensor is undefined?
 HostTensor::HostTensor(HostTensor&&) noexcept = default;
 HostTensor& HostTensor::operator=(HostTensor&&) noexcept = default;
-
-// Constructor (pattern from tensor.cpp:84-90)
-HostTensor::HostTensor(const HostBuffer& buffer, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<TensorAttributes>(Storage(HostStorage(buffer)), std::move(spec), std::move(topology))) {}
 
 // Getter Implementations (following tensor.cpp:607-650)
 
@@ -66,7 +72,10 @@ const std::optional<NdShardSpec>& HostTensor::nd_shard_spec() const { return mem
 
 const TensorTopology& HostTensor::tensor_topology() const { return impl->get_tensor_topology(); }
 
+// Should just change the return type to some flavor of vector
 Shape HostTensor::strides() const {
+    // This is a copy just to convert from size_t to uint32_t...
+    // Stinky!
     auto s = compute_strides(padded_shape());
     return Shape(ttsl::SmallVector<uint32_t>(s.begin(), s.end()));
 }
