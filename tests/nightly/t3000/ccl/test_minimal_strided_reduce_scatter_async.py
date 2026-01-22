@@ -368,7 +368,7 @@ def run_reduce_scatter_impl(
         # ),
         pytest.param(
             ReduceScatterTestConfig(
-                rs_input_shape=[8, 1, 64, 512],
+                rs_input_shape=[1, 1, 64, 512],
                 dim=3,
                 layout=ttnn.TILE_LAYOUT,
                 rs_input_dtype=ttnn.bfloat16,
@@ -382,6 +382,23 @@ def run_reduce_scatter_impl(
                 verify_output_pcc=False,
             ),
             id="experimental_strided_minimal_shape_check",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                rs_input_shape=[8, 1, 64, 512],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=False,
+            ),
+            id="experimental_strided_minimal_shape_check_2",
         ),
     ],
 )
