@@ -15,7 +15,7 @@ This guide helps developers migrate from legacy data movement APIs to the new ex
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
 5. [Complete Migration Examples](#complete-migration-examples)
-6. [Common Issues](#common-issues)
+6. [Troubleshooting](#troubleshooting)
 
 ---
 
