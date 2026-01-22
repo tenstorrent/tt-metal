@@ -151,7 +151,7 @@ static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<Mesh
     auto write_transfer = distributed::ShardDataTransfer(coord)
                               .host_data(aligned_ptr)
                               .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
-    experimental::HostBufferSetPinnedMemory(host_buffer, pinned_mem);
+    experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
 
     for (auto _ : state) {
         bool blocking = true;
