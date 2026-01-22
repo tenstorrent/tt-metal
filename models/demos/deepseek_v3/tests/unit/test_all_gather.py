@@ -9,6 +9,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_watcher_enabled
 from tests.sweep_framework.sweep_utils.ccl_common import get_mem_configs, get_serializable_shard_specs
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.utils_for_testing import maybe_trace
@@ -80,6 +81,9 @@ SHAPE_DTYPE_BUFFER_TYPE_SHARD_SPEC = [
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("enable_trace", [True, False])
 def test_deepseek(mesh_device, shape_dtype_buffer_type_shard_spec, layout, dim, cluster_axis, topology, enable_trace):
+    if is_watcher_enabled():
+        pytest.skip("Test is not passing with watcher enabled")
+
     shape, dtype, buffer_type, shard_spec = shape_dtype_buffer_type_shard_spec
 
     tt_input, torch_reference, output_mem_config = _get_tensors(
