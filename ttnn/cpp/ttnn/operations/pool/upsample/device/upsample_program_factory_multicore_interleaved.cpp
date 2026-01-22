@@ -18,15 +18,16 @@
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 
-namespace ttnn::operations::pool::upsample::program {
+namespace ttnn::prim {
 
 UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreInterleavedProgramFactory::create(
-    const UpsampleParams& operation_attributes, const UpsampleInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input_tensor;
+    const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
+    const auto& input = input_tensor;
     auto& output = output_tensor;
     // This factory only supports integer scale factors
     TT_FATAL(
-        is_integer_scale(operation_attributes.scale_factor_h) && is_integer_scale(operation_attributes.scale_factor_w),
+        operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_h) &&
+            operations::pool::upsample::is_integer_scale(operation_attributes.scale_factor_w),
         "Interleaved upsample factory requires integer scale factors, got scale_h={}, scale_w={}",
         operation_attributes.scale_factor_h,
         operation_attributes.scale_factor_w);
@@ -265,7 +266,7 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
 void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const UpsampleParams& /*operation_attributes*/,
-    const UpsampleInputs& tensor_args,
+    const Tensor& input_tensor,
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
@@ -273,7 +274,7 @@ void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     const auto& num_cores = cached_program.shared_variables.num_cores;
     const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto* const src_buffer = tensor_args.input_tensor.buffer();
+    auto* const src_buffer = input_tensor.buffer();
     auto* const dst_buffer = output_tensor.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
@@ -289,4 +290,4 @@ void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::pool::upsample::program
+}  // namespace ttnn::prim
