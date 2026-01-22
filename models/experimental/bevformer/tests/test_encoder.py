@@ -27,6 +27,9 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+# Enable/disable logging output
+ENABLE_LOGGING = True
+
 # --------------------------------------------------------------------------- #
 # Default Test Configuration                                                  #
 # --------------------------------------------------------------------------- #
@@ -222,8 +225,10 @@ def test_bevformer_encoder_forward(
     # --------------------------------------------------------------------------- #
 
     # Comprehensive comparison using enhanced test utilities
-    logger.info(f"Reference model output shape: {ref_output.shape}")
-    logger.info(f"TT model output shape: {tt_output_torch.shape}")
+    if ENABLE_LOGGING:
+        logger.info(f"Reference model output shape: {ref_output.shape}")
+    if ENABLE_LOGGING:
+        logger.info(f"TT model output shape: {tt_output_torch.shape}")
 
     if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
@@ -259,4 +264,5 @@ def test_bevformer_encoder_forward(
     # Assert that the comprehensive check passes
     assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
 
-    logger.info("✅ All BEVFormer encoder tolerance checks passed successfully!")
+    if ENABLE_LOGGING:
+        logger.info("✅ All BEVFormer encoder tolerance checks passed successfully!")
