@@ -71,7 +71,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
     address_t input_address = get_arg_val<address_t>(arg_idx++);
-    address_t device_start_id = get_arg_val<address_t>(arg_idx++);
     address_t block_start_id = get_arg_val<address_t>(arg_idx++);
 
     constexpr auto input_tensor_args = TensorAccessorArgs<12>();

@@ -159,11 +159,12 @@ void kernel_main() {
     uint32_t device_start_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t block_start_id = get_arg_val<uint32_t>(arg_idx++);
 
+    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
+
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_size = get_arg_val<uint32_t>(arg_idx++);
     uint32_t sender_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t sender_core_y = get_arg_val<uint32_t>(arg_idx++);

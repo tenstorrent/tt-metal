@@ -99,7 +99,7 @@ AllToAllAsyncGenericProgram::create_at(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
     const bool is_ring = operation_attributes.topology == ttnn::ccl::Topology::Ring;
-    const size_t num_senders_per_link = is_ring ? 2 : 1;
+    const size_t num_senders_per_link = (is_ring && operation_attributes.num_devices % 2 == 0) ? 2 : 1;
     const auto* topology_type = is_ring ? "RING" : "LINEAR";
 
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
@@ -228,19 +228,19 @@ AllToAllAsyncGenericProgram::create_at(
         sender_writer_kernel_config);
 
     CoreRange sender_box = sender_worker_core_range.bounding_box();
-    const uint32_t mcast_dest_noc_start_x = device->worker_core_from_logical_core(sender_box.start_coord).x;
-    const uint32_t mcast_dest_noc_end_x = device->worker_core_from_logical_core(sender_box.end_coord).x;
-    const uint32_t mcast_dest_noc_start_y = device->worker_core_from_logical_core(sender_box.start_coord).y;
-    const uint32_t mcast_dest_noc_end_y = device->worker_core_from_logical_core(sender_box.end_coord).y;
+    // Swap start and end coord
+    const uint32_t mcast_dest_noc_start_x = device->worker_core_from_logical_core(sender_box.end_coord).x;
+    const uint32_t mcast_dest_noc_end_x = device->worker_core_from_logical_core(sender_box.start_coord).x;
+    const uint32_t mcast_dest_noc_start_y = device->worker_core_from_logical_core(sender_box.end_coord).y;
+    const uint32_t mcast_dest_noc_end_y = device->worker_core_from_logical_core(sender_box.start_coord).y;
     const uint32_t mcast_size = sender_box.size();
 
     auto drain_sync_core = device->worker_core_from_logical_core(sender_worker_cores[0]);
 
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
-        auto& core = sender_worker_cores[core_id];
+        const auto& core = sender_worker_cores[core_id];
         std::vector<uint32_t> sender_reader_rt_args = {
             tensor_args.input_tensor.buffer()->address(),
-            (core_id % num_blocks_devices) * devices_per_core,
             (core_id / num_blocks_devices) * blocks_per_core,
         };
         for (auto d : device_offsets) {
