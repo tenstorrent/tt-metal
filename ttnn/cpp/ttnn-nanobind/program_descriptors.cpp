@@ -29,7 +29,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
-NB_MAKE_OPAQUE(std::vector<uint32_t>);
+// NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
 
