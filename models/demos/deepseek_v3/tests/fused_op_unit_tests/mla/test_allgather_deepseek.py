@@ -100,16 +100,26 @@ def run_allgather_deepseek_with_trace(
 
 
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout",
+    "op_name, num_devices, input_shape, output_shape, dim, layout",
     [
         (
+            "wq_kv_a_ag_decode",
             8,  # 8 devices in a row for TG
-            [1, 8, 32, 2112],  # Output shape after all-gather: [1, num_devices, batch, hidden]
+            [1, 1, 32, 2112],  # Input per device: [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+            [1, 8, 32, 2112],  # Output shape after all-gather: [1, num_devices, bsz, hidden]
+            1,  # Gather along dim 1
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            "wo_ag_decode",
+            8,  # 8 devices in a row for TG
+            [1, 4, 128, 128],  # Input per device: [1, bsz_local, num_heads, v_head_dim]
+            [1, 32, 128, 128],  # Output after all-gather: [1, bsz, num_heads, v_head_dim] (4*8=32)
             1,  # Gather along dim 1
             ttnn.TILE_LAYOUT,
         ),
     ],
-    ids=["deepseek_mla_wq_kv_a"],
+    ids=["wq_kv_a_ag_decode", "wo_ag_decode"],
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
@@ -127,9 +137,11 @@ def run_allgather_deepseek_with_trace(
     ],
     indirect=True,
 )
-def test_deepseek_v3_mla_wq_kv_a_all_gather_trace_mode(
+def test_deepseek_v3_mla_all_gather_trace_mode(
     mesh_device,
+    op_name,
     num_devices,
+    input_shape,
     output_shape,
     dim,
     num_links,
@@ -141,15 +153,22 @@ def test_deepseek_v3_mla_wq_kv_a_all_gather_trace_mode(
     function_level_defaults,
 ):
     """
-    Test the all-gather operation from line 1108 of mla1d.py with trace mode for performance measurement.
+    Test all-gather operations from mla1d.py decode path with trace mode for performance measurement.
 
-    This test captures a trace of the all-gather operation that follows the wq_kv_a linear projection
-    and executes it multiple times to measure performance. Uses signposts for Tracy profiling integration.
+    This test captures traces of all-gather operations and executes them multiple times to measure performance.
+    Uses signposts for Tracy profiling integration.
+
+    Operations tested:
+    1. wq_kv_a_ag_decode (line 1109): All-gather after fused wq_kv_a linear
+       - Input: [1, 1, 32, 2112] per device
+       - Output: [1, 8, 32, 2112] (gather along dim=1)
+
+    2. wo_ag_decode (line 1325): All-gather for v_out before wo linear
+       - Input: [1, 4, 128, 128] per device
+       - Output: [1, 32, 128, 128] (gather along dim=1, 4*8=32)
 
     Configuration:
-    - Input shape per device: [1, 1, 32, 2112] (per device after sharding dim=1)
     - All-gather on dim=1 (across 8 devices in a row)
-    - Output shape: [1, 8, 32, 2112] (replicated across all devices)
     - Warmup iterations: 10
     - Test iterations: 100
     - Trace mode: Enabled
@@ -183,7 +202,9 @@ def test_deepseek_v3_mla_wq_kv_a_all_gather_trace_mode(
     output_mem_config = ttnn.L1_MEMORY_CONFIG
 
     # Create golden output tensor and input
-    logger.info(f"Running all-gather test on {mesh_device.get_num_devices()} devices")
+    logger.info(f"Running all-gather test: {op_name}")
+    logger.info(f"Running on {mesh_device.get_num_devices()} devices")
+    logger.info(f"Input shape: {input_shape}")
     logger.info(f"Output shape: {output_shape}, dim: {dim}, num_devices: {num_devices}")
 
     output_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
