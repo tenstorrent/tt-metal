@@ -393,6 +393,7 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
