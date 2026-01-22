@@ -123,6 +123,7 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
     // choose cores
     const auto [clamped_num_links, worker_core_range_set, worker_cores] =
         get_cores(mesh_device, input_nd_shard_spec, num_shards, num_directions_per_link);
+    TT_FATAL(clamped_num_links <= num_links, "{} links available, but {} requested", num_links, clamped_num_links);
 
     // NOTE: writer kernel hardcoded to always use scatter_write with 2 tiles
     const uint32_t tile_granularity = 2;
@@ -646,7 +647,7 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_at(
 
 void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;

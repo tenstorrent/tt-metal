@@ -243,7 +243,7 @@ void kernel_main() {
                 noc_async_writes_flushed();
                 cb_pop_front(reduced_cb_id, tile_granularity);
 
-                // TODO: (GR) fuse with data packet after support is added by fabric team
+                // TODO: #35925 fuse with data packet after support is added by fabric team
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
                     fabric_connection,
                     unicast_sem_inc_route_id,

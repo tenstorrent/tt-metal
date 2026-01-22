@@ -16,13 +16,12 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
 
 DeepseekMoEReduceScatterDeviceOperation::program_factory_t
-DeepseekMoEReduceScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+DeepseekMoEReduceScatterDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
     return DeepseekMoEReduceScatterMeshWorkloadFactory{};
 }
 
 void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // lightweight validation for cache hits
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     for (const ttnn::Tensor& input_tensor : input_tensors) {
