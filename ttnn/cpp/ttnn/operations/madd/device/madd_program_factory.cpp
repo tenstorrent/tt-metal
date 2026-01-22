@@ -156,6 +156,45 @@ MAddProgramFactory::cached_program_t MAddProgramFactory::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
+    {  // Compute kernel (only for tiled layout)
+
+        // Create compute kernel for core group 1 if it has cores
+        if (core_group_1.num_cores() > 0) {
+            const uint32_t pages_to_process = work_per_core_group_1 * input_cb_required_pages;
+
+            const std::vector<uint32_t> compute_compile_time_args_group1 = {
+                (uint32_t)pages_to_process,
+                (uint32_t)cb_srcA_index,
+                (uint32_t)cb_srcB_index,
+                (uint32_t)cb_srcC_index,
+                (uint32_t)cb_output_index};
+
+            tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/madd/device/kernels/compute/madd_compute.cpp",
+                core_group_1,
+                tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args_group1});
+        }
+
+        // Create compute kernel for core group 2 if it has cores
+        if (core_group_2.num_cores() > 0) {
+            const uint32_t pages_to_process = work_per_core_group_2 * input_cb_required_pages;
+
+            const std::vector<uint32_t> compute_compile_time_args_group2 = {
+                (uint32_t)pages_to_process,
+                (uint32_t)cb_srcA_index,
+                (uint32_t)cb_srcB_index,
+                (uint32_t)cb_srcC_index,
+                (uint32_t)cb_output_index};
+
+            tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/madd/device/kernels/compute/madd_compute.cpp",
+                core_group_2,
+                tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args_group2});
+        }
+    }
+
     // Set up runtime arguments
     std::vector<uint32_t> reader_rt_arguments{
         a_buffer->address(),
