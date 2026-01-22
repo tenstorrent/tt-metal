@@ -110,10 +110,12 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(argidx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(argidx++);
+    const uint8_t out_ready_sem_injector_noc0_x = get_arg_val<uint32_t>(argidx++);
+    const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     size_t out_ready_sem_backward = get_arg_val<uint32_t>(argidx++);
     size_t out_ready_sem_forward = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_core_order_index = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_core_order_size = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
 
 #ifdef USE_MUX
     // Backward Mux
@@ -284,6 +286,10 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_backward, 0);
     uint64_t out_ready_sem_noc_addr_forward_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_forward, 0);
+    uint64_t out_ready_sem_injector_noc_addr_backward_in_pkt =
+        safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_backward, 0);
+    uint64_t out_ready_sem_injector_noc_addr_forward_in_pkt =
+        safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
     uint32_t slices_expected_backward = 0;
     uint32_t writes_expected_backward = 0;
@@ -437,9 +443,12 @@ void kernel_main() {
                     k_forward,
                     n_block_iter == 0,
                     use_backward ? out_ready_sem_backward_addr_ptr : out_ready_sem_forward_addr_ptr,
+                    use_backward ? out_ready_sem_injector_noc_addr_backward_in_pkt
+                                 : out_ready_sem_injector_noc_addr_forward_in_pkt,
                     use_backward ? sem_target_backward : sem_target_forward,
                     is_injector_core,
-                    use_backward ? slices_received_backward : slices_received_forward);
+                    use_backward ? slices_received_backward : slices_received_forward,
+                    in0_core_order_size);
 #endif
                 if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
@@ -488,17 +497,17 @@ void kernel_main() {
 
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / in1_core_order_size;
+                    uint32_t per_core_fabric_write_m_tiles = current_M_block_tiles / in0_core_order_size;
                     if (use_backward || (k_block_iter < (K_num_blocks / num_devices))) {
                         if (slices_received_backward <= writes_expected_backward) {
                             // If backward, send forward
                             forward_block_to_fabric_neighbor(
-                                m_tile + per_core_fabric_write_m_tiles * in1_core_order_index,
+                                m_tile + per_core_fabric_write_m_tiles * in0_core_order_index,
                                 k_block * K_block_tiles,
                                 per_core_fabric_write_m_tiles,
                                 K_block_tiles,
                                 num_tiles_to_write_per_packet,
-                                in0_start_address + (per_core_fabric_write_m_tiles * in1_core_order_index) *
+                                in0_start_address + (per_core_fabric_write_m_tiles * in0_core_order_index) *
                                                         K_block_tiles * in0_tile_size,
                                 padded_K_tiles,
                                 in0_reader,
@@ -514,12 +523,12 @@ void kernel_main() {
                         if (slices_received_forward <= writes_expected_forward) {
                             // If forward, send backward
                             forward_block_to_fabric_neighbor(
-                                m_tile + per_core_fabric_write_m_tiles * in1_core_order_index,
+                                m_tile + per_core_fabric_write_m_tiles * in0_core_order_index,
                                 k_block * K_block_tiles,
                                 per_core_fabric_write_m_tiles,
                                 K_block_tiles,
                                 num_tiles_to_write_per_packet,
-                                in0_start_address + (per_core_fabric_write_m_tiles * in1_core_order_index) *
+                                in0_start_address + (per_core_fabric_write_m_tiles * in0_core_order_index) *
                                                         K_block_tiles * in0_tile_size,
                                 padded_K_tiles,
                                 in0_reader,
