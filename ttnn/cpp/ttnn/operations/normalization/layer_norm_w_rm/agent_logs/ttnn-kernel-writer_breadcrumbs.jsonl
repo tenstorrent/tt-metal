@@ -1,0 +1,8 @@
+{"ts":"2026-01-22T14:25:43+00:00","event":"start","agent":"ttnn-kernel-writer","operation":"layer_norm_w_rm","input_files":["/localdev/mstaletovic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layer_norm_w_rm/kernel_design.md"],"predecessor_agent":"ttnn-kernel-designer"}
+{"event":"input_parse","field":"design_document","value":"kernel_design.md","confidence":"HIGH","ts":"2026-01-22T14:25:50+00:00"}
+{"event":"design_compliance","phase":"tilize_gamma_beta","directive":"USE HELPER","implementation":"compute_kernel_lib::tilize()","compliant":true,"ts":"2026-01-22T14:27:10+00:00"}
+{"event":"design_compliance","phase":"phases_1-5_8","directive":"USE HELPER","implementation":"tilize, reduce, sub, binary_op, mul","compliant":true,"ts":"2026-01-22T14:27:10+00:00"}
+{"event":"design_compliance","phase":"phases_6-7","directive":"NO HELPER","implementation":"raw DST operations for add_epsilon+rsqrt","compliant":true,"ts":"2026-01-22T14:27:10+00:00"}
+{"event":"design_compliance","phase":"phases_9-11","directive":"USE HELPER","implementation":"mul<ROW>, add<ROW>, untilize","compliant":true,"ts":"2026-01-22T14:27:10+00:00"}
+{"event":"design_compliance_summary","phases_using_helper":["tilize_gamma_beta","phases_1-5","phase_8","phases_9-10","phase_11"],"phases_using_raw_calls":["phases_6-7"],"deviations":"Changed Streaming to WaitUpfrontPopAtEnd for ROW broadcast phases 9-10 to fix multi-tile indexing","ts":"2026-01-22T14:43:12+00:00"}
+{"event":"test_results","stage":"stage7","passed":11,"failed":0,"skipped":0,"ts":"2026-01-22T14:43:12+00:00"}
