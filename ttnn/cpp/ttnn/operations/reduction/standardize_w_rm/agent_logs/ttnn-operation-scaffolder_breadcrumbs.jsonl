@@ -31,3 +31,5 @@
 {"event":"action","type":"test","command":"pytest test_stage3_registration.py","ts":"2026-01-22T12:10:23+00:00"}
 {"event":"test","stage":3,"result":"PASS","ts":"2026-01-22T12:10:38+00:00"}
 {"event":"action","type":"git_commit","message":"[ttnn-operation-scaffolder] stage 1-3: scaffold standardize_w_rm","ts":"2026-01-22T12:10:38+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"5c4bb42c64","ts":"2026-01-22T12:11:02+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[1,2,3],"final_commit":"5c4bb42c64","ts":"2026-01-22T12:11:02+00:00"}
