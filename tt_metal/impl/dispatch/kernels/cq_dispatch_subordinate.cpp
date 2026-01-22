@@ -13,7 +13,6 @@
 
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
-#include "api/socket_api.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -46,10 +45,6 @@ constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
-// Perf telemetry socket compile-time arguments
-// Perf telemetry page size - must match host-side kPerfTelemetryPageSize
-constexpr uint32_t perf_telemetry_page_size = 64;
-
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -78,17 +73,6 @@ static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
 static uint32_t num_worker_sems = 1;
-
-// Perf telemetry socket state
-static SocketSenderInterface perf_telemetry_socket;
-static bool perf_telemetry_initialized = false;
-static uint32_t perf_telemetry_pcie_xy_enc = 0;
-static uint32_t perf_telemetry_data_addr_hi = 0;
-static uint32_t perf_telemetry_host_write_ptr = 0;
-static uint32_t perf_telemetry_host_fifo_start = 0;
-static uint32_t perf_telemetry_fifo_page_aligned_size = 0;
-static uint32_t perf_telemetry_l1_data_addr = 0;
-static uint32_t perf_telemetry_l1_data_size = 0;
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
@@ -161,180 +145,6 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     return (diff << shift) > 0;
 }
 
-// Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
-volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
-
-// Initialize the perf telemetry socket interface
-// Returns: true if initialized successfully, false if config not available
-FORCE_INLINE
-bool perf_telemetry_init() {
-    if (perf_telemetry_initialized) {
-        return true;
-    }
-
-    // Read config buffer address from mailbox
-    uint32_t config_addr = perf_telemetry_mailbox->config_buffer_addr;
-    if (config_addr == 0) {
-        // Config not set by host yet
-        return false;
-    }
-
-    // Create socket interface from config buffer
-    perf_telemetry_socket = create_sender_socket_interface(config_addr);
-    set_sender_socket_page_size(perf_telemetry_socket, perf_telemetry_page_size);
-
-    // Read PCIe-specific config from the config buffer
-    // Layout: 8 words MD + 4 words ack + downstream encoding area
-    // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
-    // [15] = l1_data_buffer_address, [16] = l1_data_buffer_size
-    // [2] = data_addr_lo (write_ptr)
-    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(config_addr);
-    perf_telemetry_pcie_xy_enc = socket_config_words[12];
-    perf_telemetry_data_addr_hi = socket_config_words[13];
-    perf_telemetry_l1_data_addr = socket_config_words[15];
-    perf_telemetry_l1_data_size = socket_config_words[16];
-    uint32_t data_addr_lo = socket_config_words[2];  // Initial write_ptr = data buffer start
-
-    // Calculate page-aligned FIFO size
-    perf_telemetry_fifo_page_aligned_size =
-        perf_telemetry_socket.downstream_fifo_total_size -
-        (perf_telemetry_socket.downstream_fifo_total_size % perf_telemetry_page_size);
-
-    // Initialize write pointer tracking
-    perf_telemetry_host_write_ptr = data_addr_lo;
-    perf_telemetry_host_fifo_start = data_addr_lo;
-
-    perf_telemetry_initialized = true;
-    return true;
-}
-
-// Push the L1 data buffer contents to the host as a telemetry page
-// Mimics profiler quick_push pattern exactly but targets PCIe instead of DRAM
-// Returns: true if data was sent, false otherwise
-__attribute__((noinline)) bool perf_telemetry_push() {
-    // Try to init if not already initialized
-    if (!perf_telemetry_init()) {
-        return false;
-    }
-
-    // Check if L1 data buffer is available
-    if (perf_telemetry_l1_data_addr == 0) {
-        return false;
-    }
-
-    // ===== EXACTLY LIKE quick_push: Check linked bit on NOC_0 =====
-    auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
-    uint32_t write_buf_reg = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_CTRL);
-    if (linked_bit_is_set(write_buf_reg)) {
-        return false;
-    }
-
-    // Non-blocking check: skip if no space available in receiver's FIFO
-    volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(perf_telemetry_socket.bytes_acked_base_addr);
-    invalidate_l1_cache();
-    uint32_t bytes_free =
-        perf_telemetry_socket.downstream_fifo_total_size - (perf_telemetry_socket.bytes_sent - *bytes_acked_ptr);
-    if (bytes_free < perf_telemetry_page_size) {
-        return false;
-    }
-
-    // Build PCIe NOC address
-    uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
-                              static_cast<uint64_t>(perf_telemetry_host_write_ptr);
-    uint64_t pcie_noc_addr =
-        (static_cast<uint64_t>(perf_telemetry_pcie_xy_enc) << NOC_ADDR_COORD_SHIFT) | pcie_dest_addr;
-
-    // ===== EXACTLY LIKE quick_push: Save NOC state, write, flush, restore =====
-    // Save NOC_0 write_cmd_buf state (matching NocRegisterStateSave pattern)
-    uint32_t saved_noc_ctrl = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_CTRL);
-    uint32_t saved_noc_ret_addr_coord = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
-    uint32_t saved_noc_targ_addr_lo = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_LO);
-    uint32_t saved_noc_ret_addr_lo = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_LO);
-    uint32_t saved_noc_at_len_be = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_AT_LEN_BE);
-    uint32_t saved_noc_targ_addr_coord = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_COORDINATE);
-    uint32_t saved_noc_targ_addr_mid = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_MID);
-    uint32_t saved_noc_packet_tag = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG);
-    uint32_t saved_noc_at_data = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_AT_DATA);
-    uint32_t saved_noc_ret_addr_mid = NOC_CMD_BUF_READ_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_MID);
-
-    // Reset packet tag before push (like NocRegisterStateSave does)
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG, 0);
-
-    // ===== EXACTLY LIKE quick_push: Use profiler_noc_async_write_posted pattern =====
-    // This is ncrisc_noc_fast_write_any_len with posted=true
-    ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
-        NOC_0,
-        write_cmd_buf,
-        perf_telemetry_l1_data_addr,
-        pcie_noc_addr,
-        perf_telemetry_page_size,
-        NOC_UNICAST_WRITE_VC,
-        false,
-        false,
-        1,
-        true,
-        true);
-
-    // ===== EXACTLY LIKE quick_push: Flush posted writes =====
-    while (!ncrisc_noc_posted_writes_sent(NOC_0));
-
-    // Update host write pointer with wrap-around
-    perf_telemetry_host_write_ptr += perf_telemetry_page_size;
-    if (perf_telemetry_host_write_ptr >= perf_telemetry_host_fifo_start + perf_telemetry_fifo_page_aligned_size) {
-        perf_telemetry_host_write_ptr = perf_telemetry_host_fifo_start;
-    }
-
-    // Update socket state
-    socket_push_pages(perf_telemetry_socket, 1);
-
-    // Notify host: write bytes_sent to host's bytes_sent address
-    {
-        tt_l1_ptr uint32_t* socket_config_words =
-            reinterpret_cast<tt_l1_ptr uint32_t*>(perf_telemetry_socket.config_addr);
-        uint32_t pcie_xy_enc = socket_config_words[12];
-        uint32_t bytes_sent_addr_hi = socket_config_words[14];
-        uint32_t bytes_sent_addr_lo = socket_config_words[3];
-
-        uint64_t bytes_sent_pcie_addr =
-            (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | static_cast<uint64_t>(bytes_sent_addr_lo);
-        uint64_t notify_noc_addr = (static_cast<uint64_t>(pcie_xy_enc) << NOC_ADDR_COORD_SHIFT) | bytes_sent_pcie_addr;
-
-        // Notify with same pattern
-        ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
-            NOC_0,
-            write_cmd_buf,
-            perf_telemetry_socket.config_addr,
-            notify_noc_addr,
-            4,
-            NOC_UNICAST_WRITE_VC,
-            false,
-            false,
-            1,
-            true,
-            true);
-
-        // Flush notify
-        while (!ncrisc_noc_posted_writes_sent(NOC_0));
-    }
-
-    // ===== EXACTLY LIKE quick_push: Restore NOC state =====
-    while (!noc_cmd_buf_ready(NOC_0, write_cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_CTRL, saved_noc_ctrl);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_COORDINATE, saved_noc_ret_addr_coord);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_LO, saved_noc_targ_addr_lo);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_LO, saved_noc_ret_addr_lo);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_AT_LEN_BE, saved_noc_at_len_be);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_COORDINATE, saved_noc_targ_addr_coord);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_TARG_ADDR_MID, saved_noc_targ_addr_mid);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_PACKET_TAG, saved_noc_packet_tag);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_AT_DATA, saved_noc_at_data);
-    NOC_CMD_BUF_WRITE_REG(NOC_0, write_cmd_buf, NOC_RET_ADDR_MID, saved_noc_ret_addr_mid);
-
-    return true;
-}
-
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
@@ -346,8 +156,6 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
     WAYPOINT("WCD");
-    // Push perf telemetry to host (mimics quick_push pattern but to PCIe)
-    perf_telemetry_push();
 }
 
 template <bool flush_write = false>
