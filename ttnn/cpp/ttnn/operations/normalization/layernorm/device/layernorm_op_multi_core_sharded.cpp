@@ -1449,57 +1449,16 @@ LayerNormShardedProgramFactory::shared_variables_t LayerNormShardedProgramFactor
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormParams& /*operation_attributes*/,
+    const LayerNormParams& operation_attributes,
     const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
-    auto* const src_buffer_a = tensor_args.input.buffer();
-    const auto& b_tensor = tensor_args.residual_input_tensor;
-    const auto& gamma_tensor = tensor_args.weight;
-    const auto& beta_tensor = tensor_args.bias;
-    const auto& stats_tensor = tensor_args.stats;
-    auto* const dst_buffer = tensor_return_value.buffer();
-
-    const auto& capture = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    UpdateDynamicCircularBufferAddress(program, capture.cb_in0, *src_buffer_a);
-
-    if (b_tensor.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, capture.cb_in1, *b_tensor.value().buffer());
-        if (capture.is_pre_all_gather) {
-            UpdateDynamicCircularBufferAddress(program, capture.cb_add_out, *src_buffer_a);
-        }
-    }
-    if (stats_tensor.has_value()) {
-        UpdateDynamicCircularBufferAddress(program, capture.cb_stats, *stats_tensor.value().buffer());
-    }
-
-    UpdateDynamicCircularBufferAddress(program, capture.cb_output, *dst_buffer);
-
-    auto& writer_sender_args_by_core = GetRuntimeArgs(program, capture.writer_mcast_sender_kernels_id);
-    auto& writer_receiver_args_by_core = capture.num_none_all_to_all_workers > 0
-                                             ? GetRuntimeArgs(program, capture.writer_mcast_receiver_kernels_id)
-                                             : writer_sender_args_by_core;
-
-    const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
-    const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;
-
-    for (uint32_t i = 0; i < capture.cores.size(); ++i) {
-        const CoreCoord& core = capture.cores[i];
-
-        const auto writer_kernel_id = capture.writer_kernel_ids.at(i);
-
-        if (writer_kernel_id == capture.writer_mcast_sender_kernels_id) {
-            auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-            runtime_args[3] = gamma_address;
-            runtime_args[4] = beta_address;
-
-        } else if (writer_kernel_id == capture.writer_mcast_receiver_kernels_id) {
-            auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-            runtime_args[3] = gamma_address;
-            runtime_args[4] = beta_address;
-        }
-    }
+    // Delegate to the separated version (Program& + shared_variables_t&)
+    override_runtime_arguments(
+        cached_program.program,
+        cached_program.shared_variables,
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
 }
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
