@@ -145,6 +145,12 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
+        # Structured output support
+        self.bitmask = None
+        self.bitmask_arange = ttnn.arange(
+            start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
@@ -446,6 +452,73 @@ class Transformer(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
+    def unpack_bitmask(self, bitmask):
+        """Unpack compressed bitmask to per-token mask tensor."""
+        import math
+
+        batch_dim, vocab_dim = bitmask.shape
+        bitmask_to_broadcast = bitmask.reshape((batch_dim, vocab_dim, 1))
+        broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        unpacked_bitmask = broadcast_unpacked.reshape((batch_dim, -1))
+        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT)
+        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32)
+
+        # Use model's padded vocab size (same logic as LM head)
+        unpadded_vocab_dim = self.vocab_size
+        if self.args.padded_vocab_size is not None:
+            padded_vocab_dim = self.args.padded_vocab_size
+        else:
+            padded_vocab_dim = math.ceil(unpadded_vocab_dim / 32) * 32
+
+        padding_size = padded_vocab_dim - unpadded_vocab_dim
+        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0)
+        result = ttnn.where(full_mask, 0, float("-inf"))
+
+        # Pad batch dimension to match model's tile_padded_batch_rows
+        target_batch_size = self.args.tile_padded_batch_rows
+        if batch_dim < target_batch_size:
+            batch_padding = target_batch_size - batch_dim
+            result = ttnn.pad(result, [(0, batch_padding), (0, 0)], 0.0)
+
+        return result
+
+    def bitmask_to_device(self, bitmask):
+        """Transfer bitmask from host to device"""
+        bitmask_tt = ttnn.from_torch(
+            bitmask,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        if self.bitmask is not None:
+            copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=[self.bitmask])
+        else:
+            self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)[0]
+
+    def apply_bitmask_to_logits(self, tt_logits):
+        """Apply bitmask to logits tensor in-place. Must be called OUTSIDE of traces."""
+        if self.bitmask is None:
+            return tt_logits
+        bitmask_unpacked = self.unpack_bitmask(self.bitmask)
+
+        # Reshape bitmask from 2D (batch, vocab) to 4D (1, 1, batch, vocab) to match logits shape
+        bitmask_unpacked = ttnn.reshape(bitmask_unpacked, (1, 1, bitmask_unpacked.shape[0], bitmask_unpacked.shape[1]))
+
+        # Ensure dtype matches logits (bitmask is float32, logits may be bfloat8/16)
+        if bitmask_unpacked.dtype != tt_logits.dtype:
+            print(f"Typecasting bitmask_unpacked from {bitmask_unpacked.dtype} to {tt_logits.dtype}")
+            bitmask_unpacked = ttnn.typecast(bitmask_unpacked, tt_logits.dtype)
+
+        # Ensure memory config matches for in-place operation
+        bitmask_unpacked = ttnn.to_memory_config(bitmask_unpacked, tt_logits.memory_config())
+
+        # Add in-place to preserve the tensor identity for trace compatibility
+        ttnn.add(tt_logits, bitmask_unpacked, output_tensor=tt_logits)
+        bitmask_unpacked.deallocate(True)
+        return tt_logits
+
     def ttnn_decode_forward(
         self,
         x,
@@ -475,8 +548,10 @@ class Transformer(LightweightModule):
 
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+
             if capture_sampling_trace:
                 return tt_logits
+
             tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
@@ -505,6 +580,8 @@ class Transformer(LightweightModule):
             )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+        # Note: For host sampling, bitmask is NOT applied here - the host handles it
 
         if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations

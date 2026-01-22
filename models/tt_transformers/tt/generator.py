@@ -539,6 +539,7 @@ class Generator:
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        bitmask=None,
     ):
         mode_switched = False
         if self.mode != "decode":
@@ -547,6 +548,11 @@ class Generator:
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
+
+        # Transfer bitmask to device for structured outputs
+        if bitmask is not None:
+            for model in self.model:
+                model.bitmask_to_device(bitmask)
 
         B = tokens.shape[0]
 
@@ -642,15 +648,39 @@ class Generator:
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
+            # For device sampling, always capture logits only (not tokens) so we can apply bitmask
+            capture_logits_only = sampling_on_device and self.model[i].sampling is not None
+            result = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 sampling_on_device=sampling_on_device,
+                capture_sampling_trace=capture_logits_only,
             )
-            tt_output.append((tt_logits_i, tt_log_probs_i))
+            tt_output.append(result)
+
+        # Apply bitmask and sample for device sampling (same as trace path)
+        if sampling_on_device:
+            for i in range(self.data_parallel):
+                # Apply bitmask to logits
+                tt_output[i] = self.model[i].apply_bitmask_to_logits(tt_output[i])
+                # Sample from logits
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is not None:
+                    tt_toks, tt_log_probs = sampling_module.sample(
+                        logits=tt_output[i],
+                        tt_out_tok=tt_tokens[i],
+                        enable_trace=False,
+                    )
+                    tt_output[i] = (tt_toks, tt_log_probs)
+                else:
+                    # Shouldn't happen if sampling_on_device is True, but handle gracefully
+                    tt_output[i] = (tt_output[i], None)
+        else:
+            # Host sampling: output is already (logits, None) tuple
+            pass
 
         return tt_output
 
@@ -753,7 +783,16 @@ class Generator:
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
+
+        # Apply bitmask to logits AFTER trace execution but BEFORE sampling
+        # This avoids baking the bitmask conditional into the trace
         if sampling_on_device:
+            # Apply bitmask to logits before sampling
+            for i in range(self.data_parallel):
+                outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
+                ttnn.synchronize_device(self.model_args[i].mesh_device)
+                print(f"Synchronized device after applying bitmask to logits for model {i}")
+
             new_outputs = []
             for i in range(self.data_parallel):
                 sampling_module = getattr(self.model[i], "sampling", None)
