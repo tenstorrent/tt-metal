@@ -82,9 +82,10 @@ struct profiler_msg_t {
 // Perf telemetry configuration for D2H socket streaming
 // Placed before profiler_msg_t in mailboxes_t, using space freed from profiler control_vector reduction
 struct perf_telemetry_config_t {
-    volatile uint32_t config_buffer_addr;  // Address of D2H socket config buffer in L1
-    volatile uint32_t telemtery_state;     // Signal telemetry state
-    volatile uint32_t reserved[2];         // Reserved for future use, maintains 16-byte size
+    volatile uint32_t config_buffer_addr;      // Address of D2H socket config buffer in L1
+    volatile uint32_t telemtery_state;         // Signal telemetry state (0=run, 1=terminate)
+    volatile uint32_t telemetry_core_noc_xy;   // NOC XY encoding of telemetry core (for remote terminate)
+    volatile uint32_t telemetry_mailbox_addr;  // Mailbox address on telemetry core (for remote terminate)
 };
 
 // Messages for host to tell brisc to go

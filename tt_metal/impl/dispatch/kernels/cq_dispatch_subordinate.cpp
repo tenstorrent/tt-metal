@@ -378,7 +378,14 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
+                // Signal local TRISC to terminate
                 perf_telemetry_mailbox->telemtery_state = 1;
+                // Signal remote telemetry core to terminate (if configured)
+                if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
+                    uint64_t telemetry_terminate_addr = get_noc_addr_helper(
+                        perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
+                    dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, 1, my_noc_index);
+                }
                 done = true;
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);

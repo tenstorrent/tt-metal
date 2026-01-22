@@ -1303,6 +1303,59 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         config_buffer_addr,
         perf_telemetry_mailbox_addr);
 
+    // Write telemetry core info to dispatch_s core's mailbox so it can signal termination
+    // Get dispatch_s core for command queue 0, channel 0
+    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+    if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
+        const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
+        CoreCoord dispatch_s_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
+
+        // Get telemetry core's virtual NOC coordinates
+        CoreCoord telemetry_virtual = ref_device->virtual_core_from_logical_core(telemetry_core, CoreType::WORKER);
+        uint32_t telemetry_noc_xy = hal.noc_xy_encoding(telemetry_virtual.x, telemetry_virtual.y);
+
+        // Calculate offsets for telemetry_core_noc_xy and telemetry_mailbox_addr fields
+        uint32_t telemetry_core_noc_xy_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
+            dev_msgs::perf_telemetry_config_t::Field::telemetry_core_noc_xy);
+        uint32_t telemetry_mailbox_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
+            dev_msgs::perf_telemetry_config_t::Field::telemetry_mailbox_addr);
+
+        // Calculate mailbox address for telemtery_state field on telemetry core
+        uint32_t telemtery_state_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
+            dev_msgs::perf_telemetry_config_t::Field::telemtery_state);
+        uint32_t telemetry_core_state_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset +
+            telemtery_state_offset;
+
+        // Write to dispatch_s core's mailbox
+        uint32_t dispatch_s_mailbox_base =
+            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset;
+
+        std::vector<uint32_t> noc_xy_data = {telemetry_noc_xy};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            ref_device,
+            dispatch_s_core,
+            dispatch_s_mailbox_base + telemetry_core_noc_xy_offset,
+            noc_xy_data,
+            CoreType::WORKER);
+
+        std::vector<uint32_t> mailbox_addr_data = {telemetry_core_state_addr};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            ref_device,
+            dispatch_s_core,
+            dispatch_s_mailbox_base + telemetry_mailbox_addr_offset,
+            mailbox_addr_data,
+            CoreType::WORKER);
+
+        log_info(
+            tt::LogMetal,
+            "Wrote telemetry core info (noc_xy=0x{:x}, mailbox_addr=0x{:x}) to dispatch_s core ({}, {})",
+            telemetry_noc_xy,
+            telemetry_core_state_addr,
+            dispatch_s_core.x,
+            dispatch_s_core.y);
+    }
+
     // Create and manually slow dispatch telemetry kernel program
     // Using slow dispatch to bypass the check that prevents kernels on dispatch cores
     {
