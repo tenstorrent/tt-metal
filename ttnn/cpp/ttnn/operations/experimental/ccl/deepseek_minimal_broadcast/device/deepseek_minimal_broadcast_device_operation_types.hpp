@@ -17,6 +17,7 @@ struct DeepseekMinimalBroadcastParams {
     MemoryConfig output_mem_config;
     tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
+    std::optional<uint32_t> secondary_cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 };
 

@@ -14,6 +14,7 @@ struct DeepseekMinimalBroadcastProgramFactory {
         tt::tt_metal::GlobalSemaphore semaphore;
         tt::tt_metal::GlobalSemaphore barrier_semaphore;
         uint32_t ring_index = 0;
+        bool is_secondary_sender = false;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

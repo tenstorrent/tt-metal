@@ -20,6 +20,9 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
 constexpr bool is_sender = get_compile_time_arg_val(3);
 constexpr uint32_t core_noc_x = get_compile_time_arg_val(4);
 constexpr uint32_t core_noc_y = get_compile_time_arg_val(5);
+// Dual-axis broadcast args
+constexpr bool is_secondary_sender = get_compile_time_arg_val(6);
+constexpr bool is_active_broadcaster = get_compile_time_arg_val(7);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -29,12 +32,28 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    DPRINT << "start of broadcast_tile_reader_batch1" << ENDL();
+    DPRINT << "CT args:\n";
+    DPRINT << "cb0_id: " << (uint32_t)cb0_id << ENDL();
+    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << ENDL();
+    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << ENDL();
+    DPRINT << "is_sender: " << (uint32_t)is_sender << ENDL();
+    DPRINT << "core noc x: " << (uint32_t)core_noc_x << ENDL();
+    DPRINT << "core noc y: " << (uint32_t)core_noc_y << ENDL();
+    DPRINT << "is_secondary_sender: " << (uint32_t)is_secondary_sender << ENDL();
+    DPRINT << "is_active_broadcaster: " << (uint32_t)is_active_broadcaster << ENDL();
     if (is_sender) {
         size_t arg_idx = 0;
         // Load the input tensor spec
         uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
         uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
         uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+
+        DPRINT << "RT args\n";
+        DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << ENDL();
+        DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << ENDL();
+        DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << ENDL();
+
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id_start, packet_size_in_pages);
         cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr = get_write_ptr(cb0_id);
@@ -44,4 +63,5 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb0_id, packet_size_in_pages);
     }
+    DPRINT << "end of broadcast_tile_reader_batch1" << ENDL();
 }

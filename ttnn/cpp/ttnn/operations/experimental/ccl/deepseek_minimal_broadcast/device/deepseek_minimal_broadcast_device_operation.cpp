@@ -65,12 +65,12 @@ void DeepseekMinimalBroadcastDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be in tile size (1,32). Got tile size: ({}, {})",
         tile_height,
         tile_width);
-    // input shape should be (1,1536)
+    // input shape should be (1,7168)
     // To do add shape (1,7168) once fabric supports larger packets
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1536,
-        "Input tensor shape must be (1,1536). Got shape: ({}, {})",
+        input_shape[0] == 1 && input_shape[1] == 7168,
+        "Input tensor shape must be (1,7168). Got shape: ({}, {})",
         input_shape[0],
         input_shape[1]);
 }
@@ -109,6 +109,7 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
+        operation_attributes.secondary_cluster_axis,
         subdevice_core_range_set,
         tensor_args,
         program_factory.index());
@@ -125,7 +126,8 @@ Tensor deepseek_minimal_broadcast(
     const std::optional<MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> secondary_cluster_axis) {
     using OperationType = ttnn::experimental::prim::DeepseekMinimalBroadcastDeviceOperation;
 
     const auto& tensor_topology = input_tensor.tensor_topology();
@@ -158,6 +160,7 @@ Tensor deepseek_minimal_broadcast(
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
         .topology = ccl_topology,
         .cluster_axis = cluster_axis,
+        .secondary_cluster_axis = secondary_cluster_axis,
         .sub_device_id = sub_device_id};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
 
