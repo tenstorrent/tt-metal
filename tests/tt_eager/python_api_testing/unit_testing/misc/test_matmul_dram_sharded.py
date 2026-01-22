@@ -7,6 +7,7 @@ from loguru import logger
 from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
+    is_watcher_enabled,
     skip_for_wormhole_b0,
     skip_for_blackhole,
 )
@@ -250,6 +251,15 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     out_dtype,
     function_level_defaults,
 ):
+    if (
+        is_watcher_enabled()
+        and M == 32
+        and K == 8192
+        and N == 1280
+        and not has_bias
+        and fidelity == ttnn.MathFidelity.HiFi2
+    ):
+        pytest.skip("Test is not passing with watcher enabled github issue #36314")
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
             device,
