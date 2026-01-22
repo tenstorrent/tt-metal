@@ -13,39 +13,86 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("batch_size", [32])
-@pytest.mark.parametrize("hidden_size", [896])
-@pytest.mark.parametrize("output_size", [2112])
+@pytest.mark.parametrize(
+    "op_name, input_shape, weight_shape, input_memory_config, output_memory_config",
+    [
+        (
+            "mla_linear_wq_kv_a",
+            [1, 1, 32, 896],  # Input shape
+            [896, 2112],  # Weight shape: hidden_size x (q_lora_rank + kv_lora_rank + qk_rope_head_dim)
+            "width_sharded_7x4",  # WIDTH_SHARDED 7x4 grid, shard [32, 32]
+            "width_sharded",  # Output: WIDTH_SHARDED
+        ),
+        (
+            "mla_linear_wq_b",
+            [1, 1, 32, 1536],  # Input shape (q_lora_rank)
+            [1536, 3072],  # Weight shape: q_lora_rank x (num_heads * qk_head_dim) = 1536 x 3072
+            "width_sharded_8x2",  # WIDTH_SHARDED 8x2 grid, shard [32, 96]
+            "interleaved",  # Output: L1 interleaved
+        ),
+        (
+            "mla_linear_wkv_b1",
+            [1, 16, 32, 192],  # Input shape: [1, num_heads_local, bsz, qk_nope_head_dim]
+            [192, 512],  # Weight shape: qk_nope_head_dim x kv_lora_rank = 192 x 512
+            "interleaved",  # L1 interleaved
+            "interleaved",  # Output: L1 interleaved
+        ),
+        (
+            "mla_linear_wkv_b2",
+            [1, 128, 4, 512],  # Input shape: [1, num_heads, bsz_per_device, kv_lora_rank]
+            [512, 128],  # Weight shape: kv_lora_rank x v_head_dim = 512 x 128
+            "interleaved",  # L1 interleaved
+            "interleaved",  # Output: L1 interleaved
+        ),
+        (
+            "mla_linear_wo",
+            [1, 1, 32, 16384],  # Input shape: [1, 1, bsz, num_heads * v_head_dim]
+            [16384, 896],  # Weight shape: (num_heads * v_head_dim) x hidden_size = 16384 x 896
+            "interleaved",  # L1 interleaved
+            "width_sharded_7x4",  # Output: WIDTH_SHARDED 7x4 grid, shard [32, 32]
+        ),
+    ],
+    ids=["wq_kv_a", "wq_b", "wkv_b1", "wkv_b2", "wo"],
+)
 @pytest.mark.parametrize("warmup_iters", [10])
 @pytest.mark.parametrize("num_iters", [100])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "trace_region_size": 550912,
+            "trace_region_size": 694272,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
     indirect=True,
 )
-def test_deepseek_v3_mla_wq_kv_a_linear_trace_mode(
-    device, batch_size, hidden_size, output_size, warmup_iters, num_iters
+def test_deepseek_v3_mla_linear_trace_mode(
+    device,
+    batch_size,
+    op_name,
+    input_shape,
+    weight_shape,
+    input_memory_config,
+    output_memory_config,
+    warmup_iters,
+    num_iters,
 ):
     """
-    Test the fused wq_kv_a linear operation with trace mode for performance measurement.
+    Test all decode linear operations from mla1d.py with trace mode.
 
-    This test captures a trace of the linear operation and executes it multiple times
-    to measure performance. Uses signposts for Tracy profiling integration.
+    Linear operations tested:
+    1. wq_kv_a (line 1104): [1, 1, 32, 896] x [896, 2112] - WIDTH_SHARDED input/output
+    2. wq_b (line 1225): [1, 1, 32, 1536] x [1536, 3072] - WIDTH_SHARDED input, interleaved output
+    3. wkv_b1 (line 1240): [1, 16, 32, 192] x [192, 512] - Interleaved input/output
+    4. wkv_b2 (line 1306): [1, 128, 4, 512] x [512, 128] - Interleaved input/output
+    5. wo (line 1334): [1, 1, 32, 16384] x [16384, 896] - Interleaved input, WIDTH_SHARDED output
 
     Configuration:
     - Warmup iterations: 10
     - Test iterations: 100
     - Trace mode: Enabled
-    - Width sharded memory configuration
     """
     torch.manual_seed(0)
-
-    input_shape = [1, 1, batch_size, hidden_size]
-    weight_shape = [hidden_size, output_size]
 
     # Create random tensors for golden reference
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -69,32 +116,43 @@ def test_deepseek_v3_mla_wq_kv_a_linear_trace_mode(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Setup WIDTH_SHARDED memory config
-    shard_height = batch_size
-    shard_width = hidden_size // 28  # 896 / 28 = 32
+    # Setup input memory config based on specification
+    if input_memory_config == "width_sharded_7x4":
+        # For wq_kv_a: WIDTH_SHARDED 7x4 grid, shard [32, 32]
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))})
+        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, mem_config)
+    elif input_memory_config == "width_sharded_8x2":
+        # For wq_b: WIDTH_SHARDED 8x2 grid, shard [32, 96]
+        grid_size = device.compute_with_storage_grid_size()
+        shard_grid = ttnn.num_cores_to_corerangeset(16, grid_size, row_wise=True)
+        shard_spec = ttnn.ShardSpec(shard_grid, [32, 96], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, mem_config)
+    # else: interleaved - already in L1_MEMORY_CONFIG
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(3, 6),
-            )
-        }
-    )
-
-    shard_shape = [shard_height, shard_width]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    width_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    # Convert input to width sharded
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, width_sharded_mem_config)
+    # Setup output memory config
+    if output_memory_config == "width_sharded":
+        output_mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    elif output_memory_config == "width_sharded_7x4":
+        # For wo: WIDTH_SHARDED 7x4 grid, shard [32, 32]
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))})
+        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    else:  # interleaved
+        output_mem_config = ttnn.L1_MEMORY_CONFIG
 
     # Compile run
-    logger.info("Compiling linear operation")
+    logger.info(f"Compiling linear operation: {op_name}")
+    logger.info(f"  Input shape: {input_shape}")
+    logger.info(f"  Weight shape: {weight_shape}")
+    logger.info(f"  Output shape: {list(torch_output_tensor.shape)}")
+
     tt_output_tensor = ttnn.linear(
         tt_input_tensor,
         tt_weight_tensor,
-        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        memory_config=output_mem_config,
         dtype=ttnn.bfloat16,
     )
     ttnn.synchronize_device(device)
@@ -106,7 +164,7 @@ def test_deepseek_v3_mla_wq_kv_a_linear_trace_mode(
         tt_output_tensor = ttnn.linear(
             tt_input_tensor,
             tt_weight_tensor,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=output_mem_config,
             dtype=ttnn.bfloat16,
         )
     ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
@@ -119,7 +177,7 @@ def test_deepseek_v3_mla_wq_kv_a_linear_trace_mode(
         tt_output_tensor = ttnn.linear(
             tt_input_tensor,
             tt_weight_tensor,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=output_mem_config,
             dtype=ttnn.bfloat16,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
@@ -160,4 +218,4 @@ def test_deepseek_v3_mla_wq_kv_a_linear_trace_mode(
     assert torch_output_from_tt.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.99)
 
-    logger.info("✓ Trace mode test passed with correct output")
+    logger.info(f"✓ Trace mode {op_name} test passed with correct output")
