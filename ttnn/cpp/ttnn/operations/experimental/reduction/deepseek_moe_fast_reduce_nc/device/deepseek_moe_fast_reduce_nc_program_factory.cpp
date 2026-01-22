@@ -13,16 +13,16 @@
 
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
 
-namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
-
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+namespace ttnn::experimental::prim {
+
 DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMoEFastReduceNCParams& operation_attributes,
+    const DeepseekMoEFastReduceNCInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     // hardcoded constants
     const uint32_t num_split_tensors = 8;
 
@@ -275,9 +275,9 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
 
 void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMoEFastReduceNCParams&,
+    const DeepseekMoEFastReduceNCInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
 
@@ -307,4 +307,4 @@ void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail
+}  // namespace ttnn::experimental::prim

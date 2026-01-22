@@ -20,13 +20,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-using ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::
-    DeepseekMoEReduceScatterProgramArtifacts;
+using ttnn::experimental::prim::DeepseekMoEReduceScatterProgramArtifacts;
 
-namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
+namespace {
 
 CoreCoord choose_additional_core(
-    MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected, uint32_t clamped_num_links) {
+    ttnn::MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected, uint32_t clamped_num_links) {
     /*
      * - optimal core to use as the additional core (when necessary), so that each used link has both a forward and
      * backward worker
@@ -67,7 +66,7 @@ CoreCoord choose_additional_core(
 }
 
 std::tuple<uint32_t, CoreRangeSet, std::vector<CoreCoord>> get_cores(
-    MeshDevice* mesh_device,
+    ttnn::MeshDevice* mesh_device,
     const NdShardSpec& input_nd_shard_spec,
     uint32_t num_shards,
     uint32_t num_directions_per_link) {
@@ -100,8 +99,8 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
     const std::vector<ttnn::Tensor>& intermediate_slice_tensors,
     const ttnn::Tensor& output_tensor,
     const ttnn::MeshCoordinate& sender_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
+    const std::optional<ttnn::MeshCoordinate>& forward_coord,
+    const std::optional<ttnn::MeshCoordinate>& backward_coord,
     uint32_t ring_index,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore,
@@ -561,13 +560,16 @@ void deepseek_moe_reduce_scatter_helper_override_runtime_arguments(
     }
 }
 
-// Mesh Workload Factory implementations
+}  // namespace
+
+namespace ttnn::experimental::prim {
+
 DeepseekMoEReduceScatterMeshWorkloadFactory::cached_mesh_workload_t
 DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMoEReduceScatterParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMoEReduceScatterInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -598,10 +600,10 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
 
 ttnn::device_operation::CachedProgram<DeepseekMoEReduceScatterMeshWorkloadFactory::shared_variables_t>
 DeepseekMoEReduceScatterMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMoEReduceScatterParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const DeepseekMoEReduceScatterInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& op_semaphore,
     const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
@@ -611,10 +613,12 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_at(
 
     std::optional<uint32_t> cluster_axis = operation_attributes.cluster_axis;
 
-    const std::optional<MeshCoordinate> forward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensors.at(0), mesh_coordinate, 1, tt::tt_fabric::Topology::Ring, cluster_axis);
-    const std::optional<MeshCoordinate> backward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        input_tensors.at(0), mesh_coordinate, -1, tt::tt_fabric::Topology::Ring, cluster_axis);
+    const std::optional<ttnn::MeshCoordinate> forward_coordinate =
+        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensors.at(0), mesh_coordinate, 1, tt::tt_fabric::Topology::Ring, cluster_axis);
+    const std::optional<ttnn::MeshCoordinate> backward_coordinate =
+        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensors.at(0), mesh_coordinate, -1, tt::tt_fabric::Topology::Ring, cluster_axis);
     TT_FATAL(
         forward_coordinate.has_value() && backward_coordinate.has_value(),
         "DEBUG: forward_coord or backward_coord is null");
@@ -647,9 +651,9 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_at(
 
 void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMoEReduceScatterParams&,
+    const DeepseekMoEReduceScatterInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     const std::vector<ttnn::Tensor> intermediate_slice_tensors(
         tensor_return_value.begin(), tensor_return_value.end() - 1);  // first 8 are intermediate tensors
@@ -675,4 +679,4 @@ void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail
+}  // namespace ttnn::experimental::prim

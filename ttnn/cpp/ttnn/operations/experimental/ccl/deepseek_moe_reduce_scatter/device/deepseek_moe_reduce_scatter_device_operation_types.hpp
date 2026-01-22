@@ -12,7 +12,7 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
+namespace ttnn::experimental::prim {
 
 struct DeepseekMoEReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
@@ -24,13 +24,12 @@ struct DeepseekMoEReduceScatterProgramArtifacts {
     std::vector<tt::tt_metal::CBHandle> intermediate_cb_handles;
 };
 
-struct operation_attributes_t {
-    tt::tt_metal::MemoryConfig output_memory_config;
+struct DeepseekMoEReduceScatterParams {
+    ttnn::MemoryConfig output_memory_config;
     uint32_t dim;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;
 
-    // Add attributes method for reflection
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
@@ -42,11 +41,8 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct DeepseekMoEReduceScatterInputs {
     std::vector<ttnn::Tensor> input_tensors;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
-
-}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail
+}  // namespace ttnn::experimental::prim

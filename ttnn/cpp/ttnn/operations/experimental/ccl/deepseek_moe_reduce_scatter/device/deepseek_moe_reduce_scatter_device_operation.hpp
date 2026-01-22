@@ -15,13 +15,13 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail {
+namespace ttnn::experimental::prim {
 
 struct DeepseekMoEReduceScatterDeviceOperation {
-    using operation_attributes_t = deepseek_moe_reduce_scatter::detail::operation_attributes_t;
-    using tensor_args_t = deepseek_moe_reduce_scatter::detail::tensor_args_t;
-    using spec_return_value_t = deepseek_moe_reduce_scatter::detail::spec_return_value_t;
-    using tensor_return_value_t = deepseek_moe_reduce_scatter::detail::tensor_return_value_t;
+    using operation_attributes_t = DeepseekMoEReduceScatterParams;
+    using tensor_args_t = DeepseekMoEReduceScatterInputs;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<DeepseekMoEReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -37,17 +37,15 @@ struct DeepseekMoEReduceScatterDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::deepseek_moe_reduce_scatter::detail::DeepseekMoEReduceScatterDeviceOperation::
-    tensor_return_value_t
-    deepseek_moe_reduce_scatter(
-        const std::vector<ttnn::Tensor>& input_tensors,
-        const tt::tt_metal::MemoryConfig& output_memory_config,
-        uint32_t dim,
-        uint32_t num_links,
-        std::optional<uint32_t> cluster_axis);
+std::vector<Tensor> deepseek_moe_reduce_scatter(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const ttnn::MemoryConfig& output_memory_config,
+    uint32_t dim,
+    uint32_t num_links,
+    std::optional<uint32_t> cluster_axis);
 
 }  // namespace ttnn::prim

@@ -14,13 +14,13 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail {
+namespace ttnn::experimental::prim {
 
 struct DeepseekMoEFastReduceNCDeviceOperation {
-    using operation_attributes_t = deepseek_moe_fast_reduce_nc::detail::operation_attributes_t;
-    using tensor_args_t = deepseek_moe_fast_reduce_nc::detail::tensor_args_t;
-    using spec_return_value_t = deepseek_moe_fast_reduce_nc::detail::spec_return_value_t;
-    using tensor_return_value_t = deepseek_moe_fast_reduce_nc::detail::tensor_return_value_t;
+    using operation_attributes_t = DeepseekMoEFastReduceNCParams;
+    using tensor_args_t = DeepseekMoEFastReduceNCInputs;
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<DeepseekMoEFastReduceNCProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -32,16 +32,14 @@ struct DeepseekMoEFastReduceNCDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::reduction::deepseek_moe_fast_reduce_nc::detail::DeepseekMoEFastReduceNCDeviceOperation::
-    tensor_return_value_t
-    deepseek_moe_fast_reduce_nc(
-        const ttnn::Tensor& input_tensor,
-        uint32_t dim,
-        const ttnn::MemoryConfig& output_memory_config,
-        const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
+std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
+    const ttnn::Tensor& input_tensor,
+    uint32_t dim,
+    const ttnn::MemoryConfig& output_memory_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::prim
