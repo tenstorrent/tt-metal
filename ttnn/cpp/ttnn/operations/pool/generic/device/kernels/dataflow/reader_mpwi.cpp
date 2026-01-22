@@ -561,10 +561,6 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-<<<<<<< HEAD
-                return_indices,
-=======
->>>>>>> 93c1c0f3ef (#0: squash)
                 zero_pages,
                 out_cb_id,
                 out_idx_cb_id,
