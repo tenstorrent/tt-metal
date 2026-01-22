@@ -70,6 +70,7 @@ public:
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+    bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
@@ -210,6 +211,9 @@ private:
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
+
+    // Mutex to protect reinitialization operations (switching between mock and real hardware)
+    std::mutex reinitialization_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
