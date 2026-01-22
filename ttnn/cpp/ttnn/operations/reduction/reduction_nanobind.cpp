@@ -23,6 +23,7 @@
 #include "ttnn/operations/reduction/reduce_mean_w_rm/reduce_mean_w_rm_nanobind.hpp"
 #include "ttnn/operations/reduction/centralize_w_rm/centralize_w_rm_nanobind.hpp"
 #include "ttnn/operations/reduction/variance_w_rm/variance_w_rm_nanobind.hpp"
+#include "ttnn/operations/reduction/standardize_w_rm/standardize_w_rm_nanobind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -50,6 +51,7 @@ void py_module(nb::module_& mod) {
     ::ttnn::operations::reduce_mean_w_rm::bind_reduce_mean_w_rm_operation(mod);
     ::ttnn::operations::centralize_w_rm::bind_centralize_w_rm_operation(mod);
     ::ttnn::operations::variance_w_rm::bind_variance_w_rm_operation(mod);
+    ::ttnn::operations::standardize_w_rm::bind_standardize_w_rm_operation(mod);
 }
 
 }  // namespace ttnn::operations::reduction

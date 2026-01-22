@@ -1,0 +1,70 @@
+{
+  "operation_name": "standardize_w_rm",
+  "operation_name_pascal": "StandardizeWRm",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::standardize_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/standardize_w_rm",
+  "parameters": [
+    {
+      "name": "epsilon",
+      "cpp_type": "float",
+      "py_type": "float",
+      "default": "1e-5",
+      "description": "Small constant for numerical stability (must be > 0)"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 2,
+      "required_dtypes": ["DataType::BFLOAT16", "DataType::FLOAT32"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() >= 2",
+      "error_message": "Input tensor must be at least 2D, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input tensor must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input tensor must have INTERLEAVED memory layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input tensor must be on device",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32",
+      "error_message": "Unsupported dtype {}",
+      "error_args": ["input.dtype()"]
+    },
+    {
+      "condition": "input.logical_shape()[-1] > 0",
+      "error_message": "Width must be positive, got {}",
+      "error_args": ["input.logical_shape()[-1]"]
+    },
+    {
+      "condition": "epsilon > 0.0f",
+      "error_message": "Epsilon must be positive, got {}",
+      "error_args": ["epsilon"]
+    }
+  ],
+  "output_shape": {
+    "formula": "same_as_input",
+    "cpp_code": "ttnn::Shape output_shape = input.logical_shape();",
+    "cpp_code_padded": "ttnn::SmallVector<uint32_t> pdims(input.padded_shape().cbegin(), input.padded_shape().cend());\n    pdims[pdims.size() - 2] = ((pdims[pdims.size() - 2] + 31) / 32) * 32;\n    pdims[pdims.size() - 1] = ((pdims[pdims.size() - 1] + 31) / 32) * 32;\n    ttnn::Shape output_padded(pdims);"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Performs row-wise standardization (z-score normalization) on row-major interleaved tensors.\n\nFor each row of width W, computes:\n1. Mean across the row\n2. Centralization (subtract mean)\n3. Variance (mean of squared deviations)\n4. Reciprocal square root of (variance + epsilon)\n5. Standardized output = centralized * rsqrt(variance + epsilon)\n\nArgs:\n    input_tensor: Input tensor in ROW_MAJOR layout (at least 2D)\n    epsilon: Small constant for numerical stability (default: 1e-5)\n    memory_config: Output memory configuration\n\nReturns:\n    Tensor with same shape as input, standardized along last dimension"
+}
