@@ -1095,7 +1095,7 @@ public:
         while (remaining_bytes > 0) {
             uint32_t length = std::min(
                 tt::align(
-                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, max_read_size - 1)),
+                    std::max(MIN_READ_SIZE, payload_generator_->get_rand<uint32_t>(0, remaining_bytes)),
                     dram_alignment),
                 remaining_bytes);
 
