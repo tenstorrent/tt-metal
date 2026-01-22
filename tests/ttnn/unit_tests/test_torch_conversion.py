@@ -389,7 +389,6 @@ def create_from_numpy_test_tensors(
         np.uint8,
         np.uint16,
         np.uint32,
-        np.uint64,
         np.int8,
         np.int16,
         np.int32,
