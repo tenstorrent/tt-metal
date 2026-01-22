@@ -224,7 +224,7 @@ void MAIN {
             constexpr uint32_t bcast_scaler0 = 0;
             reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
         }
-        reduce_uninit();
+        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();

@@ -33,7 +33,7 @@ void calc_numeric_stable(
         constexpr uint32_t bcast_scaler0 = 0;
         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
     }
-    reduce_uninit();
+    reduce_uninit<false>(cb_in);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_max);
@@ -284,7 +284,7 @@ void MAIN {
                 /*itile_scaler=*/bcast_scaler0,
                 /*idst0=*/dst0);
         }
-        reduce_uninit();
+        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
         tile_regs_commit();

@@ -97,10 +97,8 @@ inline void llk_unpack_AB_reduce_init(
     const bool narrow_tile =
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
 
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
+    // Note: Debug register bit 11 control moved to TRISC1 (MATH thread) - see budabackend#1372
+    // llk_math_reduce_init handles bit 11 for FP32 accumulation
 
     _llk_unpack_AB_reduce_init_<dim, BType, enforce_fp32_accumulation>(
         face_r_dim, num_faces, narrow_tile, transpose, within_face_16x16_transpose);
