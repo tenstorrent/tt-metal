@@ -64,8 +64,38 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             "tile_h": 32,
             "tile_w": 32,
         },
+        # mlp ff1 / ff3
+        {
+            "m": 32,
+            "k": 7168,
+            "n": 3584,  # 2304, don't have Galaxy 9x8 grid
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "tile_h": 32,
+            "tile_w": 32,
+        },
+        # mlp ff2
+        {
+            "m": 32,
+            "k": 3584,  # 2304, really need tiny tiles
+            "n": 7168,
+            "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
+            "in0_core_grid": (7, 8),
+            "out_core_grid": (7, 8),
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat4_b,
+            "out_dtype": ttnn.bfloat16,
+            "expected_pcc": 0.99,
+            "tile_h": 32,
+            "tile_w": 32,
+        },
     ],
-    ids=["qkv_a", "wq_b", "wo"],
+    ids=["qkv_a", "wq_b", "wo", "ff1_ff3", "ff2"],
 )
 @pytest.mark.parametrize("num_iters", [1])
 def test_matmul_l1_dram_sharded(device, test_case, num_iters):
