@@ -1219,29 +1219,38 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     // L1 data buffer for telemetry - kernel reads address from config
     constexpr uint32_t kL1DataBufferSize = kPerfTelemetryPageSize;
 
-    // Get the dispatch_s core which runs the dispatch_subordinate kernel
-    // This is the core that will push telemetry data to host
-    constexpr uint8_t cq_id = 0;
-
     // Get reference device to query dispatch core info
     auto* ref_device = this->reference_device();
     auto device_id = ref_device->id();
-    auto channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
 
-    // Get the dispatch_s core from the dispatch core manager
-    tt_cxy_pair dispatch_s_cxy =
-        MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_id, channel, cq_id);
-    CoreCoord dispatch_core(dispatch_s_cxy.x, dispatch_s_cxy.y);
+    // Find the closest available dispatch core to PCIe for telemetry pushing
+    // This avoids conflicts with dispatch kernels and minimizes PCIe write latency
+    std::optional<tt_cxy_pair> telemetry_core_opt =
+        MetalContext::instance().get_dispatch_core_manager().get_closest_available_dispatch_core_to_pcie(device_id);
 
-    // Use device (0,0) in the mesh, with the dispatch_s core as the sender
-    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), dispatch_core};
+    TT_FATAL(
+        telemetry_core_opt.has_value(),
+        "No available dispatch core found for telemetry on device {}. "
+        "Ensure dispatch core descriptor allocates enough cores for dispatch kernels and telemetry.",
+        device_id);
+
+    CoreCoord telemetry_core(telemetry_core_opt->x, telemetry_core_opt->y);
+    log_info(
+        tt::LogMetal,
+        "Using closest available dispatch core ({}, {}) to PCIe for telemetry on device {}",
+        telemetry_core.x,
+        telemetry_core.y,
+        device_id);
+
+    // Use device (0,0) in the mesh, with the telemetry core as the sender
+    auto sender_core = MeshCoreCoord{MeshCoordinate(0, 0), telemetry_core};
 
     log_info(
         tt::LogMetal,
-        "Initializing perf telemetry D2H socket on MeshDevice {} using dispatch_s core ({}, {})",
+        "Initializing perf telemetry D2H socket on MeshDevice {} using telemetry core ({}, {})",
         this->id(),
-        dispatch_core.x,
-        dispatch_core.y);
+        telemetry_core.x,
+        telemetry_core.y);
 
     // Create socket - config buffer and L1 data buffer are allocated via MeshBuffer
     // L1 data buffer address/size are stored in config for the kernel to read
@@ -1258,7 +1267,7 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         for (uint32_t i = 0; i < test_data.size(); i++) {
             test_data[i] = 0xDEAD0000 + i;  // Recognizable pattern
         }
-        tt::tt_metal::detail::WriteToDeviceL1(ref_device, dispatch_core, l1_data_addr, test_data, CoreType::WORKER);
+        tt::tt_metal::detail::WriteToDeviceL1(ref_device, telemetry_core, l1_data_addr, test_data, CoreType::WORKER);
         log_info(
             tt::LogMetal,
             "Populated L1 data buffer at 0x{:x} with {} words of test data",
@@ -1285,7 +1294,7 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     // Write the config buffer address as a vector of uint32_t
     std::vector<uint32_t> addr_data = {config_buffer_addr};
     tt::tt_metal::detail::WriteToDeviceL1(
-        ref_device, dispatch_core, perf_telemetry_mailbox_addr, addr_data, CoreType::WORKER);
+        ref_device, telemetry_core, perf_telemetry_mailbox_addr, addr_data, CoreType::WORKER);
 
     log_info(
         tt::LogMetal,
