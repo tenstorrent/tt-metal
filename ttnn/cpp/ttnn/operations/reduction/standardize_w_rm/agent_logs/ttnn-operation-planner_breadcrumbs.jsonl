@@ -10,3 +10,5 @@
 {"event":"design_decision","topic":"centralized_persistence","choice":"CB_4 uses PERSISTENT mode to retain centralized tiles through rsqrt computation","rationale":"Centralized values needed for final multiply after rsqrt","alternatives":["Re-read and re-tilize input after rsqrt","Use larger CB to store duplicated data"],"ts":"2026-01-22T12:01:54+00:00"}
 {"event":"design_decision","topic":"output_cb_sizing","choice":"CB_16 sized to hold Wt tiles per tile-row (not 1 tile like variance)","rationale":"Standardize outputs full-width tensor, not reduced","alternatives":["Stream tiles individually to DRAM"],"ts":"2026-01-22T12:01:54+00:00"}
 {"event":"action","type":"write_spec","file":"standardize_w_rm_spec.md","ts":"2026-01-22T12:03:58+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"a571b7e7f6","ts":"2026-01-22T12:04:09+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["spec"],"final_commit":"a571b7e7f6","ts":"2026-01-22T12:05:11+00:00"}
