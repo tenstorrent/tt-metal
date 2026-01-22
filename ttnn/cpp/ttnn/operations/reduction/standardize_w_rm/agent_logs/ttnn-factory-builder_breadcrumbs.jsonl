@@ -18,3 +18,5 @@
 {"event":"result","type":"build","success":true,"ts":"2026-01-22T12:20:39+00:00"}
 {"event":"test","stage":6,"file":"test_stage6_kernel_compilation.py","result":"PASS","notes":"Empty stub kernels compile and execute without hanging","ts":"2026-01-22T12:21:09+00:00"}
 {"event":"cb_sync_summary","total_cbs":10,"all_balanced":true,"notes":"Empty stub kernels - no CB operations, no hang risk","ts":"2026-01-22T12:21:09+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"47adb52fad","ts":"2026-01-22T12:21:39+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[4,5,6],"final_commit":"47adb52fad","ts":"2026-01-22T12:21:39+00:00"}
