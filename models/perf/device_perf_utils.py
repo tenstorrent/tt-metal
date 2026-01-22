@@ -68,7 +68,14 @@ def run_device_perf(
 
 # TODO: Move into process_model_log.py (#18698)
 def post_process_ops_log_detailed(
-    output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False, detailed=False, warmup_iters=0
+    output_logs_subdir,
+    columns,
+    sum_vals=True,
+    op_name="",
+    has_signposts=False,
+    detailed=False,
+    warmup_iters=0,
+    per_op=False,
 ):
     filename = get_latest_ops_log_filename(output_logs_subdir)
     df = pd.read_csv(filename)
@@ -140,18 +147,35 @@ def post_process_ops_log_detailed(
         df = df.iloc[warmup_iters:]
 
     results = {}
-    for col in columns:
-        df_filtered = df[df[col] != "-"]
-        if sum_vals:
-            results[col] = df_filtered[col].astype(float).sum()
-        else:
-            results[col] = df_filtered[col].astype(float).to_numpy()
+    if not per_op:
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
 
-        if detailed:
-            results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
-            results[f"MIN {col}"] = df_filtered[col].astype(float).min()
-            results[f"MAX {col}"] = df_filtered[col].astype(float).max()
-            results[f"STD {col}"] = df_filtered[col].astype(float).std()
+            if detailed:
+                results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
+                results[f"MIN {col}"] = df_filtered[col].astype(float).min()
+                results[f"MAX {col}"] = df_filtered[col].astype(float).max()
+                results[f"STD {col}"] = df_filtered[col].astype(float).std()
+    else:
+        for op in df["OP CODE"].unique():
+            df_op = df[df["OP CODE"] == op]
+            results[op] = {}
+            for col in columns:
+                df_filtered = df_op[df_op[col] != "-"]
+                if sum_vals:
+                    results[op][col] = df_filtered[col].astype(float).sum()
+                else:
+                    results[op][col] = df_filtered[col].astype(float).to_numpy()
+
+                if detailed:
+                    results[op][f"AVG {col}"] = df_filtered[col].astype(float).mean()
+                    results[op][f"MIN {col}"] = df_filtered[col].astype(float).min()
+                    results[op][f"MAX {col}"] = df_filtered[col].astype(float).max()
+                    results[op][f"STD {col}"] = df_filtered[col].astype(float).std()
 
     return results
 
