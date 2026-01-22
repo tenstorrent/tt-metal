@@ -29,7 +29,6 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
-    TT_FATAL(operation_attributes.num_links == 1, "num_links must be 1, but is {}", operation_attributes.num_links);
 
     TT_FATAL(
         input_shape[operation_attributes.out_dim] % operation_attributes.num_devices == 0,
