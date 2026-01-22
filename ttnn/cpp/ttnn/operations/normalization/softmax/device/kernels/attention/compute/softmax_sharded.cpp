@@ -209,8 +209,8 @@ void MAIN {
                 cb_bcast_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::TileGrid::row(block_w),
-                {},
-                {},
+                compute_kernel_lib::TileLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
                 [](uint32_t) {
                     recip_tile_init();
                     recip_tile(0);
