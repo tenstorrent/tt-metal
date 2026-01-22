@@ -503,6 +503,15 @@ void ControlPlane::init_control_plane(
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                              ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
+                                               std::to_string(world_size) + ".yaml");
+    try {
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
+    }
+
     // Initialize routing table generator after topology_mapper is created
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
@@ -575,6 +584,15 @@ void ControlPlane::init_control_plane_auto_discovery() {
         tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+    }
+
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                              ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
+                                               std::to_string(world_size) + ".yaml");
+    try {
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }
 
     // Initialize routing table generator after topology_mapper is created
