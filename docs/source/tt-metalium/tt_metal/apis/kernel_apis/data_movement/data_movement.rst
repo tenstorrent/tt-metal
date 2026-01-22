@@ -2,6 +2,7 @@ Data Movement APIs
 ==================
 
 .. toctree::
+  device_api_migration_guide
   noc_async_read
   noc_async_read_set_state
   noc_async_read_with_state
