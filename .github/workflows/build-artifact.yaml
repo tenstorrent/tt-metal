@@ -405,13 +405,13 @@ jobs:
 
   build-wheel:
     if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
+    name: 🐍 Build wheel (Python 3.10)
     uses: ./.github/workflows/wheels.yaml
     needs: build-docker-image
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
+      python-version: '3.10'
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}

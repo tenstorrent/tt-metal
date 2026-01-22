@@ -1,4 +1,5 @@
 ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
@@ -29,6 +30,8 @@ RUN set -eux; \
 
 FROM base AS basic-ttnn-runtime
 
+ARG PYTHON_VERSION
+
 # Install basic runtime dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -49,11 +52,12 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
+
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"

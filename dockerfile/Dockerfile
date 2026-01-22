@@ -108,7 +108,7 @@ ENV PATH="/usr/local/bin:$PATH"
 
 FROM ci-build AS ci-test
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
@@ -145,7 +145,7 @@ RUN umask 000 && \
 
 FROM ci-test AS dev
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
