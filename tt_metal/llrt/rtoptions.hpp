@@ -275,6 +275,8 @@ class RunTimeOptions {
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
+    // Dispatch kernel progress update period in milliseconds (default 100ms)
+    uint32_t dispatch_progress_update_ms = 100;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -524,6 +526,7 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    void set_experimental_device_debug_dump_enabled(bool enabled);
     bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
@@ -657,6 +660,7 @@ public:
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
+    uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 

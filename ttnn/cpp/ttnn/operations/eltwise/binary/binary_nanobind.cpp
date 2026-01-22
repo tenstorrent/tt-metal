@@ -2107,7 +2107,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
                const Tensor& input_tensor,
                float exponent,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) -> ttnn::Tensor {
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
