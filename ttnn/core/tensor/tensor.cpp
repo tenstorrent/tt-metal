@@ -743,11 +743,8 @@ Tensor create_tt_tensor_from_host_data(
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
 
-        const Layout dst_layout =
-            src_dtype == DataType::BFLOAT8_B || src_dtype == DataType::BFLOAT4_B ? Layout::TILE : layout;
-
         TensorLayout src_tensor_layout(src_dtype, PageConfig(layout, optional_tile), memory_config);
-        TensorLayout dst_tensor_layout(dst_dtype, PageConfig(dst_layout, optional_tile), memory_config);
+        TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
 
@@ -868,6 +865,10 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<float> pad_value) {
     ZoneScoped;
+
+    if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
+        TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
+    }
 
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
