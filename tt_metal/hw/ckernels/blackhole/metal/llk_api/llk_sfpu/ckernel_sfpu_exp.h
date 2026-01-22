@@ -70,7 +70,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // (when input < -88.5) and +inf (when input > 88.5)
     // To avoid this, we clamp xlog2 to [0, 255]
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
-    sfpi::vFloat threshold_low = sfpi::vConst0;
+    sfpi::vFloat threshold_low = 0.f;
     sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
     sfpi::vec_min_max(threshold_low, xlog2);
     sfpi::vec_min_max(xlog2, threshold_high);
