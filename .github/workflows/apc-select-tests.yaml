@@ -228,7 +228,7 @@ jobs:
 
   run-profiler-regression:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -241,7 +241,6 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      post_commit_only: true
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -285,7 +284,7 @@ jobs:
 
   triage-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'triage-tests') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'triage-tests') }}
     secrets: inherit
     strategy:
       fail-fast: false

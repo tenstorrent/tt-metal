@@ -19,14 +19,7 @@ on:
         type: boolean
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
-    - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
-
-run-name: >
-  ${{ github.event_name == 'schedule' &&
-      (github.event.schedule == '0 */3 * * *' && 'T3K/Dual Validation' ||
-       github.event.schedule == '0 2 * * *'  && 'Quad Nightly' ||
-       'Scheduled Run')
-      || 'Manual Run' }}
+    - cron: '0 */3 * * *'  # Every 3 hours - T3K schedule
 
 jobs:
   build-artifact:
@@ -64,6 +57,9 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Create Python venv
+        run: |
+          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
@@ -76,6 +72,7 @@ jobs:
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -87,12 +84,10 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    if: ${{ github.event.inputs.glx_2x_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -117,6 +112,9 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Create Python venv
+        run: |
+          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
@@ -129,6 +127,7 @@ jobs:
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -140,8 +139,6 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -170,18 +167,22 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Create Python venv
+        run: |
+          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
-        timeout-minutes: 140
+        timeout-minutes: 30
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -193,6 +194,4 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh

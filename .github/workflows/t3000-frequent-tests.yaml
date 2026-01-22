@@ -1,4 +1,4 @@
-name: "(T3K) T3000 unit tests"
+name: "(T3K) T3000 frequent tests"
 
 on:
   workflow_dispatch:
@@ -6,31 +6,32 @@ on:
       model:
         description: "Select model to test"
         required: true
-        default: all
         type: choice
+        default: all
         options:
           - all
-          - falcon7b
+          - tteager
+          - ethernet
+          - trace stress
           - falcon40b
-          - llama3-small
-          - llama3.2-11b
-          - llama3.2-11b-vision
-          - n300 mesh llama3.2-11b-vision
+          - llama3.2-vision
+          - n300 mesh llama3.2-vision
           - llama3.2-90b-vision
-          # - llama3.1-70b
-          - llama3.2-90b
+          - llama3
+          - llama3 accuracy
+          - llama3_70n90b accuracy
+          - llama3_90b
+          # - llama3_70b
+          # - mixtral
+          - resnet
+          - sd35_large
+          - flux1
+          - motif
           - mistral
-          - mixtral
-          - grok
-          - unet shallow
-          - qwen25_vl
-          - gemma3-small
+          - wan2.2
+          - mochi
   schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
-
-permissions:
-  packages: write
-  contents: write
+    - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
   build-artifact:
@@ -41,10 +42,10 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  t3000-unit-tests:
+  t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
