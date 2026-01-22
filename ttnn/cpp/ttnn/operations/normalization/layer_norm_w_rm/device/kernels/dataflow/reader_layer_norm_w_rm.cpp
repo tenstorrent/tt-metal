@@ -48,38 +48,54 @@ void kernel_main() {
     generate_reduce_scaler(cb_epsilon, packed_epsilon_value);
 
     // Read gamma (once at program start)
-    // Gamma tensor has shape [1, ..., 1, W] with 32 rows after padding
+    // Gamma tensor has shape [W] (1D) or [1, ..., 1, W]
+    // We read the single row and replicate it 32 times to form a tile-row
+    // This is required because tilize expects 32 rows of RM data
     {
         const auto gamma_accessor = TensorAccessor(gamma_tensor_args, gamma_addr, gamma_stick_size);
         constexpr uint32_t TILE_HEIGHT = 32;
 
         cb_reserve_back(cb_gamma_rm, Wt);
-        uint32_t l1_write_addr = get_write_ptr(cb_gamma_rm);
+        uint32_t l1_write_addr_base = get_write_ptr(cb_gamma_rm);
 
-        // Read 32 sticks for gamma
-        for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-            uint64_t noc_addr = gamma_accessor.get_noc_addr(s);
-            noc_async_read(noc_addr, l1_write_addr, gamma_stick_size);
-            l1_write_addr += gamma_stick_size;
+        // Read the first (and only) row of gamma
+        uint64_t noc_addr = gamma_accessor.get_noc_addr(0);
+        noc_async_read(noc_addr, l1_write_addr_base, gamma_stick_size);
+        noc_async_read_barrier();
+
+        // Replicate the first row to fill 32 rows (for tilize)
+        // This uses local L1 copy - more efficient than 32 NoC reads
+        for (uint32_t s = 1; s < TILE_HEIGHT; ++s) {
+            uint32_t dst_addr = l1_write_addr_base + s * gamma_stick_size;
+            // Local L1 copy: use noc_async_read from L1 to L1
+            // For local copy, the source is also in L1, so we create a noc addr pointing to local L1
+            uint64_t src_noc_addr = get_noc_addr(l1_write_addr_base);
+            noc_async_read(src_noc_addr, dst_addr, gamma_stick_size);
         }
         noc_async_read_barrier();
         cb_push_back(cb_gamma_rm, Wt);
     }
 
     // Read beta (once at program start)
-    // Beta tensor has shape [1, ..., 1, W] with 32 rows after padding
+    // Beta tensor has shape [W] (1D) or [1, ..., 1, W]
+    // We read the single row and replicate it 32 times to form a tile-row
     {
         const auto beta_accessor = TensorAccessor(beta_tensor_args, beta_addr, beta_stick_size);
         constexpr uint32_t TILE_HEIGHT = 32;
 
         cb_reserve_back(cb_beta_rm, Wt);
-        uint32_t l1_write_addr = get_write_ptr(cb_beta_rm);
+        uint32_t l1_write_addr_base = get_write_ptr(cb_beta_rm);
 
-        // Read 32 sticks for beta
-        for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-            uint64_t noc_addr = beta_accessor.get_noc_addr(s);
-            noc_async_read(noc_addr, l1_write_addr, beta_stick_size);
-            l1_write_addr += beta_stick_size;
+        // Read the first (and only) row of beta
+        uint64_t noc_addr = beta_accessor.get_noc_addr(0);
+        noc_async_read(noc_addr, l1_write_addr_base, beta_stick_size);
+        noc_async_read_barrier();
+
+        // Replicate the first row to fill 32 rows (for tilize)
+        for (uint32_t s = 1; s < TILE_HEIGHT; ++s) {
+            uint32_t dst_addr = l1_write_addr_base + s * beta_stick_size;
+            uint64_t src_noc_addr = get_noc_addr(l1_write_addr_base);
+            noc_async_read(src_noc_addr, dst_addr, beta_stick_size);
         }
         noc_async_read_barrier();
         cb_push_back(cb_beta_rm, Wt);
