@@ -52,7 +52,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     bool input_is_sharded = a.is_sharded();
     bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
-    bool output_is_sharded = output.shard_spec().has_value();  // output.is_sharded();
     bool output_is_nd_sharded = output.nd_shard_spec().has_value();
     std::cout << "output_is_nd_sharded: " << output_is_nd_sharded << std::endl;
 
@@ -367,10 +366,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 dst_buffer->address(), src0_buffer->address(), start_shard_id};
             start_shard_id++;
 
-            if (output_is_sharded) {
-                shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-            }
-
             // Compute run-time args
             std::vector<uint32_t> compute_run_time_args = {num_blocks_on_core};
             // Set run-time arg
@@ -439,9 +434,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 num_unpadded_cols_per_input_block,
                 width_wise_output_block_start_index,
                 num_cols_already_processed_in_first_output_block};
-            if (output_is_sharded) {
-                shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-            }
 
             // Compute run-time args
             std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
@@ -487,9 +479,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             num_unpadded_cols_per_input_block,
             width_wise_output_block_start_index,
             num_cols_already_processed_in_first_output_block};
-        if (output_is_sharded) {
-            shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-        }
 
         // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
