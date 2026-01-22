@@ -6,10 +6,8 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::profiler_no_op {
+namespace ttml::metal {
 
-struct ProfilerNoopOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const std::string& identifier);
-};
+ttnn::Tensor profiler_no_op(const ttnn::Tensor& input_tensor, const std::string& identifier);
 
-}  // namespace ttml::metal::ops::profiler_no_op
+}  // namespace ttml::metal

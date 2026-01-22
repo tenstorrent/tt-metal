@@ -6,11 +6,9 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::swiglu_fw {
+namespace ttml::metal {
 
-struct SwiGLUForwardOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3);
-};
+ttnn::Tensor swiglu_fw(
+    const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3);
 
-}  // namespace ttml::metal::ops::swiglu_fw
+}  // namespace ttml::metal
