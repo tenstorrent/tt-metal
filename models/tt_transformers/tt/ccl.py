@@ -80,15 +80,12 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
-    batch_size=1,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
     # Ensure dim 0 and 1 are 1
-    # Always reshape to (1, 1, total_rows, dim) to match main branch behavior
-    # and ensure identical floating-point reduction order in reduce_scatter_minimal_async
     original_shape = input_tensor.shape
     if original_shape[0] != 1 or original_shape[1] != 1:
         input_tensor = ttnn.reshape(

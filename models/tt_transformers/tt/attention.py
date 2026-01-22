@@ -677,15 +677,23 @@ class Attention(LightweightModule):
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
         seq_len = x_11SH.shape[-2]
+        original_seq_len = seq_len  # Track original for later unpadding
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
 
         # reshaping long sequence to matmul fit on device
+        # Pad seq_len to nearest multiple of MAX_QKV_MM_SEQ_LEN if needed
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+            padded_seq_len = (
+                (seq_len + self.MAX_QKV_MM_SEQ_LEN - 1) // self.MAX_QKV_MM_SEQ_LEN
+            ) * self.MAX_QKV_MM_SEQ_LEN
+            pad_len = padded_seq_len - seq_len
+            x_11SH = ttnn.pad(x_11SH, padding=[(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+            seq_len = padded_seq_len
+
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
-            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         xqkv_fused = ttnn.linear(
@@ -710,11 +718,15 @@ class Attention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
-            batch_size=batch_size,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        # Slice back to original seq_len if we padded earlier
+        if original_seq_len != seq_len:
+            xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
+            seq_len = original_seq_len
 
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])

@@ -85,7 +85,7 @@ class MLP(LightweightModule):
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
         )
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -271,7 +271,6 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
-            batch_size=batch_size,
         )
 
         # Ensure dim 0 and 1 are 1
