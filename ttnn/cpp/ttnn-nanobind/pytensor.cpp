@@ -37,6 +37,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -985,7 +986,9 @@ void pytensor_module(nb::module_& mod) {
              )doc")
         .def(
             "to",
-            nb::overload_cast<Layout>(&Tensor::to_layout, nb::const_),
+            [](const Tensor& self, Layout target_layout) {
+                return ttnn::operations::core::ToLayout::invoke(self, target_layout);
+            },
             nb::arg("target_layout").noconvert(),
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:

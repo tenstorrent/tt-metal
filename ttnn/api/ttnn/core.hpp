@@ -31,9 +31,6 @@ namespace ttnn {
 
 namespace core {
 
-// returns true if padded tensor will have other physical shape
-bool is_padding_makes_sense(const ttnn::Tensor& tensor);
-
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type);
 
 std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
