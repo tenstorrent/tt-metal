@@ -98,7 +98,7 @@ static void BM_write(
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+static void BM_write_pinned_memory(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
@@ -124,7 +124,7 @@ static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<Mesh
         mesh_device.get());
 
     // Allocate destination host buffer with 16-byte alignment
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     constexpr int device_read_align{64};
     TT_ASSERT(
         device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
@@ -133,7 +133,7 @@ static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<Mesh
         hal.get_read_alignment(HalMemType::HOST));
     auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
         static_cast<std::size_t>(transfer_size));
-    auto aligned_ptr = reinterpret_cast<void*>(src_storage->data());
+    void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(
