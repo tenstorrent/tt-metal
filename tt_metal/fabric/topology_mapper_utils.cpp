@@ -222,7 +222,7 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
     // Build logical adjacency graphs for each mesh using topology solver's function
-    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_map_logical(mesh_graph);
+    auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
 
     // Build logical multi-mesh adjacency graph
     LogicalMultiMeshGraph logical_multi_mesh_graph;
@@ -308,7 +308,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // Build physical adjacency graphs for each mesh
     auto mesh_adjacency_graphs =
-        ::tt::tt_fabric::build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+        ::tt::tt_fabric::build_adjacency_graph_physical(physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Build physical multi-mesh adjacency graph
     PhysicalMultiMeshGraph physical_multi_mesh_graph;

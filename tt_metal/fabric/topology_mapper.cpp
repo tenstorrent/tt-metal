@@ -455,7 +455,6 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
-<<<<<<< HEAD
     using namespace tt::tt_metal::distributed::multihost;
     const std::size_t world_size = *this->distributed_context_.get().size();
     constexpr std::size_t control_host_rank = 0;
@@ -473,10 +472,6 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-=======
-    if (generate_mapping_locally_ ||
-        *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() == 0) {
->>>>>>> e6f2f94813e (Removing uneeded code)
         // Build logical and physical adjacency maps
         auto adjacency_map_logical_multi_mesh =
             ::tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
