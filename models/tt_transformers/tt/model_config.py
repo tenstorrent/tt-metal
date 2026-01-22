@@ -30,6 +30,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
+    convert_hf_to_meta_no_qkv_permute,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     load_hf_state_dict,
@@ -463,6 +464,7 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        use_hf_rope=False,  # Flag for Attention2: keep weights in HF format
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -493,6 +495,7 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.use_hf_rope = use_hf_rope  # Flag for Attention2: keep weights in HF format
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -2039,7 +2042,12 @@ class ModelArgs:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            if self.use_hf_rope:
+                # For Attention2: skip QKV format conversion
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            else:
+                # Standard: convert to Meta format
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
