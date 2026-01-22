@@ -30,11 +30,11 @@ namespace ckernel {
 // clang-format on
 
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(relu_max, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_max_, RC, APPROX, idst, param0));
 }
 
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(relu_max, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(_relu_max_, RC, APPROX, idst, param0));
 }
 
 /**
@@ -59,11 +59,11 @@ ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_max, APPROX));
  */
 // clang-format on
 ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(relu_min, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_min_, RC, APPROX, idst, param0));
 }
 
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(relu_min, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(_relu_min_, RC, APPROX, idst, param0));
 }
 
 /**
@@ -85,9 +85,9 @@ ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_min, APPROX));
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void relu_tile(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(relu_min, RC, APPROX, idst, 0)); }
+ALWI void relu_tile(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_min_, RC, APPROX, idst, 0)); }
 
-ALWI void relu_tile_int32(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(relu_min, RC, APPROX, idst, 0)); }
+ALWI void relu_tile_int32(uint32_t idst) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(_relu_min_, RC, APPROX, idst, 0)); }
 /**
  * Please refer to documentation for any_init.
  */
@@ -110,7 +110,7 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_min, APPROX)); }
  */
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL(lrelu, RC, APPROX, idst, slope));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_lrelu, RC, APPROX, idst, slope));
 }
 
 /**
