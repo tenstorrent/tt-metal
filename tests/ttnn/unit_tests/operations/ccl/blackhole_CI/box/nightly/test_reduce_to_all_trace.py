@@ -97,7 +97,8 @@ def compute_reference_reduce_to_all(
     indirect=["device_params"],
     ids=["fabric_1d_ring_trace"],
 )
-def test_reduce_to_all_with_trace(bh_1d_mesh_device):
+@pytest.mark.parametrize("use_barrier", [False, True], ids=["no_barrier", "with_barrier"])
+def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     """Test reduce_to_all operation with trace capture and replay for performance testing."""
 
     print("\n=== Testing reduce_to_all with TRACE ===")
@@ -253,6 +254,39 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
+    # Create barrier resources for device synchronization (only used when use_barrier=True)
+    # Uses all_gather_async which requires global semaphores but NOT SubDevice setup.
+    # We need 1 set of 2 semaphores - all_gather is inherently synchronizing so no double-buffering needed.
+    barrier_tensor = None
+    barrier_semaphores = None
+    if use_barrier:
+        # Create global semaphores for all_gather_async (2 required per the implementation)
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        submesh_device.compute_with_storage_grid_size().x - 1,
+                        submesh_device.compute_with_storage_grid_size().y - 1,
+                    ),
+                )
+            }
+        )
+        barrier_semaphores = [ttnn.create_global_semaphore(submesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+
+        # Barrier tensor: 1 full tile per device (32x32 = 1024 elements minimum)
+        # Shape: [1, 1, 32, 32] per device -> gathered on dim=0
+        barrier_shape = [1, 1, 32, 32]  # Minimal: 1 tile (must be 32x32 for TILE_LAYOUT)
+        barrier_tensor = ttnn.from_torch(
+            torch.zeros(barrier_shape, dtype=torch.bfloat16),
+            device=submesh_device,
+            layout=layout,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Use DRAM to avoid L1 conflicts
+            mesh_mapper=mesh_mapper2,  # Replicated on all devices
+        )
+        print(f"Barrier created with all_gather_async (2 semaphores)")
+
     profiler = BenchmarkProfiler()
 
     # Run once to compile
@@ -270,6 +304,14 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
         input_mux_cores=mux_cores,
         extra_worker_cores=extra_worker_cores,
     )
+    # Also compile barrier if used
+    if use_barrier:
+        _ = ttnn.experimental.all_gather_async(
+            barrier_tensor,
+            dim=0,
+            multi_device_global_semaphore=barrier_semaphores,
+            topology=topology,
+        )
     ttnn.synchronize_device(submesh_device)
 
     # Warmup iterations with trace
@@ -278,6 +320,16 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     num_warmup_iters = 15
     trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_warmup_iters):
+        # Optional barrier: force all devices to sync BEFORE reduce_to_all
+        # This ensures all devices start the op at the same time, making
+        # zone measurements reflect actual latency, not skew from previous iteration
+        if use_barrier:
+            _ = ttnn.experimental.all_gather_async(
+                barrier_tensor,
+                dim=0,
+                multi_device_global_semaphore=barrier_semaphores,
+                topology=topology,
+            )
         out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
@@ -300,6 +352,14 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     num_perf_iters = 30
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
     for i in range(num_perf_iters):
+        # Optional barrier: force all devices to sync BEFORE reduce_to_all
+        if use_barrier:
+            _ = ttnn.experimental.all_gather_async(
+                barrier_tensor,
+                dim=0,
+                multi_device_global_semaphore=barrier_semaphores,
+                topology=topology,
+            )
         out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_all(
             l_tensor,
             s_tensor,
