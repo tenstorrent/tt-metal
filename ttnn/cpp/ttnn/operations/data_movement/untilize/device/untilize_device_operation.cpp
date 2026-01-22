@@ -23,8 +23,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-namespace {
-
 bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
     if (tensor_shape.volume() == 0) {
         return false;
@@ -43,7 +41,6 @@ bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt
     }
     return false;
 }
-}  // namespace
 
 uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     auto* device = tensor.device();

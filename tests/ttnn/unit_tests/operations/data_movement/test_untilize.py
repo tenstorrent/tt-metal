@@ -2329,7 +2329,7 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
         assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-def untilize_nd_shard_spec_test_helper(
+def untilize_nd_shard_spec_to_same_shard_spec_test_helper(
     device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize
 ):
     """
@@ -2342,7 +2342,7 @@ def untilize_nd_shard_spec_test_helper(
         shape=shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
     ).sharded_across_dims(shard_across_dims, core_ranges)
 
-    torch_tensor = torch.randn(tuple(nd_spec.shape))
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_tensor = ttnn.from_torch(torch_tensor, spec=nd_spec, device=device)
 
     untilized_tensor = ttnn.untilize(ttnn_tensor, use_pack_untilize=use_pack_untilize)
@@ -2360,7 +2360,9 @@ def untilize_nd_shard_spec_test_helper(
 def test_untilize_nd_shard_spec_to_same_shard_spec3D(
     device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize
 ):
-    untilize_nd_shard_spec_test_helper(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize)
+    untilize_nd_shard_spec_to_same_shard_spec_test_helper(
+        device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize
+    )
 
 
 @pytest.mark.parametrize("shape", [[64, 3, 256, 256]])
@@ -2377,7 +2379,9 @@ def test_untilize_nd_shard_spec_to_same_shard_spec3D(
 def test_untilize_nd_shard_spec_to_same_shard_spec4D(
     device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize
 ):
-    untilize_nd_shard_spec_test_helper(device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize)
+    untilize_nd_shard_spec_to_same_shard_spec_test_helper(
+        device, shape, dtype, core_start, core_end, shard_across_dims, use_pack_untilize
+    )
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

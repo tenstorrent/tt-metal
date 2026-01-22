@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
 #include "untilize_multi_core_block_program_factory.hpp"
 #include "untilize_multi_core_parallelize_column_program_factory.hpp"
@@ -340,8 +341,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         auto page_mapping = distribution_spec.compute_page_mapping();
         const auto& mapped_cores = page_mapping.all_cores;
         uint32_t start_shard_id = 0;
-        for (uint32_t i = 0; i < full_cores.size(); ++i) {
-            CoreCoord core = full_cores[i];
+        for (auto core : full_cores) {
             auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
             uint32_t num_blocks_on_core = 0;
             uint32_t num_tiles_on_core = 0;

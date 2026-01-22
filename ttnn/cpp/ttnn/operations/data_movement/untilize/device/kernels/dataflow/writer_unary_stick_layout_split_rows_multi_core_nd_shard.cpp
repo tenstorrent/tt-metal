@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -113,9 +114,6 @@ void kernel_main() {
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         // Get total pages in shard (including padding)
         uint32_t shard_volume = dspec.shard_volume();
-
-        // Get the base NOC address for the shard using public API
-        uint64_t shard_noc_addr = accessor_src.get_shard_noc_addr(shard_id, 0, noc_index);
 
         // Initialize coordinates for checking padding
         auto local_page_coord = std::array<uint32_t, 4>{};  // Max rank 4
