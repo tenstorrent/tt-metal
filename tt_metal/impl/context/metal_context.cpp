@@ -817,13 +817,13 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
-        log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
-    } else {
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
-    }
+    // if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+    //     log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
+    //     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+    //         mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+    // } else {
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+    // }
 }
 
 void MetalContext::construct_control_plane() {
