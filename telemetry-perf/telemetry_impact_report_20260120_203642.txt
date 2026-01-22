@@ -1,0 +1,19 @@
+================================================================================
+TELEMETRY IMPACT ANALYSIS REPORT
+================================================================================
+
+Generated: 2026-01-20 20:36:42
+Total configurations tested: 0
+
+Healthy configurations: 0/0
+Statistically significant results: 0/0
+
+
+================================================================================
+CONCLUSIONS
+================================================================================
+
+
+KEY FINDINGS:
+
+  No high-impact (>5%) configurations detected.
