@@ -37,10 +37,6 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 
-namespace ttnn::distributed {
-class TensorToMesh;
-}  // namespace ttnn::distributed
-
 namespace tt::tt_metal {
 
 namespace distributed {
@@ -316,19 +312,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 // Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
 // shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-
-Tensor convert_python_tensor_to_tt_tensor(
-    const ttnn::Shape& tensor_shape,
-    DataType dst_dtype,
-    Layout layout,
-    const std::optional<Tile>& optional_tile,
-    const MemoryConfig& memory_config,
-    ttnn::PyDType src_data_type,
-    const std::function<HostBuffer(DataType)>& get_host_tensor,
-    std::optional<tt::tt_metal::distributed::MeshDevice*> device,
-    std::optional<ttnn::QueueId> cq_id,
-    const ttnn::distributed::TensorToMesh* mesh_mapper,
-    std::optional<float> pad_value = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

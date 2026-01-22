@@ -41,7 +41,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/py_to_tt_tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -400,17 +400,7 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
-PyDType get_py_tensor_type_info(const nb::ndarray<nb::array_api>& py_tensor) {
-    auto py_tensor_dtype = py_tensor.dtype();
-
-    // handle bool types by changing them to uint8
-    // TODO: add proper handling for bool types as a DataType
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
-        py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
-        py_tensor_dtype.bits = 8;
-        py_tensor_dtype.lanes = 1;
-    }
-
+PyDType get_py_tensor_type_info(nb::dlpack::dtype py_tensor_dtype) {
     if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Float) && py_tensor_dtype.bits == 32 &&
         py_tensor_dtype.lanes == 1) {
         return PyDType::FLOAT32;
@@ -765,14 +755,24 @@ void pytensor_module(nb::module_& mod) {
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper) {
-                auto src_dtype = CMAKE_UNIQUE_NAMESPACE::get_py_tensor_type_info(dlpack_tensor);
-                auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(dlpack_tensor.dtype()));
+                auto py_tensor_dtype = dlpack_tensor.dtype();
+
+                // handle bool types by changing them to uint8
+                // TODO: add proper handling for bool types as a DataType
+                if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
+                    py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
+                    py_tensor_dtype.bits = 8;
+                    py_tensor_dtype.lanes = 1;
+                }
+
+                auto src_dtype = CMAKE_UNIQUE_NAMESPACE::get_py_tensor_type_info(py_tensor_dtype);
+                auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
                 const bool tile_layout_by_default =
                     (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
-                new (t) Tensor(tt::tt_metal::convert_python_tensor_to_tt_tensor(
+                new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
                     CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor),
                     dst_dtype,
                     layout_,
