@@ -537,3 +537,26 @@ Tests:
 
     patterns:
       - type: all_to_all
+
+  - name: "SimpleNOCSelect"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      size: 1024
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    senders:
+      - noc_id: 0
+        device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+      - noc_id: 1
+        device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
