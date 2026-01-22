@@ -39,19 +39,19 @@ reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
 
 ### Options
 
-**A. Enum with lifecycle states (recommended):**
+**A. Enum with init mode states (recommended):**
 ```cpp
-enum class ReduceLifecycle {
-    FULL,        // init + uninit (default)
-    INIT_ONLY,   // only init, caller handles uninit
-    UNINIT_ONLY, // only uninit, caller handled init
-    MANUAL       // neither - caller manages both
+enum class ReduceInitMode {
+    BOTH,        // init + uninit (default)
+    INIT_ONLY,   // only init
+    UNINIT_ONLY, // only uninit
+    NONE         // neither - caller manages both
 };
 ```
 
 Call site becomes:
 ```cpp
-reduce<SUM, REDUCE_ROW, ..., ReduceLifecycle::INIT_ONLY>(...)
+reduce<SUM, REDUCE_ROW, ..., ReduceInitMode::INIT_ONLY>(...)
 ```
 
 **B. Config struct** - group `init`, `uninit`, and `reconfig` together since they're all "plumbing":
@@ -284,23 +284,7 @@ reduce<SUM, REDUCE_SCALAR>(
 
 This prevents argument swapping bugs and is self-documenting.
 
-### B. Simplify ReduceDataFormatReconfig naming
-
-```cpp
-enum class Reconfig { NONE, INPUT, OUTPUT, BOTH };  // shorter
-```
-
-Or make it a struct with flags for compile-time composition:
-```cpp
-struct Reconfig {
-    static constexpr auto NONE = ...;
-    static constexpr auto INPUT = ...;
-    static constexpr auto OUTPUT = ...;
-    static constexpr auto BOTH = INPUT | OUTPUT;
-};
-```
-
-### C. Consider flipping template param order
+### B. Consider flipping template param order
 
 Currently the rarely-changed params (`reconfig`, `init`, `uninit`) come before the often-changed type params. If grouped into a struct, the signature becomes:
 ```cpp
@@ -317,9 +301,8 @@ void reduce(ReduceCBs cbs, TileGrid grid, ReduceConfig cfg = {}, ...);
 
 | Issue | Recommendation |
 |-------|----------------|
-| Bool template args | Use `ReduceLifecycle` enum |
+| Bool template args | Use `ReduceInitMode` enum |
 | `{}, {}` for optional params | `explicit` default constructors to enforce `NoAccumulation{}` over `{}` |
 | TileShape naming | Rename to `TileGrid` |
 | ReduceInputMode enum | Policy structs with `WaitMode`/`PopMode` enums |
 | CB arguments | Group into `ReduceCBs` struct |
-| Reconfig naming | Shorten to `Reconfig` |
