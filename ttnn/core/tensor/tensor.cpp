@@ -15,6 +15,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
@@ -33,6 +34,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -660,5 +662,3 @@ Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tenso
 
 }  // namespace ops
 }  // namespace tt::tt_metal
-
-// host data to tensor conversion implementation
