@@ -53,6 +53,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     bool input_is_sharded = a.is_sharded();
     bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
 
+    // For ND sharded input, compute distribution_spec once and reuse it
+    std::optional<BufferDistributionSpec> distribution_spec_opt;
+
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
 
@@ -100,14 +103,15 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             input_shard_height = nd_shard_spec.shard_shape[-2];
             input_shard_width = nd_shard_spec.shard_shape[-1];
             grid = nd_shard_spec.grid;
-            // Create BufferDistributionSpec from NdShardSpec
-            auto distribution_spec = BufferDistributionSpec::from_shard_spec(
+            // Create BufferDistributionSpec from NdShardSpec (computed once and reused later)
+            distribution_spec_opt = BufferDistributionSpec::from_shard_spec(
                 a.padded_shape(),
                 nd_shard_spec.shard_shape,
                 tile_shape,
                 nd_shard_spec.grid,
                 nd_shard_spec.orientation,
                 nd_shard_spec.shard_distribution_strategy);
+            const auto& distribution_spec = distribution_spec_opt.value();
             num_shards = distribution_spec.num_shards();
             const auto page_mapping = distribution_spec.compute_page_mapping();
             const auto& groups = distribution_spec.core_groups();
@@ -331,14 +335,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     if (input_is_nd_sharded) {
         // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
         // in the writer kernel.
-        const auto& nd_shard_spec = a.nd_shard_spec().value();
-        auto distribution_spec = BufferDistributionSpec::from_shard_spec(
-            a.padded_shape(),
-            nd_shard_spec.shard_shape,
-            tile_shape,
-            nd_shard_spec.grid,
-            nd_shard_spec.orientation,
-            nd_shard_spec.shard_distribution_strategy);
+        TT_FATAL(distribution_spec_opt.has_value(), "Distribution_spec should have been computed for ND sharded input");
+        const auto& distribution_spec = distribution_spec_opt.value();
         auto page_mapping = distribution_spec.compute_page_mapping();
         const auto& mapped_cores = page_mapping.all_cores;
         uint32_t start_shard_id = 0;
