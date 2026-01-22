@@ -15,6 +15,7 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1301,6 +1302,34 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         "Wrote perf telemetry config buffer addr 0x{:x} to mailbox addr 0x{:x}",
         config_buffer_addr,
         perf_telemetry_mailbox_addr);
+
+    // Create and manually slow dispatch telemetry kernel program
+    // Using slow dispatch to bypass the check that prevents kernels on dispatch cores
+    {
+        Program telemetry_program;
+        const std::string telemetry_kernel_path = "tt_metal/impl/dispatch/kernels/cq_telemetry.cpp";
+
+        // Create kernel on the telemetry core (dataflow kernel)
+        DataMovementConfig telemetry_config;
+        CreateKernel(telemetry_program, telemetry_kernel_path, telemetry_core, telemetry_config);
+
+        // Compile the program with force_slow_dispatch to bypass dispatch core check
+        tt::tt_metal::detail::CompileProgram(ref_device, telemetry_program, /*force_slow_dispatch=*/true);
+
+        // Write runtime args with force_slow_dispatch
+        ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(ref_device, telemetry_program, /*force_slow_dispatch=*/true);
+
+        // Launch the program using slow dispatch
+        ::tt::tt_metal::detail::LaunchProgram(
+            ref_device, telemetry_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
+        log_info(
+            tt::LogMetal,
+            "Launched telemetry kernel {} on core ({}, {}) using slow dispatch",
+            telemetry_kernel_path,
+            telemetry_core.x,
+            telemetry_core.y);
+    }
 
     // Start background scrubbing thread to receive telemetry data
     perf_telemetry_stop_.store(false);

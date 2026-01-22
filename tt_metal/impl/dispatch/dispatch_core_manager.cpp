@@ -282,8 +282,11 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_closest_available_dispatch
 
     // Convert PCIe cores from NOC0 to logical coordinates for distance calculation
     std::vector<CoreCoord> pcie_cores_logical;
-    for (const CoreCoord& pcie_noc0 : pcie_cores_noc0) {
-        CoreCoord pcie_logical = soc.translate_coord_to(pcie_noc0, CoordSystem::LOGICAL);
+    for (const auto& pcie_noc0 : pcie_cores_noc0) {
+        // Convert umd::CoreCoord to tt_xy_pair and translate to logical coordinates
+        tt_xy_pair pcie_noc0_xy = {pcie_noc0.x, pcie_noc0.y};
+        auto pcie_logical_umd = soc.translate_coord_to(pcie_noc0_xy, CoordSystem::NOC0, CoordSystem::LOGICAL);
+        CoreCoord pcie_logical(pcie_logical_umd.x, pcie_logical_umd.y);
         pcie_cores_logical.push_back(pcie_logical);
     }
 

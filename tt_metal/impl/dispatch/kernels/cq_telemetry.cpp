@@ -9,8 +9,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/dev_msgs.h"
 
 // Perf telemetry page size - must match host-side kPerfTelemetryPageSize
 constexpr uint32_t perf_telemetry_page_size = 64;

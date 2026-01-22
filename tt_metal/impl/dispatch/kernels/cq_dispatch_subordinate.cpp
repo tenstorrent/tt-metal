@@ -16,6 +16,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "hostdev/dev_msgs.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -52,6 +53,10 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
+
+// Pointer to perf telemetry config in mailbox (for setting trisc_terminate flag)
+volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
