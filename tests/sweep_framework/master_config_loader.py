@@ -142,7 +142,7 @@ class MasterConfigLoader:
 
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
-            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
+            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_add_with_mesh.json")
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
