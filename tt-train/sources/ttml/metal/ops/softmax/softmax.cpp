@@ -6,9 +6,10 @@
 
 #include "device/softmax_device_operation.hpp"
 
-namespace ttml::metal::ops::softmax {
+namespace ttml::metal {
 
-ttnn::Tensor SoftmaxOperation::invoke(const ttnn::Tensor& input_tensor, int32_t dim) {
+ttnn::Tensor softmax(const ttnn::Tensor& input_tensor, int32_t dim) {
     return ttnn::prim::ttml_softmax(input_tensor, dim);
 }
-}  // namespace ttml::metal::ops::softmax
+
+}  // namespace ttml::metal

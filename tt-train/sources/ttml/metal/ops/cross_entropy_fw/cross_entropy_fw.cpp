@@ -6,10 +6,11 @@
 
 #include "device/cross_entropy_fw_device_operation.hpp"
 
-namespace ttml::metal::ops::cross_entropy_fw {
+namespace ttml::metal {
 
-ttnn::Tensor CrossEntropyForwardOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor) {
+ttnn::Tensor cross_entropy_fw(const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor) {
     auto result = ttnn::prim::ttml_cross_entropy_fw(input_tensor, target_tensor);
     return result;
 }
-}  // namespace ttml::metal::ops::cross_entropy_fw
+
+}  // namespace ttml::metal
