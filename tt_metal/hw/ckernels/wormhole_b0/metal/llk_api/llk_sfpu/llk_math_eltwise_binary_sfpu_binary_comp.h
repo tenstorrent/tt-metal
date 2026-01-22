@@ -17,7 +17,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::lt>,
         dst_index0,
@@ -33,7 +33,7 @@ inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::gt>,
         dst_index0,
@@ -49,7 +49,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::ge>,
         dst_index0,
@@ -65,7 +65,7 @@ inline void llk_math_eltwise_binary_sfpu_le_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_binary_comp_int32<APPROXIMATE, 8, SfpuType::le>,
         dst_index0,

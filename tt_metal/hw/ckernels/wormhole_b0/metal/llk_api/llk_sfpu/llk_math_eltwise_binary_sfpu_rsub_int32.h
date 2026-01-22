@@ -17,7 +17,7 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int32_init() {
 
 template <bool APPROXIMATE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS = 8>
 inline void llk_math_eltwise_binary_sfpu_rsub_int(
-    uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint32_t dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_rsub_int<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>,
         dst_index0,
