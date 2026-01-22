@@ -5,21 +5,15 @@
 """
 Pixel decoder (multi-scale fusion) for MaskFormer.
 
-The pixel decoder refines Swin backbone features into high-resolution pixel
-embeddings.  This file will house TT-NN implementations of:
-
-* Lateral convolutions + normalization layers per FPN level.
-* Feature fusion and upsample steps using ``ttnn.interpolate`` with parity
-  against PyTorch ``torch.nn.functional.interpolate`` (bilinear, align_corners=False).
-* Optional fused activation support via the TT-CNN builder utilities once the
-  modules are wired up.
+For bounty #30876 the pixel decoder runs on CPU using Hugging Face's reference
+implementation. The final 3×3 mask projection is optionally executed on device
+when TTNN `conv2d` is available; otherwise it falls back to the HF projection.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple, Any, Dict
-import os
 
 import torch
 import warnings
@@ -97,48 +91,44 @@ class MaskFormerPixelDecoder:
             result = self._hf_decoder(list(features), output_hidden_states=True)
         fpn_hidden = list(result.hidden_states) if isinstance(result.hidden_states, (list, tuple)) else []
 
-        # If TTNN mask projection kernel is ready, perform the final 3x3 projection on device.
-        if (
-            self.device is not None
-            and ttnn is not None
-            and self._mask_proj_kernel
-            and os.environ.get("MASKFORMER_TT_MASK_PROJ") == "1"
-        ):
-            last_fpn = fpn_hidden[-1]  # [B, C=fpn_dim, H, W]
-            nhwc = last_fpn.detach().contiguous().permute(0, 2, 3, 1)
-            mem_cfg = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) or ttnn.DRAM_MEMORY_CONFIG
-            tt_in = ttnn.from_torch(
-                nhwc,
-                dtype=self.dtype or get_default_dtype(),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=mem_cfg,
-            )
-            # Minimal DRAM-based conv2d; error if unsupported to avoid CPU fallback.
-            out_tt = ttnn.conv2d(
-                input_tensor=tt_in,
-                weight_tensor=self._mask_proj_kernel["weight"],
-                bias_tensor=self._mask_proj_kernel.get("bias"),
-                in_channels=int(tt_in.shape[-1]),
-                out_channels=self.config.mask_dim,
-                batch_size=int(tt_in.shape[0]),
-                input_height=int(tt_in.shape[1]),
-                input_width=int(tt_in.shape[2]),
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-                dilation=(1, 1),
-                groups=1,
-                device=self.device,
-                memory_config=mem_cfg,
-            )
-            out_rm = (
-                out_tt
-                if out_tt.get_layout() == ttnn.ROW_MAJOR_LAYOUT
-                else ttnn.to_layout(out_tt, ttnn.ROW_MAJOR_LAYOUT)
-            )
-            mask_features = self._to_torch(out_rm).permute(0, 3, 1, 2).contiguous()
-            return mask_features, fpn_hidden
+        if self.device is not None and ttnn is not None and self._mask_proj_kernel:
+            try:
+                last_fpn = fpn_hidden[-1]  # [B, C=fpn_dim, H, W]
+                nhwc = last_fpn.detach().contiguous().permute(0, 2, 3, 1)
+                mem_cfg = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) or ttnn.DRAM_MEMORY_CONFIG
+                tt_in = ttnn.from_torch(
+                    nhwc,
+                    dtype=self.dtype or get_default_dtype(),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=mem_cfg,
+                )
+                out_tt = ttnn.conv2d(
+                    input_tensor=tt_in,
+                    weight_tensor=self._mask_proj_kernel["weight"],
+                    bias_tensor=self._mask_proj_kernel.get("bias"),
+                    in_channels=int(tt_in.shape[-1]),
+                    out_channels=self.config.mask_dim,
+                    batch_size=int(tt_in.shape[0]),
+                    input_height=int(tt_in.shape[1]),
+                    input_width=int(tt_in.shape[2]),
+                    kernel_size=(3, 3),
+                    stride=(1, 1),
+                    padding=(1, 1),
+                    dilation=(1, 1),
+                    groups=1,
+                    device=self.device,
+                    memory_config=mem_cfg,
+                )
+                out_rm = (
+                    out_tt
+                    if out_tt.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+                    else ttnn.to_layout(out_tt, ttnn.ROW_MAJOR_LAYOUT)
+                )
+                mask_features = self._to_torch(out_rm).permute(0, 3, 1, 2).contiguous()
+                return mask_features, fpn_hidden
+            except Exception as exc:
+                warnings.warn(f"TT mask projection failed; falling back to HF projection: {exc}", RuntimeWarning)
 
         # Fallback to HF mask projection
         return result.last_hidden_state, fpn_hidden
@@ -210,83 +200,3 @@ class MaskFormerPixelDecoder:
 
     def _to_torch(self, tttensor: Any) -> torch.Tensor:
         return self._ensure_torch_tensor(tttensor)
-
-    def _build_mask_conv_params(self, tt_input):
-        """Build TT-CNN conv config for final mask projection (3x3, stride=1, pad=1)."""
-        try:
-            from models.tt_cnn.tt.builder import (
-                Conv2dConfiguration,
-                L1FullSliceStrategyConfiguration,
-                to_conv2d_config,
-                to_compute_config,
-                to_slice_config,
-            )
-        except ModuleNotFoundError:
-            raise RuntimeError("TT-CNN Conv2d helpers unavailable; install TTNN to run mask projection on device.")
-
-        dtype = self.dtype or get_default_dtype()
-        if dtype is None:
-            raise RuntimeError("Unable to determine default TT dtype for mask projection.")
-
-        # For stability across small spatial sizes, avoid aggressive slicing.
-        slice_strategy = None
-
-        in_ch = int(tt_input.shape[-1]) if len(tt_input.shape) == 4 else self.config.fpn_dim
-        out_ch = self.config.mask_dim
-        sharding = None
-        if "L1FullSliceStrategyConfiguration" in locals() and L1FullSliceStrategyConfiguration is not None:
-            try:
-                sharding = L1FullSliceStrategyConfiguration()
-            except Exception:
-                sharding = None
-
-        configuration = Conv2dConfiguration(
-            input_height=int(tt_input.shape[1]),
-            input_width=int(tt_input.shape[2]),
-            in_channels=in_ch,
-            out_channels=out_ch,
-            batch_size=int(tt_input.shape[0]),
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(1, 1),
-            dilation=(1, 1),
-            groups=1,
-            weight=self._mask_proj_kernel.get("weight"),
-            bias=self._mask_proj_kernel.get("bias"),
-            activation_dtype=dtype,
-            weights_dtype=dtype,
-            output_dtype=dtype,
-            output_layout=ttnn.TILE_LAYOUT,
-            sharding_strategy=sharding,
-            slice_strategy=slice_strategy,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
-            deallocate_activation=False,
-            reallocate_halo_output=True,
-            config_tensors_in_dram=True,
-        )
-
-        conv_config = to_conv2d_config(configuration)
-        compute_config = to_compute_config(configuration, self.device)
-        slice_config = None
-        if to_slice_config is not None and slice_strategy is not None:
-            derived_slice = to_slice_config(slice_strategy)
-            if derived_slice is not None:
-                slice_config = derived_slice
-        conv_kwargs = {
-            "in_channels": configuration.in_channels,
-            "out_channels": configuration.out_channels,
-            "batch_size": configuration.batch_size,
-            "input_height": configuration.input_height,
-            "input_width": configuration.input_width,
-            "kernel_size": configuration.kernel_size,
-            "stride": configuration.stride,
-            "padding": configuration.padding,
-            "dilation": configuration.dilation,
-            "groups": configuration.groups,
-            "device": self.device,
-            "conv_config": conv_config,
-        }
-        if slice_config is not None:
-            conv_kwargs["slice_config"] = slice_config
-        return conv_kwargs, compute_config
