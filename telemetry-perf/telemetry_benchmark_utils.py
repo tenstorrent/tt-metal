@@ -213,7 +213,18 @@ class TelemetryManager:
         Returns:
             Popen object for telemetry process
         """
-        cmd = [TELEMETRY_BINARY, "--logging-interval", polling_interval, "--port", str(TELEMETRY_PORT)]
+        cmd = [TELEMETRY_BINARY, "--polling-interval", polling_interval, "--port", str(TELEMETRY_PORT)]
+
+        # Add FSD file if it exists
+        fsd_locations = [
+            "/localdev/kkfernandez/fsd.textproto",
+            "/opt/tt-topology/fsd.textproto",
+            pathlib.Path.home() / "fsd.textproto",
+        ]
+        for fsd_path in fsd_locations:
+            if pathlib.Path(fsd_path).exists():
+                cmd.extend(["--fsd", str(fsd_path)])
+                break
 
         if mmio_only:
             cmd.append("--mmio-only")
