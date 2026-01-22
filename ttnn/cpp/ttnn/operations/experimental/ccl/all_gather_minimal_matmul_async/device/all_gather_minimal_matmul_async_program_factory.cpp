@@ -861,6 +861,7 @@ all_gather_minimal_matmul_async_factory_helper(
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
+        auto in0_injector_virtual_core = device->worker_core_from_logical_core(in0_core_order.front());
         std::vector<uint32_t> in0_args = {
             in0_addr,
             out_addr,
@@ -881,10 +882,12 @@ all_gather_minimal_matmul_async_factory_helper(
             defer_write_k_block,
             virtual_core.x,
             virtual_core.y,
+            in0_injector_virtual_core.x,
+            in0_injector_virtual_core.y,
             semaphore.at(0).address(),
             semaphore.at(1).address(),
-            in1_core_order_index,
-            in1_core_order.size()};
+            in0_core_order_index,
+            in0_core_order.size()};
         uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
         auto termination_master_logical_core =
             transpose_core_grid ? CoreCoord(core.x - worker_idx, 0) : CoreCoord(0, core.y - worker_idx);
