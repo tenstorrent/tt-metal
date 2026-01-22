@@ -30,7 +30,7 @@ void bind_nlp_kv_cache_load_slice(nb::module_& mod) {
                const uint32_t seq_len_start,
                const uint32_t seq_len_end,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor) {
                 return self(input_tensor, seq_len_start, seq_len_end, memory_config, optional_output_tensor);
             },
             nb::arg("input_tensor").noconvert(),

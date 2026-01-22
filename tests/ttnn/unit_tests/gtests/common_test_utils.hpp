@@ -15,6 +15,6 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y);
 
 // Dispatches a series of elementwise arithmetic operations over a tensor to `cq_id`, according to the expression:
 // `output_tensor = - 32 * (input_tensor) + 128`
-Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id);
+Tensor dispatch_ops_to_device(const Tensor& input_tensor, QueueId cq_id);
 
 }  // namespace ttnn::test_utils
