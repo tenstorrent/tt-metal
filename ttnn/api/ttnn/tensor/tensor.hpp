@@ -36,6 +36,7 @@
 #include <tt_stl/optional_reference.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
+#include "types.hpp"
 
 namespace tt::tt_metal {
 
@@ -320,6 +321,7 @@ Tensor view(
     const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
 Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
+
 }  // namespace ops
 
 }  // namespace tt::tt_metal
