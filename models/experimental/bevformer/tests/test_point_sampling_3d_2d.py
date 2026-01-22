@@ -28,6 +28,13 @@ from models.experimental.bevformer.tests.test_utils import (
 
 from loguru import logger
 
+# --------------------------------------------------------------------------- #
+# Default Test Configuration                                                  #
+# --------------------------------------------------------------------------- #
+
+# Flag to control detailed comparison output (set to True for debugging)
+PRINT_DETAILED_COMPARISON_FLAG = False
+
 
 # Helper functions for testing
 def create_sample_camera_matrices(num_cams):
@@ -111,7 +118,6 @@ def test_generate_reference_points(
 ):
     """Test 3D reference point generation using configuration system."""
     torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
 
     # Get configuration from preset
     preset_config = get_preset_config(config_name)
@@ -145,7 +151,7 @@ def test_generate_reference_points(
     assert torch.all(ttnn_ref_points_torch >= 0.0), "TTNN reference points should be >= 0"
     assert torch.all(ttnn_ref_points_torch <= 1.0), "TTNN reference points should be <= 1"
 
-    if print_detailed_comparison_flag:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Detailed comparison
         print_detailed_comparison(
             torch_ref_points,
@@ -194,7 +200,6 @@ def test_point_sampling_3d_to_2d(
 ):
     """Test 3D to 2D point sampling transformation using configuration system."""
     torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
 
     # Get configuration from preset
     preset_config = get_preset_config(config_name)
@@ -286,7 +291,7 @@ def test_point_sampling_3d_to_2d(
     assert torch_valid_ratio > 0.001, f"Too few valid points in torch implementation: {torch_valid_ratio:.3f}"
     assert ttnn_valid_ratio > 0.001, f"Too few valid points in TTNN implementation: {ttnn_valid_ratio:.3f}"
 
-    if print_detailed_comparison_flag:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Compare projected points
         print_detailed_comparison(
             torch_ref_points_cam,

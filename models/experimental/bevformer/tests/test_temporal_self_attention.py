@@ -25,6 +25,13 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 
 from loguru import logger
 
+# --------------------------------------------------------------------------- #
+# Default Test Configuration                                                  #
+# --------------------------------------------------------------------------- #
+
+# Flag to control detailed comparison output
+PRINT_DETAILED_COMPARISON_FLAG = False
+
 
 @pytest.mark.parametrize(
     "batch_size, num_queries, embed_dims, num_heads, num_bev_queue",
@@ -49,7 +56,6 @@ def test_temporal_self_attention_forward(
     seed,
 ):
     torch.manual_seed(seed)
-    print_detailed_comparison_flag = False
 
     bev_spatial_shapes = torch.tensor([[int(math.sqrt(num_queries))] * 2], dtype=torch.long)
     bev_h, bev_w = bev_spatial_shapes[0]
@@ -125,7 +131,7 @@ def test_temporal_self_attention_forward(
     logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
     logger.info(f"TT model output type: {type(tt_model_output)}")
 
-    if print_detailed_comparison_flag:
+    if PRINT_DETAILED_COMPARISON_FLAG:
         # Print detailed statistical comparison
         print_detailed_comparison(
             ref_model_output,

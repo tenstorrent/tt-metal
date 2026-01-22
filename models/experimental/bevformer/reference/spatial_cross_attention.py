@@ -37,7 +37,7 @@ class SpatialCrossAttention(nn.Module):
         num_cams (int): Number of cameras.
         init_cfg (dict, optional): Initialization config dict.
         batch_first (bool): Whether the first dimension of input is batch_size.
-        deformable_attention (dict): Config for MSDeformableAttention3D.
+        deformable_attention (dict): Config for MSDeformableAttention.
         **kwargs: Additional arguments.
     """
 
@@ -54,7 +54,7 @@ class SpatialCrossAttention(nn.Module):
 
         if deformable_attention is None:
             deformable_attention = dict(
-                type="MSDeformableAttention3D", embed_dims=256, num_levels=4, num_points=8, num_heads=8
+                type="MSDeformableAttention", embed_dims=256, num_levels=4, num_points=8, num_heads=8
             )
 
         self.embed_dims = embed_dims

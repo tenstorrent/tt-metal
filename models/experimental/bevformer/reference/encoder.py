@@ -46,6 +46,21 @@ class BEVFormerLayer(nn.Module):
         batch_first: bool = True,
         **kwargs,
     ):
+        """
+        Initialize a single BEVFormer transformer layer.
+
+        Args:
+            embed_dims (int): Feature embedding dimensions
+            num_heads (int): Number of attention heads
+            num_levels (int): Number of feature pyramid levels
+            num_points (int): Number of sampling points in deformable attention
+            num_cams (int): Number of cameras
+            use_temporal_self_attention (bool): Whether to include temporal self-attention
+            use_spatial_cross_attention (bool): Whether to include spatial cross-attention
+            feedforward_channels (int): Hidden dimensions in FFN
+            batch_first (bool): Whether batch dimension comes first
+            **kwargs: Additional arguments
+        """
         super(BEVFormerLayer, self).__init__()
 
         self.embed_dims = embed_dims
@@ -99,7 +114,6 @@ class BEVFormerLayer(nn.Module):
         spatial_shapes: Optional[torch.Tensor] = None,
         bev_shape: Optional[torch.Tensor] = None,
         level_start_index: Optional[torch.Tensor] = None,
-        valid_ratios: Optional[torch.Tensor] = None,
         prev_bev: Optional[torch.Tensor] = None,
         shift: Optional[torch.Tensor] = None,
         reference_points_3d: Optional[torch.Tensor] = None,
@@ -117,7 +131,6 @@ class BEVFormerLayer(nn.Module):
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
             level_start_index: Start index of each level [num_levels]
-            valid_ratios: Valid ratios for each level [B, num_levels, 2]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
             reference_points_3d: 3D reference points [num_queries, D, 3]
@@ -256,7 +269,6 @@ class BEVFormerEncoder(nn.Module):
         bev_pos: Optional[torch.Tensor] = None,
         spatial_shapes: Optional[torch.Tensor] = None,
         level_start_index: Optional[torch.Tensor] = None,
-        valid_ratios: Optional[torch.Tensor] = None,
         prev_bev: Optional[torch.Tensor] = None,
         shift: Optional[torch.Tensor] = None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
@@ -274,7 +286,6 @@ class BEVFormerEncoder(nn.Module):
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             spatial_shapes: Multi-scale feature shapes [num_levels, 2]
             level_start_index: Start indices for each level [num_levels]
-            valid_ratios: Valid ratios for each level [B, num_levels, 2]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
             img_metas: Camera metadata for point sampling
@@ -337,7 +348,6 @@ class BEVFormerEncoder(nn.Module):
                 spatial_shapes=spatial_shapes,
                 bev_shape=torch.tensor([[bev_h, bev_w]], device=bev_query.device),
                 level_start_index=level_start_index,
-                valid_ratios=valid_ratios,
                 prev_bev=prev_bev,
                 shift=shift,
                 reference_points_3d=reference_points_3d,
