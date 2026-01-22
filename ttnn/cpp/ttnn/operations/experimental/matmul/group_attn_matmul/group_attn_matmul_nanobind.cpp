@@ -30,7 +30,7 @@ void bind_group_attn_matmul(nb::module_& mod) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> output_dtype,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<Tensor> optional_output_tensor) {
+               const std::optional<Tensor>& optional_output_tensor) {
                 return self(
                     input_tensor_a,
                     input_tensor_b,

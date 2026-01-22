@@ -66,14 +66,5 @@ inline void calculate_erfc() {
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE>
-inline void calculate_sfpu_erf_erfc() {
-    if constexpr (operation == SfpuType::erf) {
-        calculate_erf<APPROXIMATION_MODE>();
-    } else if constexpr (operation == SfpuType::erfc) {
-        calculate_erfc<APPROXIMATION_MODE>();
-    }
-}
-
 }  // namespace sfpu
 }  // namespace ckernel

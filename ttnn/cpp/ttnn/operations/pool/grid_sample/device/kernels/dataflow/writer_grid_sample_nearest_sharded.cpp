@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
+#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include "../grid_sample_reader_common.hpp"
 
 // Process single grid point for nearest neighbor - adapted from common utilities
@@ -26,7 +26,8 @@ ALWI void process_grid_point_nearest(
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset,
-    uint32_t l1_write_output_addr) {
+    uint32_t l1_write_output_addr,
+    uint32_t fill_stick_addr) {
     // Compute scaling factors to match prepare_grid.cpp
     constexpr float input_height_f = float(input_height);
     constexpr float input_width_f = float(input_width);
@@ -99,12 +100,7 @@ ALWI void process_grid_point_nearest(
         const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
         noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
     } else {
-        // Out of bounds - fill with zeros
-        for (uint32_t i = 0; i < input_stick_nbytes; i += sizeof(uint32_t)) {
-            volatile tt_l1_ptr uint32_t* zero_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_output_addr + i);
-            *zero_ptr = 0;
-        }
+        noc_async_read(get_noc_addr(fill_stick_addr), l1_write_output_addr, input_stick_nbytes);
     }
 }
 
@@ -152,6 +148,7 @@ void kernel_main() {
     constexpr uint32_t reader_id = get_compile_time_arg_val(12);
     constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
     constexpr uint32_t is_sharded = get_compile_time_arg_val(14);
+    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(15);
 
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
@@ -171,7 +168,7 @@ void kernel_main() {
     }
 
     // Input tensor accessor for remote NOC reads - same as sharded reader
-    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     constexpr auto grid_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
@@ -187,6 +184,9 @@ void kernel_main() {
     // Process each grid stick assigned to this core
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
+
+    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
+    zero_out_page<fill_cb_index>(fill_stick_addr);
 
     // For split reader: track grid point index starting from reader_id
     uint32_t in_grid_row_idx = 0;
@@ -232,7 +232,12 @@ void kernel_main() {
             input_width,
             input_stick_nbytes,
             output_cb_index>(
-            grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset, l1_write_output_addr);
+            grid_stick_ptr,
+            in_grid_row_idx,
+            input_tensor_accessor,
+            batch_offset,
+            l1_write_output_addr,
+            fill_stick_addr);
 
         // Always advance once after processing
         advance_grid_index<is_sharded>(

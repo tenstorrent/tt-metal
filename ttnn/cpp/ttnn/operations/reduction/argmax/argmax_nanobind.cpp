@@ -83,7 +83,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                const std::optional<CoreRangeSet>& sub_core_grids,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor) {
                 return self(
                     input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
