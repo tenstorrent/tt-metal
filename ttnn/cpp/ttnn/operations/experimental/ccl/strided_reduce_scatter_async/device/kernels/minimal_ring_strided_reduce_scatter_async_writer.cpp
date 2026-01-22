@@ -123,6 +123,7 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -165,6 +166,8 @@ void kernel_main() {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
+        auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
         // Skip barrier semaphore in minimal version (no fabric multicast to increment it)
@@ -198,6 +201,7 @@ void kernel_main() {
         DPRINT << "start_tiles_to_read: " << start_tiles_to_read << ENDL();
         DPRINT << "chunk_width: " << chunk_width << ENDL();
         DPRINT << "direction: " << (uint32_t)direction << ENDL();
+        DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
 
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "batch element: " << b << " " << ENDL();
@@ -226,15 +230,19 @@ void kernel_main() {
                                 uint32_t input_row_offset = start_row_offset;
 
                                 cb_wait_front(cb_output_id, tile_granularity);
-
-                                // cb_wait_front(cb_output_id, tile_granularity);
+                                DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
                                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                     uint32_t intermediate_tile_id =
                                         intermediate_tile_id_start + input_row_offset + direction_offset + j;
-                                    DPRINT << "writing into intermediate_tile_id: " << intermediate_tile_id << ENDL();
+                                    if (i == 0) {
+                                        DPRINT << "writing into output_tile_id: " << intermediate_tile_id << ENDL();
+                                    } else {
+                                        DPRINT << "writing into intermediate_tile_id: " << intermediate_tile_id
+                                               << ENDL();
+                                    }
                                     // auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                    //     intermediate_addrgen, intermediate_tile_one_id, 0);
+                                    //     intermediate_addrgen, intermediate_tile_id, 0);
                                     // fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                     //     &mux_connection_handle,
                                     //     pkt_unicast_hdr,
