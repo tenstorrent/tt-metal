@@ -145,7 +145,7 @@ class TTSampling(LightweightModule):
         )
 
         # Create local indices tensor for top-k operations
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.uint16)
         for i in range(per_device_vocab_size):
             indices_tensor_torch[:, :, :, i] = i
         self.tt_indices_tensor = ttnn.from_torch(
