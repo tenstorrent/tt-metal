@@ -535,7 +535,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
 // top of the first page At the end, do not grab page N+1
 template <int32_t round, bool test_for_nonzero>
 static uint32_t write_pages_to_dispatcher(
-    uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t amt_to_write) {
+    uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - round) / downstream_cb_page_size;
 
@@ -1759,7 +1759,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 
     // Third step - write from DB
     uint32_t amt_to_write = amt_to_read;
-    relay_linear_to_downstream<false>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
+    relay_linear_to_downstream<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // RelayLinearH is a large command.
