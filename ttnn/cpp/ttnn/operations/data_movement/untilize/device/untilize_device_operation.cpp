@@ -17,73 +17,22 @@
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
+#include <tt-metalium/buffer_distribution_spec.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
 namespace {
-// TODO: get rid of the code duplication with tt_metal/impl/buffers/buffer_distribution_spec.cpp
-// BufferDistributionSpec::squeeze_shape_ranks for the helpfer fcn below
-std::pair<tt::tt_metal::Shape, tt::tt_metal::Shape> squeeze_shapes_for_sharding(
-    const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
-    TT_FATAL(
-        tensor_shape.rank() >= shard_shape.rank(),
-        "Shard rank ({}) cannot exceed tensor rank ({})!",
-        shard_shape.rank(),
-        tensor_shape.rank());
-
-    uint64_t tensor_volume = tensor_shape.volume();
-    uint64_t shard_volume = shard_shape.volume();
-    tt::stl::SmallVector<uint32_t> new_tensor_shape;
-    tt::stl::SmallVector<uint32_t> new_shard_shape;
-
-    bool matching_dims_sequence = false;
-    bool last_dim_divisible = false;
-    uint64_t cur_tensor_volume = 1;
-    uint64_t cur_shard_volume = 1;
-    for (int dim = -1; dim >= -static_cast<int>(shard_shape.rank()); dim--) {
-        auto tensor_size = tensor_shape[dim];
-        auto shard_size = shard_shape[dim];
-
-        bool should_merge_dims = false;
-        if (dim < -1) {
-            should_merge_dims = matching_dims_sequence || (shard_size == 1 && last_dim_divisible);
-        }
-
-        if (should_merge_dims) {
-            new_tensor_shape.back() *= tensor_size;
-            new_shard_shape.back() *= shard_size;
-        } else {
-            new_tensor_shape.push_back(tensor_size);
-            new_shard_shape.push_back(shard_size);
-            matching_dims_sequence = true;
-        }
-        matching_dims_sequence &= tensor_size == shard_size;
-        last_dim_divisible = shard_size != 0 ? tensor_size % shard_size == 0 : false;
-
-        cur_tensor_volume *= tensor_size;
-        cur_shard_volume *= shard_size;
-        if (cur_tensor_volume == tensor_volume && cur_shard_volume == shard_volume) {
-            break;
-        }
-    }
-
-    for (int dim = -static_cast<int>(shard_shape.rank()) - 1; dim >= -static_cast<int>(tensor_shape.rank()); dim--) {
-        new_tensor_shape.back() *= tensor_shape[dim];
-    }
-
-    std::reverse(new_tensor_shape.begin(), new_tensor_shape.end());
-    std::reverse(new_shard_shape.begin(), new_shard_shape.end());
-    return {tt::tt_metal::Shape(std::move(new_tensor_shape)), tt::tt_metal::Shape(std::move(new_shard_shape))};
-}
 
 bool is_uneven_nd_sharding(const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape) {
     if (tensor_shape.volume() == 0) {
         return false;
     }
-
-    auto [squeezed_tensor_shape, squeezed_shard_shape] = squeeze_shapes_for_sharding(tensor_shape, shard_shape);
+    // In ND sharding, the tensor and shards may not have the same rank. We may have to adjust the tensor shape before
+    // determining if it is unevenly sharded.
+    auto [squeezed_tensor_shape, squeezed_shard_shape] =
+        tt::tt_metal::detail::squeeze_shape_ranks(tensor_shape, shard_shape);
     TT_FATAL(squeezed_tensor_shape.rank() == squeezed_shard_shape.rank(), "Squeezed tensor and shard ranks must match");
 
     for (size_t i = 0; i < squeezed_shard_shape.rank(); ++i) {
