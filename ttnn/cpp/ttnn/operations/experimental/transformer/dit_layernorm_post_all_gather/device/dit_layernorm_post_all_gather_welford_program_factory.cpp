@@ -133,6 +133,30 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
     uint32_t gamma_element_size = gamma.has_value() ? gamma.value().element_size() : 0;
     uint32_t beta_element_size = beta.has_value() ? beta.value().element_size() : 0;
 
+    // Determine if gamma/beta are batched (have batch dimension > 1)
+    // Gamma/beta can have shapes: [W], [1, W], [1, 1, W], or [batch, 1, W]
+    // When batch > 1, we need to re-read gamma/beta for each batch
+    // Note: Batch broadcasting is only supported for TILE layout (validated in device_operation.cpp)
+    uint32_t gamma_is_batched = 0;
+    uint32_t gamma_batch_stride_tiles = 0;
+    if (gamma.has_value() && gamma.value().layout() == Layout::TILE) {
+        const auto& gamma_shape = gamma.value().padded_shape();
+        if (gamma_shape.rank() >= 3 && gamma_shape[-3] > 1) {
+            gamma_is_batched = 1;
+            // Stride in tiles between batches = Wt (one row of tiles per batch)
+            gamma_batch_stride_tiles = Wt;
+        }
+    }
+    uint32_t beta_is_batched = 0;
+    uint32_t beta_batch_stride_tiles = 0;
+    if (beta.has_value() && beta.value().layout() == Layout::TILE) {
+        const auto& beta_shape = beta.value().padded_shape();
+        if (beta_shape.rank() >= 3 && beta_shape[-3] > 1) {
+            beta_is_batched = 1;
+            beta_batch_stride_tiles = Wt;
+        }
+    }
+
     reader_compile_time_args.push_back((std::uint32_t)gamma_page_size);
     reader_compile_time_args.push_back((std::uint32_t)beta_page_size);
     reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
@@ -140,6 +164,11 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
     reader_compile_time_args.push_back((std::uint32_t)Wt);
     reader_compile_time_args.push_back((std::uint32_t)gamma_element_size);
     reader_compile_time_args.push_back((std::uint32_t)beta_element_size);
+    reader_compile_time_args.push_back((std::uint32_t)gamma_is_batched);
+    reader_compile_time_args.push_back((std::uint32_t)beta_is_batched);
+    reader_compile_time_args.push_back((std::uint32_t)gamma_batch_stride_tiles);
+    reader_compile_time_args.push_back((std::uint32_t)beta_batch_stride_tiles);
+    reader_compile_time_args.push_back((std::uint32_t)Ht);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
@@ -174,7 +203,8 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, W, block_size, num_devices, gamma.has_value(), beta.has_value()};
+    std::vector<uint32_t> compute_args = {
+        Wt, W, block_size, num_devices, gamma.has_value(), beta.has_value(), gamma_is_batched, beta_is_batched, Ht};
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
@@ -285,7 +315,7 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
                 tile_row_end,
                 e.u,
             });
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core, tile_row_start});
         tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, tile_row_start, tile_row_end});
         curr_row += num_tile_rows_per_core;
     }
