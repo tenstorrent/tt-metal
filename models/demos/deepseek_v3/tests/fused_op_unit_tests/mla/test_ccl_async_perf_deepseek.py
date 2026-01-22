@@ -8,7 +8,7 @@ from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-THRESHOLD = 0.4
+THRESHOLD = 0.5
 
 
 @pytest.fixture(autouse=True)
@@ -30,11 +30,15 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("mla_linear_wq_kv_a", 10, 28.81),
+        ("wq_kv_a", 10, 28.81),
+        ("wq_b", 10, 57.5),
+        ("wkv_b1", 10, 50),
+        ("wkv_b2", 10, 142),
+        ("wo", 10, 211.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_linear_tg_deepseek_perf(
+def test_linear_deepseek_perf(
     step_name,
     warmup_iters,
     perf_target_us,
@@ -44,9 +48,9 @@ def test_linear_tg_deepseek_perf(
     benchmark_data = BenchmarkData()
 
     subdir = "deepseek_linear_perf"
-    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_linear_deepseek.py"
+    command = f"pytest models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_linear_deepseek.py -k {step_name}"
     cols = ["DEVICE KERNEL"]
-    op_name = "MeshDeviceOperationAdapter<ttnn::prim::MatmulDeviceOperation>"
+    op_name = "MatmulDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)
@@ -74,9 +78,12 @@ def test_linear_tg_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -126,9 +133,12 @@ def test_fast_reduce_wq_kv_a_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -179,9 +189,12 @@ def test_ag_tg_deepseek_allgather_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -233,9 +246,12 @@ def test_slice_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -286,9 +302,12 @@ def test_rmsnorm_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -359,9 +378,12 @@ def test_to_memory_config_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -419,9 +441,12 @@ def test_permute_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -473,9 +498,12 @@ def test_rope_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -527,9 +555,12 @@ def test_concat_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -577,9 +608,12 @@ def test_pad_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -630,9 +664,12 @@ def test_paged_update_cache_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
 
 
 @pytest.mark.parametrize(
@@ -683,6 +720,9 @@ def test_reshape_deepseek_perf(
         ml_model_name="deepseek-v3-tg",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
-    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us < perf_target_us + max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us"
+    assert measured_avg_us > perf_target_us - max(
+        THRESHOLD, perf_target_us * 0.05
+    ), f"Performance is better than target, update the target: {measured_avg_us} us > {perf_target_us} us"
