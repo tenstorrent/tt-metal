@@ -23,11 +23,8 @@
 
 namespace tt::tt_metal {
 class IDevice;
-class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
-struct Event;
-struct TraceDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
