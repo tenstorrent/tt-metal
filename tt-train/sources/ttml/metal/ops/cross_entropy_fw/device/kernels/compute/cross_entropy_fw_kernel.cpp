@@ -14,6 +14,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
@@ -88,8 +89,8 @@ void find_max_value_in_row() {
         }
 
         if (col > 0) {
-            max_tile_init();
-            max_tile(max_value_register, tile_register);
+            binary_max_tile_init();
+            binary_max_tile(max_value_register, tile_register, max_value_register);
         }
     }
     tile_regs_commit();
@@ -139,8 +140,8 @@ void find_max_value_in_row() {
             }
 
             if (col > 0) {
-                max_tile_init();
-                max_tile(max_value_register, tile_register);
+                binary_max_tile_init();
+                binary_max_tile(max_value_register, tile_register, max_value_register);
             }
         }
         cb_pop_front(cb_input, block_size);  // delete block_size tiles from input buffer
