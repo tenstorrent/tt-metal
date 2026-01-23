@@ -16,19 +16,10 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
-// Returns: r (unsigned remainder), a_signed, b_signed (original signed values)
-sfpi_inline void compute_unsigned_remainder_int32(
-    const uint dst_index_in0, const uint dst_index_in1, sfpi::vInt& r, sfpi::vInt& a_signed, sfpi::vInt& b_signed) {
-    // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-
-    // Equivalent to: sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vUInt b = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
-
-    // When converting to float, integers are treated as sign-magnitude.
-    // Convert inputs to positive values to avoid conversion problems.
-    b = sfpi::abs(b);
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
+    // Get absolute value of b for reciprocal computation
+    sfpi::vUInt b = sfpi::abs(b_signed);
 
     // Convert to float for reciprocal computation
     // Handle edge case: if conversion results in negative
@@ -51,11 +42,8 @@ sfpi_inline void compute_unsigned_remainder_int32(
     // Halley's Method
     sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
 
-    // Equivalent to: sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    sfpi::vUInt a = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
-
-    a = sfpi::abs(a);
+    // Compute abs(a) - interleaved with Halley's method to reduce register pressure
+    sfpi::vUInt a = sfpi::abs(a_signed);
 
     // Continue Halley's Method
     e = e * e + e;
@@ -72,20 +60,18 @@ sfpi_inline void compute_unsigned_remainder_int32(
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
-    sfpi::vUInt MASK_11 = 0x7ff;
+    // Recompute b for chunk extraction to reduce register pressure
+    b = sfpi::abs(b_signed);
+
+    // 8388608.0f = 2^23 is used as a Bias for mantissa alignment
+    sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
 
     // Split q and b into 11-bit chunks to compute q * b
-    sfpi::vFloat q1 = int32_to_float(q & MASK_11, 0);          // Lower 11 bits of q
-    sfpi::vFloat q2 = int32_to_float(q >> 11, 0);              // Upper bits of q
-    sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, 0);  // Middle 11 bits of b
-    sfpi::vFloat b0 = int32_to_float(b & MASK_11, 0);          // Lower 11 bits of b
-    q = q << 11;
-
-    // 8388608.0f = 2^23 is used as a Bias.
-    // Adding this value to a float pushes it into a range where the lower 23 bits of the
-    // mantissa directly represent the integer portion of the number.
-    // This allows integer extraction from a floating-point value without explicit casting.
-    sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
+    sfpi::vUInt MASK_11 = 0x7ff;
+    sfpi::vFloat q1 = int32_to_float(q & MASK_11, 0);
+    sfpi::vFloat q2 = int32_to_float(q >> 11, 0);
+    sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, 0);
+    sfpi::vFloat b0 = int32_to_float(b & MASK_11, 0);
 
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
@@ -96,19 +82,22 @@ sfpi_inline void compute_unsigned_remainder_int32(
     sfpi::vInt qb = sfpi::exman9(lo) << 11;
     qb += sfpi::exman9(hi) << 22;
 
-    // Compute remainder
-    a = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
-    a = sfpi::abs(sfpi::reinterpret<sfpi::vInt>(a));
-    r = a - qb;
+    // Compute remainder - recompute abs(a_signed)
+    a = sfpi::abs(a_signed);
+    sfpi::vInt r = a - qb;
 
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
 
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22, 0);
     sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
     correction_f = sfpi::int32_to_float(correction, 0);
+
+    // Recompute b chunks for correction multiplication to reduce register pressure
+    b = sfpi::abs(b_signed);
+    b0 = int32_to_float(b & MASK_11, 0);
+    b1 = int32_to_float((b >> 11) & MASK_11, 0);
+    sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22, 0);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
     sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
@@ -124,17 +113,13 @@ sfpi_inline void compute_unsigned_remainder_int32(
     v_else { r -= tmp; }
     v_endif;
 
-    // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
+    // Final adjustment - recompute b to avoid keeping it alive
+    b = sfpi::abs(b_signed);
     v_if(r < 0 && (r - 1) < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
 
-    // Reload original signed values for sign handling
-    a_signed = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
-    b_signed = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
+    return r;
 }
 
 // Remainder = a - floor(a / b) * b
@@ -143,13 +128,16 @@ sfpi_inline void calculate_remainder_int32_body(
     // Size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    // Compute unsigned remainder
-    sfpi::vInt r;
-    sfpi::vInt a_signed;
-    sfpi::vInt b_signed;
-    compute_unsigned_remainder_int32(dst_index_in0, dst_index_in1, r, a_signed, b_signed);
+    // Load signed inputs
+    sfpi::vInt a_signed = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+    sfpi::vInt b_signed = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
-    // Remainder sign handling
+    // Compute unsigned remainder
+    sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
+
+    // Remainder sign handling (uses both a_signed and b_signed for sign)
     sfpi::vInt sign = a_signed ^ b_signed;
     v_if(r != 0) {
         v_if(sign < 0) {
