@@ -481,6 +481,17 @@ if __name__ == "__main__":
         type=str,
         help="Generate vectors for a specific suite only (e.g., 'nightly', 'model_traced'). Omit to generate all suites.",
     )
+    parser.add_argument(
+        "--use-db",
+        action="store_true",
+        help="Load configurations from PostgreSQL database instead of JSON file. Requires TTNN_OPS_DATABASE_URL or POSTGRES_* environment variables.",
+    )
+    parser.add_argument(
+        "--mesh-shape",
+        required=False,
+        type=str,
+        help="Filter configurations to specific mesh shape (e.g., '2x4', '1x1'). Only effective with --use-db.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -498,5 +509,20 @@ if __name__ == "__main__":
     else:
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
+
+    # Configure database mode if --use-db flag is provided
+    if args.use_db:
+        MasterConfigLoader.set_database_mode(True)
+        logger.info("Database mode enabled: Loading configurations from PostgreSQL")
+
+    # Configure mesh filter if --mesh-shape is provided
+    if args.mesh_shape:
+        try:
+            rows, cols = map(int, args.mesh_shape.lower().split("x"))
+            MasterConfigLoader.set_mesh_filter((rows, cols))
+            logger.info(f"Mesh filter enabled: {rows}x{cols}")
+        except ValueError:
+            logger.error(f"Invalid mesh shape format: {args.mesh_shape}. Use format like '2x4' or '1x1'.")
+            sys.exit(1)
 
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)

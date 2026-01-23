@@ -18,7 +18,7 @@ import ttnn
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-from .operation_parameter_extractors import OperationParameterExtractors
+from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
 
@@ -69,11 +69,21 @@ class MasterConfigLoader:
         lead_models_only: When True, filters configurations to only include
             those from lead models (e.g., deepseek_v3). Set via set_lead_models_filter()
             before importing sweep modules that use this loader.
+        _use_database: When True, loads configurations from PostgreSQL database
+            instead of the JSON file. Set via set_database_mode().
+        _mesh_filter: When set, filters configurations to a specific mesh shape
+            at the database query level. Set via set_mesh_filter().
     """
 
     # Class-level filter setting (replaces environment variable approach)
     # This is set by sweeps_parameter_generator.py before importing sweep modules
     _lead_models_only: bool = False
+
+    # Database mode settings (Phase 2)
+    _use_database: bool = False
+
+    # Mesh filter for server-side filtering (Phase 3)
+    _mesh_filter: Optional[Tuple[int, int]] = None
 
     @classmethod
     def set_lead_models_filter(cls, enabled: bool) -> None:
@@ -93,6 +103,45 @@ class MasterConfigLoader:
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
         return cls._lead_models_only
+
+    @classmethod
+    def set_database_mode(cls, enabled: bool) -> None:
+        """Enable or disable database loading mode.
+
+        Args:
+            enabled: If True, load configurations from PostgreSQL database.
+                    If False, load from JSON file (default behavior).
+
+        Note:
+            Database mode requires TTNN_OPS_DATABASE_URL or POSTGRES_* environment
+            variables to be set. If database connection fails, it will fall back
+            to JSON file loading.
+        """
+        cls._use_database = enabled
+
+    @classmethod
+    def get_database_mode(cls) -> bool:
+        """Get the current database mode setting."""
+        return cls._use_database
+
+    @classmethod
+    def set_mesh_filter(cls, mesh_shape: Optional[Tuple[int, int]]) -> None:
+        """Set mesh shape filter for server-side filtering.
+
+        Args:
+            mesh_shape: Tuple of (rows, cols) to filter configs by mesh shape,
+                       e.g., (2, 4) for 2x4 mesh. Set to None to disable filtering.
+
+        Note:
+            This filter is applied at the database query level when in database mode,
+            reducing data transfer. In JSON mode, filtering happens in Python.
+        """
+        cls._mesh_filter = mesh_shape
+
+    @classmethod
+    def get_mesh_filter(cls) -> Optional[Tuple[int, int]]:
+        """Get the current mesh filter setting."""
+        return cls._mesh_filter
 
     @staticmethod
     def _source_matches_lead_models(source) -> bool:
@@ -150,18 +199,199 @@ class MasterConfigLoader:
         self.traced_configs_cache = {}  # Cache configs by operation name
 
     def load_master_data(self):
-        """Load the master JSON file"""
-        if self.master_data is None:
+        """Load master data from database or JSON file.
+
+        If database mode is enabled via set_database_mode(True), attempts to load
+        from the PostgreSQL database first. Falls back to JSON file if:
+        - Database mode is disabled
+        - Database connection fails
+        - Database query fails
+        """
+        if self.master_data is not None:
+            return
+
+        # Try database loading if enabled
+        if MasterConfigLoader._use_database:
             try:
-                with open(self.master_file_path, "r") as f:
-                    self.master_data = json.load(f)
-                print(f"✅ Loaded master data with {len(self.master_data.get('operations', {}))} operations")
-            except FileNotFoundError:
-                print(f"❌ Master file not found: {self.master_file_path}")
-                self.master_data = {"operations": {}}
-            except json.JSONDecodeError as e:
-                print(f"❌ Error parsing master JSON: {e}")
-                self.master_data = {"operations": {}}
+                self.load_master_data_from_db()
+                return
+            except Exception as e:
+                print(f"⚠️ Database load failed, falling back to JSON: {e}")
+
+        # JSON file loading (default behavior)
+        self._load_master_data_from_json()
+
+    def _load_master_data_from_json(self):
+        """Load the master JSON file (internal method)."""
+        try:
+            with open(self.master_file_path, "r") as f:
+                self.master_data = json.load(f)
+            print(f"✅ Loaded master data from JSON with {len(self.master_data.get('operations', {}))} operations")
+        except FileNotFoundError:
+            print(f"❌ Master file not found: {self.master_file_path}")
+            self.master_data = {"operations": {}}
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing master JSON: {e}")
+            self.master_data = {"operations": {}}
+
+    def load_master_data_from_db(self):
+        """Load operation configurations directly from PostgreSQL database.
+
+        Queries the ttnn_ops schema and reconstructs the data in the same format
+        as the JSON file for compatibility with existing code.
+
+        Raises:
+            RuntimeError: If psycopg2 is not installed
+            ValueError: If database configuration is missing
+            Exception: If database query fails
+        """
+        from framework.database import ttnn_ops_connection, is_ttnn_ops_db_available
+
+        if not is_ttnn_ops_db_available():
+            raise ValueError("ttnn_ops database is not configured or psycopg2 is not installed")
+
+        # Build the query with optional mesh filter
+        query, params = self._build_db_query()
+
+        with ttnn_ops_connection() as (conn, cursor):
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        # Convert rows to the expected format: {"operations": {op_name: {"configurations": [...]}}}
+        operations = {}
+        for row in rows:
+            operation_name = row[0]
+            configs = row[1]  # JSONB array of configurations
+            if configs:
+                operations[operation_name] = {"configurations": configs}
+
+        self.master_data = {"operations": operations}
+
+        mesh_info = ""
+        if MasterConfigLoader._mesh_filter:
+            mesh_info = f" (mesh filter: {MasterConfigLoader._mesh_filter[0]}x{MasterConfigLoader._mesh_filter[1]})"
+        print(f"✅ Loaded master data from database with {len(operations)} operations{mesh_info}")
+
+    def _build_db_query(self) -> Tuple[str, list]:
+        """Build the SQL query for loading configurations from database.
+
+        Returns:
+            Tuple of (query_string, params_list)
+        """
+        # Base query that reconstructs JSON format from normalized tables
+        query = """
+        SELECT
+            o.operation_name,
+            jsonb_agg(
+                jsonb_set(
+                    c.full_config_json,
+                    '{machine_info,0,tensor_placements}',
+                    jsonb_build_array(
+                        jsonb_build_object(
+                            'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
+                            'placement', CASE WHEN mc.placement_type = 'shard'
+                                THEN '[PlacementShard(' || COALESCE(mc.shard_dim::text, '0') || ')]'
+                                ELSE '[PlacementReplicate]' END,
+                            'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
+                        )
+                    )
+                )
+                ORDER BY c.ttnn_configuration_id, mc.device_count
+            ) as configs
+        FROM ttnn_ops.ttnn_operation o
+        JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
+        JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+        JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+        """
+
+        params = []
+        where_clauses = []
+
+        # Add mesh filter if specified (Phase 3)
+        if MasterConfigLoader._mesh_filter:
+            where_clauses.append("mc.mesh_shape = %s")
+            params.append(list(MasterConfigLoader._mesh_filter))
+
+        # Add lead model filter if enabled
+        if MasterConfigLoader._lead_models_only:
+            # Join with configuration_model and model tables to filter by lead models
+            query = query.replace(
+                "FROM ttnn_ops.ttnn_operation o",
+                """FROM ttnn_ops.ttnn_operation o
+        JOIN ttnn_ops.ttnn_configuration_model cm_model ON cm_model.configuration_id = c.ttnn_configuration_id
+        JOIN ttnn_ops.ttnn_model m ON m.ttnn_model_id = cm_model.model_id""",
+            )
+            where_clauses.append("m.is_lead_model = true")
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        query += " GROUP BY o.operation_name"
+
+        return query, params
+
+    def get_operation_configs_from_db(self, operation_name: str) -> List:
+        """Query configurations for a single operation from database.
+
+        This is an optimized method for loading configs for one operation
+        without loading the entire dataset.
+
+        Args:
+            operation_name: The operation name (with or without namespace prefix)
+
+        Returns:
+            List of configuration dictionaries
+        """
+        from framework.database import ttnn_ops_connection, is_ttnn_ops_db_available
+
+        if not is_ttnn_ops_db_available():
+            return []
+
+        # Build query for single operation
+        query = """
+        SELECT
+            jsonb_agg(
+                jsonb_set(
+                    c.full_config_json,
+                    '{machine_info,0,tensor_placements}',
+                    jsonb_build_array(
+                        jsonb_build_object(
+                            'mesh_device_shape', to_jsonb(mc.mesh_shape)::text,
+                            'placement', CASE WHEN mc.placement_type = 'shard'
+                                THEN '[PlacementShard(' || COALESCE(mc.shard_dim::text, '0') || ')]'
+                                ELSE '[PlacementReplicate]' END,
+                            'distribution_shape', COALESCE(to_jsonb(mc.distribution_shape)::text, 'null')
+                        )
+                    )
+                )
+                ORDER BY c.ttnn_configuration_id, mc.device_count
+            ) as configs
+        FROM ttnn_ops.ttnn_operation o
+        JOIN ttnn_ops.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
+        JOIN ttnn_ops.ttnn_configuration_mesh cm ON cm.configuration_id = c.ttnn_configuration_id
+        JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = cm.mesh_config_id
+        WHERE (o.operation_name = %s OR o.base_operation_name = %s)
+        """
+
+        params = [operation_name, operation_name]
+
+        # Add mesh filter if specified
+        if MasterConfigLoader._mesh_filter:
+            query += " AND mc.mesh_shape = %s"
+            params.append(list(MasterConfigLoader._mesh_filter))
+
+        query += " GROUP BY o.operation_name"
+
+        try:
+            with ttnn_ops_connection() as (conn, cursor):
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+        except Exception as e:
+            print(f"⚠️ Database query failed for {operation_name}: {e}")
+
+        return []
 
     def get_operation_configs(self, operation_name: str) -> List[List[Dict]]:
         """Get all configurations for a specific operation"""
