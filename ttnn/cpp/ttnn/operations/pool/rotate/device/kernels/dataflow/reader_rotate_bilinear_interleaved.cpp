@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp"
+#include "ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 
 using namespace fixed_point_arithmetic;
 
@@ -29,20 +29,38 @@ void kernel_main() {
     constexpr uint32_t input_batch = get_compile_time_arg_val(3);
     constexpr uint32_t input_height = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
+    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t input_channels = get_compile_time_arg_val(7);
+    constexpr bool fill_is_zero = get_compile_time_arg_val(8) != 0;
 
     const int32_t cos_angle_q16 = static_cast<int32_t>(cos_angle_bits);
     const int32_t sin_angle_q16 = static_cast<int32_t>(sin_angle_bits);
     const int32_t center_x_q16 = static_cast<int32_t>(center_x_bits);
     const int32_t center_y_q16 = static_cast<int32_t>(center_y_bits);
 
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto src_args = TensorAccessorArgs<9>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
     constexpr uint32_t hw_size = input_height * input_width;
 
     const uint32_t end_stick_id = start_stick_id + num_sticks;
 
-    zero_out_tiles<input_cb_index>();
+    uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
+    if constexpr (fill_is_zero) {
+        zero_out_page<fill_cb_index>(fill_stick_addr);
+    } else {
+        volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
+        const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
+        const uint32_t num_pairs = input_channels / 2;
+        for (uint32_t c = 0; c < num_pairs; c++) {
+            fill_ptr32[c] = fill_value_packed;
+        }
+        if (input_channels & 1) {
+            volatile tt_l1_ptr uint16_t* fill_ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
+            fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bf16);
+        }
+    }
+    noc_async_read_barrier();
 
     uint32_t curr_batch = start_stick_id / hw_size;
     uint32_t spatial_pos_in_batch = start_stick_id % hw_size;
@@ -95,7 +113,7 @@ void kernel_main() {
         cb_reserve_back(input_cb_index, 1);
         const uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-        read_four_corner_inputs(
+        read_four_corner_inputs_with_fill(
             input_tensor_accessor,
             batch_offset,
             input_width,
@@ -105,7 +123,8 @@ void kernel_main() {
             w0,
             w1,
             input_height,
-            l1_write_input_addr);
+            l1_write_input_addr,
+            fill_stick_addr);
 
         cb_reserve_back(scalar_cb_index, 1);
         const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
