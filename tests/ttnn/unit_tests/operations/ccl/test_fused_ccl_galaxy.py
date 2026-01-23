@@ -476,9 +476,10 @@ def run_all_gather_matmul_galaxy_impl(
     def run_non_fused_op(n_iters, store_all_results=True):
         """Run non-fused: all_gather_async + ttnn.linear."""
         outs = []
+        # Use DRAM interleaved for non-fused path (simpler, like model does for some paths)
+        dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
         for i in range(n_iters):
             # AllGather - requires 2 semaphores passed as a list
-            # Use non_fused_ag_output_mem_config (rectangular grid) for mcast_in0 matmul
             sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
@@ -486,17 +487,16 @@ def run_all_gather_matmul_galaxy_impl(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
-                memory_config=non_fused_ag_output_mem_config,
+                memory_config=dram_interleaved,
                 topology=all_gather_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
-            # Matmul - uses non_fused_program_config with mcast_in0=True on rectangular grid
+            # Matmul - let ttnn auto-select program config
             mm_out = ttnn.linear(
                 ag_out,
-                tt_in1_tensor_non_fused,  # Weights on same rectangular grid
-                memory_config=non_fused_mm_output_mem_config,
-                program_config=non_fused_program_config,
+                tt_in1_tensor,  # Use original weights (will be moved to DRAM if needed)
+                memory_config=dram_interleaved,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
             )
