@@ -146,8 +146,7 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     cb_push_back(CbOut, num_output_tiles);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t mm1_full_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight0_cb = get_compile_time_arg_val(1);
     constexpr uint32_t weight1_cb = get_compile_time_arg_val(2);
@@ -165,13 +164,6 @@ void MAIN {
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
-
-    if constexpr (use_custom_mm) {
-        custom_mm_block_init(mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, num_tiles_k);
-    } else {
-        mm_block_init(
-            mm1_full_cb, weight0_cb, intermediate_pregather_cb, false, out_subblock_w, out_subblock_h, in0_block_w);
-    }
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
@@ -208,4 +200,3 @@ void MAIN {
             use_custom_mm>(bias_tile_index);
     }
 }
-}  // namespace NAMESPACE
