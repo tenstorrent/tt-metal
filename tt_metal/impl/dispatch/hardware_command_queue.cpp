@@ -88,22 +88,11 @@ HWCommandQueue::HWCommandQueue(
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
     prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
-        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
-    dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
 
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    this->size_B_ =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
-        device_->num_hw_cqs();
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
-        this->size_B_ = this->size_B_ / 4;
-    }
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
@@ -123,12 +112,6 @@ HWCommandQueue::HWCommandQueue(
     this->virtual_enqueue_program_dispatch_core_ =
         device_->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
-    tt_cxy_pair completion_q_writer_location =
-        MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
-            device_->id(), channel, this->id_);
-
-    this->completion_queue_writer_core_ = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
-
     this->exit_condition_ = false;
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread_ = std::move(completion_queue_thread);
@@ -142,8 +125,6 @@ HWCommandQueue::HWCommandQueue(
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
-
-std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
@@ -318,7 +299,5 @@ std::pair<bool, size_t> HWCommandQueue::query_prefetcher_cache(uint64_t pgm_id, 
 }
 
 void HWCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
-
-int HWCommandQueue::get_prefetcher_cache_sizeB() const { return this->prefetcher_cache_manager_->get_cache_sizeB(); }
 
 }  // namespace tt::tt_metal

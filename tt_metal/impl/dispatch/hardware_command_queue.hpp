@@ -66,7 +66,6 @@ public:
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data);
 
     uint32_t id() const;
-    std::optional<uint32_t> tid() const;
 
     SystemMemoryManager& sysmem_manager();
 
@@ -81,9 +80,7 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
-    std::optional<uint32_t> tid_;
     std::thread completion_queue_thread_;
     SystemMemoryManager& manager_;
 
@@ -103,13 +100,6 @@ private:
                                                               // reading an entry out of the completion queue
 
     MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
-    // These values are used to reset the host side launch message wptr after a trace is captured
-    // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
-    // To ensure that host and device are not out of sync, we reset the wptrs to their original values
-    // post trace capture.
-    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
     IDevice* device_;
 
     std::condition_variable reader_thread_cv_;
@@ -120,7 +110,6 @@ private:
     CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
-    CoreCoord completion_queue_writer_core_;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
@@ -129,18 +118,7 @@ private:
     // The prefetcher cache manager is used to track the state of the prefetcher cache.
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
 
-    // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
-    // Trace recording will change the state of the host side cache manager, without actually enqueueing the
-    // corresponding commands, which would cause the bookkeeping to go out of sync from the prefetcher cache. Hence we
-    // will use the following variable to swap out the cache manager into a backup variable before starting trace
-    // recording. At the end of the recording, we will reset the cache manager, and swap it with the backup.
-    std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
-
     void read_completion_queue();
-
-    // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
-    template <typename T>
-    void enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
@@ -148,8 +126,6 @@ private:
     std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB);
 
     void reset_prefetcher_cache_manager();
-
-    int get_prefetcher_cache_sizeB() const;
 
     void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
