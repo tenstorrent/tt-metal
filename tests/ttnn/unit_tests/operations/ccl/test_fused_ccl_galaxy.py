@@ -282,17 +282,7 @@ def run_all_gather_matmul_galaxy_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    # For non-fused path: all_gather output must be on same grid as weights for gather_in0=True
-    # All_gather output shape is [8, 4, M, K] (full K after gathering), sharded across output_core_range_set
-    non_fused_ag_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            output_core_range_set,  # Same grid as weights
-            [M, K_per_shard],  # K is full K after gathering
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
+    # Fused path output memory config (uses RING_CRS - non-contiguous grid)
     mm_output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -302,6 +292,52 @@ def run_all_gather_matmul_galaxy_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+
+    # For non-fused path: mcast_in0=True requires a contiguous rectangular grid
+    # Create a rectangular grid with same number of cores (24 = 6x4)
+    non_fused_num_cores = output_num_cores  # 24
+    non_fused_grid = (6, 4)  # 6x4 = 24 cores, contiguous rectangle
+    non_fused_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(non_fused_grid[0] - 1, non_fused_grid[1] - 1))}
+    )
+    non_fused_K_per_shard = round_up(math.ceil(K / non_fused_num_cores), ttnn.TILE_SIZE)
+    non_fused_N_per_shard = round_up(math.ceil(N / non_fused_num_cores), ttnn.TILE_SIZE)
+    non_fused_N_padded = non_fused_N_per_shard * non_fused_num_cores
+
+    # Non-fused path memory configs (uses rectangular grid)
+    non_fused_ag_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            non_fused_core_range_set,
+            [M, non_fused_K_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    non_fused_in1_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            non_fused_core_range_set,
+            [K, non_fused_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    non_fused_mm_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            non_fused_core_range_set,
+            [M, non_fused_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # Calculate non-fused matmul block sizes
+    non_fused_out_block_w = non_fused_N_padded // non_fused_num_cores // ttnn.TILE_SIZE
+    non_fused_out_subblock_w = MAX_DST_TILES
+    while non_fused_out_block_w % non_fused_out_subblock_w != 0:
+        non_fused_out_subblock_w -= 1
 
     # Program config for fused op (uses gather_in0 with global CB)
     fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -319,14 +355,14 @@ def run_all_gather_matmul_galaxy_impl(
         num_global_cb_receivers=24,
         untilize_out=False,
     )
-    # Program config for non-fused op (uses mcast_in0, no global CB)
+    # Program config for non-fused op (uses mcast_in0, contiguous rectangular grid)
     non_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=storage_grid,
+        compute_with_storage_grid_size=non_fused_grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
+        out_subblock_w=non_fused_out_subblock_w,
         per_core_M=out_block_h,
-        per_core_N=out_block_w,
+        per_core_N=non_fused_out_block_w,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -358,6 +394,16 @@ def run_all_gather_matmul_galaxy_impl(
         layout=ttnn.TILE_LAYOUT,
         dtype=in1_dtype,
         memory_config=in1_sharded_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    # Weights tensor for non-fused path (on rectangular grid)
+    tt_in1_tensor_non_fused = ttnn.from_torch(
+        in1_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in1_dtype,
+        memory_config=non_fused_in1_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
@@ -416,7 +462,7 @@ def run_all_gather_matmul_galaxy_impl(
         outs = []
         for i in range(n_iters):
             # AllGather - requires 2 semaphores passed as a list
-            # Use non_fused_ag_output_mem_config so output is on same grid as weights
+            # Use non_fused_ag_output_mem_config (rectangular grid) for mcast_in0 matmul
             sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
@@ -429,11 +475,11 @@ def run_all_gather_matmul_galaxy_impl(
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
-            # Matmul - uses non_fused_program_config with mcast_in0=True
+            # Matmul - uses non_fused_program_config with mcast_in0=True on rectangular grid
             mm_out = ttnn.linear(
                 ag_out,
-                tt_in1_tensor,
-                memory_config=mm_output_sharded_mem_config,
+                tt_in1_tensor_non_fused,  # Weights on same rectangular grid
+                memory_config=non_fused_mm_output_mem_config,
                 program_config=non_fused_program_config,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
