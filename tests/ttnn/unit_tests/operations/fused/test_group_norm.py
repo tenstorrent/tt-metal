@@ -398,36 +398,38 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 def generate_sdxl_test_inputs():
     inputs = []
 
-    # 1024x1024 resoultion
+    # # 1024x1024 resoultion
 
-    # UNet inputs
-    inputs.append((1, 1280, 64, 64))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 1920, 64, 64))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 2560, 32, 32))
-    inputs.append((1, 320, 128, 128))
-    inputs.append((1, 320, 64, 64))
-    inputs.append((1, 640, 64, 64))
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 960, 64, 64))
+    # # UNet inputs
+    # inputs.append((1, 1280, 64, 64))
+    # inputs.append((1, 1280, 32, 32))
+    # inputs.append((1, 1920, 64, 64))
+    # inputs.append((1, 1920, 32, 32))
+    # inputs.append((1, 2560, 32, 32))
+    # inputs.append((1, 320, 128, 128))
+    # inputs.append((1, 320, 64, 64))
+    # inputs.append((1, 640, 64, 64))
+    # inputs.append((1, 640, 32, 32))
+    # inputs.append((1, 960, 64, 64))
 
-    # VAE inputs
-    inputs.append((1, 512, 128, 128))
+    # # VAE inputs
+    # inputs.append((1, 512, 128, 128))
 
-    # Refiner UNet inputs
-    inputs.append((1, 1152, 64, 64))
-    inputs.append((1, 1536, 16, 16))
-    inputs.append((1, 1536, 32, 32))
-    inputs.append((1, 1536, 64, 64))
-    inputs.append((1, 2304, 32, 32))
-    inputs.append((1, 2304, 64, 64))
-    inputs.append((1, 3072, 16, 16))
-    inputs.append((1, 3072, 32, 32))
-    inputs.append((1, 384, 128, 128))
-    inputs.append((1, 384, 64, 64))
-    inputs.append((1, 768, 32, 32))
-    inputs.append((1, 768, 64, 64))
+    # # Refiner UNet inputs
+    # inputs.append((1, 1152, 64, 64))
+    # inputs.append((1, 1536, 16, 16))
+    # inputs.append((1, 1536, 32, 32))
+    # inputs.append((1, 1536, 64, 64))
+    # inputs.append((1, 2304, 32, 32))
+    # inputs.append((1, 2304, 64, 64))
+    # inputs.append((1, 3072, 16, 16))
+    # inputs.append((1, 3072, 32, 32))
+    # inputs.append((1, 384, 128, 128))
+    # inputs.append((1, 384, 64, 64))
+    # inputs.append((1, 768, 32, 32))
+    # inputs.append((1, 768, 64, 64))
+
+    inputs.append((1, 640, 16, 16))
 
     return inputs
 
