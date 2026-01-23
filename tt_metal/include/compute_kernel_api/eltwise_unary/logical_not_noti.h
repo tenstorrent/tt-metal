@@ -26,19 +26,19 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void logical_not_unary_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vFloat, float, idst));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(calculate_logical_not_unary, APPROX, sfpi::vFloat, float, idst));
 }
 
 ALWI void logical_not_unary_tile_int32(uint32_t idst) {
-    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vInt, int16_t, idst));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(calculate_logical_not_unary, APPROX, sfpi::vInt, int16_t, idst));
 }
 
 ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
-    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vUInt, uint16_t, idst));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(calculate_logical_not_unary, APPROX, sfpi::vUInt, uint16_t, idst));
 }
 
 ALWI void logical_not_unary_tile_uint16(uint32_t idst) {
-    MATH((SFPU_UNARY_NO_PARAM_KERNEL(logical_not_unary_uint16, RC, APPROX, idst)));
+    MATH((SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_logical_not_unary_uint16, RC, APPROX, idst)));
 }
 
 /**

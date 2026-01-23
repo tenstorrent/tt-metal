@@ -72,7 +72,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -122,7 +122,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -172,7 +172,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
@@ -222,7 +222,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                std::optional<float> scale,
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,

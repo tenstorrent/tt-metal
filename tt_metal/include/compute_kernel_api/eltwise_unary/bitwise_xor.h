@@ -28,7 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL(bitwise_xor, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_bitwise_xor, RC, APPROX, idst, param0));
 }
 
 /**
