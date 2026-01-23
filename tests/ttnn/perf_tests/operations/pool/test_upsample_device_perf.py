@@ -29,7 +29,7 @@ UPSAMPLE_PERF_CONFIGS = [
         "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         "ncores": (8, 8),
         "shard_shape": (256, 80),
-        "perf_targets": {"wh": 13.1, "bh_p150": 13.1},
+        "perf_targets": {"wh": 13.1, "bh_p150": 10.2},
     },
     # HEIGHT SHARDED - Stable Diffusion bilinear upsample (8x8 -> 16x16)
     {
@@ -43,7 +43,7 @@ UPSAMPLE_PERF_CONFIGS = [
         "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "ncores": 64,
         "shard_shape": (2, 1280),
-        "perf_targets": {"wh": 13.7, "bh_p150": 13.7},
+        "perf_targets": {"wh": 13.7, "bh_p150": 18.5},
     },
 ]
 # fmt: on

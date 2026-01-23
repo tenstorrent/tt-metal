@@ -38,7 +38,7 @@ GRID_SAMPLE_PERF_CONFIGS = [
         "shard_height": 32,
         "shard_width": 4992,       # channels * K = 64 * 78
         "core_grid": (8, 8),
-        "perf_targets": {"wh": 1174, "bh_p150": 1174},
+        "perf_targets": {"wh": 1174, "bh_p150": 845},
     },
     # OFT Integral Image Sampling - without precomputed grid (no host preparation)
     # Measured on WH: 5307.9us
@@ -58,7 +58,7 @@ GRID_SAMPLE_PERF_CONFIGS = [
         "shard_height": 32,
         "shard_width": 4992,       # channels * K = 64 * 78
         "core_grid": (8, 8),
-        "perf_targets": {"wh": 5573, "bh_p150": 5573},
+        "perf_targets": {"wh": 5573, "bh_p150": 1605},
     },
 ]
 # fmt: on

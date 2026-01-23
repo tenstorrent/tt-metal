@@ -38,7 +38,7 @@ POOL_PERF_CONFIGS = [
         "ceil_mode": False,
         "in_dtype": ttnn.bfloat16,
         "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        "perf_targets": {"wh": 131, "bh_p150": 131},
+        "perf_targets": {"wh": 131, "bh_p150": 85},
     },
     # HEIGHT SHARDED - VGG16 first maxpool (224x224 -> 112x112)
     {
@@ -59,7 +59,7 @@ POOL_PERF_CONFIGS = [
         "ceil_mode": False,
         "in_dtype": ttnn.bfloat16,
         "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        "perf_targets": {"wh": 32.7, "bh_p150": 32.7},
+        "perf_targets": {"wh": 32.7, "bh_p150": 15.2},
     },
     # BLOCK SHARDED - Gemma3 avgpool for vision token compression
     {
@@ -80,7 +80,7 @@ POOL_PERF_CONFIGS = [
         "divisor_override": None,
         "in_dtype": ttnn.bfloat16,
         "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        "perf_targets": {"wh": 18, "bh_p150": 18},
+        "perf_targets": {"wh": 18, "bh_p150": 16.1},
     },
     # WIDTH SHARDED - MobileNetV2 global avgpool (batch=10, matches actual MobileNetV2 inference)
     {
@@ -101,7 +101,7 @@ POOL_PERF_CONFIGS = [
         "divisor_override": None,
         "in_dtype": ttnn.bfloat8_b,
         "shard_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        "perf_targets": {"wh": 8.77, "bh_p150": 8.77},
+        "perf_targets": {"wh": 8.77, "bh_p150": 9.9},
     },
 ]
 # fmt: on
