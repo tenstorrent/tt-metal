@@ -38,7 +38,7 @@ prediction pipeline for confocal boundary data.
   ```
 
 - Component PCCs:
-  ```bash
+```bash
   pytest models/demos/unet_3d/tests/pcc/test_conv3d.py
   pytest models/demos/unet_3d/tests/pcc/test_conv_block.py
   pytest models/demos/unet_3d/tests/pcc/test_encoder.py
@@ -86,6 +86,14 @@ pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_unet3d_e2e_d
 - Torch model: `models/demos/unet_3d/torch_impl/model.py`
 - Runner entry point: `models/demos/unet_3d/runner/performant_runner.py`
 - Default config: `models/demos/unet_3d/configs/test_confocal_boundary.json`
+
+## Workarounds
+- 3D op handling: This model uses natively 3D ops (for example, `max_pool3d` and `upsample`). As a temporary
+  workaround, the implementation applies the 2D versions twice: first along the H/W dimensions while treating T
+  as batch, then combining H/W into a single dimension and treating T as another dimension. Alternatives for the
+  future reader:
+  - Use the torch version as a fallback
+  - Open an issue for native 3D implementations of these ops
 
 ## References
 - [UNet3D Paper](https://arxiv.org/abs/1606.06650)
