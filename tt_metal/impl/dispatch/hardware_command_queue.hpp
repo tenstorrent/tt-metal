@@ -58,8 +58,6 @@ private:
 
     IDevice* device_;
 
-    CoreType get_dispatch_core_type();
-
     CoreCoord virtual_enqueue_program_dispatch_core_;
 };
 

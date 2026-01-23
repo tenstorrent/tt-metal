@@ -60,10 +60,6 @@ HWCommandQueue::~HWCommandQueue() = default;
 
 IDevice* HWCommandQueue::device() { return this->device_; }
 
-CoreType HWCommandQueue::get_dispatch_core_type() {
-    return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-}
-
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
     return this->virtual_enqueue_program_dispatch_core_;
 }
