@@ -437,7 +437,10 @@ class TTSampling(LightweightModule):
 
         # Add device offsets to get global vocabulary indices
         topk_global_indices = ttnn.add(
-            self.tt_indices_device_offsets, topk_indices_gathered_int32_sharded, dtype=ttnn.int32
+            self.tt_indices_device_offsets,
+            topk_indices_gathered_int32_sharded,
+            dtype=ttnn.int32,
+            memory_config=self.sampling_memory_config,
         )
 
         ttnn.deallocate(topk_indices_gathered_int32_sharded)
