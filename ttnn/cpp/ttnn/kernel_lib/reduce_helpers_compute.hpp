@@ -268,9 +268,6 @@ struct TileGrid {
     static constexpr TileGrid col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
-// Backwards compatibility alias - use TileGrid in new code
-using TileShape = TileGrid;
-
 /**
  * @brief Tag type indicating no accumulation (zero overhead)
  *
@@ -468,8 +465,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
  * INPUT MODES: See ReduceInputMode enum for detailed mode descriptions.
- * - Use STREAMING_BATCHED for optimal performance when wait/pop are symmetric with TileShape.
- * - Use PRELOADED for asymmetric wait/pop (e.g., padding where you wait/pop more than TileShape).
+ * - Use STREAMING_BATCHED for optimal performance when wait/pop are symmetric with TileGrid.
+ * - Use PRELOADED for asymmetric wait/pop (e.g., padding where you wait/pop more than TileGrid).
  * - Use PERSISTENT for softmax patterns where tiles are reused in subsequent operations.
  *
  * POST-REDUCE OPERATIONS:
