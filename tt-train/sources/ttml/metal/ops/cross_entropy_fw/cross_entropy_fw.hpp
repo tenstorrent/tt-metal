@@ -6,12 +6,11 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::cross_entropy_fw {
+namespace ttml::metal {
 
-struct CrossEntropyForwardOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input,  // logits : model output (N, 1, H, W)
-        const ttnn::Tensor& target  // target : ground truth (N, H)
-    );
-};
-}  // namespace ttml::metal::ops::cross_entropy_fw
+ttnn::Tensor cross_entropy_fw(
+    const ttnn::Tensor& input,  // logits : model output (N, 1, H, W)
+    const ttnn::Tensor& target  // target : ground truth (N, H)
+);
+
+}  // namespace ttml::metal
