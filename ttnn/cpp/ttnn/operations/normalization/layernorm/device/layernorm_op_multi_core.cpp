@@ -90,7 +90,7 @@ bool CB_can_fit_in_L1(
 LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
     const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     ProgramDescriptor program_descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    auto device = tensor_args.input.device();
+    auto *device = tensor_args.input.device();
     auto grid_size = device->compute_with_storage_grid_size();
     auto num_cores = program_descriptor.kernels[0].runtime_args.size();
     ////////////////////////////////////////////////////////////////////////////
