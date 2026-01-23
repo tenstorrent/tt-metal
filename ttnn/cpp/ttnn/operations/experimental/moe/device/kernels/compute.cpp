@@ -8,8 +8,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "api/debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -205,9 +203,6 @@ void MAIN {
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
-            // fill_tile_init();
-            // fill_tile(0, 1.0f + ring_core_id);
-            // fill_tile(1, 2.0f + ring_core_id);
             tile_regs_commit();
 
             tile_regs_wait();
@@ -217,8 +212,9 @@ void MAIN {
             tile_regs_release();
         }
 
-        in0_offset_per_expert += num_w0_w1_tiles_h;
-        out_offset_per_expert += num_w0_w1_tiles_h;
+        // Alternate between the two buffers when there are more than 2 experts
+        in0_offset_per_expert = (expert_id & 1) * num_w0_w1_tiles_h;
+        out_offset_per_expert = (expert_id & 1) * num_w0_w1_tiles_h;
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push

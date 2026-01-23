@@ -14,9 +14,7 @@ void bind_moe(nb::module_& mod) {
         mod,
         ttnn::experimental::moe,
         R"doc(
-        moe(input_tensor, w0_tensor, w1_tensor, w2_tensor, output_tensor, math_fidelity, fp32_dest_acc_en)
-
-        Experimental, high-performance MoE operation.
+        Experimental, high-performance MoE operation for DeepSeek.
 
         Args:
             input_tensor: Input tensor (sharded)
