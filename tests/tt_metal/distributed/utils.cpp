@@ -182,8 +182,9 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
     std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
     uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
-    // Reduce page size on Blackhole to fit 64 CBs in L1
-    uint32_t page_size = (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) ? 1024 : 512;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs;
 
     for (uint32_t i = 0; i < num_programs; i++) {
         Program& program = *programs.emplace_back(std::make_shared<Program>());

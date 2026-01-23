@@ -640,7 +640,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                                 HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
-                                        for (int i = 0; i < max_cbs_; i++) {
+                                        for (uint32_t i = 0; i < max_cbs_; i++) {
                                             if (non_contiguous_cbs & (1ULL << i)) {
                                                 if (!cb_ids.empty()) {
                                                     cb_ids += ",";
@@ -664,7 +664,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
-                                min_remote_cb_start_index, (uint32_t)__builtin_ctzll(remote_val->second.to_ullong()));
+                                min_remote_cb_start_index,
+                                static_cast<uint32_t>(__builtin_ctzll(remote_val->second.to_ullong())));
                         }
 
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {

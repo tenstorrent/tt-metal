@@ -478,8 +478,8 @@ int main() {
             WAYPOINT("R");
             int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
             if (enables & (1u << index)) {
-                // CB mask split: low bits for lower CB indices, high bits for upper CB indices
-                // Wormhole uses only lower half (TRISC memory limit), Blackhole uses both
+                // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+                // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
                 uint64_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
                 uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
                 setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);

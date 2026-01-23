@@ -413,8 +413,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
 TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
     for (const auto& mesh_device : devices_) {
         for (bool use_assembly : {true, false}) {
-            // Test with 64-bit masks (low 32 bits, high 32 bits)
-            // mask_high is only used on Blackhole (64 CBs); Wormhole only has 32 CBs so mask_high is ignored
+            // mask_high only applies to architectures supporting more than 32 circular buffers
             for (auto [mask_low, mask_high] :
                  {std::make_pair(0xffffffffu, 0xffffffffu), std::make_pair(0xaaaaaaaau, 0xaaaaaaaau)}) {
                 CoreCoord core{0, 0};

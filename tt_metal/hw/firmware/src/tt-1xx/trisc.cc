@@ -155,8 +155,8 @@ int main(int argc, char* argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        // CB mask split: low bits for lower CB indices, high bits for upper CB indices
-        // Wormhole uses only lower half (TRISC memory limit), Blackhole uses both
+        // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+        // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
         uint64_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
         uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
         setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write, false>(

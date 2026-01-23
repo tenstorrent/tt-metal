@@ -147,7 +147,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferSequentialAcrossAllCores) {
 
         auto expected_multi_core_address =
             devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1) + (max_num_cbs * cb_config.page_size);
-        uint8_t multicore_buffer_idx = max_cbs_ - 1;
+        uint32_t multicore_buffer_idx = max_cbs_ - 1;
         CircularBufferConfig config2 =
             CircularBufferConfig(cb_config.page_size, {{multicore_buffer_idx, cb_config.data_format}})
                 .set_page_size(multicore_buffer_idx, cb_config.page_size);

@@ -1475,7 +1475,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
-    for (int i = 0; i < max_cbs_; i++) {
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1496,7 +1496,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
-    for (int i = 0; i < max_cbs_; i++) {
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1538,7 +1538,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges)
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
-    for (int i = 0; i < max_cbs_; i++) {
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1562,7 +1562,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleC
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
-    for (int i = 0; i < max_cbs_; i++) {
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1863,8 +1863,9 @@ namespace stress_tests {
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    // Reduce page size on Blackhole to fit 64 CBs in L1
-    uint32_t page_size = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? 1024 : 512;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();  // Running on second CQ is hanging on CI
@@ -2143,8 +2144,9 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    // Reduce page size on Blackhole to fit 64 CBs in L1
-    uint32_t page_size = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? 1024 : 512;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);

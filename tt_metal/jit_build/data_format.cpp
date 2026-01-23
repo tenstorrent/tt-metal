@@ -146,8 +146,8 @@ std::vector<DataFormat> get_unpack_dst_formats(
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
-            // Allow size >= buf_formats.size() to support host-side allocations that use
-            // NUM_CIRCULAR_BUFFERS (always 64). buf_formats.size() is arch-specific (32 or 64).
+            // Allow size >= buf_formats.size() to support host-side allocations sized for
+            // maximum CB count across all architectures. buf_formats.size() is arch-specific.
             // We only access the first buf_formats.size() elements
             unpack_to_dest_mode.size() >= buf_formats.size(),
             "unpack_to_dest_mode vector must have {} elements",

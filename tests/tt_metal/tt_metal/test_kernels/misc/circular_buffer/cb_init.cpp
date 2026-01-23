@@ -79,8 +79,8 @@ uint32_t get_clock_lo() {
 
 template <bool read, bool write, bool init_wr_tile_ptr>
 void perform_test(uint32_t initial_value) {
-    // Mask is split into two 32-bit values since setup_local_cb_read_write_interfaces takes a 32-bit mask
-    // mask_high is only used on Blackhole (64 CBs); Wormhole only has 32 CBs so mask_high is ignored
+    // Mask split into 32-bit halves for RISC-V efficiency (setup_local_cb_read_write_interfaces)
+    // mask_high only used on Blackhole (Wormhole uses mask_low only)
     uint32_t mask_low = get_arg_val<uint32_t>(0);
     uint32_t mask_high = get_arg_val<uint32_t>(1);
     uint64_t mask = (static_cast<uint64_t>(mask_high) << 32) | mask_low;
