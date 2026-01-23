@@ -369,7 +369,6 @@ ALWI void binary_op(
 template <BroadcastDim bcast_dim = BroadcastDim::NONE, typename... Args>
 ALWI void add(uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryTileShape shape, Args&&... args) {
     binary_op<BinaryOpType::ADD, bcast_dim>(icb_a, icb_b, ocb, shape, std::forward<Args>(args)...);
-    nop;
 }
 
 template <BroadcastDim bcast_dim = BroadcastDim::NONE, typename... Args>
