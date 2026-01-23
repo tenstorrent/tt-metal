@@ -53,9 +53,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     #include "api/debug/dprint.h"
     #include "compute_kernel_api.h"
 
-    namespace NAMESPACE {
 
-    void MAIN {
+    void kernel_main() {
 
         DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
 

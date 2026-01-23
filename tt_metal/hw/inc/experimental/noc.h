@@ -157,7 +157,8 @@ public:
             src_noc_addr,
             size_bytes,
             (vc_selection == VcSelection::CUSTOM) ? static_cast<int8_t>(vc) : -1,
-            false);
+            false,
+            noc_id_);
 
         WAYPOINT("NASW");
         ncrisc_noc_read_set_state<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE, vc_selection == VcSelection::CUSTOM>(
@@ -254,7 +255,7 @@ public:
             auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
             if constexpr (enable_noc_tracing) {
                 RECORD_NOC_EVENT_WITH_ADDR(
-                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted);
+                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
             }
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
             constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
@@ -359,7 +360,7 @@ public:
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
         constexpr bool posted = response_mode == ResponseMode::POSTED;
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size_bytes, vc, posted);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, 0, dst_noc_addr, size_bytes, vc, posted, noc_id_);
 
         WAYPOINT("NWPW");
         ncrisc_noc_write_set_state<posted, max_page_size <= NOC_MAX_BURST_SIZE>(
@@ -409,7 +410,7 @@ public:
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
             auto dst_addr =
                 get_dst_ptr<AddressType::NOC>(dst, dst_args);  // NoC target was programmed in set_async_write_state
-            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted);
+            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_addr, 0ull, 0, -1, posted, noc_id_);
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id_, dst_addr, src_addr);
 
             WAYPOINT("NWPW");

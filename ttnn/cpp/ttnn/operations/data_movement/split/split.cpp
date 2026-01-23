@@ -106,7 +106,8 @@ std::vector<ttnn::Tensor> split(
         } else {
             input_tensor_4d = input_tensor;
         }
-        const auto outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
+        const auto outputs_4d =
+            detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
         std::vector<ttnn::Tensor> outputs;
         outputs.reserve(detail::TWO_CHUNKS);
         for (const auto& t : outputs_4d) {
