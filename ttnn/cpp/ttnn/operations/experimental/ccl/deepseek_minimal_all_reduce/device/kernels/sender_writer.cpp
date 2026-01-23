@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t remote_receiver_noc_y = get_compile_time_arg_val(9);
     constexpr uint32_t dst_num_hops = get_compile_time_arg_val(10);
     constexpr uint32_t num_connections = get_compile_time_arg_val(11);
+    constexpr bool using_persistent_buffer = get_compile_time_arg_val(12);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -50,8 +51,10 @@ void kernel_main() {
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
     //  wait for receiver to signal it is ready
-    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
+    if constexpr (!using_persistent_buffer) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
+    }
 
     cb_wait_front(packet_cb_id, input_num_tiles);
     uint32_t packet_base_addr = get_read_ptr(packet_cb_id);
