@@ -307,7 +307,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     exp_tile_init<true, true, scale_fp32>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
-    cb_reserve_back(reduce_cb, rows);
+    if constexpr (do_reduce) {
+        cb_reserve_back(reduce_cb, rows);
+    }
 
 #ifdef SUB_EXP_GRANULARITY
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
