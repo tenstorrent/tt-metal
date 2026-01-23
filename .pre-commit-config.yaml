@@ -45,6 +45,12 @@ repos:
       args: ["--style=file"]
 - repo: local
   hooks:
+    - id: validate-branch-name
+      name: validate-branch-name
+      entry: python3 scripts/validate_branch_name.py
+      language: system
+      pass_filenames: false
+      always_run: true
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
