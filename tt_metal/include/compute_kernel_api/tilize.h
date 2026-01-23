@@ -31,6 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -40,6 +41,10 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
+#endif
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_tilize_init<p_unpacr::UNP_A, DST_ACCUM_MODE>(icb, block)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE>(cbid)));
 #endif
 }
 
@@ -134,6 +139,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 // clang-format on
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -150,6 +156,18 @@ ALWI void tilize_block(
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
+#else  // ARCH_QUASAR
+    UNPACK((llk_unpack_tilize_block<p_unpacr::UNP_A>(icb, block, input_tile_index)));
+    for (uint32_t t = 0; t < block; t++) {
+        // Datacopy
+        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        PACK((llk_pack<true /*out_of_order_output*/, p_pacr::PACK0>(0 /*dest index*/, icb, t + output_tile_index)));
+
+        // Release dest
+        MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
+        PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+    }
+#endif
 }
 
 // clang-format off

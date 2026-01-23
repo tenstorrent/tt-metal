@@ -74,7 +74,7 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
 
 #else  // ARCH_QUASAR
     // Do I need pack hw config here?
-    PACK((llk_pack_untilize_init<full_ct_dim, block_ct_dim, 2 /*c_dim_faces*/>(ocb)));
+    PACK((llk_pack_untilize_init<full_ct_dim, block_ct_dim>(ocb)));
 #endif
 }
 
@@ -174,8 +174,8 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
 
         MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
 
-        PACK((llk_pack_untilize(ocb, FACE_R_DIM, 4, block_c_index)));
-        PACK((llk_pack_dest_dvalid_section_done<, DST_ACCUM_MODE>()));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*rt_dim*/, ocb, block_c_index)));
+        PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));
     }
 #endif
 }
@@ -226,8 +226,13 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
+#ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
+#else  // ARCH_QUASAR
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, tile_dst_ct_offset>(
+        block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
+#endif
 }
 
 // clang-format off

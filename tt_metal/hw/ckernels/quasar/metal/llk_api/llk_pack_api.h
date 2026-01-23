@@ -100,15 +100,14 @@ inline void llk_pack(
  * @brief Initializes the packer to pack untilize a tile row by full 32x32 tiles
  *
  * @param pack_output: The output circular buffer identifier
- * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is in row-major format.
- * @param block_ct_dim: c_dim of tiles in each block
- * @param c_dim_faces: Number of faces in c_dim per tile
+ * @param full_ct_dim: Width of a full input in tiles.
+ * @param block_ct_dim: Width of a single block in tiles
  *
  * This function initializes pack untilize for a tile row by full 32x32 tiles,
  * from the math destination register to the output circular buffer.
  *
  */
-template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
+template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void llk_pack_untilize_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const TileShape output_tile_shape = {
@@ -117,29 +116,63 @@ inline void llk_pack_untilize_init(const std::uint32_t pack_output) {
         .face_c_dim = FACE_C_DIM,
         .narrow_tile = get_output_narrow_tile(output_id)};
 
-    _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES>(output_id, output_tile_shape);
+    const std::uint32_t c_dim_faces = (output_tile_shape.narrow_tile ? 1 : 2);
+    if (c_dim_faces == 2) {
+        _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM, 2 /*c_dim_faces*/>(output_id, output_tile_shape);
+    } else {
+        _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM, 1 /*c_dim_faces*/>(output_id, output_tile_shape);
+    }
 }
 
 /**
  *
  * @brief Performs pack untilize on a tile row by full 32x32 tiles
  *
+ * @tparam block_ct_dim: Width of a single block in tiles
+ * @tparam full_ct_dim: Width of a full input in tiles
+ * @tparam tile_dst_ct_offset: Compile time offset for the index of the tile in the dest from which to pack
  * @param pack_output: The output circular buffer identifier
- * @param tile_index: The L1 index in the output CB to write to
- * @param dst_index: Tile index into the destination register
+ * @param block_c_index: Block column index (used when full_ct_dim > block_ct_dim)
+ * @param tile_dst_rt_offset: Runtime offset for the index of the tile in the dest from which to pack
  *
  * This function packs and untilizes a tile row by full 32x32 tiles, from the math destination register to the output
  * circular buffer.
  *
  */
-inline void llk_pack_untilize(std::uint32_t pack_output, std::uint32_t tile_index, std::uint32_t dst_index) {
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    std::uint32_t tile_dst_ct_offset = 0>
+inline void llk_pack_untilize(
+    std::uint32_t block_rt_dim,
+    const std::uint32_t pack_output,
+    const std::uint32_t block_c_index = 0,
+    const std::uint32_t tile_dst_rt_offset = 0) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    const std::uint32_t l1_tile_index = get_local_cb_interface(output_id).fifo_wr_tile_idx + tile_index;
+    const TileShape output_tile_shape = {
+        .num_faces = get_output_num_faces(output_id),
+        .face_r_dim = get_output_face_r_dim(output_id),
+        .face_c_dim = ckernel::trisc::FACE_C_DIM,
+        .narrow_tile = get_output_narrow_tile(output_id)};
+    const std::uint32_t c_dim_faces = (output_tile_shape.narrow_tile ? 1 : 2);  // Tile width in faces
+    const std::uint32_t r_dim_faces =
+        (output_tile_shape.num_faces == 2 && !output_tile_shape.narrow_tile) ? 1 : 2;  // Tile height in faces
 
-    WAYPOINT("UPTW");
-    _llk_pack_untilize_(dst_index, l1_tile_index);
-    WAYPOINT("UPTD");
+    const std::uint32_t base_l1_index = get_local_cb_interface(output_id).fifo_wr_tile_idx;
+
+    // The internal parts of the strides are applied inside of the _llk_ itself, the external parts are passed to the
+    // _llk_pack_untilize_ call x_stride = x_stride_internal = col dim of a tile in L1 in units of 16 datums (1 face);
+    // y_stride = y_stride_external + x_stride_internal
+    // l1_index = base_l1_index + y * y_stride + x * x_stride;
+    const std::uint32_t x = block_c_index * block_ct_dim;
+    const std::uint32_t y_stride_external = full_ct_dim * r_dim_faces * output_tile_shape.face_r_dim;
+
+    for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
+        _llk_pack_untilize_<>(
+            block_rt * block_ct_dim + tile_dst_rt_offset + tile_dst_ct_offset,  // dest reg index
+            base_l1_index + block_rt /*y*/ * y_stride_external + x)             // l1 index
+    }
 }
 
 /*************************************************************************
