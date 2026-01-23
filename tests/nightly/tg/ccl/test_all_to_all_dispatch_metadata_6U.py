@@ -570,7 +570,7 @@ def test_decode_perf(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="sequential",
+        scheme="worst_congestion",
         topology=topology,
         dtype=dtype,
         cluster_axis=cluster_axis,

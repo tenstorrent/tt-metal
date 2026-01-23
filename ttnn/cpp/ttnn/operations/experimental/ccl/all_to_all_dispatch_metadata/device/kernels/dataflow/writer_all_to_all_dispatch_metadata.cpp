@@ -1061,7 +1061,7 @@ void kernel_main() {
         SPARSE_MCAST_SHORTEST_PATH,  // Sparse multicast with bidirectional shortest path routing
         SPARSE_MCAST_SPLIT_BW        // Sparse multicast, split token data 50/50 between directions
     };
-    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_LINEAR;
+    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
