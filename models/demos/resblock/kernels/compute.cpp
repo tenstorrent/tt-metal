@@ -7,29 +7,12 @@
 #include <tools/profiler/kernel_profiler.hpp>
 
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/relu.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
 #include "../../deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-
-// Minimal init to switch from matmul mode to copy_tile mode.
-// This is lighter weight than init_sfpu() because it skips the pack-related
-// initialization (which is already done by mm_block_init/custom_mm_block_init if output CB is the same).
-// Also skips llk_math_pack_sync_init which is already done by mm_block_init/custom_mm_block_init.
-template <uint32_t icb>
-FORCE_INLINE void init_copy_tile_after_matmul() {
-    // Reconfigure unpacker hardware for unary operation (same CB for both A and B)
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-    // Initialize unpacker A for copy operation
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
-    // Switch math from matmul mode to datacopy mode
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-    // Reconfigure math HW for unary operation (same CB for both srcA and srcB)
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-}
 
 template <
     uint32_t CbA,
@@ -79,7 +62,6 @@ FORCE_INLINE void matmul_with_relu_block() {
 }
 
 constexpr uint32_t MATMUL_ACC_REG_ID = 0;
-constexpr uint32_t BIAS_REG_ID = 1;
 
 template <
     uint32_t CbA,
@@ -115,18 +97,10 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     }
 
     {
-        DeviceZoneScopedN("copy_tile_init");
-
-        // Alternative to init_sfpu() + copy_tile_to_dst_init_short_with_dt()
-        init_copy_tile_after_matmul<CbBias>();
-        copy_tile(CbBias, bias_tile_index, BIAS_REG_ID);
-    }
-
-    {
-        DeviceZoneScopedN("add_binary_tile_init");
-        add_binary_tile_init();
-        add_binary_tile(
-            MATMUL_ACC_REG_ID, BIAS_REG_ID, MATMUL_ACC_REG_ID);  // Accumulate the bias into the matmul result
+        DeviceZoneScopedN("add_bias_tile");
+        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CbBias);
+        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            CbBias, bias_tile_index, MATMUL_ACC_REG_ID);
     }
 
     tile_regs_commit();
