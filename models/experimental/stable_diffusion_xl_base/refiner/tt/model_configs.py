@@ -15,7 +15,13 @@ class RefinerModelOptimisations(ModelOptimisations):
         ff_weights_dtype=ttnn.bfloat8_b,
         force_full_grid=False,
     ):
-        super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
+        super().__init__(
+            conv_act_dtype,
+            conv_w_dtype,
+            attention_weights_dtype,
+            ff_weights_dtype,
+            force_full_grid=force_full_grid,
+        )
 
         self.conv_configs["ABH_128_ADB_WDB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,

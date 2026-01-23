@@ -6,14 +6,11 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
-
-        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.device = device
         weights = state_dict[f"{module_path}.proj.weight"]
@@ -40,12 +37,6 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
-        if not self.is_refiner:
-            if input_tensor.shape[2] == 4096:
-                # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
-                # hence using L1 memory config instead
-                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
