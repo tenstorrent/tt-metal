@@ -243,6 +243,30 @@ def create_tt_model(
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
         ),
+        (  # Batch-32 with non-uniform sampling and log-probs calculation
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "log_probs": [True] * 32,
+            },  # sampling_params (non-uniform)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -513,6 +537,7 @@ def create_tt_model(
     ids=[
         "batch-32",  # throughput
         "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
+        "batch-32-non-uniform-sampling-log-probs",  # throughput w/ non-uniform sampling and log-probs calculation
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -815,6 +840,7 @@ def test_demo_text(
         frequency_penalty = sampling_params.get("frequency_penalty", 0.0)
         repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
         seed = sampling_params.get("seed", 0)
+        log_probs = sampling_params.get("log_probs", False)
         device_sampling_params = SamplingParams(
             temperature=temperature,
             top_k=top_k,
@@ -823,6 +849,7 @@ def test_demo_text(
             frequency_penalty=frequency_penalty,
             repetition_penalty=repetition_penalty,
             seed=seed,
+            enable_log_probs=log_probs,
         )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
@@ -995,6 +1022,8 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+
+                tt_out_tok, tt_log_probs = tt_out_tok[0], tt_out_tok[1]
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
