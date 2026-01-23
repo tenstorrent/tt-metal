@@ -169,7 +169,7 @@ void setup_channel(
     size_t buffer_size_bytes,
     size_t channel_base_address,
     size_t connection_info_address,
-    size_t connection_handshake_address,
+    uint32_t connection_handshake_address,
     size_t sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>(
@@ -182,7 +182,7 @@ void setup_channel(
     new (worker_interface_ptr) tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+        get_stream_scratch_register_address(connection_handshake_address), //reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         NUM_BUFFERS);  //
 
@@ -523,7 +523,7 @@ void kernel_main() {
         BUFFER_SIZE_BYTES,
         channel_base_address,
         connection_info_address,
-        connection_handshake_address,
+        0UL, //connection_handshake_address,
         sender_flow_control_address,
         StreamId{channel_stream_id});
 

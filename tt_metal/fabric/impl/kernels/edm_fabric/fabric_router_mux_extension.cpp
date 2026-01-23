@@ -130,7 +130,7 @@ void setup_channel(
     size_t buffer_size_bytes,
     size_t& channel_base_address,
     size_t& connection_info_address,
-    size_t& connection_handshake_address,
+    uint32_t connection_handshake_address,
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id,
     bool is_persistent_channel) {
@@ -146,7 +146,7 @@ void setup_channel(
     new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        connection_handshake_address,
+        get_stream_scratch_register_address(connection_handshake_address),
 //        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  
@@ -286,7 +286,7 @@ void kernel_main() {
             BUFFER_SIZE_WORKER,
             worker_channel_base_address,
             worker_connection_info_address,
-            worker_connection_handshake_address,
+            i, //worker_connection_handshake_address,
             worker_flow_control_address,
             StreamId{worker_stream_ids[i]},
             worker_is_persistent[i] == 1);
@@ -307,7 +307,7 @@ void kernel_main() {
             BUFFER_SIZE_ROUTER,
             router_channel_base_address,
             router_connection_info_address,
-            router_connection_handshake_address,
+            i, //router_connection_handshake_address,
             router_flow_control_address,
             StreamId{router_stream_ids[i]},
             router_is_persistent[i] == 1);

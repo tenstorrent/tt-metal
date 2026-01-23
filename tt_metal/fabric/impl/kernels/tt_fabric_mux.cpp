@@ -67,7 +67,7 @@ void setup_channel(
     size_t buffer_size_bytes,
     size_t& channel_base_address,
     size_t& connection_info_address,
-    size_t& connection_handshake_address,
+    uint32_t connection_handshake_address,
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
@@ -82,7 +82,7 @@ void setup_channel(
     new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        channel_id,
+        get_stream_scratch_register_address(connection_handshake_address),
 //        static_cast<uint32_t>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
@@ -186,7 +186,7 @@ void kernel_main() {
             BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
             channel_base_address,
             connection_info_address,
-            connection_handshake_address,
+            i, //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]});
     }
@@ -200,7 +200,7 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             channel_base_address,
             connection_info_address,
-            connection_handshake_address,
+            i, //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]});
     }
