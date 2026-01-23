@@ -70,6 +70,23 @@ constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPAC
 constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 }
 
+// Wall clock register indices (reading LOW latches HIGH for atomic read)
+constexpr int WALL_CLOCK_HIGH_INDEX = 1;
+constexpr int WALL_CLOCK_LOW_INDEX = 0;
+
+// Record timestamp into a telemetry_timestamp_t struct
+// Similar to kernel_profiler's mark_time_at_index_inlined
+// Reading wall clock LOW first latches HIGH for atomic 64-bit read
+FORCE_INLINE
+void record_timestamp(volatile telemetry_timestamp_t* ts) {
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    // Read LOW first to latch HIGH
+    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+    ts->time_lo = time_lo;
+    ts->time_hi = time_hi;
+}
+
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
@@ -372,6 +389,7 @@ void kernel_main() {
                     perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
                 dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, TELEMETRY_STATE_PUSH, my_noc_index);
             }
+            record_timestamp(&perf_telemetry_mailbox->kernel_start);
         }
         {
             DeviceZoneScopedN("GET_CMD");
@@ -398,6 +416,7 @@ void kernel_main() {
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
+        record_timestamp(&perf_telemetry_mailbox->kernel_end);
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
