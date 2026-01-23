@@ -134,17 +134,16 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    // Signal reader thread to exit early - this allows cleanup to proceed even if device is hung.
-    // Must be done before any blocking operations to prevent deadlocks.
-    {
+    // If there was an exception in the reader thread, the device is likely in an unrecoverable
+    // state. Signal exit early and skip the blocking clear operation.
+    bool skip_clear = thread_exception_state_.load();
+    if (skip_clear) {
         std::lock_guard lock(reader_thread_cv_mutex_);
         exit_condition_ = true;
         reader_thread_cv_.notify_one();
     }
 
-    // If there was an exception in the reader thread, skip the blocking clear operation
-    // as the device is likely in an unrecoverable state.
-    if (in_use_ && !thread_exception_state_.load()) {
+    if (in_use_ && !skip_clear) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
@@ -186,6 +185,12 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         }
     }
 
+    // Signal reader thread to exit and wait for it to finish
+    {
+        std::lock_guard lock(reader_thread_cv_mutex_);
+        exit_condition_ = true;
+        reader_thread_cv_.notify_one();
+    }
     completion_queue_reader_thread_.join();
 }
 
