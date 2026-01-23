@@ -359,7 +359,7 @@ inline ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& s
 
 bool RunPipelinedWorkersTest(
 
-    ttnn::Shape tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const size_t split_dim,
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
