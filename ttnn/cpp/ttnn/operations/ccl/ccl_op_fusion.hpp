@@ -117,6 +117,20 @@ struct ReduceScatterFusedOpSignaler {
     void init_fused_op();
 
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "num_fused_op_cores_to_signal",
+        "fused_op_receiver_cores_noc",
+        "fused_op_receiver_signal_semaphores",
+        "fused_op_signaler_mode");
+
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->num_fused_op_cores_to_signal),
+            std::cref(this->fused_op_receiver_cores_noc),
+            std::cref(this->fused_op_receiver_signal_semaphores),
+            std::cref(this->fused_op_signaler_mode));
+    }
 };
 
 enum class MatmulFusedOpSignalerType {
@@ -233,6 +247,22 @@ struct MatmulFusedOpSignaler {
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
     void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset);
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "fused_op_type",
+        "num_fused_op_cores_to_signal",
+        "fused_op_receiver_cores_noc",
+        "fused_op_receiver_signal_semaphores",
+        "fused_op_signaler_mode");
+
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->fused_op_type),
+            std::cref(this->num_fused_op_cores_to_signal),
+            std::cref(this->fused_op_receiver_cores_noc),
+            std::cref(this->fused_op_receiver_signal_semaphores),
+            std::cref(this->fused_op_signaler_mode));
+    }
 };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter

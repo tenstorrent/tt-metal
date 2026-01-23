@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_reduce_scatter_async.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/minimal_matmul_reduce_scatter_async/device/minimal_matmul_reduce_scatter_async_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -19,14 +21,14 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulReduceScatterAsync::invoke(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
-    const ttnn::ccl::Topology topology,
+    const tt::tt_fabric::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const std::optional<const DataType> dtype,
-    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& program_config,
+    const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config,
     const std::optional<const unary::UnaryWithParam>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    tt::tt_fabric::Topology usable_topology = ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto output_tensors = ttnn::prim::minimal_matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,

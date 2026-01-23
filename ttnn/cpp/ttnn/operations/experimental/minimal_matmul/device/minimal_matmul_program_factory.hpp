@@ -36,9 +36,9 @@ struct MinimalMatmulProgramFactory {
 
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
-        MinimalMatmulProgramFactory::shared_variables_t& override_variables,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
+        const MinimalMatmulInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(

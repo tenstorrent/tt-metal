@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -688,12 +689,14 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& override_variables = cached_program.shared_variables;
+    override_runtime_arguments(program, override_variables, tensor_args, tensor_return_value);
+}
 
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    MinimalMatmulProgramFactory::shared_variables_t& override_variables,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
+    const MinimalMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto in0_addr = tensor_args.input_tensor.buffer()->address();
     auto in1_addr = tensor_args.weight_tensor.buffer()->address();
     auto output_addr = tensor_return_value.buffer()->address();

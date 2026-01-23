@@ -11,6 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -58,10 +59,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     const auto& using_persistent_buffers = args.reduce_scatter_params.using_persistent_buffers;
     const auto& sub_device_id = args.reduce_scatter_params.sub_device_id;
 
-    const auto& program_config = args.matmul_struct.program_config.value();
-    auto compute_kernel_config = args.matmul_struct.compute_kernel_config.value();
-    bool bcast_batch = args.matmul_struct.bcast_batch.value();
-    bool untilize_out = args.matmul_struct.untilize_out;
+    auto compute_kernel_config = args.matmul_struct.compute_kernel_config;
 
     tt::tt_metal::Program program{};
 
@@ -84,29 +82,28 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     reduce_scatter_fused_op_signaler->init_fused_op();
 
     // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts =
-        reduce_scatter_minimal_async::detail::build_ring_reduce_scatter_minimal_async_program_artifacts(
-            program,
-            output_tensors.mm,
-            tensor_args.persistent_intermediate,
-            mesh_coord,
-            forward_coord,
-            backward_coord,
-            output_tensors.reduce_scatter,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            topology,
-            semaphore,
-            barrier_semaphore,
-            using_persistent_buffers,
-            sub_device_id,
-            reduce_scatter_fused_op_signaler,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            args.reduce_scatter_core_grid_offset);
+    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        output_tensors.mm,
+        tensor_args.persistent_intermediate,
+        mesh_coord,
+        forward_coord,
+        backward_coord,
+        output_tensors.reduce_scatter,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        reduce_scatter_fused_op_signaler,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        args.reduce_scatter_core_grid_offset);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -118,22 +115,21 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
     // Matmul
-    auto matmul_cached_program = minimal_matmul::program::minimal_matmul_factory_helper(
+    auto matmul_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper(
         program,
         tensor_args.input,
         tensor_args.weight,
         tensor_args.bias,
-        output_tensors.mm,
         args.matmul_struct.fused_activation,
-        bcast_batch,
+        args.matmul_struct.config,
+        output_tensors.mm,
         compute_kernel_config,
-        untilize_out,
         matmul_fused_op_signaler);
 
     return cached_program_t{
-        std::move(matmul_cached_program.program),
+        std::move(program),
         {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
-         .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
+         .matmul_shared_variables = std::move(matmul_shared_variables)}};
 }
 
 void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
@@ -141,20 +137,18 @@ void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
-    for (const auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        operations::experimental::minimal_matmul::program::MinimalMatmulProgramFactory::override_runtime_arguments(
-            program,
-            args.matmul_struct,
-            {.input_tensors = {tensor_args.input, tensor_args.weight},
-             .optional_input_tensors = {tensor_args.bias},
-             .optional_output_tensors = {output_tensors.mm}},
-            matmul_output_tensors);
+        ttnn::experimental::prim::MinimalMatmulInputs matmul_inputs{
+            .input_tensor = tensor_args.input, .weight_tensor = tensor_args.weight, .bias_tensor = {tensor_args.bias},
+            // .optional_output_tensors = {output_tensors.mm}
+        };
+        ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
+            program, shared_vars.matmul_shared_variables, matmul_inputs, output_tensors.mm);
 
         // Call reduce scatter runtime arguments override directly using artifacts
-        reduce_scatter_minimal_async::detail::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
             program,
             shared_vars.reduce_scatter_artifacts.reader_kernel_id,
             shared_vars.reduce_scatter_artifacts.writer_kernel_id,

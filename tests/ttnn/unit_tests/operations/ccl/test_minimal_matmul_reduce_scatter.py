@@ -152,6 +152,15 @@ def run_reduce_scatter_impl(
         packer_l1_acc=True,
     )
 
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=core_grid,
+    )
+
     ##### MM input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
     logger.info(f"Reduce scatter dim: {rs_scatter_dim}")
@@ -205,7 +214,7 @@ def run_reduce_scatter_impl(
                 weight_tt,
                 bias=bias_tt,
                 memory_config=mem_config_mm,
-                program_config=program_config,
+                program_config=matmul_config,
                 compute_kernel_config=compute_kernel_config,
             )
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -220,7 +229,10 @@ def run_reduce_scatter_impl(
                 subdevice_id=worker_sub_device_id,
             )
         else:
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = ttnn.experimental.matmul_reduce_scatter_async(
+            (
+                tt_matmul_out_tensor,
+                tt_reduce_scatter_output_tensor,
+            ) = ttnn.experimental.minimal_matmul_reduce_scatter_async(
                 tt_input_tensor_mesh_list[i],
                 weight_tt,
                 persistent_intermediate_buffer=persistent_intermediate_buffers[i],
@@ -234,7 +246,7 @@ def run_reduce_scatter_impl(
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 memory_config_mm=mem_config_mm,
-                program_config=program_config,
+                program_config=matmul_config,
                 compute_kernel_config=compute_kernel_config,
             )
 

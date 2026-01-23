@@ -13,11 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
-#include "ttnn/types.hpp"
+#include "minimal_matmul_reduce_scatter_async.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -43,14 +39,14 @@ void bind_minimal_matmul_reduce_scatter_async(nb::module_& mod, const ccl_operat
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config_rs,
                const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
-               const ttnn::ccl::Topology topology,
+               const tt::tt_fabric::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<const DataType> dtype,
-               const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& program_config,
+               const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config,
                const std::optional<const unary::UnaryWithParam>& activation,
-               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid) -> std::vector<ttnn::Tensor> {
+               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config)
+                -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -70,8 +66,7 @@ void bind_minimal_matmul_reduce_scatter_async(nb::module_& mod, const ccl_operat
                     dtype,
                     program_config,
                     activation,
-                    compute_kernel_config,
-                    core_grid);
+                    compute_kernel_config);
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -86,14 +81,13 @@ void bind_minimal_matmul_reduce_scatter_async(nb::module_& mod, const ccl_operat
             nb::arg("num_links") = 1,
             nb::arg("memory_config_rs") = nb::none(),
             nb::arg("intermediate_memory_config_rs") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
+            nb::arg("topology") = tt::tt_fabric::Topology::Ring,
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config_mm") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("activation") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace
@@ -123,7 +117,6 @@ void bind_minimal_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`program_config` (Optional[ttnn.MatmulProgramConfig])
             * :attr:`activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
-            * :attr:`core_grid` (Optional[ttnn.CoreGrid])
         )doc");
 }
 

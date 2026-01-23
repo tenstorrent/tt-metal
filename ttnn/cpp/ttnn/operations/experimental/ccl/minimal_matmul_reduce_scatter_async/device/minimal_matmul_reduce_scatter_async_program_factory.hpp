@@ -6,13 +6,14 @@
 
 #include "ttnn/device_operation.hpp"
 #include "minimal_matmul_reduce_scatter_async_device_operation_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
 namespace ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::program {
 
 struct MinimalMatmulReduceScatterAsyncSharedVariables {
-    reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
-    matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
+    ::ttnn::operations::ccl::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
+    ttnn::experimental::prim::MinimalMatmulProgramFactory::shared_variables_t matmul_shared_variables;
 };
 
 struct MinimalMatmulReduceScatterAsyncProgramFactory {

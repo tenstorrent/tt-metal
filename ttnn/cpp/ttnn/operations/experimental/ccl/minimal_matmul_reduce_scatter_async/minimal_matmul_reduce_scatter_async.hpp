@@ -8,9 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/minimal_matmul_reduce_scatter_async/device/minimal_matmul_reduce_scatter_async_device_operation.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
-
+#include "tt-metalium/experimental/fabric/fabric.hpp"
 namespace ttnn::operations::experimental::ccl {
 
 struct ExecuteMinimalMatmulReduceScatterAsync {
@@ -27,12 +25,11 @@ struct ExecuteMinimalMatmulReduceScatterAsync {
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
-        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& program_config =
-            std::nullopt,
+        const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config = std::nullopt,
         const std::optional<const unary::UnaryWithParam>& activation = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

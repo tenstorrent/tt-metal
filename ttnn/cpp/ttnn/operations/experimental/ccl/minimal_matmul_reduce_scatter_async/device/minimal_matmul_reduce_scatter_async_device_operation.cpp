@@ -4,6 +4,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -32,45 +33,34 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_h
 void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul validate
-    ttnn::operations::matmul::MatmulDeviceOperation::validate_on_program_cache_miss(
+    ttnn::experimental::prim::MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         args.matmul_struct,
-        {.input_tensors = {tensor_args.input, tensor_args.weight},
-         .optional_input_tensors = {tensor_args.bias},
-         .optional_output_tensors = {}});
+        {
+            .input_tensor = tensor_args.input, .weight_tensor = tensor_args.weight, .bias_tensor = {tensor_args.bias},
+            // .optional_output_tensors = {output_tensors.mm}
+        });
 
     // Matmul Reduce Scatter validate
     TT_FATAL(
         args.reduce_scatter_params.dim == 3,
         "MatmulReduceScatterAsync requires dim=3 for the ReduceScatter operations.");
-
-    if (args.matmul_struct.program_config.has_value()) {
-        std::visit(
-            [&](const auto& config) {
-                using ProgramConfigType = std::decay_t<decltype(config)>;
-                if (not(std::is_same_v<
-                        ProgramConfigType,
-                        operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
-                    TT_THROW(
-                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast.");
-                }
-            },
-            args.matmul_struct.program_config.value());
-    }
 }
 
 spec_return_value_t MinimalMatmulReduceScatterAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    std::vector<Tensor> input_tensors = {tensor_args.input, tensor_args.weight};
-
+    ttnn::experimental::prim::MinimalMatmulInputs matmul_inputs{
+        .input_tensor = tensor_args.input, .weight_tensor = tensor_args.weight, .bias_tensor = {tensor_args.bias},
+        // .optional_output_tensors = {output_tensors.mm}
+    };
     // Matmul shape
-    ttnn::TensorSpec matmul_output_specs = ttnn::operations::matmul::MatmulDeviceOperation::compute_output_specs(
-        args.matmul_struct, {.input_tensors = input_tensors})[0];
+    ttnn::TensorSpec matmul_output_specs =
+        ttnn::experimental::prim::MinimalMatmulDeviceOperation::compute_output_specs(args.matmul_struct, matmul_inputs);
 
     // Reduce Scatter shape - use the device operation's compute_output_specs
-    using ReduceScatterOp = ::ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-        ReduceScatterMinimalAsyncDeviceOperation;
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::tensor_args_t reduce_scatter_tensor_args{
-        input_tensors[0], std::nullopt, std::nullopt};
+    using ReduceScatterOp = ttnn::experimental::prim::ReduceScatterMinimalAsyncDeviceOperation;
+
+    ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs reduce_scatter_tensor_args{
+        tensor_args.input, std::nullopt, std::nullopt};
 
     auto reduce_scatter_output_specs =
         ReduceScatterOp::compute_output_specs(args.reduce_scatter_params, reduce_scatter_tensor_args);
@@ -81,8 +71,12 @@ spec_return_value_t MinimalMatmulReduceScatterAsyncDeviceOperation::compute_outp
 tensor_return_value_t MinimalMatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = ttnn::operations::matmul::MatmulDeviceOperation::create_output_tensors(
-        args.matmul_struct, {.input_tensors = {tensor_args.input, tensor_args.weight}})[0];
+    ttnn::Tensor matmul_output_tensor = ttnn::experimental::prim::MinimalMatmulDeviceOperation::create_output_tensors(
+        args.matmul_struct,
+        {
+            .input_tensor = tensor_args.input, .weight_tensor = tensor_args.weight, .bias_tensor = {tensor_args.bias},
+            // .optional_output_tensors = {output_tensors.mm}
+        });
 
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
@@ -143,7 +137,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm,
         const std::optional<const DataType> dtype,
-        const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& program_config,
+        const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config,
         const std::optional<const operations::unary::UnaryWithParam>& activation,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
@@ -151,8 +145,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
-    std::optional<CoreCoord> user_core_coord;
+    // bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
@@ -160,7 +153,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
-    auto matmul_struct = operations::experimental::minimal_matmul::operation_attributes_t{
+    auto matmul_struct = ttnn::experimental::prim::MinimalMatmulDeviceOperation::operation_attributes_t{
         .config = program_config,
         .fused_activation = activation,
         .output_mem_config = memory_config_mm,

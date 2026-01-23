@@ -7,27 +7,26 @@
 #include <utility>
 #include <vector>
 
-#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async {
 
 // Type alias for the reduce scatter operation attributes used in fusion
-using ReduceScatterMinimalAsyncParams =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::operation_attributes_t;
+using ReduceScatterMinimalAsyncParams = ttnn::experimental::prim::ReduceScatterMinimalAsyncParams;
 
 struct operation_attributes_t {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
-    ttnn::operations::experimental::minimal_matmul::operation_attributes_t matmul_struct;
+    ttnn::experimental::prim::MinimalMatmulDeviceOperation::operation_attributes_t matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
     operation_attributes_t(
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
-        ttnn::operations::experimental::minimal_matmul::operation_attributes_t matmul_struct,
+        ttnn::experimental::prim::MinimalMatmulDeviceOperation::operation_attributes_t matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
         std::vector<IDevice*> devices) :
         reduce_scatter_params(std::move(reduce_scatter_params)),

@@ -61,8 +61,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
         const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& program_config =
-            std::nullopt,
+        const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config = std::nullopt,
         const std::optional<const operations::unary::UnaryWithParam>& activation = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
