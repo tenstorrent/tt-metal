@@ -1,0 +1,74 @@
+asic_to_fabric_node_mapping:
+  hostnames:
+    - hostname: g14glx03_0
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 0
+              asic_id: 140874927308800
+            - umd_chip_id: 1
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 1
+              asic_id: 143238000414944
+            - umd_chip_id: 2
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 5
+              asic_id: 143238000422304
+            - umd_chip_id: 3
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 4
+              asic_id: 143238000422848
+    - hostname: g14glx03_1
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 2
+              asic_id: 143238001601888
+    - hostname: g14glx03_2
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 8
+              asic_id: 143238000420960
+    - hostname: g14glx03_3
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 10
+              asic_id: 143238000418336
