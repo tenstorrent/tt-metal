@@ -63,6 +63,7 @@ struct ParsedTrafficPatternConfig {
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 };
@@ -100,6 +101,7 @@ struct TrafficPatternConfig {
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;  // Link ID for multi-link tests
 };
@@ -130,6 +132,7 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
 };
 
 struct HighLevelPatternConfig {

@@ -21,6 +21,7 @@ on:
           - sd35_large
           - flux1-dev
           - motif
+          - qwenimage
           - mistral
           - mixtral
           - whisper

@@ -68,8 +68,8 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
@@ -160,8 +160,8 @@ void bind_unary_composite_optional_floats_with_default(
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -1497,13 +1497,13 @@ void bind_unary_composite_int_with_default(
         {5}
 
         .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \mathrm{{{2}}})
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
+            {2} (int, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1517,10 +1517,8 @@ void bind_unary_composite_int_with_default(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 2, 3, 4
 
             {7}
         )doc",
@@ -2037,9 +2035,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardmish|(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
         "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
     bind_unary_operation(
         mod,
         ttnn::gez,
@@ -2062,9 +2061,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation(
         mod,
         ttnn::i1,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|i1|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
+        "[Validated range: -10 to 10]",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Computes the modified Bessel function of the first kind of order 1. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc");
     bind_unary_operation(
         mod,
         ttnn::isfinite,
@@ -2421,8 +2421,14 @@ void py_module(nb::module_& mod) {
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(mod, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
-    bind_unary_composite(mod, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
+    bind_unary_composite(
+        mod,
+        ttnn::var_hw,
+        R"doc(Computes the variance across the height (H) and width (W) dimensions for each batch and channel. The variance is calculated as :math:`\mathrm{Var}[X] = E[(X - \mu)^2]` where :math:`\mu` is the mean over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
+    bind_unary_composite(
+        mod,
+        ttnn::std_hw,
+        R"doc(Computes the standard deviation across the height (H) and width (W) dimensions for each batch and channel. The standard deviation is calculated as :math:`\sigma = \sqrt{\mathrm{Var}[X]}` where the variance is computed over H and W dimensions. Output shape: [N, C, 1, 1].)doc");
     bind_unary_composite(
         mod,
         ttnn::normalize_hw,
@@ -2487,7 +2493,14 @@ void py_module(nb::module_& mod) {
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
+        R"doc(
+        Returns the lower triangular part of :attr:`input_tensor` by zeroing out elements above the specified :attr:`diagonal`.
+        Elements on and below the given :attr:`diagonal` are preserved, while elements above it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and below the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps more elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps fewer elements)
+        )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int_with_default(
         mod,
@@ -2495,7 +2508,14 @@ void py_module(nb::module_& mod) {
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
+        R"doc(
+        Returns the upper triangular part of :attr:`input_tensor` by zeroing out elements below the specified :attr:`diagonal`.
+        Elements on and above the given :attr:`diagonal` are preserved, while elements below it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and above the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps fewer elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps more elements)
+        )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_int_parameter(
         mod,
@@ -2525,10 +2545,10 @@ void py_module(nb::module_& mod) {
         ttnn::rdiv,
         "value",
         "denominator that is considered as numerator, which should be a non-zero float value",
-        "round_mode",
+        "rounding_mode",
         "rounding_mode value",
         "None",
-        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode.
+        R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using rounding_mode.
 
         Input tensor must have BFLOAT16 data type.
 

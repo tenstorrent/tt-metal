@@ -19,7 +19,6 @@
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn/tensor/serialization.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace ttml::serialization {
 

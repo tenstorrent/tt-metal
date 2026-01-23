@@ -5,7 +5,9 @@
 #include "tt_metal/experimental/udm/mesh_kernel.hpp"
 #include "tt_metal/experimental/udm/mesh_builder.hpp"
 #include "tt_metal/api/tt-metalium/host_api.hpp"
+#include "tt_metal/api/tt-metalium/hal.hpp"
 #include <tt_stl/assert.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 
@@ -32,6 +34,27 @@ MeshKernelHandle CreateMeshKernel(
     // Get grid IDs and local CoreRangeSets from gcores
     auto grid_to_cores = builder.get_grid_core_range_set_from_gcores(gcores);
 
+    // Check for Wormhole 2-RISC UDM restriction before creating any kernels
+    auto arch = tt::tt_metal::hal::get_arch();
+    bool is_wormhole = (arch == tt::ARCH::WORMHOLE_B0);
+    bool is_dm_kernel = std::holds_alternative<tt::tt_metal::DataMovementConfig>(config);
+
+    if (is_wormhole && is_dm_kernel) {
+        // On Wormhole, check if any global cores already have DM kernels
+        for (const auto& gcore : gcores) {
+            if (program.has_dm_kernel_on_gcore(gcore.global_id)) {
+                TT_THROW(
+                    "2-RISC UDM mode is not supported on Wormhole architecture. "
+                    "Global core {} (local coord {}) already has a data movement kernel. "
+                    "Cannot add another data movement kernel to the same core on Wormhole. "
+                    "Please use a single RISC (RISCV_0 or RISCV_1 only) per core for data movement kernels on "
+                    "Wormhole.",
+                    gcore.global_id,
+                    gcore.local_coord);
+            }
+        }
+    }
+
     MeshKernelHandle mesh_kernel_handle;
 
     // Create kernel on each grid
@@ -56,6 +79,13 @@ MeshKernelHandle CreateMeshKernel(
 
         // Register that this mesh coordinate now has a kernel
         program.register_kernel(grid_ptr->coord);
+    }
+
+    // If this is a DM kernel, register all global cores that now have DM kernels
+    if (is_dm_kernel) {
+        for (const auto& gcore : gcores) {
+            program.register_dm_kernel_on_gcore(gcore.global_id);
+        }
     }
 
     return mesh_kernel_handle;
