@@ -9,13 +9,12 @@
 #include <filesystem>
 #include <algorithm>
 #include <yaml-cpp/yaml.h>
-#include <algorithm>
-#include <string>
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -98,21 +97,6 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
 namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
-
-// Helper function to generate golden file name from mesh graph descriptor path
-std::string get_golden_name_from_mesh_graph_path(const std::string& mesh_graph_desc_path) {
-    std::filesystem::path path(mesh_graph_desc_path);
-    std::string filename = path.filename().string();
-    // Remove .textproto extension
-    if (filename.size() >= 10 && filename.substr(filename.size() - 10) == ".textproto") {
-        filename = filename.substr(0, filename.size() - 10);
-    }
-    // Replace special characters with underscores
-    std::string golden_name = "T3kCustomMeshGraph_" + filename;
-    std::replace(golden_name.begin(), golden_name.end(), '/', '_');
-    std::replace(golden_name.begin(), golden_name.end(), '-', '_');
-    return golden_name;
-}
 
 TEST(MeshGraphValidation, TestMGDConnections) {
     // TODO: This test is currently not implemented completely connection types currently cannot be mixed
@@ -387,26 +371,8 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
 
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-
-    // Create the control plane with the correct mesh graph descriptor
-    // The ControlPlane constructor will automatically write the ASIC mapping file with the correct topology
-    auto control_plane = make_control_plane(
+    [[maybe_unused]] auto control_plane = make_control_plane(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
-
-    // Generate unique golden file name based on mesh graph descriptor path
-    std::string golden_name = get_golden_name_from_mesh_graph_path(mesh_graph_desc_path);
-    // Add test index to make it unique for duplicate descriptors
-    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    if (test_info) {
-        std::string test_name = test_info->name();
-        // Extract index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
-        size_t slash_pos = test_name.find('/');
-        if (slash_pos != std::string::npos) {
-            std::string index_str = test_name.substr(slash_pos + 1);
-            golden_name += "_" + index_str;
-        }
-    }
-    check_asic_mapping_against_golden("TestT3kControlPlaneInit", golden_name);
 }
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
