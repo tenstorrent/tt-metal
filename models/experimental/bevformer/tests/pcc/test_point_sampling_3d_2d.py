@@ -369,9 +369,5 @@ def test_point_sampling_3d_to_2d(
 
     assert mask_passed, f"PCC check for validity_mask failed: {mask_message}"
 
-    if points_passed:
-        if ENABLE_LOGGING:
-            logger.info("✅ Point sampling 3D to 2D test passed!")
-    else:
-        if ENABLE_LOGGING:
-            logger.warning("⚠️ Point sampling passed but with reduced accuracy on coordinates")
+    if ENABLE_LOGGING:
+        logger.info("✅ Point sampling 3D to 2D test passed!")

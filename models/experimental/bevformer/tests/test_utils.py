@@ -953,46 +953,6 @@ def check_with_tolerances(
         return False, results
 
 
-def save_comparison_report(
-    torch_tensor: torch.Tensor, ttnn_tensor, tensor_name: str, output_path: str, **kwargs
-) -> None:
-    """
-    Save detailed comparison report to file.
-
-    Args:
-        torch_tensor: Reference PyTorch tensor
-        ttnn_tensor: ttnn tensor to compare
-        tensor_name: Name for the tensor
-        output_path: Path to save the report
-        **kwargs: Additional parameters for tolerance checking
-    """
-    try:
-        with open(output_path, "w") as f:
-            # Redirect print output to file
-            import sys
-
-            original_stdout = sys.stdout
-            sys.stdout = f
-
-            print(f"COMPARISON REPORT: {tensor_name}")
-            print(f"Generated at: {torch.utils.data.get_worker_info()}")  # Timestamp placeholder
-            print("=" * 80)
-
-            # Detailed comparison
-            print_detailed_comparison(torch_tensor, ttnn_tensor, tensor_name, show_histograms=True)
-
-            # Tolerance checking
-            check_with_tolerances(torch_tensor, ttnn_tensor, tensor_name=tensor_name, **kwargs)
-
-            # Restore stdout
-            sys.stdout = original_stdout
-
-        logger.info(f"Comparison report saved to: {output_path}")
-
-    except Exception as e:
-        logger.error(f"Error saving comparison report: {e}")
-
-
 def check_with_pcc(torch_tensor: torch.Tensor, ttnn_tensor, pcc: float = 0.99) -> Tuple[bool, str]:
     """
     Legacy PCC checking function for backward compatibility.
