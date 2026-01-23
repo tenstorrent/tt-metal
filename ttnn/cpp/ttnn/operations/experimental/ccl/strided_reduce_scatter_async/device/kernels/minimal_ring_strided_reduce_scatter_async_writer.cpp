@@ -219,7 +219,7 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t chunk_width = 2;
-        const uint32_t mm_block_ht = 2;
+        const uint32_t mm_block_ht = 1;
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -250,19 +250,20 @@ void kernel_main() {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                 for (uint32_t i = 0; i < ring_size; i++) {
                     DPRINT << "Next ring element: " << i << " " << ENDL();
+                    uint32_t actual_slice_idx;
+                    if (direction) {
+                        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                    } else {
+                        actual_slice_idx =
+                            slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                    }
+                    DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
+
                     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-                        uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
+                        uint32_t input_row_offset = start_row_offset + input_tensor_Wt * (m_block_iter * mm_block_ht);
                         uint32_t output_row_offset = input_row_offset / ring_size;
-                        uint32_t actual_slice_idx;
-                        if (direction) {
-                            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                        } else {
-                            actual_slice_idx =
-                                slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-                        }
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
-                        DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                         if (i < (ring_size - 1)) {
                             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
                             // DPRINT << "intermediate_tile_id_start: " << intermediate_tile_id_start << ENDL();
@@ -298,12 +299,12 @@ void kernel_main() {
 
                                 uint64_t out_ready_sem_noc_addr_in_pkt =
                                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                                DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                // DPRINT << "WRITING TO SEMAPHORE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                                     &mux_connection_handle,
                                     pkt_hdr_seminc,
                                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
-                                DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
+                                // DPRINT << "SEMAPHORE WRITE COMPLETE: " << out_ready_sem_noc_addr_in_pkt << ENDL();
                                 noc_async_writes_flushed();
                             }
                         } else {

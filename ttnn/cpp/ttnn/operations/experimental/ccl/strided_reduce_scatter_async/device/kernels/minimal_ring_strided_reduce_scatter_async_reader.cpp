@@ -110,7 +110,7 @@ void kernel_main() {
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const uint32_t chunk_width = 2;
-    const uint32_t mm_block_ht = 2;
+    const uint32_t mm_block_ht = 1;
 
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
@@ -140,22 +140,22 @@ void kernel_main() {
 
             for (uint32_t i = 0; i < ring_size; i++) {
                 DPRINT << "Next ring element: " << i << " " << ENDL();
+                uint32_t actual_slice_idx;
+                if (direction) {
+                    actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+                } else {
+                    actual_slice_idx =
+                        slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+                }
+                DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                 for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-                    uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
+                    uint32_t input_row_offset = start_row_offset + input_tensor_Wt * (m_block_iter * mm_block_ht);
+                    DPRINT << "m_block_iter: " << m_block_iter << ENDL();
+                    DPRINT << "input_row_offset: " << input_row_offset << ENDL();
 
-                    // DPRINT << "direction: " << (uint32_t)direction << ENDL();
-                    // DPRINT << "slice_idx: " << slice_idx << ENDL();
                     const bool do_reduce = i != 0;
                     uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
-                    uint32_t actual_slice_idx;
-                    if (direction) {
-                        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                    } else {
-                        actual_slice_idx =
-                            slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-                    }
-                    DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                     const uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
                     uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
                     // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
@@ -163,17 +163,16 @@ void kernel_main() {
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
                         if (do_reduce) {
-                            DPRINT << "WAITING ON SEMAPHORE: " << out_ready_sem << ENDL();
+                            // DPRINT << "WAITING ON SEMAPHORE: " << out_ready_sem << ENDL();
                             noc_semaphore_wait_min(
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                             sem_target++;
-                            DPRINT << "SEMAPHORE WAIT COMPLETE: " << sem_target << ENDL();
+                            // DPRINT << "SEMAPHORE WAIT COMPLETE: " << sem_target << ENDL();
                         }
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         uint32_t direction_offset = direction ? 0 : chunk_width / 2;
                         // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
-                        DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         // DPRINT << "direction_offset: " << direction_offset << ENDL();
 
                         cb_reserve_back(cb_in0, tile_granularity);
