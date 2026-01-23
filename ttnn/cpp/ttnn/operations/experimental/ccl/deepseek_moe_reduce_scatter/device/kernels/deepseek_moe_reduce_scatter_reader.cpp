@@ -96,5 +96,4 @@ void kernel_main() {
 
     // reset the semaphore
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), 0);
-    noc_async_atomic_barrier();
 }
