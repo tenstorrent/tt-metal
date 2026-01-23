@@ -99,6 +99,23 @@ reduce_to_all_simplified_program_factory(
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
     auto* device = tensor_args.input_tensor_l.device();
 
+    if (forward_coord.has_value()) {
+        log_info(
+            tt::LogTest,
+            "physical device id: {}, current coord: {}, forward coordinate: {}",
+            mesh_device->get_device(device_coordinate)->id(),
+            device_coordinate,
+            forward_coord.value());
+    }
+    if (backward_coord.has_value()) {
+        log_info(
+            tt::LogTest,
+            "physical device id: {}, current coord: {}, backward coordinate: {}",
+            mesh_device->get_device(device_coordinate)->id(),
+            device_coordinate,
+            backward_coord.value());
+    }
+
     // Determine which mux direction to use for R1 and R2 based on device position.
     // Ring topology: D0 ↔ D1 ↔ D2 ↔ D3 ↔ (back to D0)
     //
@@ -243,6 +260,9 @@ reduce_to_all_simplified_program_factory(
     // Packet CBs for writer
     constexpr auto cb_packet_header = tt::CBIndex::c_20;
     constexpr auto cb_packet = tt::CBIndex::c_21;
+
+    // Sync CB for coordination between Compute and Writer
+    constexpr auto cb_sync = tt::CBIndex::c_22;
 
     // =========================================================================
     // Create Circular Buffers
@@ -401,6 +421,13 @@ reduce_to_all_simplified_program_factory(
             .set_tile_dims(cb_packet, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_packet_config);
 
+    // Sync CB (tiny, 1 tile size, can use 16B if supported but using aligned_page_size for safety)
+    tt::tt_metal::CircularBufferConfig cb_sync_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_sync, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_sync, aligned_page_size)
+            .set_tile_dims(cb_sync, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_sync_config);
+
     // =========================================================================
     // Setup mux cores and config
     // =========================================================================
@@ -461,28 +488,34 @@ reduce_to_all_simplified_program_factory(
     };
 
     // Writer compile-time args
-    // The writer needs to know which mux to use for R1 and R2.
-    // We pass r1_mux args first, then r2_mux args.
-    // The actual FWD/BWD assignment depends on device position (set above).
-    uint32_t r1_mux_ct_idx = 14;                 // After base args
-    uint32_t r2_mux_ct_idx = r1_mux_ct_idx + 5;  // 5 mux args per direction
-
+    // Build base args first, then calculate mux indices based on size
     std::vector<uint32_t> writer_ct_args = {
-        r1_mux_ct_idx,          // 0 - index where R1 mux compile args start
-        r2_mux_ct_idx,          // 1 - index where R2 mux compile args start
-        Sq_chunk_t,             // 2
-        vDHt,                   // 3
-        cb_local_l,             // 4
-        cb_local_s,             // 5
-        cb_local_m,             // 6
-        cb_r1_result_l,         // 7
-        cb_r1_result_s,         // 8
-        cb_r1_result_m,         // 9
-        cb_packet_header,       // 10
-        cb_packet,              // 11
-        l1_alignment,           // 12
-        input_page_size_bytes,  // 13
+        Sq_chunk_t,             // 0
+        vDHt,                   // 1
+        cb_local_l,             // 2
+        cb_local_s,             // 3
+        cb_local_m,             // 4
+        cb_r1_result_l,         // 5
+        cb_r1_result_s,         // 6
+        cb_r1_result_m,         // 7
+        cb_packet_header,       // 8
+        cb_packet,              // 9
+        l1_alignment,           // 10
+        input_page_size_bytes,  // 11
+        cb_sync,                // 12
     };
+
+    // Calculate mux indices based on current size.
+    // The indices will be at positions 13 and 14, followed by the mux args.
+    // r1_mux_ct_idx points to where R1 mux args start (after base args + 2 indices)
+    // r2_mux_ct_idx points to where R2 mux args start (after R1 mux args)
+    constexpr uint32_t num_mux_args_per_direction = 5;
+    uint32_t r1_mux_ct_idx = writer_ct_args.size() + 2;  // +2 for the two index args we're about to add
+    uint32_t r2_mux_ct_idx = r1_mux_ct_idx + num_mux_args_per_direction;
+
+    // Push the calculated indices (positions 13 and 14)
+    writer_ct_args.push_back(r1_mux_ct_idx);
+    writer_ct_args.push_back(r2_mux_ct_idx);
 
     // Add mux compile-time args for R1 and R2.
     // NOTE: The compile-time args are IDENTICAL for both muxes because they come from
@@ -537,6 +570,7 @@ reduce_to_all_simplified_program_factory(
         scale_val,         // 20
         Sq_chunk_t,        // 21
         vDHt,              // 22
+        cb_sync,           // 23
     };
 
     // =========================================================================
