@@ -69,8 +69,11 @@ ttnn::experimental::prim::BranchDescriptor ExecuteLayerNorm::branch(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
+    // Match the defaults used by invoke(): approx_mode=false, fp32_acc=true
+    bool approx_mode = false;
+    bool fp32_acc = true;
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, approx_mode, fp32_acc);
 
     LayerNormDeviceOp::operation_attributes_t op_attrs{
         .norm_type = ttnn::prim::LayerNormType::LAYERNORM,
