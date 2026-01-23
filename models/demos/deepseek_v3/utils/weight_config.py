@@ -15,8 +15,9 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
+from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 @contextmanager
@@ -71,6 +72,91 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     }.issubset(memory_config_dict.keys()):
         return obj
     return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
+
+
+def convert_weight_spec_to_saved(
+    weight_spec: WeightSpec,
+    output_path: Path,
+    mesh_device: ttnn.Device,
+    path_name: str,
+) -> SavedWeight:
+    """Convert a WeightSpec to SavedWeight by calling shard_and_save.
+
+    Args:
+        weight_spec: WeightSpec to convert
+        output_path: Base path for saving the weight
+        mesh_device: TTNN mesh device for conversion
+        path_name: Path name to use (e.g., "w1.input_tensor_b" or "weight")
+
+    Returns:
+        SavedWeight with the converted weight saved to disk
+    """
+    if weight_spec.torch_tensor is None:
+        raise ValueError(
+            "WeightSpec has no torch_tensor; this spec must be materialized via TensorCache "
+            "(create_weight_config_from_weight_spec) rather than convert_weight_spec_to_saved."
+        )
+    # Apply preprocessing
+    torch_tensor = weight_spec.preprocessor(weight_spec.torch_tensor)
+
+    return shard_and_save(
+        output_path / path_name,
+        torch_tensor,
+        weight_spec.shard_dims,
+        mesh_device,
+        weight_spec.remove_dims,
+        dtype=weight_spec.dtype,
+        layout=weight_spec.layout,
+        memory_config=weight_spec.memory_config,
+    )
+
+
+def convert_weight_specs_in_config(
+    weight_config: Any,
+    output_path: Path,
+    mesh_device: ttnn.Device,
+    path_parts: list[str] = [],
+) -> WeightConfig:
+    """Recursively convert WeightSpec objects to SavedWeight.
+
+    Args:
+        weight_config: Weight configuration that may contain WeightSpec objects
+        output_path: Base path for saving converted weights
+        mesh_device: TTNN mesh device for conversion
+        path_parts: Accumulated path parts for generating output file paths
+
+    Returns:
+        Weight configuration with all WeightSpec objects converted to SavedWeight
+    """
+    if isinstance(weight_config, dict):
+        result = {}
+        for key, value in weight_config.items():
+            if value is None:
+                result[key] = None
+            elif isinstance(value, WeightSpec):
+                # Generate output path from accumulated path parts
+                path_name = ".".join(path_parts + [key])
+                result[key] = convert_weight_spec_to_saved(value, output_path, mesh_device, path_name)
+            else:
+                # Recursively process nested structures
+                result[key] = convert_weight_specs_in_config(value, output_path, mesh_device, path_parts + [key])
+        return result
+    elif isinstance(weight_config, (list, tuple)):
+        result = [
+            convert_weight_specs_in_config(item, output_path, mesh_device, path_parts + [str(i)])
+            if item is not None
+            else None
+            for i, item in enumerate(weight_config)
+        ]
+        # Preserve tuple type if input was a tuple
+        return tuple(result) if isinstance(weight_config, tuple) else result
+    elif isinstance(weight_config, WeightSpec):
+        # Handle WeightSpec at top level (shouldn't happen in practice, but handle it)
+        path_name = ".".join(path_parts) if path_parts else "weight"
+        return convert_weight_spec_to_saved(weight_config, output_path, mesh_device, path_name)
+    else:
+        # For SavedWeight, None, or other types, return as-is
+        return weight_config
 
 
 def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
@@ -167,7 +253,12 @@ def get_weight_config(
     # Convert weights to TT tensors-on-disk and build weight_config
     logger.info("Converting weights to TTNN SavedWeight format...")
 
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    # Get weight specs from module (may contain WeightSpec or SavedWeight)
+    weight_spec_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+
+    # Convert any WeightSpec objects to SavedWeight
+    weight_config = convert_weight_specs_in_config(weight_spec_config, weight_cache_path, mesh_device)
+    del weight_spec_config
 
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)
@@ -231,6 +322,10 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
                     f"SavedWeight at '{current_prefix}' references missing file. "
                     f"Resolved path: {effective_path} (original: {entry.path})"
                 )
+        elif isinstance(entry, WeightSpec):
+            # WeightSpec objects should have been converted to SavedWeight before validation
+            # Skip validation for WeightSpec (they will be converted later)
+            pass
         else:
             # Recursively validate nested structures
             validate_weight_config_paths(root_path, entry, current_prefix)

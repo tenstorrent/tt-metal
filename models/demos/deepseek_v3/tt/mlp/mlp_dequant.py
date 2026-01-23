@@ -9,9 +9,9 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, get_state_dicts
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class MLPDequant(MLP):
@@ -35,7 +35,6 @@ class MLPDequant(MLP):
         return {
             models_name: {
                 "input_tensor_b": cls.convert_quantized_metaweight(
-                    output_path / f"{models_name}.input_tensor_b",
                     get_state_dicts(
                         state_dict,
                         f"{hf_name}.weight",
@@ -68,28 +67,31 @@ class MLPDequant(MLP):
     @classmethod
     def convert_quantized_metaweight(
         cls,
-        path: Path,
         quantized_weight_tensor: torch.Tensor,
         scale_inv_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
         metaweight_block_size: tuple[int, ...],
-    ) -> SavedWeight:
+    ) -> WeightSpec:
         """
         Convert the quantized weight tensor to a format suitable for TTNN.
 
         Args:
-            hf_config: The Hugging Face configuration object.
             quantized_weight_tensor: The quantized weight tensor.
             scale_inv_tensor: The scale inverse tensor.
             mesh_device: The mesh device to use for the conversion.
+            is_w2: Whether this is the w2 (down_proj) weight, which has different sharding.
+            metaweight_block_size: Block size for dequantization.
 
         Returns:
-            The converted TTNN tensor.
+            WeightSpec describing how to convert the weight.
         """
+        # Dequantize the weight tensor
+        dequantized_tensor = dequantize(quantized_weight_tensor, scale_inv_tensor, metaweight_block_size)
+
+        # Use the parent class's convert_metaweight method
         return cls.convert_metaweight(
-            path=path,
-            torch_metaweight_tensor=dequantize(quantized_weight_tensor, scale_inv_tensor, metaweight_block_size),
+            torch_metaweight_tensor=dequantized_tensor,
             mesh_device=mesh_device,
             is_w2=is_w2,
         )

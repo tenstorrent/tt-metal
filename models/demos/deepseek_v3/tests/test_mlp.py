@@ -23,6 +23,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
+from models.demos.deepseek_v3.utils.weight_config import convert_weight_specs_in_config
 
 
 # TODO: Doesn't work on multi-host - we should figure out why
@@ -83,9 +84,12 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     num_module_layers, _ = mesh_device.shape
 
     # Convert the weights
-    weight_config = MLPClass.convert_weights(
+    weight_spec_config = MLPClass.convert_weights(
         hf_config, [state_dict] + [None] * (num_module_layers - 1), tmp_path, mesh_device
     )
+
+    # Convert WeightSpec objects to SavedWeight objects
+    weight_config = convert_weight_specs_in_config(weight_spec_config, tmp_path, mesh_device)
 
     # Verify weight_config structure
     assert "w1" in weight_config

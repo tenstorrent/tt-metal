@@ -16,12 +16,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     LinearConfig,
     MeshDeviceStub,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
-    SEQ_LEN_CHUNK_SIZE,
-    even_int_div,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, SEQ_LEN_CHUNK_SIZE, even_int_div
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -31,6 +26,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
 
 
 class LMHead1D(AbstractModule):
@@ -62,21 +58,21 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
-            1, 0
+        weight_tensor = state_dict["weight"]
+        assert weight_tensor.shape == (
+            vocab_size,
+            hidden_dim,
         )  # In torch the weights are in (out_features, in_features) format
-        assert weight_tensor.shape == (hidden_dim, vocab_size)
 
         return {
             "linear": {
-                "input_tensor_b": shard_and_save(
-                    output_path / "linear.input_tensor_b",
-                    weight_tensor,
+                "input_tensor_b": WeightSpec(
+                    torch_tensor=weight_tensor,
                     shard_dims=(None, -1),
-                    mesh_device=mesh_device,
                     dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    preprocessor=lambda t: t.permute(1, 0),  # Convert to (in_features, out_features)
                 )
             }
         }

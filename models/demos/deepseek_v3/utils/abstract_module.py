@@ -173,7 +173,9 @@ class AbstractModule(ABC):
             mesh_device: TTNN mesh device
 
         Returns:
-            Dict mapping operation keyword tensor arguments to their save paths
+            Dict mapping operation keyword tensor arguments to either:
+            - WeightSpec: Declarative specification for weight conversion (preferred)
+            - SavedWeight: Pre-converted weight (legacy, for backwards compatibility)
         """
         raise NotImplementedError(f"Subclasses of {AbstractModule.__name__} must implement the convert_weights method")
 
