@@ -23,9 +23,7 @@ void MAIN {
         REDUCE_DIM,
         compute_kernel_lib::policies::StreamingPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-        tt::CBIndex::c_0,  // input CB
-        tt::CBIndex::c_2,  // scaler CB
-        tt::CBIndex::c_3,  // output CB
+        compute_kernel_lib::ReduceCBs::of(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3),
         compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
 }
 }  // namespace NAMESPACE
