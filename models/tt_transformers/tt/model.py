@@ -592,6 +592,11 @@ class Transformer(LightweightModule):
             )
 
         if mode == "prefill" and get_last_token == -1:
+            a = ttnn.slice(x, (0, 0, 0, 0), (1, 1, 32, x.shape[-1]))
+            b = self.norm(a, mode="prefill")
+            c = ttnn.interleaved_to_sharded(b, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+            d = self.lm_head(c)
+            e = ttnn.to_layout(d, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
