@@ -10,8 +10,7 @@
 #include "compute_kernel_api.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_single_transfer = get_compile_time_arg_val(1);
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(2);
@@ -48,4 +47,3 @@ void MAIN {
         cb_out.push_back(num_single_transfer);
     }
 }
-}  // namespace NAMESPACE

@@ -10,8 +10,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce_custom.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t qk_im_cb = get_compile_time_arg_val(0);
     constexpr uint32_t prev_max_cb = get_compile_time_arg_val(1);
     constexpr uint32_t out_max_cb = get_compile_time_arg_val(2);
@@ -66,4 +65,3 @@ void MAIN {
     // Ensure outputs are produced before exiting
     cb_wait_front(out_max_cb, Sq_chunk_t);
 }
-}  // namespace NAMESPACE

@@ -8,8 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
     uint32_t dst_tile_rows = get_compile_time_arg_val(1);
     uint32_t dst_tile_cols = get_compile_time_arg_val(2);
@@ -60,4 +59,3 @@ void MAIN {
 
     release_dst();
 }
-}  // namespace NAMESPACE
