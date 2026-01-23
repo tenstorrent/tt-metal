@@ -60,7 +60,6 @@
 #include "mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
-class HWCommandQueue;
 class SystemMemoryManager;
 
 namespace program_cache::detail {
