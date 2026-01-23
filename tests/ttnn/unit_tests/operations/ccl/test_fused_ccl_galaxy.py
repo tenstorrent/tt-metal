@@ -339,6 +339,22 @@ def run_all_gather_matmul_galaxy_impl(
     while non_fused_out_block_w % non_fused_out_subblock_w != 0:
         non_fused_out_subblock_w -= 1
 
+    # Calculate in0_block_w for non-fused path
+    # Condition: shard_tiles % in0_block_w == 0 AND K_in_tiles % in0_block_w == 0
+    non_fused_shard_tiles = non_fused_K_per_shard // ttnn.TILE_SIZE  # 160 / 32 = 5
+    K_in_tiles = K // ttnn.TILE_SIZE  # 3584 / 32 = 112
+    non_fused_in0_block_w = non_fused_shard_tiles
+    while non_fused_in0_block_w > 0:
+        if non_fused_shard_tiles % non_fused_in0_block_w == 0 and K_in_tiles % non_fused_in0_block_w == 0:
+            break
+        non_fused_in0_block_w -= 1
+    if non_fused_in0_block_w == 0:
+        non_fused_in0_block_w = 1
+
+    logger.debug(
+        f"Non-fused: shard_tiles={non_fused_shard_tiles}, K_tiles={K_in_tiles}, in0_block_w={non_fused_in0_block_w}"
+    )
+
     # Program config for fused op (uses gather_in0 with global CB)
     fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=storage_grid,
@@ -358,7 +374,7 @@ def run_all_gather_matmul_galaxy_impl(
     # Program config for non-fused op (uses mcast_in0, contiguous rectangular grid)
     non_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=non_fused_grid,
-        in0_block_w=in0_block_w,
+        in0_block_w=non_fused_in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=non_fused_out_subblock_w,
         per_core_M=out_block_h,
