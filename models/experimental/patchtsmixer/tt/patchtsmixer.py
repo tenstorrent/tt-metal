@@ -38,8 +38,11 @@ class TtPatchTSMixerGatedAttention:
         )
         # Softmax in L1
         w = ttnn.softmax(y, dim=-1, memory_config=self.l1_mem_config)
+        ttnn.deallocate(y)
         # Multiply in L1
-        return ttnn.multiply(x, w, memory_config=self.l1_mem_config)
+        out = ttnn.multiply(x, w, memory_config=self.l1_mem_config)
+        ttnn.deallocate(w)
+        return out
 
 
 class TtPatchTSMixerPositionalEncoding:
@@ -194,13 +197,15 @@ class TtPatchTSMixerMLP:
         # L1 memory config for outputs
         self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
+        # Core grid for parallelization
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
     def __call__(self, x):
         # x shape: (B, C, Np, D)
-        B = x.shape[0]
-        C = x.shape[1]
+        B, C = x.shape[0], x.shape[1]
 
         # First linear with GELU: (B, C, Np, D) @ (D, expansion*D)
-        # Distribute across cores for parallel processing
+        # Use core_grid for parallel processing across B*C dimension
         x = ttnn.linear(
             x,
             self.w1,
@@ -217,7 +222,7 @@ class TtPatchTSMixerMLP:
         )
 
         # Second linear: (B, C, Np, expansion*D) @ (expansion*D, D)
-        x = ttnn.linear(
+        x_out = ttnn.linear(
             x,
             self.w2,
             bias=self.b2,
@@ -230,7 +235,10 @@ class TtPatchTSMixerMLP:
                 packer_l1_acc=False,
             ),
         )
-        return x
+
+        ttnn.deallocate(x)
+
+        return x_out
 
 
 class TtFeatureMixerBlock:
@@ -288,8 +296,10 @@ class TtFeatureMixerBlock:
         x = self.mlp(x)
         if self.use_gated_attn:
             x = self.gate(x)
-        x = ttnn.add(x, residual)
-        return x
+        out = ttnn.add(x, residual)
+        ttnn.deallocate(x)
+        ttnn.deallocate(residual)
+        return out
 
 
 class TtPatchMixerBlock:
@@ -340,11 +350,12 @@ class TtPatchMixerBlock:
         residual = x
 
         # (B, C, N_p, D)
-        x = self.norm(x)
+        x_norm = self.norm(x)
 
         # Move patches to last dim so MLP mixes patches:
         # (B, C, N_p, D) -> (B, C, D, N_p)
-        x = ttnn.permute(x, (0, 1, 3, 2))
+        x = ttnn.permute(x_norm, (0, 1, 3, 2))
+        ttnn.deallocate(x_norm)
 
         # MLP over last dim (N_p)
         x = self.mlp(x)
@@ -354,9 +365,13 @@ class TtPatchMixerBlock:
             x = self.gate(x)
 
         # Back (B, C, D, N_p) -> (B, C, Np, D)
-        x = ttnn.permute(x, (0, 1, 3, 2))
+        x_perm = ttnn.permute(x, (0, 1, 3, 2))
+        ttnn.deallocate(x)
 
-        return ttnn.add(x, residual)
+        out = ttnn.add(x_perm, residual)
+        ttnn.deallocate(x_perm)
+        ttnn.deallocate(residual)
+        return out
 
 
 class TtPatchTSMixerChannelFeatureMixerBlock:
@@ -404,10 +419,11 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
     def __call__(self, x):
         residual = x
 
-        x = self.norm(x)
+        x_norm = self.norm(x)
 
         # Move channel to last dim (B, C, N_p, D) -> (B, D, N_p, C)
-        x = ttnn.permute(x, (0, 3, 2, 1))
+        x = ttnn.permute(x_norm, (0, 3, 2, 1))
+        ttnn.deallocate(x_norm)
 
         if self.use_gated_attn:
             x = self.gate(x)  # gate over channels
@@ -415,8 +431,13 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
         x = self.mlp(x)  # MLP over channels (last dim)
 
         # Back: (B, D, N_p, C) -> (B, C, N_p, D)
-        x = ttnn.permute(x, (0, 3, 2, 1))
-        return ttnn.add(x, residual)
+        x_perm = ttnn.permute(x, (0, 3, 2, 1))
+        ttnn.deallocate(x)
+
+        out = ttnn.add(x_perm, residual)
+        ttnn.deallocate(x_perm)
+        ttnn.deallocate(residual)
+        return out
 
 
 class TtPatchTSMixerLayer:
@@ -561,14 +582,17 @@ class TtPatchTSMixerForecastHead:
         B, C, Np, D = x.shape
 
         # Flatten in L1
-        x = ttnn.reshape(x, (B, C, 1, Np * D), memory_config=self.l1_mem_config)
+        x_flat = ttnn.reshape(x, (B, C, 1, Np * D), memory_config=self.l1_mem_config)
+        ttnn.deallocate(x)
 
         # Linear with L1 output
-        y = ttnn.linear(x, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        y = ttnn.linear(x_flat, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        ttnn.deallocate(x_flat)
 
         # Permute in L1
-        y = ttnn.permute(y, (0, 3, 2, 1), memory_config=self.l1_mem_config)
-        return y
+        out = ttnn.permute(y, (0, 3, 2, 1), memory_config=self.l1_mem_config)
+        ttnn.deallocate(y)
+        return out
 
 
 class TtPatchTSMixerLinearHead:
@@ -613,35 +637,44 @@ class TtPatchTSMixerLinearHead:
         B, C, Np, D = x.shape
 
         # Transpose: (B, C, Np, D) -> (B, C, D, Np)
-        x = ttnn.permute(x, (0, 1, 3, 2))
+        x_perm = ttnn.permute(x, (0, 1, 3, 2))
+        ttnn.deallocate(x)
 
         # Apply aggregation over patch dimension (last dim)
         if self.head_aggregation == "use_last":
             # Take last patch: (B, C, D, Np) -> (B, C, D, 1)
             # TTNN slice syntax: tensor[start:stop] along dim
-            x = x[:, :, :, Np - 1 : Np]  # (B, C, D, 1)
-            x = ttnn.squeeze(x, -1)  # (B, C, D)
+            x_agg = x_perm[:, :, :, Np - 1 : Np]  # (B, C, D, 1)
+            ttnn.deallocate(x_perm)
+            x = ttnn.squeeze(x_agg, -1)  # (B, C, D)
+            ttnn.deallocate(x_agg)
 
         elif self.head_aggregation == "max_pool":
             # Max pool over patches: (B, C, D, Np) -> (B, C, D)
-            x = ttnn.max(x, dim=-1)
+            x = ttnn.max(x_perm, dim=-1)
+            ttnn.deallocate(x_perm)
 
         elif self.head_aggregation == "avg_pool":
             # Average pool over patches: (B, C, D, Np) -> (B, C, D)
-            x = ttnn.mean(x, dim=-1)
+            x = ttnn.mean(x_perm, dim=-1)
+            ttnn.deallocate(x_perm)
+        else:
+            x = x_perm
 
         # else: head_aggregation is None, keep all patches (B, C, D, Np)
 
         # Flatten: (B, C, D, ...) -> (B, C*D*...)
         if self.head_aggregation is None:
             # (B, C, D, Np) -> (B, C*D*Np)
-            x = ttnn.reshape(x, (B, C * D * Np))
+            x_flat = ttnn.reshape(x, (B, C * D * Np))
         else:
             # (B, C, D) -> (B, C*D)
-            x = ttnn.reshape(x, (B, C * D))
+            x_flat = ttnn.reshape(x, (B, C * D))
+        ttnn.deallocate(x)
 
         # Linear projection: (B, features) -> (B, num_targets)
-        x = ttnn.linear(x, self.projection_weight, bias=self.projection_bias)
+        x = ttnn.linear(x_flat, self.projection_weight, bias=self.projection_bias)
+        ttnn.deallocate(x_flat)
 
         # Optional: Apply sigmoid + range scaling
         if self.output_range is not None:
@@ -834,6 +867,7 @@ class TtPatchTSMixerEmbedding:
 
         # Patchify (already optimized with L1)
         patches_tt = self.patchify(x_lc)
+        ttnn.deallocate(x_lc)
 
         # Linear projection: (B, C, Np, patch_length) @ (patch_length, d_model)
         # Use multi-core parallelization for input embedding
@@ -852,6 +886,7 @@ class TtPatchTSMixerEmbedding:
                 packer_l1_acc=False,
             ),
         )
+        ttnn.deallocate(patches_tt)
         return out
 
 
