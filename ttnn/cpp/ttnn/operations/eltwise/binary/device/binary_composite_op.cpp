@@ -5,6 +5,7 @@
 #include "binary_composite_op.hpp"
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
