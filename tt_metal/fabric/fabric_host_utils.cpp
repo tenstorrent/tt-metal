@@ -194,14 +194,14 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
     const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
 
-    // Structure: mesh_id -> hostname -> list of {asic_id, tray_id, asic_location, fabric_node_id}
+    // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
     struct AsicMapping {
-        tt::tt_metal::AsicID asic_id;
         tt::tt_metal::TrayID tray_id;
         tt::tt_metal::ASICLocation asic_location;
         FabricNodeId fabric_node_id;
+        tt::tt_metal::AsicID asic_id;
     };
-    std::map<MeshId, std::map<HostName, std::vector<AsicMapping>>> mappings_by_mesh_and_host;
+    std::map<HostName, std::map<MeshId, std::map<ChipId, AsicMapping>>> mappings_by_host_mesh_and_chip;
 
     // Iterate through all meshes
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
@@ -213,6 +213,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 // Get ASIC ID for this fabric node
                 tt::tt_metal::AsicID asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
 
+                // Get physical chip ID (UMD chip ID) for this fabric node
+                ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+
                 // Get ASIC position (tray_id and asic_location) from physical system descriptor
                 tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
                 tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
@@ -220,9 +223,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 // Get hostname for this fabric node
                 HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
 
-                // Add to the mapping structure
-                mappings_by_mesh_and_host[mesh_id][hostname].push_back(
-                    {asic_id, tray_id, asic_location, fabric_node_id});
+                // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
+                AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
+                mappings_by_host_mesh_and_chip[hostname][mesh_id].emplace(umd_chip_id, mapping);
             } catch (...) {
                 // Skip unmapped fabric nodes
                 continue;
@@ -238,24 +241,44 @@ void serialize_asic_to_fabric_node_mapping_to_file(
 
     YAML::Emitter emitter;
     emitter << YAML::BeginMap;
-    emitter << YAML::Key << "meshes";
-    emitter << YAML::Value << YAML::BeginMap;
+    emitter << YAML::Key << "asic_to_fabric_node_mapping";
+    emitter << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "hostnames";
+    emitter << YAML::Value << YAML::BeginSeq;
 
-    // Emit each mesh
-    for (const auto& [mesh_id, host_mappings] : mappings_by_mesh_and_host) {
-        emitter << YAML::Key << ("mesh_" + std::to_string(*mesh_id));
-        emitter << YAML::Value << YAML::BeginMap;
+    // Emit each hostname as a list item
+    for (const auto& [hostname, mesh_mappings] : mappings_by_host_mesh_and_chip) {
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "hostname";
+        emitter << YAML::Value << hostname;
 
-        // Emit each host within this mesh
-        for (const auto& [hostname, mappings] : host_mappings) {
-            emitter << YAML::Key << hostname;
+        // Emit mesh as a key with a list value
+        emitter << YAML::Key << "mesh";
+        emitter << YAML::Value << YAML::BeginSeq;
+
+        // Emit each mesh within this hostname
+        for (const auto& [mesh_id, chip_mappings] : mesh_mappings) {
+            // First emit mesh entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "mesh";
+            emitter << YAML::Value << *mesh_id;
+            emitter << YAML::EndMap;
+
+            // Then emit chips entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "chips";
             emitter << YAML::Value << YAML::BeginSeq;
 
-            // Emit each ASIC position to Fabric node mapping
-            for (const auto& mapping : mappings) {
+            // Emit each umd_chip_id mapping (physical chip ID)
+            for (const auto& [umd_chip_id, mapping] : chip_mappings) {
                 emitter << YAML::BeginMap;
-                emitter << YAML::Key << "asic_id";
-                emitter << YAML::Value << *mapping.asic_id;
+
+                // Emit umd_chip_id field
+                emitter << YAML::Key << "umd_chip_id";
+                emitter << YAML::Value << umd_chip_id;
+
+                // Emit asic_position
                 emitter << YAML::Key << "asic_position";
                 emitter << YAML::Value;
                 emitter << YAML::BeginMap;
@@ -264,6 +287,8 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 emitter << YAML::Key << "asic_location";
                 emitter << YAML::Value << *mapping.asic_location;
                 emitter << YAML::EndMap;
+
+                // Emit fabric_node_id
                 emitter << YAML::Key << "fabric_node_id";
                 emitter << YAML::Value;
                 emitter << YAML::BeginMap;
@@ -272,15 +297,23 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 emitter << YAML::Key << "chip_id";
                 emitter << YAML::Value << mapping.fabric_node_id.chip_id;
                 emitter << YAML::EndMap;
+
+                // Emit asic_id as the last field
+                emitter << YAML::Key << "asic_id";
+                emitter << YAML::Value << *mapping.asic_id;
+
                 emitter << YAML::EndMap;
             }
 
             emitter << YAML::EndSeq;
+            emitter << YAML::EndMap;
         }
 
+        emitter << YAML::EndSeq;
         emitter << YAML::EndMap;
     }
 
+    emitter << YAML::EndSeq;
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
     out_file << emitter.c_str();

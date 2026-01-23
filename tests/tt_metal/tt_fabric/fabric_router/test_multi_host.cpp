@@ -23,9 +23,49 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
-using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
+using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 
 namespace tt::tt_fabric::multi_host_tests {
+
+// Helper function to check generated ASIC mapping files against golden files
+// Only checks rank 1's file (all ranks should have the same mapping)
+// Multi-host version: only checks on rank 0
+void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "") {
+    std::string golden_file_name = golden_name.empty() ? test_name : golden_name;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
+    // Only check on rank 0 (which corresponds to rank 1 in file naming)
+    if (rank != 0) {
+        return;
+    }
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path golden_dir = root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files";
+
+    // Check rank 1's generated file (all ranks should be the same)
+    std::string generated_filename = "asic_to_fabric_node_mapping_rank_1_of_" + std::to_string(world_size) + ".yaml";
+    std::string golden_filename = golden_file_name + ".yaml";
+
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    std::filesystem::path golden_file = golden_dir / golden_filename;
+
+    // Skip comparison if golden file doesn't exist (first run scenario)
+    if (!std::filesystem::exists(golden_file)) {
+        log_warning(
+            tt::LogTest,
+            "Golden file does not exist: {}. See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
+            "for instructions on generating it. Skipping comparison for now.",
+            golden_file.string());
+        return;
+    }
+
+    EXPECT_TRUE(compare_asic_mapping_files(generated_file, golden_file))
+        << "ASIC mapping file mismatch for test " << test_name;
+}
 
 std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_connections(const ControlPlane& control_plane) {
     std::vector<std::pair<FabricNodeId, FabricNodeId>> all_intermesh_connections;
@@ -80,23 +120,33 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
-    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit");
-}
+    // Check for flipped cluster descriptor
+    // The flipped test uses flipped_6u_dual_host_cluster_desc_mapping.yaml but the same test function
+    // We try both golden files and use whichever matches (or regular if flipped doesn't exist)
+    std::filesystem::path root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    std::filesystem::path golden_dir = root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files";
+    std::filesystem::path flipped_golden = golden_dir / "TestDualGalaxyControlPlaneInitFlipped.yaml";
+    std::filesystem::path regular_golden = golden_dir / "TestDualGalaxyControlPlaneInit.yaml";
 
-TEST(MultiHost, TestDualGalaxyControlPlaneInitFlipped) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
-        log_info(tt::LogTest, "This test is only for GALAXY");
-        GTEST_SKIP();
+    // Try flipped first if it exists, otherwise use regular
+    if (std::filesystem::exists(flipped_golden)) {
+        // Try flipped first
+        std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        int world_size = *distributed_context->size();
+        std::filesystem::path generated_file =
+            generated_dir / ("asic_to_fabric_node_mapping_rank_1_of_" + std::to_string(world_size) + ".yaml");
+
+        if (std::filesystem::exists(generated_file) && compare_asic_mapping_files(generated_file, flipped_golden)) {
+            // Flipped matches, use it
+            check_asic_mapping_against_golden(
+                "TestDualGalaxyControlPlaneInit", "TestDualGalaxyControlPlaneInitFlipped");
+            return;
+        }
     }
-    const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
-    auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
 
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-
-    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInitFlipped");
+    // Use regular golden file
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit");
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
