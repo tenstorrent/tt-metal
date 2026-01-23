@@ -76,7 +76,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
 
     // reader
     uint32_t src_tiles_per_row = input.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t src_tiles_per_col = input.padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t src_tiles_per_col = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t src_tile_stride = row_wise ? 1 : src_tiles_per_row;
     uint32_t src_block_stride = row_wise ? src_tiles_per_row : 1;
 
@@ -93,7 +93,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
 
     // writer
     uint32_t out_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t out_tiles_per_col = output.padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t out_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t out_tile_stride = row_wise ? 1 : out_tiles_per_row;
     uint32_t out_block_stride = row_wise ? out_tiles_per_row : 1;
 
@@ -109,27 +109,31 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
         WriterDataMovementConfig(writer_compile_time_args));
 
     // RUNTIME ARGS
-    std::vector<uint32_t> shape_blocks(rank - 1);
+    std::vector<uint32_t> src_shape_blocks(rank - 1);
+    std::vector<uint32_t> out_shape_blocks(rank - 1);
     std::vector<uint32_t> src_block_id_gap(rank - 1);
     std::vector<uint32_t> out_block_id_gap(rank - 1);
     std::vector<uint32_t> block_coord(rank - 1, 0);
 
     int index = rank - 2;
     if (row_wise) {
-        shape_blocks[index] = out_tiles_per_col;
+        out_shape_blocks[index] = out_tiles_per_col;
+        src_shape_blocks[index] = src_tiles_per_col;
         src_block_id_gap[index] = src_tiles_per_row * (src_tiles_per_col - out_tiles_per_col);
         out_block_id_gap[index] = 0;
         index--;
     } else {
-        shape_blocks[index] = out_tiles_per_row;
+        out_shape_blocks[index] = out_tiles_per_row;
+        src_shape_blocks[index] = src_tiles_per_row;
         src_block_id_gap[index] = src_tiles_per_row * src_tiles_per_col - out_tiles_per_row;
         out_block_id_gap[index] = out_tiles_per_row * out_tiles_per_col - out_tiles_per_row;
         index--;
     }
     uint32_t size_acc_src = src_tiles_per_row * src_tiles_per_col;
-    for (uint32_t i = rank - 3; i >= 0; i--) {
+    for (int32_t i = rank - 3; i >= 0; i--) {
         int size_unpadded_dim = input.padded_shape()[i] - output.padded_shape()[i];
-        shape_blocks[index] = output.padded_shape()[i];
+        out_shape_blocks[index] = output.padded_shape()[i];
+        src_shape_blocks[index] = input.padded_shape()[i];
         src_block_id_gap[index] = size_unpadded_dim * size_acc_src;
         out_block_id_gap[index] = 0;
         size_acc_src *= input.padded_shape()[i];
@@ -167,11 +171,16 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
 
     std::vector<uint32_t> block_start(rank - 1);
     std::vector<uint32_t> zero_coord(rank - 1, 0);
-    block_start[0] = row_wise ? args.slice_start[1] : args.slice_start[0];
-    for (int i = 1; i < rank; i++) {
-        block_start[i - 1] = args.slice_start[i];
+    if (row_wise) {
+        block_start[rank - 2] = args.slice_start[rank - 2] / TILE_HEIGHT;
+    } else {
+        block_start[rank - 2] = args.slice_start[rank - 1] / TILE_WIDTH;
     }
-    uint32_t src_block_dim_start = row_wise ? args.slice_start[0] : args.slice_start[1];
+    for (int i = 0; i < rank - 2; i++) {
+        block_start[i] = args.slice_start[i];
+    }
+    uint32_t src_block_dim_start =
+        row_wise ? args.slice_start[rank - 1] / TILE_WIDTH : args.slice_start[rank - 2] / TILE_HEIGHT;
     uint32_t src_block_dim_size = row_wise ? src_tiles_per_row : src_tiles_per_col;
     uint32_t out_block_dim_size = row_wise ? out_tiles_per_row : out_tiles_per_col;
 
@@ -184,28 +193,29 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
         }
 
         uint32_t src_block_tile_id = calc_block_tile_id(
-            block_coord, shape_blocks, block_start, row_wise ? 0 : 1, src_block_dim_size, src_block_dim_start);
+            block_coord, src_shape_blocks, block_start, row_wise, src_block_dim_size, src_block_dim_start);
         uint32_t out_block_tile_id =
-            calc_block_tile_id(block_coord, shape_blocks, zero_coord, row_wise ? 0 : 1, out_block_dim_size, 0);
+            calc_block_tile_id(block_coord, out_shape_blocks, zero_coord, row_wise, out_block_dim_size, 0);
 
         std::vector<uint32_t> reader_rt_args = {src_buffer->address(), src_block_tile_id, num_blocks_arg};
-        reader_rt_args.insert(reader_rt_args.end(), shape_blocks.begin(), shape_blocks.end());
+        reader_rt_args.insert(reader_rt_args.end(), out_shape_blocks.begin(), out_shape_blocks.end());
         reader_rt_args.insert(reader_rt_args.end(), src_block_id_gap.begin(), src_block_id_gap.end());
         reader_rt_args.insert(reader_rt_args.end(), block_coord.begin(), block_coord.end());
 
         std::vector<uint32_t> writer_rt_args = {dst_buffer->address(), out_block_tile_id, num_blocks_arg};
-        writer_rt_args.insert(writer_rt_args.end(), shape_blocks.begin(), shape_blocks.end());
+        writer_rt_args.insert(writer_rt_args.end(), out_shape_blocks.begin(), out_shape_blocks.end());
         writer_rt_args.insert(writer_rt_args.end(), out_block_id_gap.begin(), out_block_id_gap.end());
         writer_rt_args.insert(writer_rt_args.end(), block_coord.begin(), block_coord.end());
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        for (int i = rank - 1; i >= 1; i--) {
-            block_coord[i]++;
-            if (block_coord[i] == shape_blocks[i]) {
-                block_coord[i] = 0;
-                block_coord[i - 1]++;
+        block_coord[rank - 2] += num_blocks_arg;
+        for (int j = rank - 2; j >= 1; j--) {
+            if (block_coord[j] >= out_shape_blocks[j]) {
+                const uint32_t carry = block_coord[j] / out_shape_blocks[j];
+                block_coord[j] = block_coord[j] % out_shape_blocks[j];
+                block_coord[j - 1] += carry;
             } else {
                 break;
             }
