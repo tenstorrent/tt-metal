@@ -280,7 +280,6 @@ void compute_grad_scores(
 void update_grad_query(
     const uint32_t cb_grad_scores,
     const uint32_t cb_key,
-    const uint32_t scaler_bits,
     const uint32_t cb_grad_query_accum,
     const uint32_t tiles_per_row,
     const uint32_t block_size,
@@ -387,7 +386,6 @@ void update_grad_value(
 void update_grad_key(
     const uint32_t cb_grad_scores,
     const uint32_t cb_query,
-    const uint32_t scaler_bits,
     const uint32_t cb_transpose_wh,
     const uint32_t cb_grad_key_accum,
     const uint32_t tiles_per_row,

@@ -177,13 +177,10 @@ void MAIN {
                     cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
                 // Step 7: compute grad w.r.t. key
-                // dK = scaler * (dZ^T @ Q)
-                // we apply scaler inside compute_grad_scores function to improve numerical stability of upcoming
-                // matmul for grad K (and grad Q in q kernel)
+                // dK = dS^T @ Q (scaling already applied in compute_grad_scores)
                 update_grad_key(
                     cb_grad_scores,
                     cb_query,
-                    scaler_bits,
                     cb_transpose_wh,
                     cb_grad_key_accum,
                     tiles_per_row,
