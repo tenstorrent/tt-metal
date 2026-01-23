@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#include <tools/profiler/kernel_profiler.hpp>
-
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/relu.h"
@@ -23,8 +21,6 @@ template <
     bool PopA = false,
     bool UseCustomMM = true>
 FORCE_INLINE void matmul_with_relu_block() {
-    DeviceZoneScopedN("matmul_with_relu_block");
-
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     constexpr uint32_t num_output_tiles = 1;
@@ -33,7 +29,6 @@ FORCE_INLINE void matmul_with_relu_block() {
     tile_regs_acquire();
 
     {
-        DeviceZoneScopedN("matmul_tiles");
         if constexpr (UseCustomMM) {
             custom_mm_block(CbA, CbB, 0, 0, 0, false, NumTilesK);
         } else {
@@ -43,7 +38,6 @@ FORCE_INLINE void matmul_with_relu_block() {
         }
     }
     {
-        DeviceZoneScopedN("relu_tile");
         relu_tile_init();
         relu_tile(0);
     }
@@ -75,8 +69,6 @@ template <
     bool PopBias = false,
     bool UseCustomMM = true>
 FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
-    DeviceZoneScopedN("matmul_with_bias_block");
-
     constexpr uint32_t num_output_tiles = 1;
     cb_reserve_back(CbOut, num_output_tiles);
     cb_wait_front(CbA, NumTilesK);
@@ -86,7 +78,6 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     tile_regs_acquire();
 
     {
-        DeviceZoneScopedN("matmul_tiles");
         if constexpr (UseCustomMM) {
             custom_mm_block(CbA, CbB, 0, 0, MATMUL_ACC_REG_ID, false, NumTilesK);
         } else {
@@ -97,7 +88,6 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     }
 
     {
-        DeviceZoneScopedN("add_bias_tile");
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CbBias);
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             CbBias, bias_tile_index, MATMUL_ACC_REG_ID);

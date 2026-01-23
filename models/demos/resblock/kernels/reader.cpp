@@ -6,11 +6,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-#include <tools/profiler/kernel_profiler.hpp>
-
 template <uint32_t CbOut, uint32_t NumTiles>
 FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr) {
-    DeviceZoneScopedN("mcast_reader_wait_for_mcast");
     cb_reserve_back(CbOut, NumTiles);
     noc_semaphore_wait(mcast_sender_semaphore_addr_ptr, VALID);
     cb_push_back(CbOut, NumTiles);
@@ -25,7 +22,6 @@ template <
     uint32_t MCastReceiverNocY,
     uint32_t MCastReceiverSemaphoreId>
 void gather(uint32_t receiver_data_addr, uint32_t offset) {
-    DeviceZoneScopedN("gather");
     cb_wait_front(CbIn, NumTiles);
 
     // Gather to receiver core (write and then signal using semaphore)
@@ -86,8 +82,6 @@ void kernel_main() {
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         {
-            DeviceZoneScopedN("layer_gather_and_mcast");
-
             // Gather after first matmul so that we can mcast full result to all cores
             gather<
                 intermediate_pregather_cb,
@@ -100,7 +94,6 @@ void kernel_main() {
             wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
         {
-            DeviceZoneScopedN("layer_gather_and_mcast_2");
             // Gather after second matmul so that we can mcast full result to all cores
             gather<
                 intermediate_pregather_cb,
@@ -115,8 +108,6 @@ void kernel_main() {
     }
 
     {
-        DeviceZoneScopedN("copy_output");
-
         // Calculate offset for this core's data in mm1_full_cb (mcast contains data from all cores)
         const uint32_t src_addr = get_read_ptr(mm1_full_cb) + gather_destination_tile_offset_bytes;
         constexpr uint32_t number_of_tiles_to_copy_into_output = 1;

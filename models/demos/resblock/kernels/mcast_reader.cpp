@@ -6,8 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-#include <tools/profiler/kernel_profiler.hpp>
-
 // ============================================================================
 // Persistent multicast sender helpers (from deepseek mcast.hpp)
 // ============================================================================
@@ -169,8 +167,6 @@ FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr)
 
 FORCE_INLINE void wait_for_gather(
     volatile tt_l1_ptr uint32_t* mcast_receiver_semaphore_addr_ptr, uint32_t num_senders) {
-    DeviceZoneScopedN("wait_for_gather");
-
     // Wait for all senders to finish sending data
     noc_semaphore_wait(mcast_receiver_semaphore_addr_ptr, num_senders);
 
@@ -188,7 +184,6 @@ FORCE_INLINE void mcast(
     uint64_t mcast_sender_noc_coord_x_end,
     uint64_t mcast_sender_noc_coord_y_end,
     uint64_t mcast_semaphore_noc_addr) {
-    DeviceZoneScopedN("mcast");
     // Mcast to all cores using persistent sender
     const uint64_t mcast_data_noc_addr = get_noc_multicast_addr<noc_index>(
         mcast_sender_noc_coord_x_start,
@@ -285,8 +280,6 @@ void kernel_main() {
         mcast_semaphore_noc_addr, mcast_sender_semaphore_addr, mcast_sender_semaphore_addr_ptr);
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
-        DeviceZoneScopedN("gather_and_mcast");
-
         // First mcast: matmul+relu result -> MM2_FULL_CB
         // Use get_write_ptr for mm2_full_cb since it's not bound to input tensor
         wait_for_gather(mcast_receiver_semaphore_addr_ptr, num_senders);
