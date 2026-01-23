@@ -196,8 +196,8 @@ def build_mpi_command(
                 break
 
     # Add --bind-to none only if not already specified
-    if not bind_to_already_specified:
-        cmd.extend(["--bind-to", "none"])
+    # if not bind_to_already_specified:
+    #     cmd.extend(["--bind-to", "none"])
 
     if mpi_args:
         cmd.extend(mpi_args)

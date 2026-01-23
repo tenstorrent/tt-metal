@@ -115,14 +115,22 @@ def validate_device_mapping(tray_to_pcie_device_mapping):
 def generate_supported_rank_bindings(host_vector):
     # Process Rank ID To Tray ID Mapping when spawning 2 processes on a WH Galaxy
     BH_POD_RANK_TO_TRAY_MAPPING = {
-        0: {"bh-glx-b08u02": 1},
-        1: {"bh-glx-b08u02": 3},
-        2: {"bh-glx-b08u02": 4},
-        3: {"bh-glx-b08u02": 2},
-        4: {"bh-glx-b08u08": 1},
-        5: {"bh-glx-b08u08": 3},
-        6: {"bh-glx-b08u08": 4},
-        7: {"bh-glx-b08u08": 2},
+        0: {"bh-glx-c01u08": 2},
+        1: {"bh-glx-c01u08": 4},
+        2: {"bh-glx-c01u02": 2},
+        3: {"bh-glx-c01u02": 4},
+        4: {"bh-glx-c01u02": 3},
+        5: {"bh-glx-c01u02": 1},
+        6: {"bh-glx-c01u08": 3},
+        7: {"bh-glx-c01u08": 1},
+        8: {"bh-glx-c02u08": 2},
+        9: {"bh-glx-c02u08": 4},
+        10: {"bh-glx-c02u02": 2},
+        11: {"bh-glx-c02u02": 4},
+        12: {"bh-glx-c02u02": 3},
+        13: {"bh-glx-c02u02": 1},
+        14: {"bh-glx-c02u08": 3},
+        15: {"bh-glx-c02u08": 1},
     }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
@@ -167,6 +175,46 @@ def generate_supported_rank_bindings(host_vector):
             "mesh_id": 7,
             "mesh_host_rank": 0,
         },
+        # {
+        #     "rank": 8,
+        #     "mesh_id": 8,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 9,
+        #     "mesh_id": 9,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 10,
+        #     "mesh_id": 10,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 11,
+        #     "mesh_id": 11,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 12,
+        #     "mesh_id": 12,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 13,
+        #     "mesh_id": 13,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 14,
+        #     "mesh_id": 14,
+        #     "mesh_host_rank": 0,
+        # },
+        # {
+        #     "rank": 15,
+        #     "mesh_id": 15,
+        #     "mesh_host_rank": 0,
+        # },
     ]
 
     mapping_file = "tray_to_pcie_device_mapping.yaml"
@@ -179,11 +227,11 @@ def generate_supported_rank_bindings(host_vector):
         tray_to_pcie_device_mapping,
         BH_DUAL_POD_PIPELINE_RANK_BINDINGS,
         BH_POD_RANK_TO_TRAY_MAPPING,
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto",
+        "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto",
         "bh_blitz_pipeline_rank_bindings.yaml",
     )
 
 
 if __name__ == "__main__":
-    host_vector = ["bh-glx-b08u02", "bh-glx-b08u08", "bh-glx-b09u02", "bh-glx-b09u08"]
+    host_vector = ["bh-glx-c01u08", "bh-glx-c01u02", "bh-glx-c02u08", "bh-glx-c02u02"]
     generate_supported_rank_bindings(host_vector)
