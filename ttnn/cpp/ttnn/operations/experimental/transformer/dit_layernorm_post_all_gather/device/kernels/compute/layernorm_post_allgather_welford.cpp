@@ -20,7 +20,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "tt_metal/api/tt-metalium/math.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace NAMESPACE {
 
