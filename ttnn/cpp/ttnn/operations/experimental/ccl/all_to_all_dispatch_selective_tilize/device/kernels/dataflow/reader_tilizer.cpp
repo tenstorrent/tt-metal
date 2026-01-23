@@ -877,10 +877,9 @@ void kernel_main() {
 
         // print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_buffer_id);
 
-        // always want ptr to the front of the CB, so these can be constexpr
-        constexpr uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_buffer_id);
-        constexpr uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
-        constexpr uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
+        uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_buffer_id);
+        uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
+        uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
 
         // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain cores
         if (num_tilizer_cores > 1) {
@@ -948,13 +947,13 @@ void kernel_main() {
         // == 1 ==
 
         // get mcast address(es)
-        constexpr uint64_t matmul_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
+        uint64_t matmul_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
             per_expert_total_tokens_cb_read_ptr);  // TODO: (GR) needs to be the target address (where MM receives it)
-        constexpr uint64_t untilize_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
+        uint64_t untilize_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
             untilize_mcast_start_x,
             untilize_mcast_start_y,
             untilize_mcast_end_x,
@@ -976,7 +975,7 @@ void kernel_main() {
         // == 2 ==
 
         // get mcast address
-        constexpr uint64_t untilize_e_t_mcast_addr = get_safe_multicast_noc_addr(
+        uint64_t untilize_e_t_mcast_addr = get_safe_multicast_noc_addr(
             untilize_mcast_start_x,
             untilize_mcast_start_y,
             untilize_mcast_end_x,
@@ -987,23 +986,25 @@ void kernel_main() {
         noc_async_write_multicast(e_t_cb_read_ptr, untilize_e_t_mcast_addr, e_t_buffer_total_size, num_untilize_cores);
 
         // == 3 ==
+        // NOTE: technically we don't need two separate semaphores for this, leaving them separate for now
+        // in case we want to get creative with when we send off the metadata
 
         // get semaphore addresses
-        constexpr uint32_t matmul_metadata_ready_semaphore_addr = get_semaphore(matmul_metadata_ready_semaphore_id);
-        constexpr uint32_t untilize_metadata_ready_semaphore_addr = get_semaphore(untilize_metadata_ready_semaphore_id);
+        uint32_t matmul_metadata_ready_semaphore_addr = get_semaphore(matmul_metadata_ready_semaphore_id);
+        uint32_t untilize_metadata_ready_semaphore_addr = get_semaphore(untilize_metadata_ready_semaphore_id);
 
         // set local semaphore values
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_metadata_ready_semaphore_addr), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(untilize_metadata_ready_semaphore_addr), 1);
 
         // get mcast address(es)
-        constexpr uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
             matmul_mcast_end_x,
             matmul_mcast_end_y,
             matmul_metadata_ready_semaphore_addr);
-        constexpr uint64_t untilize_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
+        uint64_t untilize_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             untilize_mcast_start_x,
             untilize_mcast_start_y,
             untilize_mcast_end_x,

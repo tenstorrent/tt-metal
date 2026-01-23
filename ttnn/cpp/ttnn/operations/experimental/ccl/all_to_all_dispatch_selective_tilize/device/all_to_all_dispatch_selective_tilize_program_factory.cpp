@@ -502,7 +502,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
         {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
         {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
-        {"num_mm_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
+        {"num_matmul_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
         {"matmul_metadata_ready_semaphore_id", matmul_metadata_ready_semaphore_id},
 
         // Multicast coordinates for signalling UT cores
