@@ -83,6 +83,9 @@ void kernel_main() {
 #endif
     constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
@@ -98,10 +101,8 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
-    DPRINT << "Running dm_in1_sender_out kernel" << ENDL();
 
 #ifdef FUSE_TERNARY
-    DPRINT << "FUSE_TERNARY enabled" << ENDL();
     constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
 #endif
@@ -272,9 +273,25 @@ void kernel_main() {
 
 #ifdef FUSE_TERNARY
             if constexpr (!is_output_writer) {
-                // TODO: Add fused addcmul support in kernel
-            }
+                // TODO: Add fused addcmul tensor reading support
+                cb_reserve_back(cb_id_ternary_a, out_block_num_tiles);
+                cb_reserve_back(cb_id_ternary_b, out_block_num_tiles);
 
+                uint32_t l1_write_addr_ternary_a = get_write_ptr(cb_id_ternary_a);
+                uint32_t l1_write_addr_ternary_b = get_write_ptr(cb_id_ternary_b);
+
+                // Iterate on M and N dimensions of current block
+                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
+                    noc_async_read_tile(n_tile_id, ternary_a_reader, l1_write_addr_ternary_a);
+                    noc_async_read_tile(n_tile_id, ternary_b_reader, l1_write_addr_ternary_b);
+                    l1_write_addr_ternary_a += ternary_a_tile_size;
+                    l1_write_addr_ternary_b += ternary_b_tile_size;
+                }
+                noc_async_read_barrier();
+
+                cb_push_back(cb_id_ternary_a, out_block_num_tiles);
+                cb_push_back(cb_id_ternary_b, out_block_num_tiles);
+            }
 #endif  // FUSE_TERNARY
 
             k_forward = !k_forward;

@@ -55,6 +55,57 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     }
 }
 
+void add_bias_and_addcmul_block(
+    uint32_t in_cb,
+    uint32_t bias_cb,
+    uint32_t ternary_a_cb,
+    uint32_t ternary_b_cb,
+    uint32_t scalar_value,
+    uint32_t out_cb,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles) {
+    add_bcast_rows_init_short(in_cb, bias_cb);
+    reconfig_data_format(in_cb, bias_cb);
+    pack_reconfig_data_format(out_cb);
+    constexpr uint32_t fused_act_dst_id = 0;
+
+    constexpr uint32_t ternary_a_dst_id = 1;
+    constexpr uint32_t ternary_b_dst_id = 2;
+
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            acquire_dst();
+
+#ifdef FUSE_BIAS
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
+#else
+            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
+#endif
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+            SFPU_OP_FUNC_ACTIVATION
+#endif
+
+#ifdef FUSE_TERNARY
+            // TO-CHECK: may require reconfig of ternary_a_cb and ternary_b_cb
+            // First version: Use SFPU addcmul
+            copy_tile(ternary_a_cb, tile_id, ternary_a_dst_id);
+            copy_tile(ternary_b_cb, tile_id, ternary_b_dst_id);
+
+            addcmul_tile_init();
+            addcmul_tile<DataFormat::Float16_b>(
+                fused_act_dst_id, ternary_a_dst_id, ternary_b_dst_id, fused_act_dst_id, scalar_value);
+#endif
+
+            pack_tile(fused_act_dst_id, out_cb);
+            release_dst();
+            tile_id++;
+        }
+        cb_push_back(out_cb, N_block_tiles);
+    }
+}
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -128,21 +179,27 @@ void kernel_main() {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
+#else
+    // Set default value to maintain compatiblity with add_bias_and_addcmul_block
+    // But in this case, this value is not used (set as constexpr to help compiler optimize out)
+    constexpr uint32_t fused_ternary_scalar_uint = 0;
 #endif
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
-#ifdef FUSE_BIAS
+
+#if defined(FUSE_BIAS) || defined(FUSE_TERNARY)
+
+    // Group both for add_bias_and_addcmul_block
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
-#endif
-#ifdef FUSE_TERNARY
-    constexpr uint32_t in4_cb = tt::CBIndex::c_5;
-    constexpr uint32_t in5_cb = tt::CBIndex::c_6;
-#endif
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+#endif  // defined(FUSE_BIAS) || defined(FUSE_TERNARY)
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -226,13 +283,45 @@ void kernel_main() {
             PACK((llk_pack_reconfig_l1_acc(0)));
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             cb_reserve_back(out_cb, out_block_num_tiles);
-#ifndef FUSE_BIAS
+
+#if !defined(FUSE_BIAS) && !defined(FUSE_TERNARY)
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
+            // FUSED_BIAS or FUSED_TERNARY
+
+#ifdef FUSE_BIAS
             cb_wait_front(in2_cb, N_block_tiles);
-            add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, N_block_tiles);
 #endif
+
+#ifdef FUSE_TERNARY
+#error "FUSE_TERNARY not implemented"
+            cb_wait_front(cb_id_ternary_a, out_block_num_tiles);
+            cb_wait_front(cb_id_ternary_b, out_block_num_tiles);
+#endif  // FUSE_TERNARY
+
+            add_bias_and_addcmul_block(
+                intermediate_cb,
+                in2_cb,
+                cb_id_ternary_a,
+                cb_id_ternary_b,
+                fused_ternary_scalar_uint,
+                out_cb,
+                M_block_tiles,
+                N_block_tiles);
+            // add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
+
+#ifdef FUSE_BIAS
+            cb_pop_front(in2_cb, N_block_tiles);
+#endif  // FUSE_BIAS
+
+#ifdef FUSE_TERNARY
+#error "FUSE_TERNARY not implemented"
+            cb_pop_front(cb_id_ternary_a, out_block_num_tiles);
+            cb_pop_front(cb_id_ternary_b, out_block_num_tiles);
+#endif  // FUSE_TERNARY
+
+#endif  // !defined(FUSE_BIAS) && !defined(FUSE_TERNARY)
+
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
     }
