@@ -15,7 +15,6 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
-import torch
 import ttnn
 
 
@@ -115,6 +114,9 @@ def serialize_operation_parameters(
             """Recursively serialize a value, handling tensors specially."""
             nonlocal tensor_counter
 
+            # Lazy import torch to avoid global import validation errors
+            import torch
+
             if isinstance(value, ttnn.Tensor):
                 # Store tensor data directly in metadata (not as separate file)
                 tensor_data: Dict[str, Any] = {
@@ -125,8 +127,6 @@ def serialize_operation_parameters(
 
                 # Only serialize tensor values if requested
                 if serialize_tensor_values:
-                    if torch is None:
-                        raise ImportError("torch is required for tensor value serialization")
                     # Move tensor to CPU and convert to numpy for human-readable format
                     cpu_tensor = value
                     if hasattr(ttnn, "from_device"):
@@ -174,7 +174,7 @@ def serialize_operation_parameters(
                 return tensor_data
 
             # Handle torch.Tensor objects (e.g., passed to from_torch)
-            if torch is not None and isinstance(value, torch.Tensor):
+            if isinstance(value, torch.Tensor):
                 tensor_data: Dict[str, Any] = {
                     "type": "torch.Tensor",
                 }
