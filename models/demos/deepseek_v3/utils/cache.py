@@ -69,11 +69,23 @@ class InMemoryCacheStorage:
 CacheStorage = InMemoryCacheStorage
 
 
+def default_converter(tensor: torch.Tensor, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
+    tensor = ttnn.from_torch(tensor, dtype=dtype, layout=layout)
+    return tensor
+
+
 class TensorCache:
-    def __init__(self, state_dict: dict[str, torch.Tensor], hf_config: dict, storage: CacheStorage):
+    def __init__(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        hf_config: dict,
+        storage: CacheStorage,
+        converter: Callable = default_converter,
+    ):
         self.state_dict = state_dict
         self.hf_config = hf_config
         self.storage = storage
+        self.converter = converter
 
     def cache_entry_exists_for_fingerprint(self, fingerprint: str):
         return self.storage.has(fingerprint)
@@ -96,7 +108,7 @@ class TensorCache:
                 )
             hf_tensor = self.state_dict[name]
             preprocessed_hf_tensor = preprocessor(hf_tensor)
-            tensor = ttnn.from_torch(preprocessed_hf_tensor, dtype=dtype, layout=layout)
+            tensor = self.converter(preprocessed_hf_tensor, dtype, layout)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)
             return tensor
