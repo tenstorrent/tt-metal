@@ -964,11 +964,15 @@ def test_wq_kv_a_sequence_deepseek_perf(
     profiler.end("run")
     # Get the measured performance
     print(results)
+    measured_min = 0
+    measured_max = 0
+    measured_avg = 0
+    measured_std = 0
     for op in results.keys():
-        measured_min = results[op][cols[0]]["MIN"]
-        measured_max = results[op][cols[0]]["MAX"]
-        measured_avg = results[op][cols[0]]["AVG"]
-        measured_std = results[op][cols[0]]["STD"]
+        measured_min += results[op][cols[0]]["MIN"]
+        measured_max += results[op][cols[0]]["MAX"]
+        measured_avg += results[op][cols[0]]["AVG"]
+        measured_std += results[op][cols[0]]["STD"]
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
