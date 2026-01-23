@@ -473,10 +473,11 @@ class TT_CCL:
         gathered_width = K_per_device * cluster_shape[cluster_axis]  # 3584 * 4 = 14336
 
         # Fused all_gather_matmul requires intermediate buffer sharded across cluster_shape[cluster_axis] cores
-        # Use cores (3,0) to (3,3) - 4 cores matching the gather dimension
+        # Use cores (4,0) to (4,3) - column 4 is NOT in sub_core_grids so it won't conflict with other ops
+        # sub_core_grids uses columns 1-3 and 5-6, so column 4 is safe
         intermediate_num_cores = cluster_shape[cluster_axis]  # 4 cores
         intermediate_core_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, intermediate_num_cores - 1))]
+            [ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, intermediate_num_cores - 1))]
         )
 
         # Shard width = gathered_width / num_cores, rounded up to tile size
