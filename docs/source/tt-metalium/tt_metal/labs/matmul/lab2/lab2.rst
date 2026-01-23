@@ -468,10 +468,8 @@ The overall approach can be summarized by the following pseudo-code:
        for (i in 0 .. M_block_tiles) {
            for (j in 0 .. N_block_tiles) {
                // Get the current accumulator tile for C(i,j)
-               if (b == 0)
-                  // First K-block: start from zero
-                  acc_tile = zero_tile()
-               else
+               acc_tile = zero_tile()
+               if (b != 0)
                   // Middle or last K-block: reload partial result built so far
                   acc_tile = load_partial_C_tile(i, j)
 
@@ -486,7 +484,7 @@ The overall approach can be summarized by the following pseudo-code:
                }
                // Store updated result for C(i,j)
                if (b == num_blocks - 1)
-                  // Last K-block: acc_tile is the final result forC(i,j)
+                  // Last K-block: acc_tile has the final result for C(i,j)
                   store_final_C_tile(i, j, acc_tile)
                else
                   // Not last K-block: acc_tile is a partial result to be reused later
@@ -608,18 +606,20 @@ Steps
    
 #. Size circular buffers based on the blocking variables, keeping in mind the following:
 
-   - Input buffers need to store ``A_slab`` and ``B_slab`` and should use double buffering.
-   - Output buffers need to store ``C_block``, and should use double buffering.
-   - Intermediate buffer needs to store the partial results, whose size is the same as ``C_block``.
+   - Input CBs need to store ``A_slab`` and ``B_slab`` and should use double buffering.
+   - Output CB needs to store ``C_block``, and should use double buffering.
+   - Intermediate CB needs to store the partial results, whose size is the same as ``C_block``.
      Since the same kernel will both produce and consume the partial results, no double buffering
      is needed.
 
 #. Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
+   Reader kernel should read the appropriate tiles (``A_slab(b)`` and ``B_slab(b)``) from the circular buffers.
+   Order tiles within each slab in the CB in row-major order.
+   Writer kernel should read the ``C_block`` tiles from the circular buffer in row-major order and write
+   them to the output tensor in appropriate locations.
 
 #. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
-   Remember that ``tile_regs_acquire`` sets all the tiles in the destination register array to 0.
-   There are also several new things to consider:
-   
+
    * When you call ``mm_init``, one of the arguments is the output circular buffer index.
      Given that matrix multiplication results will be written into either the output or intermediate
      buffers, you can use either of the two circular buffer indices in call to ``mm_init``.
@@ -647,11 +647,19 @@ Steps
      longer needed in subsequent calls, and these operations are in common to both the copy and multiplication
      operations, which is why ``_short`` versions are sufficient for later calls.
      For optimal performance, **make sure to call these initalization functions only when required**.
-   * When writing to or reading from the intermediate CB, make sure that the ``cb_wait_front`` and
-     ``cb_reserve_back`` calls use appropriate number of tiles, given that the intermediate CB
-     is used to store a whole block of partial results.
-   * Don't forget to call ``cb_pop_front`` for the intermediate CB after reading all the tiles
-     from it to free up space for the next iteration.
+   * Remember that ``tile_regs_acquire`` sets all the tiles in the destination register array to 0.
+   * Remember that ``tile_regs_acquire`` does more than just set destination register array to 0.
+     As such, it must always be called before using the destination regaister.
+     Specifically, it must be called before calling ``copy_tile``, but does **not** need to be called
+     between a call to ``copy_tile`` and a call to ``matmul_tiles`` (doing so would be destructive,
+     because it would overwrite the data that was just copied into the destination register array).
+   * When writing to or reading from the intermediate CBs, you could wait/reserve the 
+     number of tiles for the whole block of partial results at once. However, a simpler option is
+     to just push and pop one tile at a time. This is possible because the i, j loop goes in
+     the same order for every block.
+     Smiliar reasoning applies to the output buffer.
+     Don't forget to call ``cb_pop_front`` for the intermediate CB at appropriate time to
+     free up space for the next iteration.
    
 
 #. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels.
