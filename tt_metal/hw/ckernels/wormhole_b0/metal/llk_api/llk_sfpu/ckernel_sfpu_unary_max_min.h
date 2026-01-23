@@ -52,13 +52,13 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
         if ((int)value >= 0) {
             // if msb(value) == 0, we can safely use SFPSWAP even though it expects sign-magnitude integers
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-            TT_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 9 : 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 9 : 1);
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         } else {
             // if msb(value) == 1, we need to invert both values for SFPSWAP to work
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-            TT_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 1 : 9);
+            TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, IS_MAX_OP ? 1 : 9);
             TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         }
