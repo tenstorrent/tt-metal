@@ -523,7 +523,10 @@ public:
                 tt::LogOp,
                 "Conv2d Transpose DRAM Slicing: Additional padding of {} added to the right side.",
                 additional_padded_width);
-            this_output_pad[1] += additional_padded_width;
+            // Note: Do NOT add additional_padded_width to this_output_pad[1].
+            // output_padding is a semantic conv_transpose2d parameter that affects the mathematical
+            // computation. Tile alignment padding should only affect the slice dimensions,
+            // not the output_padding parameter.
             output_slice_width += additional_padded_width;
         }
         auto this_op_padding = std::array<uint32_t, 4>(
@@ -585,6 +588,7 @@ public:
         slice_halo_config.num_cores_nhw = get_num_cores_channels_from_parallel_config(parallel_config);
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
         slice_halo_config.snap_to_tile = true;
+        slice_halo_config.is_transpose = true;
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,
