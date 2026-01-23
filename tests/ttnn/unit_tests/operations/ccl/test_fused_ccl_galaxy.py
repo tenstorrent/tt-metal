@@ -282,6 +282,17 @@ def run_all_gather_matmul_galaxy_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    # For non-fused path: all_gather output must be on same grid as weights for gather_in0=True
+    # All_gather output shape is [8, 4, M, K] (full K after gathering), sharded across output_core_range_set
+    non_fused_ag_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,  # Same grid as weights
+            [M, K_per_shard],  # K is full K after gathering
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
     mm_output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -392,6 +403,7 @@ def run_all_gather_matmul_galaxy_impl(
         outs = []
         for i in range(n_iters):
             # AllGather - requires 2 semaphores passed as a list
+            # Use non_fused_ag_output_mem_config so output is on same grid as weights (required for gather_in0=True)
             sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
@@ -399,7 +411,7 @@ def run_all_gather_matmul_galaxy_impl(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
-                memory_config=ag_output_mem_config,
+                memory_config=non_fused_ag_output_mem_config,
                 topology=all_gather_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
