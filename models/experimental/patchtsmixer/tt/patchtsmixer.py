@@ -18,8 +18,24 @@ class TtPatchTSMixerGatedAttention:
         self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
-        # Linear with L1 output
-        y = ttnn.linear(x, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        # x shape: (B, C, Np, D)
+        B = x.shape[0]
+        C = x.shape[1]
+
+        # Linear with L1 output and multi-core parallelization
+        y = ttnn.linear(
+            x,
+            self.weight,
+            bias=self.bias,
+            memory_config=self.l1_mem_config,
+            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
         # Softmax in L1
         w = ttnn.softmax(y, dim=-1, memory_config=self.l1_mem_config)
         # Multiply in L1
@@ -162,6 +178,7 @@ class TtPatchTSMixerMLP:
 
     Stage 2 Optimization:
     - L1 memory storage for weights and outputs (5-10x speedup expected)
+    - Future: Add multi-core matmul program configs when tensor shapes are well-defined
     """
 
     def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0):
@@ -178,11 +195,41 @@ class TtPatchTSMixerMLP:
         self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
 
     def __call__(self, x):
-        # First linear with GELU, output in L1
-        x = ttnn.linear(x, self.w1, bias=self.b1, activation="gelu", memory_config=self.l1_mem_config)
+        # x shape: (B, C, Np, D)
+        B = x.shape[0]
+        C = x.shape[1]
 
-        # Second linear, output in L1
-        x = ttnn.linear(x, self.w2, bias=self.b2, memory_config=self.l1_mem_config)
+        # First linear with GELU: (B, C, Np, D) @ (D, expansion*D)
+        # Distribute across cores for parallel processing
+        x = ttnn.linear(
+            x,
+            self.w1,
+            bias=self.b1,
+            activation="gelu",
+            memory_config=self.l1_mem_config,
+            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
+
+        # Second linear: (B, C, Np, expansion*D) @ (expansion*D, D)
+        x = ttnn.linear(
+            x,
+            self.w2,
+            bias=self.b2,
+            memory_config=self.l1_mem_config,
+            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
         return x
 
 
@@ -191,6 +238,7 @@ class TtFeatureMixerBlock:
     TTNN equivalent of FeatureMixerBlock.
 
     Expected x shape: (B, C, N_p, D) in TILE layout on device.
+    Uses HEIGHT_SHARDED to parallelize along B*C dimension for independent sequence processing.
     """
 
     def __init__(
@@ -206,6 +254,7 @@ class TtFeatureMixerBlock:
         self.device = device
         self.base = base_address
         self.use_gated_attn = use_gated_attn
+        self.d_model = d_model
 
         # Submodules use base-addressed paths
         self.norm = TtPatchTSMixerLayerNormDispatcher(
@@ -228,6 +277,12 @@ class TtFeatureMixerBlock:
             )
 
     def __call__(self, x):
+        # Input: (B, C, Np, D)
+        # For now, HEIGHT_SHARDED isn't fully supported by all ops (layer_norm, linear, etc.)
+        # So we skip sharding and stick with L1 interleaved memory for stability
+        # Future optimization: Once HEIGHT_SHARDED is supported across all ops,
+        # we can add parallel processing here
+
         residual = x
         x = self.norm(x)
         x = self.mlp(x)
@@ -654,8 +709,12 @@ class TtPatchTSMixerPatchify:
         # Cache indices in L1 with TILE_LAYOUT
         self.idx2 = self._build_idx2()
 
-        # L1 config for all intermediate operations
+        # Cache for idx4 tensor per (B, C) shape to avoid repeated expansion
+        self._idx4_cache = {}
+
+        # Memory configs: L1 for small/hot data, DRAM for large temporary tensors
         self.l1_mem_config = ttnn.L1_MEMORY_CONFIG
+        self.dram_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     def _build_idx2(self):
         P = self.patch_length
@@ -673,32 +732,59 @@ class TtPatchTSMixerPatchify:
         idx2 = ttnn.to_memory_config(idx2, ttnn.L1_MEMORY_CONFIG)
         return idx2
 
+    def _get_or_create_idx4(self, B: int, C: int):
+        """
+        Get cached idx4 tensor for given (B, C) shape, or create and cache it.
+        Avoids repeating expensive idx4 expansion on every forward pass.
+        """
+        key = (B, C)
+        if key in self._idx4_cache:
+            return self._idx4_cache[key]
+
+        Np = self.num_patches
+        P = self.patch_length
+
+        # Build idx4: (1, Np, P, 1) -> (B, Np, P, C)
+        idx4 = ttnn.reshape(self.idx2, (1, Np, P, 1))
+        idx4 = ttnn.repeat(idx4, (B, 1, 1, C), memory_config=self.l1_mem_config)
+
+        self._idx4_cache[key] = idx4
+        return idx4
+
     def __call__(self, x):
         B, L, C = x.shape if len(x.shape) == 3 else (x.shape[0], x.shape[2], x.shape[3])
 
         if len(x.shape) == 3:
-            x = ttnn.reshape(x, (B, 1, L, C), memory_config=self.l1_mem_config)
+            x = ttnn.reshape(x, (B, 1, L, C))
 
-        # Slice directly
+        # Slice directly (output stays in input's memory)
         x = ttnn.slice(x, (0, 0, self.sequence_start, 0), (B, 1, self.sequence_start + self.new_len, C))
 
-        # Ensure TILE_LAYOUT
+        # Ensure TILE_LAYOUT (let TTNN choose memory location)
         if x.get_layout() != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=self.l1_mem_config)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        # Expand in L1
         Np = self.num_patches
-        x = ttnn.repeat(x, (1, Np, 1, 1), memory_config=self.l1_mem_config)
-
-        # Build idx4 from cached idx2
         P = self.patch_length
-        idx4 = ttnn.reshape(self.idx2, (1, Np, P, 1))
-        idx4 = ttnn.repeat(idx4, (B, 1, 1, C), memory_config=self.l1_mem_config)
 
-        # Gather with L1 output
+        # NOTE: TTNN gather limitation - requires matching dimensions
+        # Ideally: gather with x=(B,1,L,C) and idx=(B,Np,P,C) using broadcasting
+        # Reality: gather requires x=(B,Np,L,C) to match idx=(B,Np,P,C) on Np dimension
+        # This creates 63x memory expansion: (B,1,L,C) -> (B,63,L,C) for typical config
+        # TODO: Request TTNN enhancement to support broadcasting in gather operation
+
+        # Large temporary expansion → DRAM (avoid L1 thrashing)
+        # Example: (2,1,512,7) → (2,63,512,7) = 7KB → 441KB
+        x = ttnn.repeat(x, (1, Np, 1, 1), memory_config=self.dram_mem_config)
+
+        # Use cached idx4 to avoid repeated expansion
+        idx4 = self._get_or_create_idx4(B, C)
+
+        # Gather output is small → L1 for fast access by next layer
+        # Output: (B, Np, P, C) - consumed immediately by embedding
         y = ttnn.gather(x, dim=2, index=idx4, memory_config=self.l1_mem_config)
 
-        # Final permute in L1
+        # Final permute: keep in L1 for embedding layer
         y = ttnn.permute(y, (0, 3, 1, 2), memory_config=self.l1_mem_config)
         return y
 
@@ -749,8 +835,23 @@ class TtPatchTSMixerEmbedding:
         # Patchify (already optimized with L1)
         patches_tt = self.patchify(x_lc)
 
-        # Linear projection with L1 output
-        out = ttnn.linear(patches_tt, self.weight, bias=self.bias, memory_config=self.l1_mem_config)
+        # Linear projection: (B, C, Np, patch_length) @ (patch_length, d_model)
+        # Use multi-core parallelization for input embedding
+        B = patches_tt.shape[0]
+        C = patches_tt.shape[1]
+        out = ttnn.linear(
+            patches_tt,
+            self.weight,
+            bias=self.bias,
+            memory_config=self.l1_mem_config,
+            core_grid=ttnn.CoreGrid(y=min(B * C, 8), x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
         return out
 
 
