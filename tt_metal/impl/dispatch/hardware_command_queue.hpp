@@ -29,7 +29,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
-#include "trace/trace_node.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "ringbuffer_cache.hpp"
@@ -56,9 +55,6 @@ public:
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
 
-    void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
-    void record_end() override;
-
     void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
 
@@ -81,11 +77,8 @@ private:
     uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
-    std::shared_ptr<TraceDescriptor> trace_ctx_;
     std::thread completion_queue_thread_;
     SystemMemoryManager& manager_;
-
-    std::vector<TraceNode> trace_nodes_;
 
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<CQSharedState> cq_shared_state_;
@@ -136,7 +129,6 @@ private:
     // recording. At the end of the recording, we will reset the cache manager, and swap it with the backup.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
 
-    void allocate_trace_programs();
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
