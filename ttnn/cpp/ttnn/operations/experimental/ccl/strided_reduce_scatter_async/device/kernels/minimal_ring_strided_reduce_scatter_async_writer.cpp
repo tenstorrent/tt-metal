@@ -219,6 +219,7 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t chunk_width = 2;
+        const uint32_t mm_block_ht = 1;
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
@@ -246,6 +247,9 @@ void kernel_main() {
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "batch element: " << b << " " << ENDL();
             for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+                uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
+                uint32_t output_row_offset = input_row_offset / ring_size;
+
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                     for (uint32_t i = 0; i < ring_size; i++) {
@@ -267,7 +271,6 @@ void kernel_main() {
                                  chunk_piece_idx++) {
                                 uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                                 uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                                uint32_t input_row_offset = start_row_offset;
 
                                 cb_wait_front(cb_output_id, tile_granularity);
                                 DPRINT << "WRITING TO CB: " << cb_output_id << ENDL();
@@ -308,12 +311,11 @@ void kernel_main() {
                             uint32_t output_tile_id_start = b * output_batch_num_pages;
                             uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                             uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                            uint32_t input_row_offset = start_row_offset / ring_size;
                             cb_wait_front(cb_output_id, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_output_id);
                             for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                                 uint32_t output_tile_id =
-                                    output_tile_id_start + input_row_offset + direction_offset + j;
+                                    output_tile_id_start + output_row_offset + direction_offset + j;
                                 DPRINT << "writing into output_tile_id: " << output_tile_id << ENDL();
                                 uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
                                 noc_async_write(l1_read_addr, local_noc_addr, page_size);

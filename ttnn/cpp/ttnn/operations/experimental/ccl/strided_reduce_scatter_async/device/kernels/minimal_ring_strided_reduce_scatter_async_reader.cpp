@@ -110,6 +110,7 @@ void kernel_main() {
     const uint32_t batch_size = input_tensor_B;
     const uint32_t chunks_per_mm_N_block = 1;
     const uint32_t chunk_width = 2;
+    const uint32_t mm_block_ht = 1;
 
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
@@ -135,6 +136,8 @@ void kernel_main() {
         DPRINT << "batch element: " << b << " " << ENDL();
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
+
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
                 for (uint32_t i = 0; i < ring_size; i++) {
@@ -168,7 +171,6 @@ void kernel_main() {
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                        uint32_t input_row_offset = start_row_offset;
                         // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
                         DPRINT << "input_row_offset: " << input_row_offset << ENDL();
                         // DPRINT << "direction_offset: " << direction_offset << ENDL();
