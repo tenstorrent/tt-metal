@@ -279,7 +279,7 @@ private:
     PhysicalMeshConfig parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml);
 
     // Parsing helpers
-    CoreCoord parse_core_coord(const YAML::Node& node);
+    std::variant<tt::tt_metal::CoreCoord, std::string> parse_core_coord(const YAML::Node& node);
     MeshCoordinate parse_mesh_coord(const YAML::Node& node);
     MeshId parse_mesh_id(const YAML::Node& yaml_node);
     template <typename T>
@@ -418,8 +418,10 @@ private:
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number);
-    SenderConfig resolve_sender_config(const ParsedSenderConfig& parsed_sender);
-    TrafficPatternConfig resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern);
+    std::vector<SenderConfig> resolve_sender_config(const ParsedSenderConfig& parsed_sender);
+    // Use for non-sweeping core configs
+    TrafficPatternConfig resolve_traffic_pattern_single(const ParsedTrafficPatternConfig& parsed_pattern);
+    std::vector<TrafficPatternConfig> resolve_traffic_pattern(const ParsedTrafficPatternConfig& parsed_pattern);
     DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest);
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
