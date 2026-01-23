@@ -348,15 +348,16 @@ def run_multi_core_matmul_1d(
     )
 
     signpost("start")
-    for _ in range(num_iters):
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=output_sharded_mem_config,
-            compute_kernel_config=compute_kernel_config,
-            dtype=output_dtype,
-        )
+    with device.cache_entries_counter.measure():
+        for _ in range(num_iters):
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=output_sharded_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=output_dtype,
+            )
     signpost("stop")
     tt_out = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
@@ -371,7 +372,7 @@ def run_multi_core_matmul_1d(
     assert passing
 
     # Check program cache
-    assert device.num_program_cache_entries() == 1  # Only 1 op
+    assert device.cache_entries_counter.total == 1  # Only 1 op
 
 
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")

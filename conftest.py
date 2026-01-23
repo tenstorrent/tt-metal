@@ -454,6 +454,10 @@ def device(request, device_params):
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    device.cache_entries_counter = CacheEntriesCounter(device)
+
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
@@ -555,6 +559,10 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -1267,3 +1275,13 @@ def pytest_configure(config):
         new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
         new_xmlpath = os.path.join(directory, new_filename)
         config.option.xmlpath = new_xmlpath
+
+
+@pytest.fixture(scope="function")
+def cache_entries_counter(device):
+    """
+    Cache entries counter fixture - measures the number of program cache entries for a given test.
+    """
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    yield CacheEntriesCounter(device)
