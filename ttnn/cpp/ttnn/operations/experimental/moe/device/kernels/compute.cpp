@@ -108,7 +108,7 @@ void MAIN {
         // Compute in @ {W0,W1}
         //---------------------------------------------------------------------
         for (uint32_t i = 0; i < num_elt_tiles; ++i) {
-            uint32_t in0_index = in0_offset_per_expert;
+            uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
 
             tile_regs_acquire();
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_elt_tile; ++block_id) {
@@ -132,6 +132,11 @@ void MAIN {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
+            // silu_tile_init();
+            // silu_tile(0);
+
+            // mul_binary_tile_init();
+            // mul_binary_tile(0, 1, 0);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -154,7 +159,7 @@ void MAIN {
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 2)
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = out_offset_per_expert;
+        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
         for (uint32_t i = 0; i < (num_mm2_tiles >> 1); ++i) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -211,10 +216,6 @@ void MAIN {
             pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
             tile_regs_release();
         }
-
-        // Alternate between the two buffers when there are more than 2 experts
-        in0_offset_per_expert = (expert_id & 1) * num_w0_w1_tiles_h;
-        out_offset_per_expert = (expert_id & 1) * num_w0_w1_tiles_h;
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push
