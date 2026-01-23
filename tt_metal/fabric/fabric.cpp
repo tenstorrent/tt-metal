@@ -277,14 +277,14 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 
     std::vector<FabricNodeId> dst_nodes;
     std::unordered_set<RoutingDirection> used_directions;
-    for (int i = 0; i < attempted_directionss.size(); i++) {
+    for (auto dir : attempted_directionss) {
         TT_FATAL(
-            !used_directions.contains(attempted_directionss[i]),
+            !used_directions.contains(dir),
             "Multiple ethernet cores in the same direction ({}) are not currently supported. "
             "This restriction will be removed in a future update when proper multi-core routing is implemented.",
-            attempted_directionss[i]);
+            dir);
 
-        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, attempted_directionss[i]);
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, dir);
 
         if (!neighbors.empty()) {
             dst_nodes.push_back(FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]));
