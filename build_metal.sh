@@ -84,7 +84,7 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
 
 
 configure_only="OFF"

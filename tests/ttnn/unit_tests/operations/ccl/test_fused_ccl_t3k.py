@@ -10,6 +10,10 @@ that match the Llama 70B model patterns.
 
 Fused ops tested:
 - ttnn.experimental.matmul_reduce_scatter_async (Matmul + ReduceScatter)
+
+Performance comparison mode:
+- Runs both fused and non-fused operations
+- Reports speedup/slowdown of fused vs non-fused
 """
 
 import torch
@@ -48,6 +52,31 @@ def cleanup_sub_device(mesh_device):
     """Clean up sub-device configuration."""
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+
+
+def print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, rs_input_shape, mm_weights_shape):
+    """Print a performance comparison report between fused and non-fused operations."""
+    speedup = non_fused_time_us / fused_time_us if fused_time_us > 0 else 0
+    improvement_pct = (1 - fused_time_us / non_fused_time_us) * 100 if non_fused_time_us > 0 else 0
+
+    logger.info("=" * 80)
+    logger.info(f"PERFORMANCE COMPARISON REPORT: {test_name}")
+    logger.info("=" * 80)
+    logger.info(f"Configuration:")
+    logger.info(f"  - RS Input Shape: {rs_input_shape}")
+    logger.info(f"  - MM Weights Shape: {mm_weights_shape}")
+    logger.info("-" * 80)
+    logger.info(f"Results:")
+    logger.info(f"  - Non-Fused (linear + reduce_scatter): {non_fused_time_us:.2f} us")
+    logger.info(f"  - Fused (matmul_reduce_scatter_async):  {fused_time_us:.2f} us")
+    logger.info("-" * 80)
+    if fused_time_us < non_fused_time_us:
+        logger.info(f"  SPEEDUP: {speedup:.2f}x ({improvement_pct:.1f}% faster)")
+    else:
+        slowdown = fused_time_us / non_fused_time_us if non_fused_time_us > 0 else 0
+        slowdown_pct = (fused_time_us / non_fused_time_us - 1) * 100 if non_fused_time_us > 0 else 0
+        logger.info(f"  SLOWDOWN: {slowdown:.2f}x ({slowdown_pct:.1f}% slower)")
+    logger.info("=" * 80)
 
 
 # =============================================================================
@@ -345,7 +374,11 @@ def run_matmul_reduce_scatter_t3k_impl(
         logger.info(f"Avg time per run ({num_iters} iters): {avg_time_per_run_us:.2f} us")
         logger.info(f"Avg time per iteration: {avg_time_per_iter_us:.2f} us")
         logger.info(f"rs_input_shape={rs_input_shape}, mm_weights_shape={mm_weights_shape}")
+
+        # Release trace
+        ttnn.release_trace(mesh_device, trace_id)
     else:
+        avg_time_per_iter_us = None
         for i in range(num_iters):
             tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
             tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
@@ -381,6 +414,8 @@ def run_matmul_reduce_scatter_t3k_impl(
     cleanup_sub_device(mesh_device)
     logger.info("Matmul+ReduceScatter T3K test completed successfully")
 
+    return avg_time_per_iter_us
+
 
 # =============================================================================
 # Pytest Test Cases
@@ -390,22 +425,19 @@ def run_matmul_reduce_scatter_t3k_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
     [
-        # ==================== Galaxy 70B actual dimensions ====================
+        # ==================== Llama 70B actual dimensions ====================
         # Llama 70B: dim=8192, hidden_dim=28672
         # FF1/FF3: weights [8192, 28672], output [seq, 28672] -> RS -> [seq, 3584]
-        # Note: Large N (28672) with large M exceeds L1 capacity with interleaved memory
-        # Galaxy 70B decode (M=32) - WORKS
+        # T3K 70B decode (M=32)
         (8, 1, [1, 1, 8192, 28672], [1, 1, 32, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        # Galaxy 70B prefill (M=128) - WORKS (borderline)
+        # T3K 70B prefill (M=128)
         (8, 1, [1, 1, 8192, 28672], [1, 1, 128, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        # ==================== Scaled dimensions (same ratio, smaller absolute) ====================
-        # These use similar compute/communication ratios but fit in L1
+        # ==================== Scaled dimensions ====================
         # Scaled: dim=4096, hidden_dim=14336 (half of 70B)
         (8, 1, [1, 1, 4096, 14336], [1, 1, 32, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         (8, 1, [1, 1, 4096, 14336], [1, 1, 128, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         (8, 1, [1, 1, 4096, 14336], [1, 1, 256, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # ==================== Smaller test dimensions ====================
-        # Smaller dimensions for quick functional tests
         (8, 1, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         (8, 1, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         (8, 1, [1, 1, 8192, 2048], [1, 1, 512, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
@@ -432,14 +464,6 @@ def run_matmul_reduce_scatter_t3k_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (False, 1),
-        (True, 5),
-    ],
-    ids=["check", "perf"],
-)
-@pytest.mark.parametrize(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 23887872}, ttnn.Topology.Ring),
@@ -447,8 +471,7 @@ def run_matmul_reduce_scatter_t3k_impl(
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("use_non_fused", [False, True], ids=["fused", "non_fused"])
-def test_matmul_reduce_scatter_t3k(
+def test_matmul_reduce_scatter_t3k_check(
     mesh_device,
     num_devices,
     num_links,
@@ -464,16 +487,15 @@ def test_matmul_reduce_scatter_t3k(
     mem_config_mm,
     mem_config_input,
     mem_config_rs,
-    enable_trace,
-    num_iters,
     rs_topology,
-    use_non_fused,
 ):
     """
-    Test Matmul + ReduceScatter fused operation on T3K (8 devices).
+    Functional test for Matmul + ReduceScatter fused operation on T3K (8 devices).
 
-    Uses tensor dimensions similar to Llama 70B MLP ff1/ff3 path.
+    Validates correctness of fused op by comparing against golden PyTorch outputs.
+    Uses tensor dimensions from Llama 70B MLP ff1/ff3 path.
     """
+    # Run fused op (correctness check only)
     run_matmul_reduce_scatter_t3k_impl(
         mesh_device,
         num_devices,
@@ -491,7 +513,128 @@ def test_matmul_reduce_scatter_t3k(
         mem_config_rs,
         mem_config_mm,
         rs_topology=rs_topology,
-        enable_trace=enable_trace,
-        num_iters=num_iters,
-        use_non_fused=use_non_fused,
+        enable_trace=False,
+        num_iters=1,
+        use_non_fused=False,
     )
+
+
+@pytest.mark.parametrize(
+    "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
+    [
+        # ==================== Llama 70B actual dimensions ====================
+        # T3K 70B decode (M=32)
+        (8, 1, [1, 1, 8192, 28672], [1, 1, 32, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # T3K 70B prefill (M=128)
+        (8, 1, [1, 1, 8192, 28672], [1, 1, 128, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # ==================== Scaled dimensions ====================
+        (8, 1, [1, 1, 4096, 14336], [1, 1, 32, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (8, 1, [1, 1, 4096, 14336], [1, 1, 128, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # ==================== Smaller test dimensions ====================
+        (8, 1, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (8, 1, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+    ],
+    ids=[
+        "llama70b_decode_32",
+        "llama70b_prefill_128",
+        "scaled_decode_32",
+        "scaled_prefill_128",
+        "small_decode_32",
+        "small_prefill_128",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_mm, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 23887872}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_matmul_reduce_scatter_t3k_perf_comparison(
+    mesh_device,
+    num_devices,
+    num_links,
+    mm_weights_shape,
+    rs_input_shape,
+    mm_shard_dim,
+    rs_scatter_dim,
+    layout,
+    use_bias,
+    matmul_weights_dtype,
+    max_in0_block_w,
+    rs_input_dtype,
+    mem_config_mm,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+):
+    """
+    Performance comparison test for Matmul + ReduceScatter on T3K (8 devices).
+
+    Runs both fused and non-fused operations and generates a comparison report showing
+    the speedup/slowdown of the fused operation.
+    """
+    num_iters = 5
+
+    # Run non-fused op first
+    logger.info("Running NON-FUSED operation (linear + reduce_scatter)...")
+    non_fused_time_us = run_matmul_reduce_scatter_t3k_impl(
+        mesh_device,
+        num_devices,
+        rs_input_shape,
+        mm_shard_dim,
+        rs_scatter_dim,
+        num_links,
+        mm_weights_shape,
+        rs_input_dtype,
+        layout,
+        matmul_weights_dtype,
+        max_in0_block_w,
+        use_bias,
+        mem_config_input,
+        mem_config_rs,
+        mem_config_mm,
+        rs_topology=rs_topology,
+        enable_trace=True,
+        num_iters=num_iters,
+        use_non_fused=True,
+    )
+
+    # Run fused op
+    logger.info("Running FUSED operation (matmul_reduce_scatter_async)...")
+    fused_time_us = run_matmul_reduce_scatter_t3k_impl(
+        mesh_device,
+        num_devices,
+        rs_input_shape,
+        mm_shard_dim,
+        rs_scatter_dim,
+        num_links,
+        mm_weights_shape,
+        rs_input_dtype,
+        layout,
+        matmul_weights_dtype,
+        max_in0_block_w,
+        use_bias,
+        mem_config_input,
+        mem_config_rs,
+        mem_config_mm,
+        rs_topology=rs_topology,
+        enable_trace=True,
+        num_iters=num_iters,
+        use_non_fused=False,
+    )
+
+    # Print comparison report
+    test_name = f"T3K Matmul+ReduceScatter (M={rs_input_shape[2]}, N={rs_input_shape[3]})"
+    print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, rs_input_shape, mm_weights_shape)
