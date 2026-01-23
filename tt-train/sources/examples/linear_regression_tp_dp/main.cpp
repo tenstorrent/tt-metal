@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <CLI/CLI.hpp>
 #include <fmt/format.h>
 
+#include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -18,8 +20,6 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
-#include "core/distributed/distributed.hpp"
-
 
 using ttml::autograd::TensorPtr;
 
@@ -30,18 +30,27 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
+namespace {
+bool parse_mesh_shape(const std::string& mesh_shape_str, uint32_t& rows, uint32_t& cols) {
+    const auto delimiter_pos = mesh_shape_str.find('x');
+    if (delimiter_pos == std::string::npos || delimiter_pos == 0 || delimiter_pos + 1 >= mesh_shape_str.size()) {
+        return false;
+    }
+
+    try {
+        rows = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(0, delimiter_pos)));
+        cols = static_cast<uint32_t>(std::stoul(mesh_shape_str.substr(delimiter_pos + 1)));
+    } catch (const std::exception&) {
+        return false;
+    }
+
+    return rows > 0 && cols > 0;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
     CLI::App app{"Linear Regression TP+DP Example"};
     argv = app.ensure_utf8(argv);
-
-    // - 8 DP groups (data parallelism) along mesh dimension 0
-    // - 4 TP devices per group (tensor parallelism) along mesh dimension
-    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd
-    // config file)
-    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(8, 4);  // 8 DP groups × 4 TP devices
-    const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
-    const uint32_t dp_size = logical_mesh_shape[0];
-    const uint32_t tp_size = logical_mesh_shape[1];
 
     // Training hyperparameters
     const size_t training_samples_count = 100000;
@@ -53,11 +62,39 @@ int main(int argc, char** argv) {
     // Default to column parallelism, use row if --row flag is passed
     bool use_row_parallel = false;
     uint32_t batch_size = 8192;
+    std::string mesh_shape_str = "8x4";
 
     app.add_flag("--row", use_row_parallel, "Use RowParallelLinear (shards input features), default is ColumnParallelLinear");
     app.add_option("-b,--batch_size", batch_size, "Batch size")->default_val(batch_size);
+    app.add_option("--mesh_shape", mesh_shape_str, "Logical mesh shape RxC (e.g. 8x4)")->default_val(mesh_shape_str);
 
     CLI11_PARSE(app, argc, argv);
+
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
+        fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 8x4\n", mesh_shape_str);
+        return 1;
+    }
+
+    // - DP groups (data parallelism) along mesh dimension 0
+    // - TP devices per group (tensor parallelism) along mesh dimension 1
+    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd
+    // config file)
+    const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
+    const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
+    // In these examples, I assume dp is always the first mesh axis and tp is the second one, which will be
+    // preserved later on when adding tp+dp llm training support. A user will set if they want to use data
+    // parallel or not and which mesh device shape they want to use, the axis will be
+    // decided automatically: data parallel will always be the first one if
+    // present, the second will be cp (if present, if dp is disabled --- cp will be the first one), then pp,
+    // tp and ep.
+    const uint32_t dp_size = logical_mesh_shape[0];
+    const uint32_t tp_size = logical_mesh_shape[1];
+
+    TT_FATAL(num_features % tp_size == 0, "num_features must be divisible by tp_size (going to be sharded)");
+    TT_FATAL(num_targets % tp_size == 0, "num_targets must be divisible by tp_size (going to be sharded)");
+    TT_FATAL(batch_size % dp_size == 0, "batch_size must be divisible by dp_size (going to be sharded)");
 
     // Validate that batch_size is divisible by dp_size
     if (batch_size == 0) {
@@ -72,13 +109,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Enable fabric BEFORE opening the device - fabric config must be set before device initialization
     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     ttml::autograd::ctx().open_device(logical_mesh_shape);
     auto* device = &ttml::autograd::ctx().get_device();
-
-    // Configure parallelization context for TP+DP
-    ttml::autograd::ctx().get_parallelism_context().configure(device, /*enable_dp=*/true, /*enable_tp=*/true);
 
     // Generate training dataset
     auto training_params = ttml::datasets::MakeRegressionParams{
@@ -91,91 +124,89 @@ int main(int argc, char** argv) {
     auto training_dataset = ttml::datasets::make_regression(training_params);
 
     // Collate function: prepare batch data for TP+DP training
-    std::function<BatchType(std::vector<DatasetSample>&& samples)> collate_fn =
-        [device, logical_mesh_shape, use_row_parallel](std::vector<DatasetSample>&& samples) {
-            const uint32_t actual_batch_size = samples.size();
+    std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
+        [device, logical_mesh_shape, use_row_parallel](std::vector<DatasetSample>&& samples) -> BatchType {
+        const uint32_t actual_batch_size = samples.size();
 
-            // Flatten samples into contiguous vectors
-            std::vector<float> data;
-            std::vector<float> targets;
-            data.reserve(actual_batch_size * num_features);
-            targets.reserve(actual_batch_size * num_targets);
-            for (auto& [features, target] : samples) {
-                std::move(features.begin(), features.end(), std::back_inserter(data));
-                std::move(target.begin(), target.end(), std::back_inserter(targets));
-            }
+        // Flatten samples into contiguous vectors
+        std::vector<float> data;
+        std::vector<float> targets;
+        data.reserve(actual_batch_size * num_features);
+        targets.reserve(actual_batch_size * num_targets);
+        for (auto& [features, target] : samples) {
+            std::move(features.begin(), features.end(), std::back_inserter(data));
+            std::move(target.begin(), target.end(), std::back_inserter(targets));
+        }
 
-            // Configure data mapper based on parallelism type
-            tt::tt_metal::distributed::MeshMapperConfig data_config;
-            data_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{0});  // DP: shard batch
-            if (use_row_parallel) {
-                // RowParallelLinear: input is sharded, so data should be sharded
-                data_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard
-            } else {
-                // ColumnParallelLinear: input is broadcast, so data should be broadcast
-                data_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});  // TP: broadcast
-            }
-            data_config.mesh_shape_override = logical_mesh_shape;
-            const auto data_mapper = ttnn::distributed::create_mesh_mapper(*device, data_config);
+        // Configure data mapper based on parallelism type
+        tt::tt_metal::distributed::MeshMapperConfig data_config;
+        data_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{0});  // DP: shard batch
+        if (use_row_parallel) {
+            // RowParallelLinear: input is sharded, so data should be sharded
+            data_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard
+        } else {
+            // ColumnParallelLinear: input is broadcast, so data should be broadcast
+            data_config.placements.push_back(
+                tt::tt_metal::distributed::MeshMapperConfig::Replicate{});  // TP: broadcast
+        }
+        data_config.mesh_shape_override = logical_mesh_shape;
+        const auto data_mapper = ttnn::distributed::create_mesh_mapper(*device, data_config);
 
-            // Create data tensor with proper sharding
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-                data,
-                ttnn::Shape{actual_batch_size, 1, 1, num_features},
-                device,
-                ttnn::Layout::TILE,
-                data_mapper.get()));
+        // Create data tensor with proper sharding
+        auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            data, ttnn::Shape{actual_batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, data_mapper.get()));
 
-            // Configure targets mapper based on parallelism type
-            tt::tt_metal::distributed::MeshMapperConfig targets_config;
-            targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{0});  // DP: shard batch
-            if (use_row_parallel) {
-                // RowParallelLinear: output is always replicated (via all_reduce), so targets should be replicated
-                targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});  // TP: replicate
-            } else {
-                // ColumnParallelLinear with gather_output=false: output is sharded, so targets should be sharded
-                targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard output features
-            }
-            targets_config.mesh_shape_override = logical_mesh_shape;
-            const auto targets_mapper = ttnn::distributed::create_mesh_mapper(*device, targets_config);
+        // Configure targets mapper based on parallelism type
+        tt::tt_metal::distributed::MeshMapperConfig targets_config;
+        targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{0});  // DP: shard batch
+        if (use_row_parallel) {
+            // RowParallelLinear: output is always replicated (via all_reduce), so targets should be replicated
+            targets_config.placements.push_back(
+                tt::tt_metal::distributed::MeshMapperConfig::Replicate{});  // TP: replicate
+        } else {
+            // ColumnParallelLinear with gather_output=false: output is sharded, so targets should be sharded
+            targets_config.placements.push_back(
+                tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard output features
+        }
+        targets_config.mesh_shape_override = logical_mesh_shape;
+        const auto targets_mapper = ttnn::distributed::create_mesh_mapper(*device, targets_config);
 
-            // Create targets tensor
-            auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-                targets,
-                ttnn::Shape{actual_batch_size, 1, 1, num_targets},
-                device,
-                ttnn::Layout::TILE,
-                targets_mapper.get()));
+        // Create targets tensor
+        auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            targets,
+            ttnn::Shape{actual_batch_size, 1, 1, num_targets},
+            device,
+            ttnn::Layout::TILE,
+            targets_mapper.get()));
 
-            return std::make_pair(data_tensor, targets_tensor);
-        };
+        return {data_tensor, targets_tensor};
+    };
 
     auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
 
     // Initialize model based on parallelism type
-    // Get tp_axis from ParallelismContext and pass to linear layers
-    auto tp_axis = ttml::autograd::ctx().get_parallelism_context().get_tp_axis();
+    // shard_dim=1 specifies that weights should be sharded along mesh dimension 1 (TP dimension)
     std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_row_parallel) {
         fmt::print("Using RowParallelLinear: shards input features, all_reduces output\n");
         // RowParallelLinear: shards input features, all_reduces output
         model = std::make_shared<ttml::modules::distributed::RowParallelLinear>(
-            num_features, num_targets, /* has_bias */ bias, /* input_is_parallel */ true, tp_axis);
+            num_features, num_targets, /* has_bias */ bias, /* input_is_parallel */ true, /* shard_dim */ 1U);
     } else {
         fmt::print("Using ColumnParallelLinear: shards output features, sharded output\n");
         // ColumnParallelLinear: shards output features, keeps output sharded
         model = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            num_features, num_targets, /* has_bias */ bias, /* gather_output */ false, tp_axis);
+            num_features, num_targets, /* has_bias */ bias, /* gather_output */ false, /* shard_dim */ 1U);
     }
     fmt::print("Batch size: {}, DP groups: {}, TP size: {}\n", batch_size, dp_size, tp_size);
 
     // Configure optimizer
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F); /* Denys's lr*/
     if (!use_row_parallel) {
-        /* loss is caclulated for each tp partition, so its averaged over 1/tp_size times less samples making gradient tp_size times greater*/
+        /* loss is calculated for each tp partition, so it is averaged over 1/tp_size times less samples making gradient
+         * tp_size times greater*/
         learning_rate /= tp_size;
     }
-    // std::cout << "Learning rate: " << learning_rate << std::endl;
 
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);

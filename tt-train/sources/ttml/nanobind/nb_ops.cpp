@@ -113,6 +113,12 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
+            "scatter",
+            &ttml::ops::distributed::scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
             "all_gather",
             &ttml::ops::distributed::all_gather,
             nb::arg("tensor"),
