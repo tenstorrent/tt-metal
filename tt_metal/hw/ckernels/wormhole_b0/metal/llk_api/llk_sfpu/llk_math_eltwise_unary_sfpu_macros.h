@@ -33,8 +33,9 @@
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise)>, PARAM0, PARAM1)
 
 // For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE>)
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE)                                           \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, (APPROX ? ApproximationMode::Fast : ApproximationMode::Precise)>( \
+        INIT_CB<APPROX, FAST_APPROX, SCALE>)
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, ITERATIONS, DST_IDX, PARAM0) \
@@ -180,6 +181,8 @@
         ckernel::sfpu::TYPE<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);
 
 // For log1p op that needs three template parameters
-#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROXIMATE, FAST_APPROX, FP32, DST_IDX) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                         \
-        ckernel::sfpu::FN<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX, FP32>, DST_IDX, (int)VectorMode::MODE)
+#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROXIMATE, FAST_APPROX, FP32, DST_IDX)                      \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                              \
+        ckernel::sfpu::FN<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX, FP32>, \
+        DST_IDX,                                                                                                    \
+        (int)VectorMode::MODE)

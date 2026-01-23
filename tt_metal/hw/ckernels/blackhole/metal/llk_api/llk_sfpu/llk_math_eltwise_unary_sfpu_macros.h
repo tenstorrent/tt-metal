@@ -180,6 +180,8 @@
         ckernel::sfpu::TYPE<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);
 
 // For log1p op that needs three template parameters
-#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROXIMATE, FAST_APPROX, FP32, DST_IDX) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                         \
-        ckernel::sfpu::FN<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX, FP32>, DST_IDX, (int)VectorMode::MODE)
+#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P_FN(FN, MODE, APPROXIMATE, FAST_APPROX, FP32, DST_IDX)                      \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                              \
+        ckernel::sfpu::FN<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), FAST_APPROX, FP32>, \
+        DST_IDX,                                                                                                    \
+        (int)VectorMode::MODE)
