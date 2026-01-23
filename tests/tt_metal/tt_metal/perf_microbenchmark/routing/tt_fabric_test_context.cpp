@@ -552,6 +552,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .target_address = dest.target_address,
                 .atomic_inc_address = dest.atomic_inc_address,
                 .link_id = sender.link_id,
+                .noc_id = sender.noc_id,
                 .sender_credit_info = pattern.sender_credit_info,
                 .credit_return_batch_size = pattern.credit_return_batch_size,
             };
@@ -612,7 +613,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .atomic_inc_address = atomic_inc_address,
         .dst_noc_encoding = dst_noc_encoding,
         .payload_buffer_size = payload_buffer_size,
-        .link_id = traffic_config.link_id};
+        .link_id = traffic_config.link_id,
+        .noc_id = traffic_config.noc_id};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
