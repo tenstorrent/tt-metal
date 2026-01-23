@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -19,17 +20,31 @@ void kernel_main() {
 
     const uint32_t end_id = start_page_id + num_pages;
 
+    DPRINT << "[WRITER] start " << start_page_id << " end " << end_id << ENDL();
+    DPRINT << "[WRITER] pages/row " << num_pages_per_tile_row << ENDL();
+    DPRINT << "[WRITER] page size " << page_size << ENDL();
+
     // reader copied the data from DRAM to CB buffer.
     for (uint32_t i = start_page_id; i < end_id; i += num_pages_per_tile_row) {
         cb_wait_front(cb_id_out, num_pages_per_tile_row);
+
+        DPRINT << "[WRITER] CB " << cb_id_out << ENDL();
+        DPRINT << "[WRITER] pages per row " << num_pages_per_tile_row << ENDL();
+
         uint64_t base_l1_read_addr = get_read_ptr(cb_id_out);
 
-        uint64_t dst_noc_addr = s0.get_noc_addr(i);
+        // Write each tile individually to its correct NOC address
+        for (uint32_t j = 0; j < num_pages_per_tile_row; ++j) {
+            uint64_t l1_read_addr = base_l1_read_addr + j * page_size;
+            // pages in DRAM are not necessarily contiguous since memory is interleaved.
+            // that's why we need to get NOC address for each page individually.
+            uint64_t dst_noc_addr = s0.get_noc_addr(i + j);
 
-        // write entire tile row at once
-        // should I go tile by tile?
-        // TODO: find suitable tile count to write at once based on perf.
-        noc_async_write(base_l1_read_addr, dst_noc_addr, page_size * num_pages_per_tile_row);
+            DPRINT << "[WRITER] Tile " << j << " L1 addr " << HEX() << "0x" << l1_read_addr << DEC() << ENDL();
+            DPRINT << "[WRITER] Tile " << j << " DST NOC addr " << HEX() << "0x" << dst_noc_addr << DEC() << ENDL();
+
+            noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+        }
 
         noc_async_write_barrier();
 
