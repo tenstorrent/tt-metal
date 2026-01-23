@@ -66,8 +66,8 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
+
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/common_values.hpp"
 
