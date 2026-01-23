@@ -430,6 +430,7 @@ def generate_sdxl_test_inputs():
     # inputs.append((1, 768, 64, 64))
 
     inputs.append((1, 640, 16, 16))
+    inputs.append((1, 1920, 16, 16))
 
     return inputs
 
