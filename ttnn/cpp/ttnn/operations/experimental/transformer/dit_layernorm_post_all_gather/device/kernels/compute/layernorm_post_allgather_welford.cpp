@@ -20,7 +20,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include <tt-metalium/math.hpp>
 
 namespace NAMESPACE {
 
@@ -48,7 +47,7 @@ void MAIN {
     constexpr uint32_t beta_is_batched = get_compile_time_arg_val(7);
     constexpr uint32_t Ht = get_compile_time_arg_val(8);
 
-    constexpr uint32_t Wt_round_up_block_sizes = tt::round_up(Wt, block_size);
+    constexpr uint32_t Wt_round_up_block_sizes = get_compile_time_arg_val(9);
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);

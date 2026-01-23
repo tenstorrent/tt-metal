@@ -79,12 +79,14 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
+    uint32_t Wt_round_up_block_size = tt::round_up(Wt, block_size);
+
     // Size circular buffers in terms of dst_reg_count (like fused rmsnorm)
     const uint32_t double_buffer = 2;
     const uint32_t in0_tiles = dst_reg_count * double_buffer;
     const uint32_t in1_tiles = stats_tiles_cols * double_buffer;
-    const uint32_t in2_tiles = gamma.has_value() ? tt::round_up(Wt, dst_reg_count) : 0;
-    const uint32_t in3_tiles = beta.has_value() ? tt::round_up(Wt, dst_reg_count) : 0;
+    const uint32_t in2_tiles = gamma.has_value() ? Wt_round_up_block_size : 0;
+    const uint32_t in3_tiles = beta.has_value() ? Wt_round_up_block_size : 0;
     const uint32_t in4_tiles = 1;  // epsilon
 
     const uint32_t intermed0_tiles = tile_cols_per_device;
@@ -204,7 +206,16 @@ PostAllGatherWelfordProgramFactory::cached_program_t PostAllGatherWelfordProgram
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {
-        Wt, W, block_size, num_devices, gamma.has_value(), beta.has_value(), gamma_is_batched, beta_is_batched, Ht};
+        Wt,
+        W,
+        block_size,
+        num_devices,
+        gamma.has_value(),
+        beta.has_value(),
+        gamma_is_batched,
+        beta_is_batched,
+        Ht,
+        Wt_round_up_block_size};
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/"
