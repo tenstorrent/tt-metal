@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/graph/graph_argument_serializer.hpp"
+#include "ttnn/graph/graph_registration.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <boost/algorithm/string/replace.hpp>
@@ -10,6 +11,29 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <type_traits>
+
+// Include headers for additional types
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation_types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <umd/device/types/xy_pair.hpp>
+
+// Include operation-specific serialization (moving towards decoupled architecture per review comment)
+#include "ttnn/operations/eltwise/graph_serialization.hpp"
+#include "ttnn/operations/matmul/graph_serialization.hpp"
+#include "ttnn/operations/normalization/graph_serialization.hpp"
+#include "ttnn/operations/core/graph_serialization.hpp"
+#include "ttnn/operations/transformer/graph_serialization.hpp"
+#include "ttnn/operations/conv/graph_serialization.hpp"
+#include "ttnn/operations/data_movement/graph_serialization.hpp"
+#include "ttnn/operations/sliding_window/graph_serialization.hpp"
+#include "ttnn/operations/embedding/graph_serialization.hpp"
 
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
     os << "[";
@@ -25,8 +49,83 @@ std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
 
 namespace ttnn::graph {
 
+// Helper function to sanitize strings for JSON serialization
+// Replaces invalid UTF-8 sequences with replacement character (U+FFFD)
+std::string sanitize_utf8(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+
+    for (size_t i = 0; i < str.size();) {
+        unsigned char c = str[i];
+
+        // ASCII character (0x00-0x7F)
+        if (c < 0x80) {
+            result.push_back(c);
+            i++;
+        }
+        // 2-byte UTF-8 (0xC0-0xDF)
+        else if ((c >= 0xC0) && (c < 0xE0)) {
+            if (i + 1 < str.size() && (str[i + 1] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                i += 2;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // 3-byte UTF-8 (0xE0-0xEF)
+        else if ((c >= 0xE0) && (c < 0xF0)) {
+            if (i + 2 < str.size() && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                result.push_back(str[i + 2]);
+                i += 3;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // 4-byte UTF-8 (0xF0-0xF7)
+        else if ((c >= 0xF0) && (c < 0xF8)) {
+            if (i + 3 < str.size() && (str[i + 1] & 0xC0) == 0x80 && (str[i + 2] & 0xC0) == 0x80 &&
+                (str[i + 3] & 0xC0) == 0x80) {
+                result.push_back(c);
+                result.push_back(str[i + 1]);
+                result.push_back(str[i + 2]);
+                result.push_back(str[i + 3]);
+                i += 4;
+            } else {
+                // Invalid sequence, use replacement character
+                result.append("\\uFFFD");
+                i++;
+            }
+        }
+        // Invalid UTF-8 start byte (0x80-0xBF, 0xF8-0xFF)
+        else {
+            // Replace with hex escape sequence for debugging
+            char hex[8];
+            snprintf(hex, sizeof(hex), "\\x%02X", c);
+            result.append(hex);
+            i++;
+        }
+    }
+
+    return result;
+}
+
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);
+    // Append layout and storage_type information after the standard reflection output
+    os << ",layout=" << tensor.layout();
+    os << ",storage_type=";
+    switch (tensor.storage_type()) {
+        case tt::tt_metal::StorageType::HOST: os << "StorageType::HOST"; break;
+        case tt::tt_metal::StorageType::DEVICE: os << "StorageType::DEVICE"; break;
+        default: os << "StorageType::UNKNOWN"; break;
+    }
     return os;
 }
 
@@ -91,10 +190,39 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::experimental::Glo
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const tt::xy_pair& value) {
+    os << value.str();
+    return os;
+}
+
+// TileReshapeMapMode operator moved to ttnn/operations/data_movement/graph_serialization.hpp
+// EmbeddingsType operator moved to ttnn/operations/embedding/graph_serialization.hpp
+
+// LayerNorm and Softmax operators moved to ttnn/operations/normalization/graph_serialization.hpp
+
+// SDPA, Conv2d, OpSlicing, ComputeKernel operators moved to respective graph_serialization.hpp files
+
+// Matmul program config operators moved to ttnn/operations/matmul/graph_serialization.hpp
+
+// BasicUnaryWithParam operators moved to ttnn/operations/eltwise/graph_serialization.hpp
+
+// Variant operators - must be defined after all element type operators
 std::ostream& operator<<(std::ostream& os, const std::variant<float, tt::tt_metal::Tensor>& value) {
     std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
+
+std::ostream& operator<<(
+    std::ostream& os, const std::variant<std::string, ttnn::operations::unary::BasicUnaryWithParam<float>>& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
+// LayerNorm and Softmax variant operators moved to ttnn/operations/normalization/graph_serialization.hpp
+
+// Compute kernel config variant operator moved to ttnn/operations/core/graph_serialization.hpp
+
+// Matmul program config variant operator moved to ttnn/operations/matmul/graph_serialization.hpp
 
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::optional<T>& value) {
@@ -154,7 +282,10 @@ std::string graph_demangle(const std::string_view name) {
     return ret_val;
 }
 
-GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
+GraphArgumentSerializer::GraphArgumentSerializer() {
+    // DO NOT call initialize() here!
+    // initialize() must be called explicitly at runtime, after all static objects are constructed
+}
 
 GraphArgumentSerializer& GraphArgumentSerializer::instance() {
     static GraphArgumentSerializer new_instance;
@@ -425,6 +556,9 @@ void GraphArgumentSerializer::register_type() {
 }
 
 std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::any>& span) {
+    // By the time to_list() is called, all static objects have been constructed
+    instance().initialize();
+
     std::vector<std::string> result;
     for (const auto& element : span) {
         if (!element.has_value()) {
@@ -452,6 +586,19 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
 }
 
 void GraphArgumentSerializer::initialize() {
+    // Make initialize() idempotent - safe to call multiple times
+    if (initialized_) {
+        return;  // Already initialized, nothing to do
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Execute all queued operation-specific registrations FIRST
+    // This must happen before any graph capture can start
+    // Operations self-register via TTNN_REGISTER_GRAPH_ARG macro in their headers
+    // ═══════════════════════════════════════════════════════════════════════════════
+    GraphArgumentRegistrationQueue::instance().execute_all();
+
+    // Now register core types
     GraphArgumentSerializer::register_type<bool>();
     GraphArgumentSerializer::register_type<int>();
     GraphArgumentSerializer::register_type<unsigned int>();
@@ -465,7 +612,24 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<uint32_t>();
     GraphArgumentSerializer::register_type<uint64_t>();
     GraphArgumentSerializer::register_type<int32_t>();
-    GraphArgumentSerializer::register_type<std::string>();
+
+    // Custom handler for std::string to sanitize UTF-8
+    GraphArgumentSerializer::ConvertionFunction string_function = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        if (value.type() == typeid(std::reference_wrapper<std::string>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<std::string>>(value);
+            oss << sanitize_utf8(referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<const std::string>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const std::string>>(value);
+            oss << sanitize_utf8(referenced_value.get());
+        } else {
+            oss << "Unable to parse string";
+        }
+        return oss.str();
+    };
+    registry()[typeid(std::reference_wrapper<std::string>)] = string_function;
+    registry()[typeid(std::reference_wrapper<const std::string>)] = string_function;
+    registry()[typeid(const std::reference_wrapper<std::string>)] = string_function;
     GraphArgumentSerializer::register_type<tt::tt_metal::DataType>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Layout>();
     GraphArgumentSerializer::register_type<tt::tt_metal::MemoryConfig>();
@@ -499,6 +663,18 @@ void GraphArgumentSerializer::initialize() {
 
     GraphArgumentSerializer::register_type<tt::tt_metal::experimental::GlobalCircularBuffer>();
     GraphArgumentSerializer::register_type<tt::tt_metal::IDevice>();
+
+    // Fabric topology
+    GraphArgumentSerializer::register_type<tt::tt_fabric::Topology>();
+
+    // xy_pair
+    GraphArgumentSerializer::register_type<tt::xy_pair>();
+
+    // Note: std::nullopt_t is already handled specially and cannot be registered as a template parameter
+    // Note: Operation-specific types are auto-registered at the START of initialize() via execute_all()
+
+    // Mark as initialized
+    initialized_ = true;
 }
 
 }  // namespace ttnn::graph

@@ -98,7 +98,21 @@ void py_graph_module(nb::module_& m) {
         "end_graph_capture",
         [] {
             nlohmann::json json_object = GraphProcessor::end_graph_capture();
-            auto json_object_str = json_object.dump();
+            std::string json_object_str;
+            try {
+                // Try to dump with default settings (UTF-8 validation enabled)
+                json_object_str = json_object.dump();
+            } catch (const nlohmann::json::type_error& e) {
+                // If UTF-8 validation fails, dump with ensure_ascii=true to escape non-ASCII chars
+                // This will convert any problematic bytes to \uXXXX escape sequences
+                try {
+                    json_object_str = json_object.dump(-1, ' ', true, nlohmann::json::error_handler_t::replace);
+                } catch (...) {
+                    // If that still fails, return an empty result with error information
+                    json_object_str =
+                        R"({"content": [], "error": "Failed to serialize graph due to invalid UTF-8 data"})";
+                }
+            }
             auto json_module = nb::module_::import_("json");
             return json_module.attr("loads")(json_object_str);
         },

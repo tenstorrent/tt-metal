@@ -13,6 +13,7 @@
 
 namespace ttnn::graph {
 std::string graph_demangle(std::string_view name);
+std::string sanitize_utf8(const std::string& str);
 
 class GraphArgumentSerializer {
 public:
@@ -20,6 +21,23 @@ public:
     std::vector<std::string> to_list(const std::span<std::any>& span);
 
     static GraphArgumentSerializer& instance();
+
+    // Public API for external type registration
+    // This allows operations to register their types without exposing internal implementation
+    template <typename T>
+    static void register_argument_type() {
+        instance().register_type<T>();
+    }
+
+    template <typename T>
+    static void register_argument_vector() {
+        instance().register_vector<T>();
+    }
+
+    template <typename OptionalT>
+    static void register_argument_optional() {
+        instance().register_optional_type<OptionalT>();
+    }
 
 private:
     GraphArgumentSerializer();
@@ -46,5 +64,6 @@ private:
     void initialize();
 
     std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
+    bool initialized_ = false;  // Safety flag to catch premature usage
 };
 }  // namespace ttnn::graph
