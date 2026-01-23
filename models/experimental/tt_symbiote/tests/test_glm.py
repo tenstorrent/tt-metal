@@ -17,6 +17,7 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearLLama
+from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -54,6 +55,7 @@ def get_attention_mappings():
                 self.q_norm = orig_layer.q_norm
                 self.k_norm = orig_layer.k_norm
             self.ttnn_attention_module = TTNNSDPAAttention()
+            self.ttnn_rope = TTNNRotaryPositionEmbedding()
             # self.ttnn_permute = TTNNPermute()
             # self.ttnn_reshape = TTNNReshape()
 
@@ -74,21 +76,17 @@ def get_attention_mappings():
         ):
             input_shape = hidden_states.shape[:-1]
             hidden_shape = (*input_shape, -1, self.head_dim)
-
+            assert not self.use_qk_norm, "QK norm not supported in rewritten attention yet."
             query_states = self.q_proj(hidden_states).reshape(hidden_shape)
             key_states = self.k_proj(hidden_states).reshape(hidden_shape)
             value_states = self.v_proj(hidden_states).reshape(hidden_shape)
-
-            if self.use_qk_norm:  # main diff from Llama
-                query_states = self.q_norm(query_states)
-                key_states = self.k_norm(key_states)
 
             query_states = query_states.transpose(1, 2)
             key_states = key_states.transpose(1, 2)
             value_states = value_states.transpose(1, 2)
 
             cos, sin = position_embeddings
-            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+            query_states, key_states = self.ttnn_rope(query_states, key_states, cos, sin)
 
             if past_key_values is not None:
                 # sin and cos are specific to RoPE models; position_ids needed for the static cache
@@ -106,7 +104,7 @@ def get_attention_mappings():
                 scaling=self.scaling,
                 **kwargs,
             )
-            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = attn_output.reshape(*input_shape, -1)
             attn_output = self.o_proj(attn_output)
             return attn_output, None
 
