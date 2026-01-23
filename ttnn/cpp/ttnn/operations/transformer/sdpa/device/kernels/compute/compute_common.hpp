@@ -456,8 +456,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Postcondition: in1_cb has rows consumed
 
     constexpr uint32_t num_tiles = rows * cols;
-    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
+    constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
