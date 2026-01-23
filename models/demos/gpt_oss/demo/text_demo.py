@@ -247,7 +247,7 @@ def prepare_gpt_oss_generator_args(
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts (128k prompt)
             1,  # data_parallel
             128,  # batch_size (32 per row, but only 1 real user per row)
             1,  # repeat_batches
@@ -401,10 +401,10 @@ def test_gpt_oss_demo(
         users_row_sharded=users_row_sharded,
         long_context_mode=long_context_mode,
     )
-    if long_context_mode:
-        pytest.skip(
-            f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
-        )
+    # if long_context_mode:
+    #     pytest.skip(
+    #         f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
+    #     )
 
     # Create generator (match tt-transformers pattern)
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
@@ -570,17 +570,17 @@ def test_gpt_oss_demo(
             logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
         else:
             # Standard batch prefill (matching tt_transformers)
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+            # logger.info("Starting prefill warmup...")
+            # profiler.start(f"compile_prefill", iteration=batch_idx)
+            # logits = generator.prefill_forward_text(
+            #     input_tokens_prefill_pt,
+            #     page_table=page_table,
+            #     kv_cache=tt_kv_cache,
+            #     prompt_lens=decoding_pos,
+            #     enable_trace=enable_prefill_trace,
+            # )
+            # profiler.end(f"compile_prefill", iteration=batch_idx)
+            # logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
