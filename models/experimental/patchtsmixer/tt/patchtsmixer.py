@@ -53,7 +53,6 @@ class TtPatchTSMixerPositionalEncoding:
         x: (B, C, N_p, D) as TTNN tensor
         pe: stored as (1, 1, N_p, D) TTNN tensor for broadcast
 
-    Stage 2 Optimization: L1 memory for PE buffer
     """
 
     def __init__(self, device, base_address: str, parameters: dict, *, num_patches: int, d_model: int):
@@ -119,10 +118,6 @@ class TtPatchTSMixerBatchNorm:
 
 
 class TtPatchTSMixerLayerNorm:
-    """
-    Stage 2 Optimization: L1 memory for params and outputs
-    """
-
     def __init__(self, device, base_address: str, parameters: dict, eps=1e-5):
         self.device = device
         self.base = base_address
@@ -178,10 +173,6 @@ class TtPatchTSMixerMLP:
     Applies:
         x = gelu(x @ W1 + b1)
         x = x @ W2 + b2
-
-    Stage 2 Optimization:
-    - L1 memory storage for weights and outputs (5-10x speedup expected)
-    - Future: Add multi-core matmul program configs when tensor shapes are well-defined
     """
 
     def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0):
@@ -286,10 +277,6 @@ class TtFeatureMixerBlock:
 
     def __call__(self, x):
         # Input: (B, C, Np, D)
-        # For now, HEIGHT_SHARDED isn't fully supported by all ops (layer_norm, linear, etc.)
-        # So we skip sharding and stick with L1 interleaved memory for stability
-        # Future optimization: Once HEIGHT_SHARDED is supported across all ops,
-        # we can add parallel processing here
 
         residual = x
         x = self.norm(x)
@@ -563,7 +550,6 @@ class TtPatchTSMixerForecastHead:
     Input:  (B, C, Np, D)  rank-4
     Output: (B, H, C).
 
-    Stage 2 Optimization: L1 memory for weights and outputs
     """
 
     def __init__(self, device, base_address: str, parameters: dict, *, prediction_length: int):
@@ -725,7 +711,6 @@ class TtPatchTSMixerPatchify:
     Input tensor shape expected: (B, L, C)  (HF-style)
     Output TTNN tensor: (B, C, N_patches, patch_length)
 
-    Stage 2 Optimization: L1 memory throughout, minimize layout conversions
     """
 
     def __init__(self, *, device, context_length, patch_length, patch_stride):
@@ -829,7 +814,6 @@ class TtPatchTSMixerEmbedding:
     Input tensor:  past_values already transposed to (B, C, L) in the model.
     Output TTNN:  (B, C, Np, d_model)
 
-    Stage 2 Optimization: L1 memory for weights and outputs
     """
 
     def __init__(
