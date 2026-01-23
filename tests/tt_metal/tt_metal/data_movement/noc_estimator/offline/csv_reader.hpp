@@ -19,7 +19,7 @@ struct DataPoint {
     common::Architecture arch = common::Architecture::WORMHOLE_B0;
     uint32_t num_transactions = 0;
     uint32_t transaction_size_bytes = 0;
-    uint32_t num_peers = 1;
+    uint32_t num_subordinates = 1;
     bool same_axis = false;
     bool linked = false;
     double latency_cycles = 0.0;
@@ -45,7 +45,7 @@ private:
     static constexpr const char* COL_ARCH = "Architecture";
     static constexpr const char* COL_NUM_TRANSACTIONS = "Number of Transactions";
     static constexpr const char* COL_TRANSACTION_SIZE = "Transaction Size (bytes)";
-    static constexpr const char* COL_NUM_PEERS = "Num Peers";
+    static constexpr const char* COL_NUM_SUBORDINATES = "Num Subordinates";
     static constexpr const char* COL_SAME_AXIS = "Same Axis";
     static constexpr const char* COL_LINKED = "Linked";
     static constexpr const char* COL_LATENCY = "Latency (cycles)";

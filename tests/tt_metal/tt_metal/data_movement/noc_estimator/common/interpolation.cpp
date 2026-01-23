@@ -219,7 +219,7 @@ double find_with_relaxation(
                 relaxed_param = RELAX_PARAM_NAMES[level];
                 GroupKey relaxed_key = k;
                 relaxed_key.num_transactions = key.num_transactions;
-                relaxed_key.num_peers = key.num_peers;
+                relaxed_key.num_subordinates = key.num_subordinates;
 
                 if (entries.contains(relaxed_key)) {
                     return interpolate_latency(entries.at(relaxed_key), sizes, transaction_size);

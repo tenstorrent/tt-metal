@@ -14,7 +14,7 @@ namespace tt::noc_estimator::common {
 // Interpolate latency for a given transaction size from LatencyData
 double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size);
 
-// Interpolate across numeric fields (num_transactions, num_peers)
+// Interpolate across numeric fields (num_transactions, num_subordinates)
 double interpolate_latency_nd(
     const GroupKey& key,
     uint32_t transaction_size,

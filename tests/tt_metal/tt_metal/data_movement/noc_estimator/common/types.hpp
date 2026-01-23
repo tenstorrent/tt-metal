@@ -31,7 +31,7 @@ constexpr int DEFAULT_PATTERN = 1;    // ONE_TO_ONE
 constexpr int DEFAULT_MEMORY = 0;     // L1
 constexpr int DEFAULT_ARCH = 0;       // WORMHOLE_B0
 constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 1;
-constexpr uint32_t DEFAULT_NUM_PEERS = 1;
+constexpr uint32_t DEFAULT_NUM_SUBORDINATES = 1;
 constexpr bool DEFAULT_SAME_AXIS = false;
 constexpr bool DEFAULT_LINKED = false;
 
@@ -42,7 +42,7 @@ struct GroupKey {
     MemoryType memory;
     Architecture arch;
     uint32_t num_transactions;
-    uint32_t num_peers;
+    uint32_t num_subordinates;
     bool same_axis;
     bool linked;
 
@@ -63,8 +63,8 @@ struct GroupKey {
         if (num_transactions != other.num_transactions) {
             return num_transactions < other.num_transactions;
         }
-        if (num_peers != other.num_peers) {
-            return num_peers < other.num_peers;
+        if (num_subordinates != other.num_subordinates) {
+            return num_subordinates < other.num_subordinates;
         }
         if (same_axis != other.same_axis) {
             return same_axis < other.same_axis;
@@ -74,8 +74,8 @@ struct GroupKey {
 
     bool operator==(const GroupKey& other) const {
         return mechanism == other.mechanism && pattern == other.pattern && memory == other.memory &&
-               arch == other.arch && num_transactions == other.num_transactions && num_peers == other.num_peers &&
-               same_axis == other.same_axis && linked == other.linked;
+               arch == other.arch && num_transactions == other.num_transactions &&
+               num_subordinates == other.num_subordinates && same_axis == other.same_axis && linked == other.linked;
     }
 
     // Check if non-numeric fields match (for interpolation)
@@ -89,13 +89,13 @@ struct GroupKey {
 // To add a new numeric field: update extract() and with_values()
 struct NumericFields {
     // Extract all numeric values from a GroupKey
-    static std::vector<uint32_t> extract(const GroupKey& key) { return {key.num_transactions, key.num_peers}; }
+    static std::vector<uint32_t> extract(const GroupKey& key) { return {key.num_transactions, key.num_subordinates}; }
 
     // Create a new key with different numeric values
     static GroupKey with_values(const GroupKey& base, const std::vector<uint32_t>& values) {
         GroupKey result = base;
         result.num_transactions = values[0];
-        result.num_peers = values[1];
+        result.num_subordinates = values[1];
         return result;
     }
 

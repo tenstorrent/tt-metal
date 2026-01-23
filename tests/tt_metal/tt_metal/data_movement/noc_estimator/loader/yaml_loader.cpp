@@ -36,7 +36,7 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
                 .memory = static_cast<MemoryType>(get_or_default<int>(key_node, "memory", DEFAULT_MEMORY)),
                 .arch = static_cast<Architecture>(get_or_default<int>(key_node, "arch", DEFAULT_ARCH)),
                 .num_transactions = get_or_default<uint32_t>(key_node, "num_transactions", DEFAULT_NUM_TRANSACTIONS),
-                .num_peers = get_or_default<uint32_t>(key_node, "num_peers", DEFAULT_NUM_PEERS),
+                .num_subordinates = get_or_default<uint32_t>(key_node, "num_subordinates", DEFAULT_NUM_SUBORDINATES),
                 .same_axis = get_or_default<bool>(key_node, "same_axis", DEFAULT_SAME_AXIS),
                 .linked = get_or_default<bool>(key_node, "linked", DEFAULT_LINKED)};
 

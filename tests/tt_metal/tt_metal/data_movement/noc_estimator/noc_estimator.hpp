@@ -23,7 +23,7 @@ struct NocEstimatorParams {
     uint32_t num_transactions = 64;
     uint32_t num_transactions_per_barrier = 1;
     uint32_t transaction_size_bytes = 512;
-    uint32_t num_peers = 1;
+    uint32_t num_subordinates = 1;
     bool same_axis = false;
     bool linked = false;
 };

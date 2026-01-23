@@ -50,7 +50,7 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params) {
         .memory = static_cast<common::MemoryType>(params.memory),
         .arch = static_cast<common::Architecture>(params.arch),
         .num_transactions = params.num_transactions_per_barrier,
-        .num_peers = params.num_peers,
+        .num_subordinates = params.num_subordinates,
         .same_axis = params.same_axis,
         .linked = params.linked};
 

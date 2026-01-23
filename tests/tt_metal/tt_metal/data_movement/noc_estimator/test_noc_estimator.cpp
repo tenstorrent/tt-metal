@@ -38,10 +38,10 @@ int main() {
             .num_transactions = 1,
             .num_transactions_per_barrier = 1,
             .transaction_size_bytes = 64,
-            .num_peers = 4};
+            .num_subordinates = 4};
 
         NocEstimate result = estimate_noc_performance(params);
-        std::cout << "Test 1 - Blackhole multicast (64 bytes, 1 txn, 4 peers):\n";
+        std::cout << "Test 1 - Blackhole multicast (64 bytes, 1 txn, 4 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
         expect_near_pct("Test 1 latency", result.latency_cycles, 396.0, 2.0);
@@ -57,10 +57,10 @@ int main() {
             .num_transactions = 100,
             .num_transactions_per_barrier = 100,
             .transaction_size_bytes = 2048,
-            .num_peers = 25};
+            .num_subordinates = 25};
 
         NocEstimate result = estimate_noc_performance(params);
-        std::cout << "Test 2 - Wormhole unicast (2048 bytes, 100 txns, 25 peers):\n";
+        std::cout << "Test 2 - Wormhole unicast (2048 bytes, 100 txns, 25 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
         expect_near_pct("Test 2 latency", result.latency_cycles, 6985.0, 2.0);
@@ -76,10 +76,10 @@ int main() {
             .num_transactions = 16,
             .num_transactions_per_barrier = 16,
             .transaction_size_bytes = 7500,  // Interpolated
-            .num_peers = 4};
+            .num_subordinates = 4};
 
         NocEstimate result = estimate_noc_performance(params);
-        std::cout << "Test 3 - Interpolated (7500 bytes, 16 txns, 4 peers):\n";
+        std::cout << "Test 3 - Interpolated (7500 bytes, 16 txns, 4 subordinates):\n";
         std::cout << "  Latency: " << result.latency_cycles << " cycles\n";
         std::cout << "  Bandwidth: " << result.bandwidth_bytes_per_cycle << " bytes/cycle\n\n";
         expect_near_pct("Test 3 latency", result.latency_cycles, 2900.0, 2.0);
@@ -94,7 +94,7 @@ int main() {
             .num_transactions = 4,
             .num_transactions_per_barrier = 4,
             .transaction_size_bytes = 2048,
-            .num_peers = 4,
+            .num_subordinates = 4,
             .linked = false};
 
         NocEstimatorParams params_linked{
@@ -104,7 +104,7 @@ int main() {
             .num_transactions = 4,
             .num_transactions_per_barrier = 4,
             .transaction_size_bytes = 2048,
-            .num_peers = 4,
+            .num_subordinates = 4,
             .linked = true};
 
         NocEstimate result_unlinked = estimate_noc_performance(params_unlinked);
@@ -132,7 +132,7 @@ int main() {
             .num_transactions = 16,
             .num_transactions_per_barrier = 16,
             .transaction_size_bytes = 2048,
-            .num_peers = 4};
+            .num_subordinates = 4};
 
         NocEstimatorParams params_upper{
             .mechanism = NocMechanism::MULTICAST,
@@ -141,7 +141,7 @@ int main() {
             .num_transactions = 64,
             .num_transactions_per_barrier = 64,
             .transaction_size_bytes = 2048,
-            .num_peers = 4};
+            .num_subordinates = 4};
 
         NocEstimatorParams params_interp{
             .mechanism = NocMechanism::MULTICAST,
@@ -150,7 +150,7 @@ int main() {
             .num_transactions = 50,  // Between 16 and 64
             .num_transactions_per_barrier = 50,
             .transaction_size_bytes = 2048,
-            .num_peers = 4};
+            .num_subordinates = 4};
 
         NocEstimate result_lower = estimate_noc_performance(params_lower);
         NocEstimate result_upper = estimate_noc_performance(params_upper);
@@ -171,9 +171,9 @@ int main() {
         std::cout << "  In range: " << (in_range ? "YES" : "NO") << "\n\n";
     }
 
-    // Test 6: 2D interpolation (both num_transactions AND num_peers)
+    // Test 6: 2D interpolation (both num_transactions AND num_subordinates)
     {
-        std::cout << "Test 6 - 2D Interpolation (num_transactions=50, num_peers=15):\n";
+        std::cout << "Test 6 - 2D Interpolation (num_transactions=50, num_subordinates=15):\n";
 
         NocEstimatorParams params{
             .mechanism = NocMechanism::MULTICAST,
@@ -182,7 +182,7 @@ int main() {
             .num_transactions = 50,  // Interpolated (between 16 and 64)
             .num_transactions_per_barrier = 50,
             .transaction_size_bytes = 2048,
-            .num_peers = 15};  // Interpolated (between 4 and 25)
+            .num_subordinates = 15};  // Interpolated (between 4 and 25)
 
         NocEstimate result = estimate_noc_performance(params);
         std::cout << "  Latency: " << result.latency_cycles << " cycles (bilinear interpolation)\n";

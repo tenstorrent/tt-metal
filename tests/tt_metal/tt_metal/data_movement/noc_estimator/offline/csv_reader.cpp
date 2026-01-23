@@ -104,9 +104,9 @@ bool CsvReader::parse_data_line(const std::string& line, DataPoint& point) {
         point.transaction_size_bytes = stoul(tokens[column_map_[COL_TRANSACTION_SIZE]]);
         point.num_transactions = stoul(tokens[column_map_[COL_NUM_TRANSACTIONS]]);
         point.latency_cycles = stod(tokens[column_map_[COL_LATENCY]]);
-        auto it = column_map_.find(COL_NUM_PEERS);
+        auto it = column_map_.find(COL_NUM_SUBORDINATES);
         if (it != column_map_.end() && it->second < tokens.size()) {
-            point.num_peers = stoul(tokens[it->second]);
+            point.num_subordinates = stoul(tokens[it->second]);
         }
 
         it = column_map_.find(COL_SAME_AXIS);

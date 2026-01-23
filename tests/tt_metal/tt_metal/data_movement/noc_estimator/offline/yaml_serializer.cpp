@@ -33,8 +33,8 @@ bool save_latency_data_to_yaml(
         if (key.num_transactions != DEFAULT_NUM_TRANSACTIONS) {
             out << YAML::Key << "num_transactions" << YAML::Value << key.num_transactions;
         }
-        if (key.num_peers != DEFAULT_NUM_PEERS) {
-            out << YAML::Key << "num_peers" << YAML::Value << key.num_peers;
+        if (key.num_subordinates != DEFAULT_NUM_SUBORDINATES) {
+            out << YAML::Key << "num_subordinates" << YAML::Value << key.num_subordinates;
         }
         if (key.same_axis != DEFAULT_SAME_AXIS) {
             out << YAML::Key << "same_axis" << YAML::Value << key.same_axis;
