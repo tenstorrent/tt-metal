@@ -149,7 +149,7 @@ def run_all_gather_matmul_galaxy_impl(
     Supports multiple operation modes:
     - "fused": llama_all_gather_matmul_async (requires large L1 intermediate)
     - "non_fused": all_gather_async + ttnn.linear (standard approach)
-    - "chunked_fused": Chunked fused AllGather + Matmul (smaller intermediate)
+    - "chunked_fused": Chunked AllGather + Matmul (smaller intermediate per chunk)
     - "local_matmul_allreduce": Local matmul + AllReduce (most memory efficient)
 
     Uses tensor dimensions from Llama 70B MLP FF2 path:
@@ -167,13 +167,13 @@ def run_all_gather_matmul_galaxy_impl(
     # Setup fabric
     all_gather_topology = ttnn.Topology.Linear
 
-    # Sub-device setup needed for fused paths (fused and chunked_fused)
-    # Non-fused path runs without sub-device (like Galaxy prefill mode)
+    # Sub-device setup only needed for fused path (uses llama_all_gather_matmul_async)
+    # Non-fused and chunked_fused paths run without sub-device (like Galaxy prefill mode)
     worker_sub_device_id = None
     sub_device_stall_group = None
     sub_device_manager = None
 
-    if op_mode in ("fused", "chunked_fused"):
+    if op_mode == "fused":
         worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
         worker_sub_device_id = ttnn.SubDeviceId(0)
         sub_device_stall_group = [worker_sub_device_id]
@@ -186,7 +186,7 @@ def run_all_gather_matmul_galaxy_impl(
     # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
     semaphore_cores = (
         SUB_DEVICE_CRS
-        if op_mode in ("fused", "chunked_fused")
+        if op_mode == "fused"
         else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))})  # 7x10 = 70 cores
     )
     ccl_semaphore_handles = [
@@ -658,10 +658,10 @@ def run_all_gather_matmul_galaxy_impl(
 
     def run_chunked_fused_op(n_iters, store_all_results=True):
         """
-        Run chunked fused AllGather + Matmul approach.
+        Run chunked AllGather + Matmul approach to reduce intermediate buffer size.
 
-        This splits the K dimension into chunks to reduce intermediate buffer size,
-        allowing the fused op to fit in L1 for large model dimensions.
+        This splits the K dimension into chunks so each chunk's intermediate buffer
+        fits in L1. Uses separate all_gather + matmul ops per chunk, then accumulates.
 
         For each iteration:
         1. For each chunk c in [0, num_chunks):
@@ -675,32 +675,38 @@ def run_all_gather_matmul_galaxy_impl(
         - 4x reduction allows fitting in ~133KB available L1
         """
         outs = []
+        dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
 
         for iter_idx in range(n_iters):
             accumulated_result = None
 
             for chunk_idx in range(num_chunks):
                 # Use different semaphores for each chunk within an iteration
-                sem_idx = (iter_idx * num_chunks + chunk_idx) % num_buffers
-                buffer_idx = (iter_idx * num_chunks + chunk_idx) % num_buffers
+                sem_idx = (iter_idx * num_chunks + chunk_idx) % num_buffers * 2
 
-                # Run fused AllGather + Matmul on this chunk
-                chunk_out = ttnn.experimental.llama_all_gather_matmul_async(
+                # Step 1: AllGather this chunk
+                gathered_chunk = ttnn.experimental.all_gather_async(
                     tt_input_chunks[chunk_idx],
-                    tt_weight_chunks[chunk_idx],
-                    tt_chunk_intermediate_tensors[buffer_idx],
                     dim=3,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
-                    multi_device_global_semaphore=ccl_semaphore_handles[sem_idx],
-                    ag_memory_config=chunk_ag_output_mem_config,
-                    mm_memory_config=mm_output_sharded_mem_config,
+                    multi_device_global_semaphore=[
+                        ccl_semaphore_handles[sem_idx],
+                        ccl_semaphore_handles[sem_idx + 1],
+                    ],
+                    memory_config=dram_interleaved,
                     topology=all_gather_topology,
                     num_links=num_links,
-                    subdevice_id=worker_sub_device_id,
-                    program_config=chunked_fused_program_config,
+                )
+
+                # Step 2: Matmul with corresponding weight chunk
+                chunk_out = ttnn.linear(
+                    gathered_chunk,
+                    tt_weight_chunks[chunk_idx],
+                    memory_config=dram_interleaved,
                     compute_kernel_config=compute_kernel_config,
                     dtype=output_dtype,
+                    core_grid=ttnn.CoreGrid(y=7, x=10),
                 )
 
                 # Accumulate partial results
@@ -837,8 +843,8 @@ def run_all_gather_matmul_galaxy_impl(
     for tensor_index in range(len(tt_outs)):
         validate(tt_outs[tensor_index], output_tensor_goldens_list[tensor_index])
 
-    # Only cleanup sub-device if it was set up (fused paths)
-    if op_mode in ("fused", "chunked_fused"):
+    # Only cleanup sub-device if it was set up (fused path only)
+    if op_mode == "fused":
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
 
@@ -911,9 +917,9 @@ def test_all_gather_matmul_galaxy_check(
 
     Tests different operation modes:
     - non_fused: all_gather_async + ttnn.linear (standard approach)
-    - chunked_fused: llama_all_gather_matmul_async with K split into chunks (reduces L1 intermediate)
+    - chunked_fused: K split into chunks, all_gather + matmul per chunk, accumulate results
 
-    Note: "fused" mode (full K) skipped - requires too much L1 for 70B model dims.
+    Note: "fused" mode (llama_all_gather_matmul_async) skipped - requires too much L1 for 70B dims.
     """
     run_all_gather_matmul_galaxy_impl(
         mesh_device,
@@ -991,9 +997,9 @@ def test_all_gather_matmul_galaxy_perf_comparison(
 
     Compares operation modes:
     - non_fused: all_gather_async + ttnn.linear (standard approach)
-    - chunked_fused: llama_all_gather_matmul_async with K split into chunks (reduces L1 intermediate)
+    - chunked_fused: K split into chunks, all_gather + matmul per chunk, accumulate results
 
-    Note: "fused" mode (full K) skipped - requires too much L1 for 70B model dims.
+    Note: "fused" mode (llama_all_gather_matmul_async) skipped - requires too much L1 for 70B dims.
     """
     num_iters = 5
     results = {}
