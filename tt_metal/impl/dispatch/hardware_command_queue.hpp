@@ -4,15 +4,8 @@
 
 #pragma once
 
-#include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <mutex>
-#include <optional>
-#include <thread>
-#include <variant>
 
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
@@ -28,8 +21,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
-#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -49,8 +40,7 @@ public:
         IDevice* device,
         std::shared_ptr<CQSharedState> cq_shared_state,
         uint32_t id,
-        NOC noc_index,
-        uint32_t completion_queue_reader_core = 0);
+        NOC noc_index);
 
     ~HWCommandQueue();
 
@@ -70,33 +60,16 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t completion_queue_reader_core_ = 0;
-    std::thread completion_queue_thread_;
     SystemMemoryManager& manager_;
 
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    std::atomic<bool> exit_condition_;
-    std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
-                                                         // command is expected back in the completion queue
-    std::atomic<uint32_t> num_completed_completion_q_reads_;  // completion queue reader thread increments this after
-                                                              // reading an entry out of the completion queue
-
-    MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
     IDevice* device_;
-
-    std::condition_variable reader_thread_cv_;
-    std::mutex reader_thread_cv_mutex_;
 
     CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
-
-    void read_completion_queue();
-
-    void increment_num_entries_in_completion_q();
-    void set_exit_condition();
 };
 
 }  // namespace tt::tt_metal

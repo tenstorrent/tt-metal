@@ -12,6 +12,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 

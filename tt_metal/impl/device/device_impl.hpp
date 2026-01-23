@@ -215,7 +215,6 @@ private:
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 
