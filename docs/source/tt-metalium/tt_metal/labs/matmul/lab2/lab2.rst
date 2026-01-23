@@ -376,7 +376,7 @@ this is hown in Figure 3.
        +----+----+----+----+----+----+----+----+----+
 
 .. figure:: ../../../../../common/images/matmul-blocked-core-works-distribution.webp
-   :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked (Each color represents a different core)
+   :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked
    :align: center
 
    Figure 3: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked
@@ -392,10 +392,10 @@ Alternatively, we could pad the matrix dimensions to make them a multiple of the
 
 If the program is compute-bound, we may choose to:
 
-  * Not use blocking if lower number of cores causes performance degradation because data reuse
-    is not beneficial.
-  * Add more cores across one or both dimensions of the core grid, if higher number of cores
-    is available and will divide the number of tiles evenly.
+* Not use blocking if lower number of cores causes performance degradation because data reuse
+  is not beneficial.
+* Add more cores across one or both dimensions of the core grid, if higher number of cores
+  is available and will divide the number of tiles evenly.
 
 Assigning rectangular blocks to output tiles doesn't resolve the problem that bringing e.g.
 entire row of A into on-chip SRAM is not possible because of limited on-chip memory.
@@ -602,6 +602,7 @@ Steps
    ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``, and ``K`` are divisible by ``TILE_HEIGHT``.
    
 #. Size circular buffers based on the blocking variables, keeping in mind the following:
+
    - Input buffers need to store ``A_slab`` and ``B_slab`` and should use double buffering.
    - Output buffers need to store ``C_block``, and should use double buffering.
    - Intermediate buffer needs to store the partial results, whose size is the same as ``C_block``.
