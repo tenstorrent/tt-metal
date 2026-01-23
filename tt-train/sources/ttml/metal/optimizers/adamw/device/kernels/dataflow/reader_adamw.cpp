@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,10 +26,10 @@ void kernel_main() {
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    // fp32 tile size for param, exp_avg, exp_avg_sq, max_exp_avg_sq
-    const uint32_t fp32_tile_size_bytes = get_tile_size(cb_param_idx);
-    // bf16 tile size for grad
-    const uint32_t bf16_tile_size_bytes = get_tile_size(cb_grad_idx);
+    // Tile size in bytes for parameters and moving averages (can be bf16 or fp32)
+    const uint32_t tile_size_bytes = get_tile_size(cb_param_idx);
+    // Gradient is always bf16
+    const uint32_t grad_tile_size_bytes = get_tile_size(cb_grad_idx);
 
     constexpr auto param_args = TensorAccessorArgs<1U>();
     constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
@@ -37,11 +37,11 @@ void kernel_main() {
     constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
     constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
 
-    const auto param_addr_gen = TensorAccessor(param_args, param_addr, fp32_tile_size_bytes);
-    const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, bf16_tile_size_bytes);
-    const auto exp_avg_addr_gen = TensorAccessor(exp_avg_args, exp_avg_addr, fp32_tile_size_bytes);
-    const auto exp_avg_sq_addr_gen = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr, fp32_tile_size_bytes);
-    const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr, fp32_tile_size_bytes);
+    const auto param_addr_gen = TensorAccessor(param_args, param_addr, tile_size_bytes);
+    const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, grad_tile_size_bytes);
+    const auto exp_avg_addr_gen = TensorAccessor(exp_avg_args, exp_avg_addr, tile_size_bytes);
+    const auto exp_avg_sq_addr_gen = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr, tile_size_bytes);
+    const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr, tile_size_bytes);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
@@ -49,20 +49,20 @@ void kernel_main() {
         uint32_t current_block_size = std::min(block_size, tiles_left);
 
         read_tiles_by_row</* UseBarrier = */ false>(
-            cb_param_idx, param_addr_gen, tile_idx, current_block_size, fp32_tile_size_bytes, block_size);
+            cb_param_idx, param_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
         read_tiles_by_row</* UseBarrier = */ false>(
-            cb_grad_idx, grad_addr_gen, tile_idx, current_block_size, bf16_tile_size_bytes, block_size);
+            cb_grad_idx, grad_addr_gen, tile_idx, current_block_size, grad_tile_size_bytes, block_size);
         read_tiles_by_row</* UseBarrier = */ false>(
-            cb_exp_avg_idx, exp_avg_addr_gen, tile_idx, current_block_size, fp32_tile_size_bytes, block_size);
+            cb_exp_avg_idx, exp_avg_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
         read_tiles_by_row</* UseBarrier = */ false>(
-            cb_exp_avg_sq_idx, exp_avg_sq_addr_gen, tile_idx, current_block_size, fp32_tile_size_bytes, block_size);
+            cb_exp_avg_sq_idx, exp_avg_sq_addr_gen, tile_idx, current_block_size, tile_size_bytes, block_size);
 #if AMSGRAD
         read_tiles_by_row</* UseBarrier = */ false>(
             cb_max_exp_avg_sq_in_idx,
             max_exp_avg_sq_addr_gen,
             tile_idx,
             current_block_size,
-            fp32_tile_size_bytes,
+            tile_size_bytes,
             block_size);
 #endif
         noc_async_read_barrier();

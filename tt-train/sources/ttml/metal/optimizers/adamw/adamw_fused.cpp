@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "adamw_fused.hpp"
 
-#include "device/adamw_fused_device_operation.hpp"
+#include "device/adamw_device_operation.hpp"
 
 namespace ttml::metal {
 
@@ -23,7 +23,7 @@ ttnn::Tensor adamw_fused(
     const float weight_decay,
     const bool stochastic_rounding,
     const uint32_t step) {
-    return ttnn::prim::ttml_adamw_fused(
+    return ttnn::prim::ttml_adamw(
         param_in,
         grad,
         exp_avg,
