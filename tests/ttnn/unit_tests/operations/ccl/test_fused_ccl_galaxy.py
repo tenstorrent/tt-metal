@@ -479,30 +479,17 @@ def run_all_gather_matmul_galaxy_impl(
 @pytest.mark.parametrize(
     "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
-        # ==================== Llama 70B FF2 dimensions for Galaxy ====================
-        # FF2 path: Input from FF1 output (hidden_dim) -> w2 -> output (dim)
-        # Galaxy 70B: hidden_dim=28672, dim=8192
-        # K (AG input) = hidden_dim/4 = 7168 per device (gathered to 28672)
-        # N (output) = dim = 8192
-        # Galaxy 70B decode (M=32)
-        (32, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # Galaxy 70B prefill (M=128)
-        (128, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # ==================== Scaled dimensions ====================
-        # Scaled: hidden_dim=14336, dim=4096
-        (32, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        (128, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # ==================== Smaller test dimensions ====================
-        (32, 2048, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        (128, 2048, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # ==================== Actual Galaxy Model FF2 dimensions ====================
+        # From model_config.py: K=3584 (hidden_dim/4 gathered), N=2304 (dim/4)
+        # These are the EXACT dimensions used in llama_mlp.py lines 163-185 (decode)
+        # Galaxy decode (M=32)
+        (32, 3584, 2304, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # Galaxy decode with different M
+        (32, 3584, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "llama70b_ff2_decode_32",
-        "llama70b_ff2_prefill_128",
-        "scaled_ff2_decode_32",
-        "scaled_ff2_prefill_128",
-        "small_ff2_decode_32",
-        "small_ff2_prefill_128",
+        "model_ff2_decode_K3584_N2304",
+        "model_ff2_decode_K3584_N2048",
     ],
 )
 @pytest.mark.parametrize("num_links", [3])
@@ -565,20 +552,18 @@ def test_all_gather_matmul_galaxy_check(
 @pytest.mark.parametrize(
     "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
-        # ==================== Llama 70B FF2 dimensions for Galaxy ====================
-        # Galaxy 70B decode (M=32)
-        (32, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # Galaxy 70B prefill (M=128)
-        (128, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # ==================== Scaled dimensions ====================
-        (32, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        (128, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # ==================== Actual Galaxy Model FF2 dimensions ====================
+        # From model_config.py: K=3584 (hidden_dim/4 gathered), N=2304 (dim/4)
+        # These are the EXACT dimensions used in llama_mlp.py lines 163-185 (decode)
+        # This test compares: line_all_gather + ttnn.linear vs llama_all_gather_matmul_async
+        # Galaxy decode (M=32) - actual model dimension
+        (32, 3584, 2304, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # Alternative N dimension
+        (32, 3584, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "llama70b_ff2_decode_32",
-        "llama70b_ff2_prefill_128",
-        "scaled_ff2_decode_32",
-        "scaled_ff2_prefill_128",
+        "model_ff2_decode_K3584_N2304",
+        "model_ff2_decode_K3584_N2048",
     ],
 )
 @pytest.mark.parametrize("num_links", [3])
