@@ -120,11 +120,14 @@ tiles is ``9 * 9 = 81``. If we choose to implement the matrix multiplication on 
 needed for other tasks), then each core will be responsible for producing ``81 / 11 = 7.36`` output tiles.
 Since the number of output tiles must be an integer, we will round this up to ``8`` output tiles per core.
 As a result, ``10`` cores are assigned ``8`` output tiles each, and the ``11``th core processes the remaining one tile.
-The diagram below shows how the output tiles are distributed among the cores. Each square represents a tile, and the
+The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
 color of the square corresponds to the core that is responsible for producing that tile.
 
 .. figure:: ../../../../../common/images/matmul-spmd-core-works-distribution.webp
    :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD (Each color represents a different core)
+   :align: center
+
+   Figure 2: Output Tile Distribution for Matrix Multiplication on Multiple Cores under SPMD
 
 TT-Metalium includes utilities to simplify work distribution across cores.
 This is done in two steps:
@@ -344,10 +347,62 @@ Blocked Matrix Multiplication
 =============================
 
 Instead of considering one row at a time, a more general approach is to group output tiles into
-rectangular blocks. This may seem counterintuitive at first; if a single row of A
-doesn't fit into on-chip SRAM, then multiple rows needed to compute a single block would not fit either.
-The solution is to compute partial results, which require only a subset of the input tiles that is small
-enough to fit into on-chip SRAM.
+rectangular blocks and assign such rectangular blocks to cores. for example, consider Core 1 in Figure 2.
+Core 1 needs the first row of ``A`` and the last column of ``B`` to compute the output tile in the top right
+corner of the output, ond only for that tile. Therefore, this data cannot be reused for any other computation.
+If we distribute work across 9 cores instead, such that each core computes ``3x3`` output tiles, then each core
+can reuse a row of ``A`` to produce output of three tiles in the same row of the output. Similarly, each core
+can reuse a column of ``B`` to produce output of three tiles in the same column of the output.
+this is hown in Figure 3.
+
+       +----+----+----+----+----+----+----+----+----+
+       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
+       +----+----+----+----+----+----+----+----+----+
+       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
+       +----+----+----+----+----+----+----+----+----+
+       | C0 | C0 | C0 | C1 | C1 | C1 | C2 | C2 | C2 |
+       +----+----+----+----+----+----+----+----+----+
+       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
+       +----+----+----+----+----+----+----+----+----+
+       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
+       +----+----+----+----+----+----+----+----+----+
+       | C3 | C3 | C3 | C4 | C4 | C4 | C5 | C5 | C5 |
+       +----+----+----+----+----+----+----+----+----+
+       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
+       +----+----+----+----+----+----+----+----+----+
+       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
+       +----+----+----+----+----+----+----+----+----+
+       | C6 | C6 | C6 | C7 | C7 | C7 | C8 | C8 | C8 |
+       +----+----+----+----+----+----+----+----+----+
+
+.. figure:: ../../../../../common/images/matmul-blocked-core-works-distribution.webp
+   :alt: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked (Each color represents a different core)
+   :align: center
+
+   Figure 3: Output Tile Distribution for Matrix Multiplication on Multiple Cores under Blocked
+
+Observe that there is no data reuse across cores; each core still needs to read input data for its own
+block of output tiles, some of which is the same as the data read by other cores.
+Also observe that this approach requires number of tiles to be a multiple of the number of cores in each dimension.
+
+Comparing Figure 3 to Figure 2, we went from using 11 cores to using 9 cores.
+This may be beneficial if the program is memory-bound, because performance benefit from data reuse
+may be far greater than any performance loss from having fewer cores for compute.
+Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores in each dimension.
+
+If the program is compute-bound, we may choose to:
+
+  * Not use blocking if lower number of cores causes performance degradation because data reuse
+    is not beneficial.
+  * Add more cores across one or both dimensions of the core grid, if higher number of cores
+    is available and will divide the number of tiles evenly.
+
+Assigning rectangular blocks to output tiles doesn't resolve the problem that bringing e.g.
+entire row of A into on-chip SRAM is not possible because of limited on-chip memory.
+In fact, for data reuse to be fully effective with blocking, we need multiple rows of tiles
+of input in on-chip memory. The solution is to break down the ``K`` dimension into smaller chunks
+of tiles and compute partial results for each chunk, which require only a subset of the input
+tiles that is small enough to fit into on-chip SRAM.
 Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
 avoid performance degradation due to repeated writes and reads to off-chip DRAM.
 
