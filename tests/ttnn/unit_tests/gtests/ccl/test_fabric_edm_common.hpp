@@ -190,7 +190,7 @@ public:
     }
 };
 
-class MeshFabric1DFixture final : public BaseFabricFixture {
+class MeshFabric1DFixture : public BaseFabricFixture {
 public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
