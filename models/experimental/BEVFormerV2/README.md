@@ -3,7 +3,6 @@
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![Supported Device](https://img.shields.io/badge/device-Wormhole%20(n150)-blue)
 ![Precision](https://img.shields.io/badge/precision-BF16-green)
-![Input Resolution](https://img.shields.io/badge/input-Multi-view%20(6%20cameras)-lightgrey)
 ![Status](https://img.shields.io/badge/status-Stable-brightgreen)
 
 ---
