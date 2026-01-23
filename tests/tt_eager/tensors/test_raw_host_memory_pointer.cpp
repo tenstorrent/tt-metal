@@ -137,8 +137,7 @@ void test_raw_host_memory_pointer() {
 
     HostBuffer alternative_tensor_for_printing_buffer(
         tt::stl::Span<bfloat16>(
-            static_cast<bfloat16*>(static_cast<void*>(storage_of_alternative_tensor_for_printing.get())),
-            shape.volume()),
+            reinterpret_cast<bfloat16*>(storage_of_alternative_tensor_for_printing.get()), shape.volume()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
 
     Tensor alternative_tensor_for_printing =
