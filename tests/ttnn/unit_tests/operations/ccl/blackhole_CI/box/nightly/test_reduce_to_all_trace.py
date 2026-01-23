@@ -130,7 +130,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     tile = ttnn.Tile((8, 32))
 
     # mux cores
-    mux_cores = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 3)]
+    mux_cores = [ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6), ttnn.CoreCoord(2, 6), ttnn.CoreCoord(3, 6)]
 
     # results in better perf compared to automating the generation of worker cores (other than data cores)
     extra_worker_cores = [
@@ -147,8 +147,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(3, 4)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(3, 5)),
         }
     )
     shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)

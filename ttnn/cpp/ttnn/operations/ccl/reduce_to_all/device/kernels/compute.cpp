@@ -52,17 +52,38 @@
 #include "compute_kernel_api/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
-struct OutputCBs {
-    uint32_t l_cb;
-    uint32_t s_cb;
-    uint32_t m_cb;
-};
+/**
+ * out_cb = in0_cb * in1_cb
+ * DOES NOT POP in0_cb (supports shared consumption)
+ * POPS in1_cb (temp)
+ */
+inline void mul_block_bcast_cols_no_pop_in0(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+    uint32_t num_tiles = rows * cols;
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, rows);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            acquire_dst();
+            uint32_t in0_index = i * cols + j;
+            mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, 0);
+            cb_reserve_back(out_cb, 1);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst();
+        }
+    }
+    cb_pop_front(in1_cb, rows);
+}
 
 // Perform SDPA reduction of two (l, s, m) tuples
+// PRECONDITION: All input CBs must have data available (caller handles waits)
 // Returns CB IDs containing the results (may be temp CBs)
-template <uint32_t scale_fp32>
-inline OutputCBs sdpa_reduce(
+template <uint32_t scale_fp32, bool pop_input1 = true>
+inline void sdpa_reduce(
     uint32_t cb_l1,       // l1 input (local)
     uint32_t cb_s1,       // s1 input (local)
     uint32_t cb_m1,       // m1 input (local)
@@ -71,65 +92,70 @@ inline OutputCBs sdpa_reduce(
     uint32_t cb_m2,       // m2 input (neighbor)
     uint32_t cb_exp_p1,   // temp for exp((m1-m)*scale)
     uint32_t cb_exp_p2,   // temp for exp((m2-m)*scale)
-    uint32_t cb_m_temp,   // temp for max result
-    uint32_t cb_s1_temp,  // temp for s1
+    uint32_t cb_m_temp,   // temp for max result (OUTPUT: m)
+    uint32_t cb_s1_temp,  // temp for s1 (OUTPUT: s)
     uint32_t cb_s2_temp,  // temp for s2
-    uint32_t cb_l1_temp,  // temp for l1
+    uint32_t cb_l1_temp,  // temp for l1 (OUTPUT: l)
     uint32_t cb_l2_temp,  // temp for l2
     uint32_t Sq_chunk_t,
     uint32_t vDHt) {
     constexpr int mode = VectorMode::R;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
-    // Wait for all inputs
-    cb_wait_front(cb_l1, out_tiles);
-    cb_wait_front(cb_l2, out_tiles);
-    cb_wait_front(cb_s1, Sq_chunk_t);
-    cb_wait_front(cb_s2, Sq_chunk_t);
-    cb_wait_front(cb_m1, Sq_chunk_t);
-    cb_wait_front(cb_m2, Sq_chunk_t);
-
     // Move s values to temp CBs (they get modified in-place)
-    move_block<false>(cb_s1, cb_s1_temp, Sq_chunk_t);
-    move_block<false>(cb_s2, cb_s2_temp, Sq_chunk_t);
+    {
+        DeviceZoneScopedN("SDPA-REDUCE-MOVE-S-TEMP");
+        move_block<false>(cb_s1, cb_s1_temp, Sq_chunk_t);
+        move_block<false>(cb_s2, cb_s2_temp, Sq_chunk_t);
+    }
 
-    // m = max(m1, m2)
-    max_block<mode>(cb_m1, cb_m2, cb_m_temp, Sq_chunk_t);
+    {
+        DeviceZoneScopedN("SDPA-REDUCE-COMPUTE-MAX");
+        // m = max(m1, m2)
+        max_block<mode>(cb_m1, cb_m2, cb_m_temp, Sq_chunk_t);
+    }
 
-    // P1 = exp((m1 - m) * scale)
-    sub_exp_block<scale_fp32, mode>(cb_m1, cb_m_temp, cb_exp_p1, Sq_chunk_t);
+    {
+        DeviceZoneScopedN("SDPA-REDUCE-COMPUTE-SCALE-EXP");
+        // P1 = exp((m1 - m) * scale)
+        sub_exp_block<scale_fp32, mode>(cb_m1, cb_m_temp, cb_exp_p1, Sq_chunk_t);
 
-    // P2 = exp((m2 - m) * scale)
-    sub_exp_block<scale_fp32, mode>(cb_m2, cb_m_temp, cb_exp_p2, Sq_chunk_t);
+        // P2 = exp((m2 - m) * scale)
+        sub_exp_block<scale_fp32, mode>(cb_m2, cb_m_temp, cb_exp_p2, Sq_chunk_t);
 
-    // s1 = s1 * P1
-    mul_block_inplace(cb_s1_temp, cb_exp_p1, Sq_chunk_t);
+        // s1 = s1 * P1
+        mul_block_inplace(cb_s1_temp, cb_exp_p1, Sq_chunk_t);
 
-    // s2 = s2 * P2
-    mul_block_inplace(cb_s2_temp, cb_exp_p2, Sq_chunk_t);
+        // s2 = s2 * P2
+        mul_block_inplace(cb_s2_temp, cb_exp_p2, Sq_chunk_t);
 
-    // s = s1 * P1 + s2 * P2
-    add_block_inplace<true>(cb_s1_temp, cb_s2_temp, Sq_chunk_t);
+        // s = s1 * P1 + s2 * P2
+        add_block_inplace<true>(cb_s1_temp, cb_s2_temp, Sq_chunk_t);
+    }
 
-    // l1 = l1 * P1 (broadcast P1 across columns)
-    mul_block_bcast_cols(cb_l1, cb_exp_p1, cb_l1_temp, Sq_chunk_t, vDHt);
+    {
+        DeviceZoneScopedN("SDPA-REDUCE-COMPUTE-L");
+        // l1 = l1 * P1 (broadcast P1 across columns)
+        mul_block_bcast_cols_no_pop_in0(cb_l1, cb_exp_p1, cb_l1_temp, Sq_chunk_t, vDHt);
 
-    // l2 = l2 * P2 (broadcast P2 across columns)
-    mul_block_bcast_cols(cb_l2, cb_exp_p2, cb_l2_temp, Sq_chunk_t, vDHt);
+        // l2 = l2 * P2 (broadcast P2 across columns)
+        mul_block_bcast_cols(cb_l2, cb_exp_p2, cb_l2_temp, Sq_chunk_t, vDHt);
 
-    // l = l1 * P1 + l2 * P2
-    add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_tiles);
+        // l = l1 * P1 + l2 * P2
+        add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_tiles);
+    }
 
-    // Pop input CBs
-    cb_pop_front(cb_l1, out_tiles);
-    cb_pop_front(cb_l2, out_tiles);
-    cb_pop_front(cb_s1, Sq_chunk_t);
-    cb_pop_front(cb_s2, Sq_chunk_t);
-    cb_pop_front(cb_m1, Sq_chunk_t);
-    cb_pop_front(cb_m2, Sq_chunk_t);
+    // // Pop input CBs
+    // if constexpr (pop_input1) {
+    //     cb_pop_front(cb_l1, out_tiles);
+    //     cb_pop_front(cb_s1, Sq_chunk_t);
+    //     cb_pop_front(cb_m1, Sq_chunk_t);
+    // }
+    // // cb_l2 is popped by mul_block_bcast_cols
+    // cb_pop_front(cb_s2, Sq_chunk_t);
+    // cb_pop_front(cb_m2, Sq_chunk_t);
 
-    // Results are in temp CBs: l=cb_l1_temp, s=cb_s1_temp, m=cb_m_temp
-    return {cb_l1_temp, cb_s1_temp, cb_m_temp};
+    // Results are in: l=cb_l1_temp, s=cb_s1_temp, m=cb_m_temp
 }
 
 namespace NAMESPACE {
@@ -174,6 +200,7 @@ constexpr uint32_t cb_s_out = get_compile_time_arg_val(19);    // s result → A
 constexpr uint32_t scale_fp32 = get_compile_time_arg_val(20);
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(21);
 constexpr uint32_t vDHt = get_compile_time_arg_val(22);
+constexpr uint32_t cb_sync = get_compile_time_arg_val(23);
 
 void MAIN {
     // ==========================================================================
@@ -204,39 +231,49 @@ void MAIN {
     // =========================================================================
     // ROUND 1: reduce(local, r1_neighbor) → r1_result
     // =========================================================================
-    // Note: sdpa_reduce writes results to temp CBs.
-    // We then copy to r1_result CBs for the writer to send.
+    // OPTIMIZATION: Output directly to cb_r1_result_* CBs.
+    // Both writer and compute just READ from these CBs (no conflict).
+    // R2 uses different output CBs, so no read/write aliasing.
 
-    OutputCBs r1_output = sdpa_reduce<scale_fp32>(
-        cb_local_l,
-        cb_local_s,
-        cb_local_m,  // local (input 1)
-        cb_r1_neighbor_l,
-        cb_r1_neighbor_s,
-        cb_r1_neighbor_m,  // neighbor (input 2)
-        cb_exp_p1,
-        cb_exp_p2,  // temp for P1, P2
-        cb_m_out,
-        cb_s1_temp,
-        cb_s2_temp,  // temp: m→cb_m_out, s1→cb_s1_temp
-        cb_l_out,
-        cb_l2_temp,  // temp: l→cb_l_out
-        Sq_chunk_t,
-        vDHt);
+    // Wait for local inputs (should be fast - data already available)
+    cb_wait_front(cb_local_l, out_tiles);
+    cb_wait_front(cb_local_s, Sq_chunk_t);
+    cb_wait_front(cb_local_m, Sq_chunk_t);
 
-    // sdpa_reduce returns {cb_l_out, cb_s1_temp, cb_m_out}
-    // Move R1 results to r1_result CBs (writer needs these for R2 send)
-    cb_reserve_back(cb_r1_result_l, out_tiles);
-    cb_reserve_back(cb_r1_result_s, Sq_chunk_t);
-    cb_reserve_back(cb_r1_result_m, Sq_chunk_t);
+    // Wait for R1 neighbor data (this is the fabric latency!)
+    {
+        DeviceZoneScopedN("COMPUTE-R1-FABRIC-WAIT");
+        cb_wait_front(cb_r1_neighbor_l, out_tiles);
+        cb_wait_front(cb_r1_neighbor_s, Sq_chunk_t);
+        cb_wait_front(cb_r1_neighbor_m, Sq_chunk_t);
+    }
 
-    move_block<true>(r1_output.l_cb, cb_r1_result_l, out_tiles);
-    move_block<true>(r1_output.s_cb, cb_r1_result_s, Sq_chunk_t);
-    move_block<true>(r1_output.m_cb, cb_r1_result_m, Sq_chunk_t);
+    {
+        DeviceZoneScopedN("R1-SDPA-REDUCE");
+        sdpa_reduce<scale_fp32>(
+            cb_local_l,
+            cb_local_s,
+            cb_local_m,  // local (input 1)
+            cb_r1_neighbor_l,
+            cb_r1_neighbor_s,
+            cb_r1_neighbor_m,  // neighbor (input 2)
+            cb_exp_p1,
+            cb_exp_p2,       // temp for P1, P2
+            cb_r1_result_m,  // M output → directly to r1_result_m
+            cb_r1_result_s,  // S output → directly to r1_result_s
+            cb_s2_temp,      // S2 temp
+            cb_r1_result_l,  // L output → directly to r1_result_l
+            cb_l2_temp,      // L2 temp
+            Sq_chunk_t,
+            vDHt);
 
-    cb_push_back(cb_r1_result_l, out_tiles);
-    cb_push_back(cb_r1_result_s, Sq_chunk_t);
-    cb_push_back(cb_r1_result_m, Sq_chunk_t);
+        // Signal Writer that R1 is done and data in cb_r1_result is safe to read
+        // Writer waits on this CB before reading r1_result
+        cb_reserve_back(cb_sync, 1);
+        cb_push_back(cb_sync, 1);
+        DPRINT << "compute signaled writer that R1 is done" << ENDL();
+    }
+    // Results are now in cb_r1_result_l/s/m - no copy needed!
 
     // =========================================================================
     // ROUND 2: reduce(r1_result, r2_neighbor) → output (in aliased CBs!)
@@ -244,42 +281,61 @@ void MAIN {
     // The output CBs (cb_l_out, cb_m_out, cb_s_out) are aliased to output tensor shards.
     // After this reduction + normalization, the final values are at their output addresses!
 
-    OutputCBs r2_output = sdpa_reduce<scale_fp32>(
-        cb_r1_result_l,
-        cb_r1_result_s,
-        cb_r1_result_m,  // R1 result = R2 local
-        cb_r2_neighbor_l,
-        cb_r2_neighbor_s,
-        cb_r2_neighbor_m,  // R2 neighbor
-        cb_exp_p1,
-        cb_exp_p2,  // temp (reuse from R1)
-        cb_m_out,
-        cb_s1_temp,
-        cb_s2_temp,  // m→cb_m_out (ALIASED!), s1→cb_s1_temp
-        cb_l_out,
-        cb_l2_temp,  // l→cb_l_out (ALIASED!)
-        Sq_chunk_t,
-        vDHt);
+    // Wait for R1 result (local input for R2) - should be immediate since we just produced it
+    cb_wait_front(cb_r1_result_l, out_tiles);
+    cb_wait_front(cb_r1_result_s, Sq_chunk_t);
+    cb_wait_front(cb_r1_result_m, Sq_chunk_t);
 
-    // r2_output = {cb_l_out, cb_s1_temp, cb_m_out}
+    // Wait for R2 neighbor data (this is the fabric latency!)
+    {
+        DeviceZoneScopedN("COMPUTE-R2-FABRIC-WAIT");
+        cb_wait_front(cb_r2_neighbor_l, out_tiles);
+        cb_wait_front(cb_r2_neighbor_s, Sq_chunk_t);
+        cb_wait_front(cb_r2_neighbor_m, Sq_chunk_t);
+    }
+
+    {
+        DeviceZoneScopedN("R2-SDPA-REDUCE");
+        sdpa_reduce<scale_fp32, false>(
+            cb_r1_result_l,
+            cb_r1_result_s,
+            cb_r1_result_m,  // R1 result = R2 local
+            cb_r2_neighbor_l,
+            cb_r2_neighbor_s,
+            cb_r2_neighbor_m,  // R2 neighbor
+            cb_exp_p1,
+            cb_exp_p2,  // temp (reuse from R1)
+            cb_m_out,
+            cb_s1_temp,
+            cb_s2_temp,  // m→cb_m_out (ALIASED!), s1→cb_s1_temp
+            cb_l_out,    // l→cb_l_out (ALIASED!)
+            cb_l2_temp,  // l2 intermediate
+            Sq_chunk_t,
+            vDHt);
+    }
+
+    // R2 results are in: l=cb_l_out, s=cb_s1_temp, m=cb_m_out
     // cb_l_out and cb_m_out are already aliased to output tensor!
     // cb_s1_temp contains final S - need to copy to cb_s_out (which is aliased to output_s)
 
     // =========================================================================
     // Final normalization: l = l / s
     // =========================================================================
-    // First, copy S to output (cb_s_out is aliased to output_s)
-    move_block<false>(r2_output.s_cb, cb_s_out, Sq_chunk_t);
+    {
+        DeviceZoneScopedN("FINAL-NORMALIZE");
+        // First, copy S to output (cb_s_out is aliased to output_s)
+        move_block<false>(cb_s1_temp, cb_s_out, Sq_chunk_t);
 
-    // Compute 1/s in a separate temp (reuse cb_s2_temp since we're done with it)
-    move_block<false>(cb_s_out, cb_s2_temp, Sq_chunk_t);
-    recip_block_inplace<vector_mode>(cb_s2_temp, Sq_chunk_t);
+        // Compute 1/s in a separate temp (reuse cb_s2_temp since we're done with it)
+        move_block<false>(cb_s_out, cb_s2_temp, Sq_chunk_t);
+        recip_block_inplace<vector_mode>(cb_s2_temp, Sq_chunk_t);
 
-    // l = l * (1/s) - broadcast 1/s across columns
-    // r2_output.l_cb is cb_l_out, which is aliased to output_l
-    // After this, output_l has the normalized final result!
-    mul_block_bcast_cols_inplace(r2_output.l_cb, cb_s2_temp, Sq_chunk_t, vDHt);
-
+        // l = l * (1/s) - broadcast 1/s across columns
+        // cb_l_out is aliased to output_l
+        // After this, output_l has the normalized final result!
+        mul_block_bcast_cols_inplace(cb_l_out, cb_s2_temp, Sq_chunk_t, vDHt);
+    }
+    DPRINT << "compute finished final normalize" << ENDL();
     // =========================================================================
     // Output is now in place!
     // =========================================================================
