@@ -471,8 +471,25 @@ class TT_CCL:
         # K_per_device = K / cluster_shape[cluster_axis] = 3584 / 4 = 896
         gathered_width = 3584 if not self.is_qwen else 3200  # This is K, the full gathered dim
 
-        # Use DRAM for intermediate buffer to avoid L1 sharding conflicts
-        intermediate_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        # Fused all_gather_matmul requires WIDTH_SHARDED L1 intermediate buffer
+        # Use cores (3,0) to (3,3) matching the unit test configuration
+        intermediate_num_cores = cluster_shape[cluster_axis]  # 4 cores
+        intermediate_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, intermediate_num_cores - 1))]
+        )
+
+        # Shard width = gathered_width / num_cores, rounded up to tile size
+        shard_width = ((gathered_width + intermediate_num_cores - 1) // intermediate_num_cores + 31) // 32 * 32
+
+        intermediate_mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_core_range_set,
+                [M, shard_width],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         for _ in range(self.num_cbs):
             tt_buffer = ttnn.from_torch(
