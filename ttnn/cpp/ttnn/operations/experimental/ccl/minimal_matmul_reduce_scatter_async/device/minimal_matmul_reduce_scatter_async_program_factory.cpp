@@ -107,7 +107,8 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
+        ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler(
+            ttnn::experimental::ccl::MatmulFusedOpSignalerType::REDUCE_SCATTER);
 
     matmul_fused_op_signaler->init_reduce_scatter(
         reduce_scatter_fused_op_signaler->fused_op_receiver_cores_noc,

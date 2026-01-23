@@ -124,6 +124,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     auto grid_size =
         config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    const auto& cores_list = grid_to_cores(core_grid.start_coord, core_grid.end_coord, true);
+
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
@@ -328,12 +330,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     }
 
     if (fuse_op) {
-        // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
-        defines["FUSE_AG"] = "1";
-        if (fused_op_signaler->read_local_slice_from_input) {
-            in0_injector_defines = defines;
-            in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+        if (fused_op_signaler->is_all_gather()) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
+            defines["FUSE_AG"] = "1";
+            if (fused_op_signaler->read_local_slice_from_input) {
+                in0_injector_defines = defines;
+                in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+            }
+        } else if (fused_op_signaler->is_reduce_scatter()) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, core_grid);
+            defines["FUSE_RS"] = "1";
         }
     }
 

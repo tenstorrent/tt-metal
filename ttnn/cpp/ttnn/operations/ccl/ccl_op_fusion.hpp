@@ -267,6 +267,8 @@ struct MatmulFusedOpSignaler {
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MinimalMatmulFusedOpSignaler {
+    MatmulFusedOpSignalerType fused_op_type = MatmulFusedOpSignalerType::EMPTY;
+
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
@@ -285,7 +287,7 @@ struct MinimalMatmulFusedOpSignaler {
     bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
 
-    MinimalMatmulFusedOpSignaler() = default;
+    MinimalMatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) : fused_op_type(signaler_type) {}
 
     void init_all_gather(
         uint32_t ring_size,
@@ -308,6 +310,9 @@ struct MinimalMatmulFusedOpSignaler {
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
+
+    bool is_all_gather() const;
+    bool is_reduce_scatter() const;
 };
 
 }  // namespace ttnn::experimental::ccl

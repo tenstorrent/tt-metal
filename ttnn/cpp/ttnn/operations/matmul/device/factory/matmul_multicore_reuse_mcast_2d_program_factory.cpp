@@ -225,6 +225,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    log_info(tt::LogOp, "All cores with work = {}, all_cores = {}, cores = {}", all_cores_with_work, all_cores, cores);
+
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -289,6 +291,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     CoreRangeSet in0_receiver_interleaved(in0_receiver_interleaved_set);
     CoreRangeSet in1_receiver(in1_receiver_set);
 
+    log_info(
+        tt::LogOp,
+        "in0_sender_interleaved = {}, in1_sender = {} in0_receiver_interleaved = {} in1_receiver = {}",
+        in0_sender_interleaved,
+        in1_sender,
+        in0_receiver_interleaved,
+        in1_receiver);
     std::optional<CoreRange> in0_receiver_in1_receiver_interleaved_other_cores;
     if (split_half) {
         in0_receiver_in1_receiver_interleaved_other_cores = {

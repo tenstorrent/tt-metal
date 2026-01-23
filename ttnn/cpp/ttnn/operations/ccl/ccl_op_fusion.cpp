@@ -539,4 +539,11 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
 
+bool MinimalMatmulFusedOpSignaler::is_reduce_scatter() const {
+    return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER;
+}
+bool MinimalMatmulFusedOpSignaler::is_all_gather() const {
+    return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER;
+}
+
 }  // namespace ttnn::experimental::ccl
