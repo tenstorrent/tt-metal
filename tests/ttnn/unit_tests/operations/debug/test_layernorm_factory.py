@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import numpy as np
 from loguru import logger
 
 from models.common.utility_functions import skip_for_blackhole
