@@ -54,8 +54,6 @@ constexpr auto kGradQueryCbIndex = tt::CBIndex::c_13;
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
-
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -297,10 +295,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
-    }
-
     SDPABackwardQKernels kernels;
 
     // Reader compile-time arguments
@@ -355,7 +349,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
@@ -378,7 +372,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,

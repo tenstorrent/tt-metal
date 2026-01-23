@@ -43,7 +43,6 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
-    const bool fp32_dest_acc_en = true,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
 
 }  // namespace ttnn::prim

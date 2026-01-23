@@ -22,12 +22,6 @@
 
 constexpr uint32_t onetile = 1U;
 
-#ifdef FP32_DEST_ACC_EN
-constexpr uint32_t dst_reg_number = 4U;
-#else
-constexpr uint32_t dst_reg_number = 8U;
-#endif
-
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
 // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
