@@ -106,6 +106,7 @@ class TtConv:
         act_blocks=32,
         enable_act_double_buffer=True,
         reshard_if_not_optimal=False,
+        enable_weights_double_buffer=False,
         batch_size=1,
     ):
         self.device = device
@@ -126,6 +127,7 @@ class TtConv:
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
         self.reshard_if_not_optimal = reshard_if_not_optimal
+        self.enable_weights_double_buffer = enable_weights_double_buffer
         self.batch_size = batch_size
 
         self.conv_config = self._initialize_conv_config()
@@ -142,6 +144,7 @@ class TtConv:
             transpose_shards=False,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_weights_double_buffer=self.enable_weights_double_buffer,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -150,14 +153,18 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        if self.change_shard:
-            conv_config.shard_layout = None
+        # if self.change_shard:
+        #    conv_config.shard_layout = None
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
 
         if self.block_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            # Enable weights double buffering for block-sharded layers for better performance
+            if not self.enable_weights_double_buffer:
+                self.enable_weights_double_buffer = True
+                conv_config.enable_weights_double_buffer = True
 
         if self.width_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -569,7 +576,8 @@ class TtDetectionModel:
             parameters,
             "model.0",
             input_params=conv_config["input_params"][0],
-            act_block_h=False,
+            act_block_h=True,
+            act_blocks=64,
             deallocate_activation=True,
         )
         self.conv_1 = TtConv(
@@ -593,7 +601,7 @@ class TtDetectionModel:
             parameters,
             "model.3",
             input_params=conv_config["input_params"][2],
-            deallocate_activation=False,
+            deallocate_activation=True,
         )
         self.c2f_4 = TtC2f(
             device,
@@ -613,6 +621,7 @@ class TtDetectionModel:
             block_shard=True,
             change_shard=True,
             input_params=c2f_configs["model.6"]["input_params"],
+            act_block_h=True,
         )
         self.conv_7 = TtConv(
             device,
@@ -620,7 +629,6 @@ class TtDetectionModel:
             "model.7",
             input_params=conv_config["input_params"][3],
             block_shard=True,
-            reshard_if_not_optimal=False,
         )
         self.c2f_8 = TtC2f(
             device,
@@ -631,6 +639,7 @@ class TtDetectionModel:
             change_shard=True,
             block_shard=True,
             input_params=c2f_configs["model.8"]["input_params"],
+            act_block_h=True,
         )
         self.sppf_9 = TtSppf(
             device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
@@ -644,6 +653,7 @@ class TtDetectionModel:
             bfloat8=True,
             block_shard=True,
             input_params=c2f_configs["model.12"]["input_params"],
+            act_block_h=True,
         )
         self.c2f_15 = TtC2f(
             device,
@@ -676,6 +686,7 @@ class TtDetectionModel:
             input_params=c2f_configs["model.21"]["input_params"],
             block_shard=True,
             change_shard=False,
+            act_block_h=True,
         )
         self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
 
@@ -688,7 +699,8 @@ class TtDetectionModel:
         else:
             nchw = x
         nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
-        ttnn.deallocate(nchw)
+        if nchw is not x:
+            ttnn.deallocate(nchw)
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)
         x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
