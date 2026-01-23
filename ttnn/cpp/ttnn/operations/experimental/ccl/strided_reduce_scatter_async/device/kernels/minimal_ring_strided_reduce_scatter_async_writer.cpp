@@ -246,14 +246,13 @@ void kernel_main() {
 
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "batch element: " << b << " " << ENDL();
-            for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-                uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
-                uint32_t output_row_offset = input_row_offset / ring_size;
-
-                for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
-                    int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-                    for (uint32_t i = 0; i < ring_size; i++) {
-                        DPRINT << "Next ring element: " << i << " " << ENDL();
+            for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+                for (uint32_t i = 0; i < ring_size; i++) {
+                    DPRINT << "Next ring element: " << i << " " << ENDL();
+                    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+                        uint32_t input_row_offset = start_row_offset + (m_block_iter * mm_block_ht);
+                        uint32_t output_row_offset = input_row_offset / ring_size;
                         uint32_t actual_slice_idx;
                         if (direction) {
                             actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
@@ -342,14 +341,12 @@ void kernel_main() {
                             slice_idx++;
                         }
                     }
-                    // Reset the global semaphore before the round
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
                 }
+                // Reset the global semaphore before the round
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
             }
         }
-
         noc_async_write_barrier();
         noc_async_atomic_barrier();
 
