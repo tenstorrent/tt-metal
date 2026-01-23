@@ -755,6 +755,7 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
 
 namespace experimental::quasar {
 
+// Returns the DM processor type (DM0-DM7) for the binary at the given index.
 uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return enchantum::to_underlying(this->dm_cores_[index]);
