@@ -273,6 +273,7 @@ class Generator:
         model_id_warmup=None,
         start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
+        warmup_prefill=True,
         **kwargs,
     ):
         self.mode = "prefill"
@@ -283,7 +284,8 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        if warmup_prefill:
+            self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
