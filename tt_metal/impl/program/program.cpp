@@ -86,7 +86,6 @@ namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal {
-class HWCommandQueue;
 class EnqueueProgramCommand;
 namespace experimental {
 class GlobalCircularBuffer;
