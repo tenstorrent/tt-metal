@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Custom preprocessors for PCC tests.
+"""
+
 from models.experimental.BEVFormerV2.reference.resnet import ResNet
 from models.experimental.BEVFormerV2.reference.fpn import FPN
 from models.experimental.BEVFormerV2.reference.encoder import BEVFormerEncoder
