@@ -61,7 +61,7 @@ void kernel_main() {
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
         receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, receiver_socket.upstream_bytes_acked_addr);
 
-    for (int i = 0; i < 1000000; i++) {
+    for (int i = 0; i < 5000000; i++) {
         auto noc_write_addr = output_addr_gen.get_noc_addr(0);
         socket_wait_for_pages(receiver_socket, 1);
         // uint32_t l1_read_addr = receiver_socket.read_ptr;
