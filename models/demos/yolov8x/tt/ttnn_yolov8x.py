@@ -109,8 +109,8 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        if self.change_shard:
-            conv_config.shard_layout = None
+        #  if self.change_shard:
+        #     conv_config.shard_layout = None
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
