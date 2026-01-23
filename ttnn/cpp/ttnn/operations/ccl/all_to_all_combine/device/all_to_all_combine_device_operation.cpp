@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -63,7 +64,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto experts = mapping_shape[2];
 
     TT_FATAL(
-        experts % mesh_rows * mesh_cols == 0,
+        experts % (mesh_rows * mesh_cols) == 0,
         "Experts {} must be evenly divisible by devices",
         experts,
         mesh_rows * mesh_cols);
@@ -158,8 +159,11 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
 AllToAllCombineDeviceOperation::tensor_return_value_t AllToAllCombineDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return tensor_args.optional_output_tensor.value_or(
+    auto output_tensor = tensor_args.optional_output_tensor.value_or(
         create_device_tensor(output_spec, tensor_args.input_tensor.device()));
+    output_tensor = ttnn::zeros_like(
+        output_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::optional<Tensor>(output_tensor));
+    return output_tensor;
 }
 
 }  // namespace ttnn::operations::ccl

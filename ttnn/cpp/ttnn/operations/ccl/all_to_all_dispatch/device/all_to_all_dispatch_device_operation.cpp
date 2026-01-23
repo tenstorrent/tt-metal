@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "all_to_all_dispatch_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -149,12 +150,31 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
 AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensors.has_value()) {
-        return tensor_args.optional_output_tensors.value();
+        auto output_tensors = tensor_args.optional_output_tensors.value();
+        for (auto& output_tensor : output_tensors) {
+            output_tensor = ttnn::zeros_like(
+                output_tensor,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::optional<Tensor>(output_tensor));
+        }
+        return output_tensors;
     }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
     auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
+    output_tensor = ttnn::zeros_like(
+        output_tensor, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::optional<Tensor>(output_tensor));
+    metadata_tensor = ttnn::zeros_like(
+        metadata_tensor,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::optional<Tensor>(metadata_tensor));
     return {output_tensor, metadata_tensor};
 }
 
