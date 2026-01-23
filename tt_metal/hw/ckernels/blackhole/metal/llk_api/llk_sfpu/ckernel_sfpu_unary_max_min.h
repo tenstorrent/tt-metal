@@ -42,7 +42,7 @@ sfpi_inline void load_value_param_int(uint value) {
         // if msb(value) == 1, we need to invert for SFPSWAP to work
         sfpi::vConstIntPrgm0 = (int)value >= 0 ? value : ~value;
     } else {
-        sfpi::vConstIntPrgm0 = value;
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
     }
 }
 
@@ -64,7 +64,7 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
         }
     } else if constexpr (!IS_MAX_OP) {
         // if value == INT_MIN, then min(x, value) = INT_MIN
-        TTI_SFPSTORE(p_sfpu::LREG12, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     } else {
         // if value == INT_MIN, then max(x, value) = x; do nothing
     }
