@@ -601,16 +601,15 @@ def run_all_gather_matmul_galaxy_impl(
     "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
         # ==================== Actual Galaxy Model FF2 dimensions ====================
-        # From model_config.py: K=3584 (hidden_dim/4 gathered), N=2304 (dim/4)
-        # These are the EXACT dimensions used in llama_mlp.py lines 163-185 (decode)
-        # Galaxy decode (M=32)
-        (32, 3584, 2304, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # Galaxy decode with different M
-        (32, 3584, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # Real Llama 70B dimensions:
+        # - K_per_device = 3584 (hidden_size/4 = 14336/4)
+        # - K_gathered = 14336 (after all_gather along 4 devices)
+        # - N = 2048 (dim/4 = 8192/4)
+        # Galaxy decode (M=32) - actual model dimensions
+        (32, 14336, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "model_ff2_decode_K3584_N2304",
-        "model_ff2_decode_K3584_N2048",
+        "model_ff2_decode_K14336_N2048",
     ],
 )
 @pytest.mark.parametrize("num_links", [3])
@@ -674,17 +673,16 @@ def test_all_gather_matmul_galaxy_check(
     "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
         # ==================== Actual Galaxy Model FF2 dimensions ====================
-        # From model_config.py: K=3584 (hidden_dim/4 gathered), N=2304 (dim/4)
-        # These are the EXACT dimensions used in llama_mlp.py lines 163-185 (decode)
+        # Real Llama 70B dimensions:
+        # - K_per_device = 3584 (hidden_size/4 = 14336/4)
+        # - K_gathered = 14336 (after all_gather along 4 devices)
+        # - N = 2048 (dim/4 = 8192/4)
         # This test compares: line_all_gather + ttnn.linear vs llama_all_gather_matmul_async
-        # Galaxy decode (M=32) - actual model dimension
-        (32, 3584, 2304, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
-        # Alternative N dimension
-        (32, 3584, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        # Galaxy decode (M=32) - actual model dimensions
+        (32, 14336, 2048, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "model_ff2_decode_K3584_N2304",
-        "model_ff2_decode_K3584_N2048",
+        "model_ff2_decode_K14336_N2048",
     ],
 )
 @pytest.mark.parametrize("num_links", [3])

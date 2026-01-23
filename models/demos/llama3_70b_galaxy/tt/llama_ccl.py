@@ -103,7 +103,8 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
-            # Note: all_gather_matmul_buffers allocated lazily to avoid L1 conflicts
+            # Note: all_gather_matmul_buffers not used - model dims too large for L1
+            # Fused op works for unit test dims but not actual model
             self.all_gather_matmul_buffers = None
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
