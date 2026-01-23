@@ -1349,7 +1349,81 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
     ],
 )
-def test_untilize_nd_shard_to_nd_shard_spec_different_shard_specs(
+def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs(
+    device,
+    dtype,
+    use_pack_untilize,
+    tensor_shape,
+    input_shard_shape,
+    output_shard_shape,
+    input_shard_orientation,
+    shard_core_grid,
+):
+    torch.manual_seed(0)
+    input_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=input_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
+    )
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        nd_shard_spec=input_nd_shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, spec=tensor_spec, device=device)
+
+    output_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=output_shard_shape, grid=shard_core_grid, orientation=input_shard_orientation
+    )
+    output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
+    ttnn_output_tensor = ttnn.untilize(
+        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
+    )
+    ans = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_with_pcc(input_torch_tensor, ans, 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("tensor_shape", [[2, 96, 128]])
+@pytest.mark.parametrize(
+    "input_shard_shape",
+    [
+        ttnn.Shape([3, 64, 128]),
+        ttnn.Shape([64, 128]),
+        ttnn.Shape([2, 64, 128]),
+        ttnn.Shape([1, 64, 128]),
+    ],
+)
+@pytest.mark.parametrize(
+    "output_shard_shape",
+    [
+        ttnn.Shape([32, 128]),
+        ttnn.Shape([96, 128]),
+        ttnn.Shape([1, 96, 128]),
+        ttnn.Shape([2, 96, 128]),
+        # ttnn.Shape([64, 128]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2))}),
+    ],
+)
+def test_untilize_multicore_nd_shard_to_nd_shard_spec_different_shard_specs_shard_shape_flattened(
     device,
     dtype,
     use_pack_untilize,
@@ -1427,7 +1501,7 @@ def test_untilize_nd_shard_to_nd_shard_spec_different_shard_specs(
         )
     ],
 )
-def test_untilize_nd_shard_to_legacy_shard(
+def test_untilize_multicore_nd_shard_to_legacy_shard(
     device,
     dtype,
     use_pack_untilize,
@@ -1543,7 +1617,7 @@ def test_untilize_nd_shard_to_legacy_shard(
         )
     ],
 )
-def test_untilize_legacy_shard_to_nd_shard(
+def test_untilize_multicore_legacy_shard_to_nd_shard(
     device,
     dtype,
     use_pack_untilize,

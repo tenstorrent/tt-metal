@@ -147,7 +147,7 @@ void kernel_main() {
             }
 
             // Check if page is at start of row in shard
-            bool is_start_of_row = (local_page_coord[dspec.rank() - 1] == 0);
+            bool is_start_of_row = (local_page_coord[dspec.rank() - 1] % num_tiles_per_input_block == 0);
             if (is_start_of_row) {
                 if (!is_padding) {
                     uint32_t page_id = 0;

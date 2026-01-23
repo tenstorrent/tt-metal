@@ -52,7 +52,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
-    bool input_is_nd_sharded = a.nd_shard_spec().has_value() && !a.shard_spec().has_value();
+    bool input_is_nd_sharded = a.nd_shard_spec().has_value();
 
     // For ND sharded input, compute distribution_spec once and reuse it
     std::optional<BufferDistributionSpec> distribution_spec_opt;
@@ -351,7 +351,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 num_blocks_on_core = num_shards_on_core * num_blocks_per_shard;
                 num_tiles_on_core = num_blocks_on_core * num_tiles_per_input_block;
             }
-
             // Reader run-time args
             std::vector<uint32_t> reader_run_time_args = {num_tiles_on_core};
 
