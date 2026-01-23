@@ -665,6 +665,7 @@ class Generator:
         if sampling_on_device:
             for i in range(self.data_parallel):
                 # Apply bitmask to logits
+                # TODO apply only if new bitmask was passed in this iteration
                 tt_output[i] = self.model[i].apply_bitmask_to_logits(tt_output[i])
                 # Sample from logits
                 sampling_module = getattr(self.model[i], "sampling", None)
