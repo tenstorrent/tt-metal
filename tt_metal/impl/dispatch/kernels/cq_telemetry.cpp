@@ -15,6 +15,14 @@
 // Perf telemetry page size - must match host-side kPerfTelemetryPageSize
 constexpr uint32_t perf_telemetry_page_size = 64;
 
+// Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
+constexpr uint32_t telemetry_timestamp_size = 2 * sizeof(telemetry_timestamp_t);  // 32 bytes
+
+// Compile-time defines set by host:
+// DISPATCH_CORE_NOC_X - NOC X coordinate of dispatch_s core
+// DISPATCH_CORE_NOC_Y - NOC Y coordinate of dispatch_s core
+// DISPATCH_DATA_ADDR  - Address of kernel_start in dispatch_s's L1 mailbox
+
 // Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
 volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
     reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
@@ -85,6 +93,12 @@ __attribute__((noinline)) bool perf_telemetry_push() {
     if (perf_telemetry_l1_data_addr == 0) {
         return false;
     }
+
+    // Read 32 bytes from dispatch core's kernel_start to our kernel_start
+    uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_DATA_ADDR);
+    uint32_t local_kernel_start_addr = reinterpret_cast<uint32_t>(&perf_telemetry_mailbox->kernel_start);
+    noc_async_read(dispatch_noc_addr, local_kernel_start_addr, telemetry_timestamp_size);
+    noc_async_read_barrier();
 
     // Initialize NOC for PCIe writes (using command buffer 0)
     noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
