@@ -272,6 +272,9 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
 
+    // Add using_persistent_buffers flag
+    writer_compile_args.push_back(operation_attributes.using_persistent_buffers ? 1 : 0);
+
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/kernels/"

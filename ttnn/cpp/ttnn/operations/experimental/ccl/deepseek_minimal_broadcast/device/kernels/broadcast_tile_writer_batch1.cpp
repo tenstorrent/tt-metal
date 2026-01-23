@@ -38,6 +38,7 @@ constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(11)
 constexpr uint32_t range_hops_forward = get_compile_time_arg_val(12);
 constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(13);
 constexpr uint32_t range_hops_backward = get_compile_time_arg_val(14);
+constexpr bool using_persistent_buffers = get_compile_time_arg_val(15);
 
 // Number of primary axis connections (forward + backward)
 constexpr uint32_t num_primary_connections =
@@ -106,41 +107,44 @@ void kernel_main() {
 
     // Secondary axis barrier between primary sender and secondary sender
     // Both devices send an atomic inc to each other and wait
-    if constexpr (has_secondary_target || has_reverse_secondary_connection) {
-        auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
-        auto route_id = has_secondary_target ? secondary_route_id : reverse_secondary_route_id;
-        volatile PACKET_HEADER_TYPE* sec_sync_header = PacketHeaderPool::header_table[route_id].first;
-        fabric_set_unicast_route(fabric_connection, sec_sync_header, secondary_connection_idx);
+    if constexpr (!using_persistent_buffers) {
+        if constexpr (has_secondary_target || has_reverse_secondary_connection) {
+            auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
+            auto route_id = has_secondary_target ? secondary_route_id : reverse_secondary_route_id;
+            volatile PACKET_HEADER_TYPE* sec_sync_header = PacketHeaderPool::header_table[route_id].first;
+            fabric_set_unicast_route(fabric_connection, sec_sync_header, secondary_connection_idx);
 
-        // Send atomic inc to the other device's secondary sync semaphore
-        fabric_unicast_noc_unicast_atomic_inc(
-            &secondary_slot.sender,
-            sec_sync_header,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{secondary_sync_sem_noc_addr_in_pkt, 1},
-            1);
+            // Send atomic inc to the other device's secondary sync semaphore
+            fabric_unicast_noc_unicast_atomic_inc(
+                &secondary_slot.sender,
+                sec_sync_header,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{secondary_sync_sem_noc_addr_in_pkt, 1},
+                1);
 
-        // Wait for the other device's atomic inc on secondary_sync_sem
-        volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(secondary_sync_sem);
-        noc_semaphore_wait_min(sync_sem_ptr, 1);
-        noc_semaphore_set(sync_sem_ptr, 0);
-    }
+            // Wait for the other device's atomic inc on secondary_sync_sem
+            volatile tt_l1_ptr uint32_t* sync_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(secondary_sync_sem);
+            noc_semaphore_wait_min(sync_sem_ptr, 1);
+            noc_semaphore_set(sync_sem_ptr, 0);
+        }
 
-    if (!is_sender) {
-        // Now do the column-wise barrier (primary axis sync)
-        // do it for the sender later to overlap with data sending
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            fabric_connection,
-            sem_route_id,
-            starts,
-            ranges,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        if (!is_sender) {
+            // Now do the column-wise barrier (primary axis sync)
+            // do it for the sender later to overlap with data sending
+            fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                sem_route_id,
+                starts,
+                ranges,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                sem_route_id,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        }
     }
 
     if (is_sender) {
@@ -171,22 +175,22 @@ void kernel_main() {
                     dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
                 1);  // 1 hop to secondary sender
         }
-
-        // Now do the column-wise barrier (primary axis sync)
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            fabric_connection,
-            sem_route_id,
-            starts,
-            ranges,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
-
+        if constexpr (!using_persistent_buffers) {
+            // Now do the column-wise barrier (primary axis sync)
+            fabric_multicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                fabric_connection,
+                sem_route_id,
+                starts,
+                ranges,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                sem_route_id,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        }
         fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
             UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
             UnicastFusedAtomicIncUpdateMask::PayloadSize>(

@@ -87,6 +87,10 @@ TensorSpec DeepseekMinimalBroadcastDeviceOperation::compute_output_specs(
 
 Tensor DeepseekMinimalBroadcastDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Use persistent output buffer if provided
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        return tensor_args.persistent_output_buffer.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
@@ -110,6 +114,7 @@ tt::stl::hash::hash_t DeepseekMinimalBroadcastDeviceOperation::compute_program_h
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         operation_attributes.secondary_cluster_axis,
+        operation_attributes.using_persistent_buffers,
         subdevice_core_range_set,
         tensor_args,
         program_factory.index());
@@ -127,7 +132,8 @@ Tensor deepseek_minimal_broadcast(
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> secondary_cluster_axis) {
+    std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<Tensor>& persistent_output_buffer) {
     using OperationType = ttnn::experimental::prim::DeepseekMinimalBroadcastDeviceOperation;
 
     const auto& tensor_topology = input_tensor.tensor_topology();
@@ -161,8 +167,10 @@ Tensor deepseek_minimal_broadcast(
         .topology = ccl_topology,
         .cluster_axis = cluster_axis,
         .secondary_cluster_axis = secondary_cluster_axis,
-        .sub_device_id = sub_device_id};
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+        .sub_device_id = sub_device_id,
+        .using_persistent_buffers = persistent_output_buffer.has_value()};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

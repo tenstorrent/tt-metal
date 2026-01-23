@@ -20,7 +20,8 @@ struct ExecuteDeepseekMinimalBroadcast {
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<uint32_t> cluster_axis = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        std::optional<uint32_t> secondary_cluster_axis = std::nullopt);
+        std::optional<uint32_t> secondary_cluster_axis = std::nullopt,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

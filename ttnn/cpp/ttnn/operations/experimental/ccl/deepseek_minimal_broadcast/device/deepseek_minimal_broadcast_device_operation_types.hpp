@@ -19,10 +19,12 @@ struct DeepseekMinimalBroadcastParams {
     std::optional<uint32_t> cluster_axis;
     std::optional<uint32_t> secondary_cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    bool using_persistent_buffers = false;
 };
 
 struct DeepseekMinimalBroadcastInputs {
     Tensor input_tensor;
+    std::optional<Tensor> persistent_output_buffer;
 };
 
 }  // namespace ttnn::experimental::prim
