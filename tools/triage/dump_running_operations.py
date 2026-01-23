@@ -41,6 +41,7 @@ from triage import (
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
@@ -131,12 +132,14 @@ def _collect_dispatcher_data(
 ) -> DispatcherCoreData | None:
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-    except Exception as exc:
+    except TimeoutDeviceRegisterError:
+        raise
+    except Exception as e:
         log_check_risc(
             risc_name,
             location,
             False,
-            f"Failed to read dispatcher data for running operations aggregation: {exc}",
+            f"Failed to read dispatcher data for running operations aggregation: {e}",
         )
         return None
     if not show_all_cores and dispatcher_core_data.go_message == "DONE":
