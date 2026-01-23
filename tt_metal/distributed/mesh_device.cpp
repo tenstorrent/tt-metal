@@ -169,7 +169,18 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
+        // Catch any exceptions during device close - destructors must not throw.
+        // This can happen when a device is hung and times out during close.
+        try {
+            tt_metal::MetalContext::instance().device_manager()->close_devices(
+                devices_to_close, /*skip_synchronize=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "Exception during device close in ScopedDevices destructor: {}. "
+                "The device may be in an unrecoverable state and require a reset.",
+                e.what());
+        }
     }
 }
 
