@@ -546,57 +546,85 @@ void dump_link_stats(
     uint32_t data_size,
     uint32_t packet_size_bytes) {
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-
+    auto local_ethernet_metrics = ctx.physical_system_descriptor.query_local_ethernet_metrics();
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
     const auto& asic_descriptors = ctx.physical_system_descriptor.get_asic_descriptors();
-    auto local_ethernet_metrics = ctx.physical_system_descriptor.query_local_ethernet_metrics();
     auto port_info_map = generate_port_info(ctx.physical_system_descriptor);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    struct LinkInfo {
+        tt::tt_metal::AsicID asic_id;
+        uint8_t src_chan;
+        ChipId chip_id;
+        CoreCoord ethernet_core;
+        EthChannelIdentifier channel_id;
+    };
+    std::vector<LinkInfo> links;
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
-        auto chip_id = ctx.asic_id_to_chip_id[*asic_id];
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
+        auto chip_id = ctx.asic_id_to_chip_id.at(*asic_id);
+        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        const auto& asic_desc = asic_descriptors.at(asic_id);
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
-                auto coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                uint32_t num_mismatched = 0;
-                if (data_size > 0) {
-                    auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        chip_id,
-                        ctx.devices[chip_id]->ethernet_core_from_logical_core(coord),
-                        src_eth_l1_byte_address,
-                        data_size);
-
-                    // Count mismatched words
-                    for (size_t i = 0; i < result_vec.size(); ++i) {
-                        if (result_vec[i] != inputs[i]) {
-                            num_mismatched++;
-                        }
-                    }
-                }
-
+                auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
-                statuses_per_link[EthChannelIdentifier{
-                                      .host = host_name,
-                                      .asic_id = asic_descriptors.at(asic_id).unique_id,
-                                      .tray_id = asic_descriptors.at(asic_id).tray_id,
-                                      .asic_location = asic_descriptors.at(asic_id).asic_location,
-                                      .channel = src_chan,
-                                      .port_id = *port_info.port_id,
-                                      .port_type = static_cast<uint32_t>(port_info.port_type),
-                                  }]
-                    .push_back(LinkStatus{
-                        .metrics = local_ethernet_metrics.at(asic_id).at(src_chan),
-                        .traffic_params =
-                            TrafficParams{
-                                .packet_size_bytes = packet_size_bytes,
-                                .data_size = data_size,
-                            },
-                        .num_mismatched_words = num_mismatched,
-                    });
+                links.push_back(
+                    {asic_id,
+                     src_chan,
+                     chip_id,
+                     ethernet_core,
+                     EthChannelIdentifier{
+                         .host = host_name,
+                         .asic_id = asic_desc.unique_id,
+                         .tray_id = asic_desc.tray_id,
+                         .asic_location = asic_desc.asic_location,
+                         .channel = src_chan,
+                         .port_id = *port_info.port_id,
+                         .port_type = static_cast<uint32_t>(port_info.port_type),
+                     }});
             }
         }
+    }
+
+    // Parallelize read_core calls in batches
+    constexpr size_t MAX_CONCURRENT_READS = 32;
+    std::vector<std::vector<uint32_t>> read_results(links.size());
+    if (data_size > 0) {
+        for (size_t i = 0; i < links.size(); i += MAX_CONCURRENT_READS) {
+            std::vector<std::future<std::vector<uint32_t>>> futures;
+            for (size_t j = i; j < std::min(i + MAX_CONCURRENT_READS, links.size()); ++j) {
+                auto chip_id = links[j].chip_id;
+                auto ethernet_core = links[j].ethernet_core;
+                futures.push_back(std::async(
+                    std::launch::async, [&cluster, chip_id, ethernet_core, src_eth_l1_byte_address, data_size]() {
+                        return cluster.read_core(chip_id, ethernet_core, src_eth_l1_byte_address, data_size);
+                    }));
+            }
+            for (size_t j = 0; j < futures.size(); ++j) {
+                read_results[i + j] = futures[j].get();
+            }
+        }
+    }
+
+    // Process results
+    for (size_t i = 0; i < links.size(); ++i) {
+        uint32_t num_mismatched = 0;
+        if (data_size > 0) {
+            for (size_t j = 0; j < read_results[i].size(); ++j) {
+                if (read_results[i][j] != inputs[j]) {
+                    num_mismatched++;
+                }
+            }
+        }
+        statuses_per_link[links[i].channel_id].push_back(LinkStatus{
+            .metrics = local_ethernet_metrics.at(links[i].asic_id).at(links[i].src_chan),
+            .traffic_params = TrafficParams{.packet_size_bytes = packet_size_bytes, .data_size = data_size},
+            .num_mismatched_words = num_mismatched,
+        });
     }
 }
 
@@ -1047,8 +1075,11 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
-    for (int i = 0; i < num_iterations; i++) {
+    for (int i = 0; i < 10; i++) {
         for (const auto& traffic_config : traffic_configs) {
+            log_output_rank0(
+                "[TIMING] send_traffic_and_validate_links: Starting iteration " + std::to_string(i + 1) + " of " +
+                std::to_string(num_iterations));
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
             std::size_t d_size = traffic_config.data_size;
