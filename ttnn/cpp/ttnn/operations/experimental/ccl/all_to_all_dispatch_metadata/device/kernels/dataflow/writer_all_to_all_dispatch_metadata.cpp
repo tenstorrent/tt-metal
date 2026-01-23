@@ -147,7 +147,6 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     bool negative_polarity = true;
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, static_cast<uint32_t>(size_bytes));
-        // DPRINT << "curr_packet_size: " << curr_packet_size << ENDL();
 
         const auto noc_command_header = tt::tt_fabric::NocUnicastCommandHeader{noc_addr};
 
@@ -1012,7 +1011,6 @@ void kernel_main() {
     detail::zero_buffer_barrier();
 
 #ifdef USE_MUX
-    DPRINT << "Waiting for mux to be ready and connecting" << ENDL();
     // Wait for mux to be ready and connect
     for (uint32_t dir = 0; dir < num_directions; dir++) {
         if (directions[dir] && mux_connection_valid_arr[dir]) {
@@ -1031,7 +1029,6 @@ void kernel_main() {
     // Send initialization semaphore to configured targets for synchronization
     // Use bidirectional multicast for 1D ring topology (2 packets instead of dispatch_devices-1 unicasts)
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    DPRINT << "Initializing semaphore" << ENDL();
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
@@ -1039,7 +1036,6 @@ void kernel_main() {
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    DPRINT << "Waiting for all devices to complete initialization synchronization" << ENDL();
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
@@ -1065,9 +1061,7 @@ void kernel_main() {
         SPARSE_MCAST_SHORTEST_PATH,  // Sparse multicast with bidirectional shortest path routing
         SPARSE_MCAST_SPLIT_BW        // Sparse multicast, split token data 50/50 between directions
     };
-    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH;
-
-    DPRINT << "Dispatching tokens" << ENDL();
+    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_LINEAR;
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
@@ -1203,9 +1197,6 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    DPRINT << "Sending selected experts tensor to all other devices and signaling that we are done dispatching the "
-              "input tokens"
-           << ENDL();
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
@@ -1252,32 +1243,62 @@ void kernel_main() {
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
 #ifdef USE_MUX
-    DPRINT << "MUX teardown" << ENDL();
-    // MUX teardown for Phase 1: Each worker has exclusive access to its link's mux cores
-    // Since each mux core has only 1 client (this worker), no coordination is needed.
-    // Simply disconnect and terminate.
+    // MUX teardown for Phase 2: Multiple workers per link share the same mux cores
+    // Each link has a termination master that waits for all other workers to disconnect
+    // before terminating the mux cores.
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    // First: disconnect from all mux cores
+    // Step 1: All workers disconnect from their mux connections
     for (uint32_t dir = 0; dir < num_directions; dir++) {
         if (directions[dir] && mux_connection_valid_arr[dir]) {
-            DPRINT << "Disconnecting from mux core dir=" << dir << ENDL();
             tt::tt_fabric::fabric_client_disconnect(fabric_connections[dir]);
         }
     }
 
-    // Second: terminate all mux cores this worker is connected to
-    // Each worker owns its link's mux cores exclusively, so no signaling/waiting needed
+    // Step 2: Coordinate termination
+    // - Termination masters wait for signals from other workers on their link
+    // - Non-masters signal the termination master that they've disconnected
+    //
+    // Note: All directions for a given link share the same termination master,
+    // so we only need to coordinate once per link (using any valid direction's semaphore).
+    // We use the first valid direction's semaphore for coordination.
+
+    // Find the first valid direction for this worker to use for coordination
+    uint32_t coord_dir = num_directions;  // Invalid sentinel
     for (uint32_t dir = 0; dir < num_directions; dir++) {
         if (directions[dir] && mux_connection_valid_arr[dir]) {
-            DPRINT << "Terminating mux core dir=" << dir << ENDL();
-            tt::tt_fabric::fabric_endpoint_terminate(
-                fabric_mux_x_arr[dir], fabric_mux_y_arr[dir], fabric_mux_termination_signal_address);
+            coord_dir = dir;
+            break;
         }
     }
 
-    DPRINT << "MUX teardown complete" << ENDL();
+    if (coord_dir < num_directions) {
+        if (any_is_termination_master) {
+            // Termination master: wait for (num_mux_clients - 1) signals from other workers
+            if (num_mux_clients > 1) {
+                volatile uint32_t* termination_semaphore =
+                    reinterpret_cast<volatile uint32_t*>(termination_sync_address_arr[coord_dir]);
+                noc_semaphore_wait(termination_semaphore, num_mux_clients - 1);
+            }
+
+            // All workers have disconnected, now terminate the mux cores
+            for (uint32_t dir = 0; dir < num_directions; dir++) {
+                if (directions[dir] && mux_connection_valid_arr[dir]) {
+                    tt::tt_fabric::fabric_endpoint_terminate(
+                        fabric_mux_x_arr[dir], fabric_mux_y_arr[dir], fabric_mux_termination_signal_address);
+                }
+            }
+        } else {
+            // Non-master: signal the termination master that we've disconnected
+            uint64_t termination_master_semaphore_noc_addr = get_noc_addr(
+                termination_master_noc_x_arr[coord_dir],
+                termination_master_noc_y_arr[coord_dir],
+                termination_sync_address_arr[coord_dir]);
+            noc_semaphore_inc(termination_master_semaphore_noc_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
 
     noc_async_write_barrier();
 #else

@@ -393,8 +393,41 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         subdevice_cores.size(),
         num_links);
 
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-    uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
+    // Determine number of workers based on mux usage:
+    // - With mux: Use all available cores, multiple workers per link
+    // - Without mux: Cap to num_links (1 worker per link, since we can't share fabric connections)
+    const bool use_mux = operation_attributes.use_mux;
+    uint32_t num_cores;
+    uint32_t workers_per_link;
+
+    if (use_mux) {
+        // Phase 2: Use all available worker cores, distributing them across links
+        // For example: 8 cores / 4 links = 2 workers per link
+        num_cores = subdevice_cores.size();
+        workers_per_link = num_cores / num_links;
+        TT_FATAL(
+            workers_per_link >= 1,
+            "Not enough cores {} for {} links (need at least 1 worker per link)",
+            num_cores,
+            num_links);
+        // Ensure num_cores is a multiple of num_links for even distribution
+        num_cores = workers_per_link * num_links;
+    } else {
+        // Without mux: 1 worker per link (can't share direct fabric connections)
+        num_cores = num_links;
+        workers_per_link = 1;
+    }
+
+    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_cores);
+
+    log_debug(
+        tt::LogOp,
+        "Phase 2 worker distribution: {} total workers, {} links, {} workers per link, {} tokens per core",
+        num_cores,
+        num_links,
+        workers_per_link,
+        tokens_per_core);
+
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
@@ -518,8 +551,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
 
-    // Conditionally set up mux infrastructure
-    const bool use_mux = operation_attributes.use_mux;
+    // Conditionally set up mux infrastructure (use_mux already defined above)
     std::optional<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_id = 0;
@@ -529,13 +561,14 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         log_debug(tt::LogOp, "Using fabric mux for dispatch");
 
         // Launch mux workers
+        // Note: num_workers passed to launch_mux_workers should be workers_per_link (clients per mux channel)
         auto [launched_mux_kernel_id, launched_mux_config, launched_mux_neigbor_core_maps] = detail::launch_mux_workers(
             *mesh_device,
             operation_attributes.mux_core_range_set,
             src_fabric_node_id,
             neighbors,
             num_links,
-            num_cores,  // num_workers = num_cores for Phase 1 (1 worker per link)
+            workers_per_link,  // Phase 2: workers per link = clients per mux channel
             program);
         mux_kernel_id = launched_mux_kernel_id;
         mux_kernel_config = launched_mux_config;
@@ -546,7 +579,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     std::vector<uint32_t> writer_compile_time_args_final = writer_compile_time_args;
     if (use_mux) {
         ttnn::ccl::fabric_mux_connection_ct_args(
-            num_cores,  // num_mux_clients
+            workers_per_link,  // num_mux_clients = workers per link sharing each mux channel
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             mux_kernel_config.value(),
             writer_compile_time_args_final);
@@ -599,18 +632,40 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         drain_sync_tilizer_noc_core.x,
         drain_sync_tilizer_noc_core.y);
 
-    // For mux: set up termination master (first worker core is the sync core)
-    const auto& termination_master_core = sender_cores[0];
-    const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
-    uint32_t termination_master_semaphore_id = 0;
+    // For mux: set up termination masters (one per link)
+    // Each link has workers_per_link workers sharing the same mux cores
+    // The first worker on each link (worker_idx % workers_per_link == 0) is the termination master
+    std::vector<CoreCoord> termination_master_cores;
+    std::vector<CoreCoord> termination_master_virtual_cores;
+    std::vector<uint32_t> termination_master_semaphore_ids;
     if (use_mux) {
-        termination_master_semaphore_id = tt::tt_metal::CreateSemaphore(program, {termination_master_core}, 0);
+        for (uint32_t link = 0; link < num_links; link++) {
+            uint32_t master_worker_idx = link * workers_per_link;  // First worker on this link
+            const auto& master_core = sender_cores[master_worker_idx];
+            termination_master_cores.push_back(master_core);
+            termination_master_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(master_core));
+            termination_master_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, {master_core}, 0));
+            log_debug(
+                tt::LogOp,
+                "Link {} termination master: worker {} at core ({}, {}), semaphore_id {}",
+                link,
+                master_worker_idx,
+                master_core.x,
+                master_core.y,
+                termination_master_semaphore_ids.back());
+        }
     }
 
-    uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
     auto mux_core_map_iter = mux_neigbor_core_maps.cbegin();
-    for (const auto& sender_core : sender_cores) {
+    uint32_t current_link_id = 0;
+
+    for (uint32_t worker_idx = 0; worker_idx < num_cores; worker_idx++) {
+        const auto& sender_core = sender_cores[worker_idx];
+        uint32_t link_id = worker_idx / workers_per_link;
+        uint32_t worker_idx_within_link = worker_idx % workers_per_link;
+        bool is_termination_master = (worker_idx_within_link == 0);
+
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
             indices_tensor.buffer()->address(),
@@ -638,26 +693,41 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
         if (use_mux) {
             // Use mux connection runtime args
-            const bool is_termination_master = (sender_core == termination_master_core);
+            // Get termination master info for this link
+            const auto& link_termination_master_virtual_core = termination_master_virtual_cores[link_id];
+            uint32_t link_termination_master_semaphore_id = termination_master_semaphore_ids[link_id];
+
+            // Move to the correct mux core map for this link (if link changed)
+            while (current_link_id < link_id) {
+                ++mux_core_map_iter;
+                ++current_link_id;
+            }
+
             for (const auto& neighbor_coordinate : neighbors) {
                 const auto& mux_virtual_core = mux_core_map_iter->at(neighbor_coordinate);
                 ttnn::ccl::fabric_mux_connection_rt_args(
-                    true,  // is_sender
+                    true,  // mux_connection_valid
                     is_termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_virtual_core,
-                    link_id,  // worker_index within the mux channel
+                    worker_idx_within_link,  // worker_index within the mux channel (0 to workers_per_link-1)
                     sender_core,
                     mux_kernel_config.value(),
                     program,
-                    termination_master_virtual_core,
+                    link_termination_master_virtual_core,
                     writer_runtime_args,
-                    termination_master_semaphore_id);
+                    link_termination_master_semaphore_id);
             }
-            // Move to next mux core map for next link
-            if (link_id < num_links - 1) {
-                ++mux_core_map_iter;
-            }
+
+            log_debug(
+                tt::LogOp,
+                "Worker {} at core ({}, {}) on link {} (worker {} within link), is_termination_master={}",
+                worker_idx,
+                sender_core.x,
+                sender_core.y,
+                link_id,
+                worker_idx_within_link,
+                is_termination_master);
         } else {
             // Use direct fabric connection runtime args
             for (const auto& neighbor_coordinate : neighbors) {
@@ -686,7 +756,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
         tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_core, writer_runtime_args);
-        link_id++;
     }
 
     return {

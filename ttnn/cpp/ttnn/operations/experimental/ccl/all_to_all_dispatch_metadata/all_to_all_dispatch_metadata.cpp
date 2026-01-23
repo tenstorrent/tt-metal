@@ -43,9 +43,9 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
 
-    // Default worker cores: (0,0) to (0,3) - 4 cores for 4 links
+    // Default worker cores: (0,0) to (0,7) - 8 cores for 4 links (2 workers per link)
     CoreRangeSet worker_cores =
-        worker_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 3))));
+        worker_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 7))));
 
     // Default mux cores: (1,0) to (1,7) - 8 cores (2 per link × 4 links)
     CoreRangeSet mux_cores = mux_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(1, 0), CoreCoord(1, 7))));
