@@ -41,10 +41,10 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE) {
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
-
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
             }
