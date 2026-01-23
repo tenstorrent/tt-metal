@@ -284,3 +284,26 @@ def test_typecast_bfp8_b_to_fp32(device):
     # print(cpu_version[0, 0:16])
     # print(npu_version[0, 0:16])
     assert passed
+
+
+# from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# def test_typecast_bfp16_b_to_bf8(device):
+
+
+#     torch.manual_seed(0)
+#     shape = [1024, 1024]
+
+#     # bfp8_b --> fp32 by cpu.
+#     torch_bf16 = torch.randn(shape, dtype=torch.bfloat16)
+#     bfp16_b = ttnn.to_layout(ttnn.Tensor(torch_bf16, ttnn.bfloat16), ttnn.TILE_LAYOUT)
+
+#     # bfp8_b --> fp32 by npu.
+#     bf8_by_npu = ttnn.typecast(bfp16_b.to(device), ttnn.bfloat4_b)
+#     npu_version = bf8_by_npu.to_torch()
+
+#     assert_with_pcc(torch_bf16, npu_version, 0.99)
+#     #passed = torch.equal(cpu_version, npu_version)
+#     # print(cpu_version[0, 0:16])
+#     # print(npu_version[0, 0:16])
+#     # assert passed
