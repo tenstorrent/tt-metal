@@ -3,7 +3,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${SCRIPT_DIR}/tt-metal"
+REPO_DIR="${SCRIPT_DIR}/../../../../.."
 
 echo "🔨 Building tests..."
 cd "$REPO_DIR"
@@ -13,14 +13,13 @@ echo ""
 echo "🧪 Running block variant tests..."
 echo ""
 
-for test in test_eltwise_binary_block test_reduce_block test_broadcast_block test_transpose_block test_pack_block; do
-    if [ -f "./build/test/tt_metal/$test" ]; then
-        echo "▶ Running $test..."
-        ./build/test/tt_metal/$test || echo "❌ $test failed"
-        echo ""
-    else
-        echo "⚠️  $test not found (not added to CMakeLists.txt?)"
-    fi
-done
+if [ -f "./build/test/tt_metal/unit_tests_legacy" ]; then
+    echo "▶ Running block variant tests from unit_tests_legacy..."
+    ./build/test/tt_metal/unit_tests_legacy --gtest_filter='*Block*' || echo "❌ Some tests failed"
+    echo ""
+else
+    echo "⚠️  unit_tests_legacy not found (build failed?)"
+    exit 1
+fi
 
 echo "✅ Test run complete!"

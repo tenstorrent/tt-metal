@@ -26,9 +26,9 @@ echo ""
 
 # Step 4: Build tests
 echo "🔨 Step 4/5: Building tests..."
-cd tt-metal
+cd ../../../../..
 ./build_metal.sh --build-tests
-cd ..
+cd - > /dev/null
 echo ""
 
 # Step 5: Run tests

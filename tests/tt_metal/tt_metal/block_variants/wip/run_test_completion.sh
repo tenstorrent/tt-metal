@@ -10,8 +10,8 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="${SCRIPT_DIR}/complete_test_todos.py"
-REPO_ROOT="${SCRIPT_DIR}/tt-metal"
-TEST_DIR="${REPO_ROOT}/tests/tt_metal/tt_metal/block_variants"
+REPO_ROOT="${SCRIPT_DIR}/../../../../.."
+TEST_DIR="${SCRIPT_DIR}/.."
 
 # Colors
 RED='\033[0;31m'

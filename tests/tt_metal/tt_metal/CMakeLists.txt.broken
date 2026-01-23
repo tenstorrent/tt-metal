@@ -34,11 +34,6 @@ set(UNIT_TESTS_LEGACY_SRC
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
     test_untilize_eltwise_binary.cpp
-    block_variants/test_eltwise_binary_block.cpp
-    block_variants/test_reduce_block.cpp
-    block_variants/test_broadcast_block.cpp
-    block_variants/test_transpose_block.cpp
-    block_variants/test_pack_block.cpp
     test_unaligned_read_write_core.cpp
 )
 
@@ -154,4 +149,25 @@ install(
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
         COMPONENT metalium-validation
+)
+
+# Block variant tests (Issue #35739)
+tt_metal_add_gtest(test_eltwise_binary_block
+    block_variants/test_eltwise_binary_block.cpp
+)
+
+tt_metal_add_gtest(test_reduce_block
+    block_variants/test_reduce_block.cpp
+)
+
+tt_metal_add_gtest(test_broadcast_block
+    block_variants/test_broadcast_block.cpp
+)
+
+tt_metal_add_gtest(test_transpose_block
+    block_variants/test_transpose_block.cpp
+)
+
+tt_metal_add_gtest(test_pack_block
+    block_variants/test_pack_block.cpp
 )

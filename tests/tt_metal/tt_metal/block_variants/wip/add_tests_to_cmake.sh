@@ -3,7 +3,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CMAKE_FILE="${SCRIPT_DIR}/tt-metal/tests/tt_metal/tt_metal/CMakeLists.txt"
+CMAKE_FILE="${SCRIPT_DIR}/../../CMakeLists.txt"
 
 echo "📝 Adding block variant tests to CMakeLists.txt..."
 
@@ -12,40 +12,25 @@ if [ ! -f "$CMAKE_FILE" ]; then
     exit 1
 fi
 
+# Check if tests are already added
+if grep -q "block_variants/test_eltwise_binary_block.cpp" "$CMAKE_FILE"; then
+    echo "⚠️  Block variant tests already in CMakeLists.txt"
+    exit 0
+fi
+
 # Backup
 cp "$CMAKE_FILE" "${CMAKE_FILE}.backup"
 echo "✅ Backup created: ${CMAKE_FILE}.backup"
 
-# Add tests
-cat >> "$CMAKE_FILE" << 'EOF'
+# Find the line with test_untilize_eltwise_binary.cpp and add after it
+# This is in the UNIT_TESTS_LEGACY_SRC list
+sed -i '/test_untilize_eltwise_binary.cpp/a\    block_variants/test_eltwise_binary_block.cpp\n    block_variants/test_reduce_block.cpp\n    block_variants/test_broadcast_block.cpp\n    block_variants/test_transpose_block.cpp\n    block_variants/test_pack_block.cpp' "$CMAKE_FILE"
 
-# Block variant tests (Issue #35739)
-tt_metal_add_gtest(test_eltwise_binary_block
-    block_variants/test_eltwise_binary_block.cpp
-)
-
-tt_metal_add_gtest(test_reduce_block
-    block_variants/test_reduce_block.cpp
-)
-
-tt_metal_add_gtest(test_broadcast_block
-    block_variants/test_broadcast_block.cpp
-)
-
-tt_metal_add_gtest(test_transpose_block
-    block_variants/test_transpose_block.cpp
-)
-
-tt_metal_add_gtest(test_pack_block
-    block_variants/test_pack_block.cpp
-)
-EOF
-
-echo "✅ Added 5 block variant tests to CMakeLists.txt"
+echo "✅ Added 5 block variant tests to UNIT_TESTS_LEGACY_SRC"
 echo ""
 echo "📋 Next steps:"
-echo "   1. cd tt-metal"
+echo "   1. cd ../../../../.. (to tt-metal root)"
 echo "   2. ./build_metal.sh --build-tests"
-echo "   3. ./build/test/tt_metal/test_eltwise_binary_block"
+echo "   3. ./build/test/tt_metal/unit_tests_legacy --gtest_filter='*Block*'"
 echo ""
-echo "Or use: ./run_block_tests.sh"
+echo "Note: Tests are part of unit_tests_legacy executable"
