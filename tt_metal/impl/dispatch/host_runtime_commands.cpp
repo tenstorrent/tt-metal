@@ -13,7 +13,7 @@
 #include <functional>
 #include <memory>
 
-#include "command_queue.hpp"
+#include "hardware_command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
@@ -118,7 +118,7 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
     return event_completed;
 }
 
-void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void Finish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {

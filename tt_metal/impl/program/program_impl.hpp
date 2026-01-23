@@ -10,7 +10,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "impl/dispatch/command_queue.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -260,8 +260,8 @@ public:
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(CommandQueue* queue);
-    CommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue* queue);
+    HWCommandQueue* get_last_used_command_queue() const;
 
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
 
@@ -317,7 +317,7 @@ public:
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
 private:
-    CommandQueue* last_used_command_queue_for_testing = nullptr;
+    HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;

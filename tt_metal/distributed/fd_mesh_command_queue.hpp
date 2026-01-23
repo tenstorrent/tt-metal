@@ -6,8 +6,6 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include "impl/dispatch/command_queue.hpp"
-
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"

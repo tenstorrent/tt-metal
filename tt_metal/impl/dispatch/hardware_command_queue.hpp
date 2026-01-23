@@ -16,7 +16,6 @@
 
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
-#include "command_queue.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
@@ -38,11 +37,19 @@ class IDevice;
 class Program;
 class SystemMemoryManager;
 enum NOC : uint8_t;
+struct Event;
+struct TraceDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
-class HWCommandQueue : public CommandQueue {
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+struct ReadCoreDataDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
+
+class HWCommandQueue {
 public:
     HWCommandQueue(
         IDevice* device,
@@ -51,26 +58,26 @@ public:
         NOC noc_index,
         uint32_t completion_queue_reader_core = 0);
 
-    ~HWCommandQueue() override;
+    ~HWCommandQueue();
 
-    const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
+    const CoreCoord& virtual_enqueue_program_dispatch_core() const;
 
     void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
+        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data);
 
-    uint32_t id() const override;
-    std::optional<uint32_t> tid() const override;
+    uint32_t id() const;
+    std::optional<uint32_t> tid() const;
 
-    SystemMemoryManager& sysmem_manager() override;
+    SystemMemoryManager& sysmem_manager();
 
-    // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
+    // This function is temporarily needed since MeshCommandQueue relies on the HWCommandQueue object
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
 
-    IDevice* device() override;
+    IDevice* device();
 
     // needed interface items
-    void terminate() override;
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void terminate();
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 private:
     uint32_t id_;
