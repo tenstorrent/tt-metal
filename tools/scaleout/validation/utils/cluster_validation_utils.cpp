@@ -1075,11 +1075,8 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
     bool fwd = true;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < num_iterations; i++) {
         for (const auto& traffic_config : traffic_configs) {
-            log_output_rank0(
-                "[TIMING] send_traffic_and_validate_links: Starting iteration " + std::to_string(i + 1) + " of " +
-                std::to_string(num_iterations));
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
             std::size_t d_size = traffic_config.data_size;
