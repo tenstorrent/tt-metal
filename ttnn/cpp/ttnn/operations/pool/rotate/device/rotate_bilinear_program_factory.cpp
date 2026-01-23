@@ -86,7 +86,9 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
 
     uint32_t cb_idx = tt::CBIndex::c_0;
 
-    cb_idx++;
+    const uint32_t fill_cb_page_size = input_stick_nbytes;
+    const auto [fill_cb_index, fill_cb_handle] =
+        tt::tt_metal::create_cb(cb_idx++, program, all_cores, fill_cb_page_size, 1, input_cb_data_format);
 
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_channels / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * element_size;
@@ -107,6 +109,8 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         cb_idx++, program, all_cores, output_cb_page_size, output_cb_pages, output_cb_data_format);
 
+    const bool fill_is_zero = (fill_value_bf16 == 0);
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index,
         scalar_cb_index,
@@ -114,6 +118,9 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         input_batch,
         input_height,
         input_width,
+        fill_cb_index,
+        input_channels,
+        static_cast<uint32_t>(fill_is_zero),
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
