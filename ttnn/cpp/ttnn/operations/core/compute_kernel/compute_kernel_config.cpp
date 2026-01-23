@@ -105,7 +105,9 @@ bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& comput
     return std::visit(
         [](auto&& compute_kernel_config) -> bool {
             using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                return false;
+            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
                 return compute_kernel_config.fp32_dest_acc_en;
             } else if constexpr (std::is_same_v<T, BlackholeComputeKernelConfig>) {
                 return compute_kernel_config.fp32_dest_acc_en;
