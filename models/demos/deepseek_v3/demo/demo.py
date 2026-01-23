@@ -319,9 +319,12 @@ def run_demo(
             if token_acc is not None:
                 # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
                 # This ensures the TT model uses the exact same token sequence as the reference.
-                pre_tokenized_prompts = [token_acc.get_prompt_token_ids()]
-                # Still need a placeholder prompt for the generator API
-                prompt_list = [""]
+                if prompts:
+                    prompt_list = prompts
+                else:
+                    # Still need a placeholder prompt for the generator API
+                    prompt_list = [""]
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
