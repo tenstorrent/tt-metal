@@ -331,8 +331,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *         Available policies: StreamingPolicy, StreamingBatchedPolicy, PreloadedPolicy, PersistentPolicy
  * @tparam ReconfigPolicy Data format reconfiguration policy - defaults to policies::ReconfigBothPolicy
  *         Available policies: ReconfigNonePolicy, ReconfigInputPolicy, ReconfigOutputPolicy, ReconfigBothPolicy
- * @tparam InitPolicy Init/uninit lifecycle policy - defaults to policies::InitBothPolicy
- *         Available policies: InitBothPolicy, InitOnlyPolicy, UninitOnlyPolicy, NoInitPolicy
+ * @tparam InitPolicy Init/uninit lifecycle policy - defaults to policies::InitUninitPolicy
+ *         Available policies: InitUninitPolicy, InitOnlyPolicy, UninitOnlyPolicy, NoInitPolicy
  *
  * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
@@ -419,7 +419,7 @@ template <
     uint32_t ocb,
     typename InputPolicy = policies::StreamingPolicy,
     typename ReconfigPolicy = policies::ReconfigBothPolicy,
-    typename InitPolicy = policies::InitBothPolicy,
+    typename InitPolicy = policies::InitUninitPolicy,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
