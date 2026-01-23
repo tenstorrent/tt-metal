@@ -265,6 +265,92 @@ def post_process_ops_log_by_config(
     return results
 
 
+def post_process_cpp_log_by_config(
+    csv_file: str,
+    test_configs: list[dict],
+    num_iters: int,
+) -> dict:
+    """
+    Post-process the C++ profiler CSV log to extract per-config statistics.
+
+    Each test config has two trace IDs: one for warmup and one for actual iterations.
+    We identify the "actual" trace IDs by matching row count to num_iters * num_devices.
+
+    Stats computation:
+        - Per iteration:  max across devices  -> "worst device time for this iter"
+        - Per config:     avg across iters    -> "average worst-device time"
+        - Across configs: min of AVG          -> "best config"
+
+    Args:
+        csv_file: Path to the CSV file
+        test_configs: List of test config dicts from collect_test_configs()
+        num_iters: Number of actual iterations per test config (excluding warmup)
+
+    Returns:
+        Dict mapping hyperparam_string to stats dict with MIN, MAX, AVG, STD, etc.
+    """
+    logger.info(f"Processing C++ profiler log: {csv_file}")
+
+    df = pd.read_csv(csv_file)
+
+    # Filter out rows with empty METAL TRACE ID
+    df = df[df["METAL TRACE ID"].notna()]
+
+    # Infer num_devices from unique DEVICE IDs
+    num_devices = df["DEVICE ID"].nunique()
+    expected_rows = num_iters * num_devices
+
+    # Find "actual" trace IDs (those with row count = num_iters * num_devices)
+    trace_counts = df.groupby("METAL TRACE ID").size()
+    actual_trace_ids = trace_counts[trace_counts == expected_rows].index.tolist()
+    actual_trace_ids = sorted(actual_trace_ids)  # maintain execution order
+
+    logger.info(
+        f"Found {len(actual_trace_ids)} actual trace IDs (expected {len(test_configs)}), "
+        f"{num_devices} devices, {num_iters} iters per config"
+    )
+
+    # Validate count matches test_configs
+    if len(actual_trace_ids) != len(test_configs):
+        raise ValueError(f"Found {len(actual_trace_ids)} actual trace IDs, expected {len(test_configs)} test configs")
+
+    duration_col = "DEVICE KERNEL DURATION [ns]"
+    results = {}
+
+    for cfg, trace_id in zip(test_configs, actual_trace_ids):
+        config_df = df[df["METAL TRACE ID"] == trace_id].copy()
+        config_df = config_df.sort_values("GLOBAL CALL COUNT").reset_index(drop=True)
+
+        # For each iteration: take max duration across devices
+        per_iter_worst = []
+        for iter_idx in range(num_iters):
+            start = iter_idx * num_devices
+            end = start + num_devices
+            iter_df = config_df.iloc[start:end]
+            worst = iter_df[duration_col].max()
+            per_iter_worst.append(worst)
+
+        per_iter_worst = pd.Series(per_iter_worst)
+
+        results[cfg["hyperparam_string"]] = {
+            "MIN": per_iter_worst.min(),
+            "MAX": per_iter_worst.max(),
+            "AVG": per_iter_worst.mean(),
+            "STD": per_iter_worst.std(),
+            "NUM_ITERS": num_iters,
+            "NUM_DEVICES": num_devices,
+            "OPS_PER_ITER": 1,
+        }
+
+        logger.debug(
+            f"Config {cfg['hyperparam_string']}: {num_iters} iters x {num_devices} devices, "
+            f"MIN={per_iter_worst.min()/1000:.2f}us, MAX={per_iter_worst.max()/1000:.2f}us, "
+            f"AVG={per_iter_worst.mean()/1000:.2f}us"
+        )
+
+    return results
+
+
 def identify_best_worst_configs(results_by_config: dict) -> dict:
     """
     Identify best and worst hyperparam configurations.
@@ -298,6 +384,7 @@ def generate_perf_chart(
 ) -> str:
     """
     Generate a matplotlib bar chart showing min/max performance for each config.
+    Also saves results to CSV and a summary TXT file.
 
     Args:
         test_filter: Test filter name (e.g., "spatial_activation")
@@ -312,6 +399,8 @@ def generate_perf_chart(
     if not results_by_config:
         logger.warning("No results to plot")
         return None
+
+    os.makedirs(output_dir, exist_ok=True)
 
     configs = list(results_by_config.keys())
     avgs = [results_by_config[c]["AVG"] for c in configs]
@@ -373,12 +462,67 @@ def generate_perf_chart(
     plt.tight_layout()
 
     # Save chart
-    os.makedirs(output_dir, exist_ok=True)
     chart_path = os.path.join(output_dir, f"{test_filter}_perf.png")
     plt.savefig(chart_path, dpi=150, bbox_inches="tight")
     plt.close()
-
     logger.info(f"Saved performance chart to: {chart_path}")
+
+    # Save CSV (in execution order)
+    csv_path = os.path.join(output_dir, f"{test_filter}_results.csv")
+    csv_rows = []
+    for cfg in configs:
+        stats = results_by_config[cfg]
+        csv_rows.append(
+            {
+                "hyperparam_string": cfg,
+                "AVG": stats["AVG"],
+                "MIN": stats["MIN"],
+                "MAX": stats["MAX"],
+                "STD": stats["STD"],
+                "NUM_ITERS": stats["NUM_ITERS"],
+                "NUM_DEVICES": stats["NUM_DEVICES"],
+                "OPS_PER_ITER": stats["OPS_PER_ITER"],
+            }
+        )
+    csv_df = pd.DataFrame(csv_rows)
+    csv_df.to_csv(csv_path, index=False)
+    logger.info(f"Saved results CSV to: {csv_path}")
+
+    # Save summary TXT with top/bottom 3
+    txt_path = os.path.join(output_dir, f"{test_filter}_summary.txt")
+    sorted_configs = sorted(results_by_config.items(), key=lambda x: x[1]["AVG"])
+    top_3 = sorted_configs[:3]
+    bottom_3 = sorted_configs[-3:]
+
+    with open(txt_path, "w") as f:
+        f.write(f"Test filter: {test_filter}\n")
+        f.write(f"Total configs: {len(configs)}\n")
+        f.write(f"Op sequence: {op_seq_str}\n")
+        f.write("\n")
+
+        f.write("=" * 40 + "\n")
+        f.write("TOP 3 BEST CONFIGS (lowest AVG)\n")
+        f.write("=" * 40 + "\n")
+        for i, (cfg, stats) in enumerate(top_3, 1):
+            f.write(f"\n#{i}: {cfg}\n")
+            f.write(f"  AVG: {stats['AVG']/divisor:.2f} {unit}\n")
+            f.write(f"  MIN: {stats['MIN']/divisor:.2f} {unit}\n")
+            f.write(f"  MAX: {stats['MAX']/divisor:.2f} {unit}\n")
+            f.write(f"  STD: {stats['STD']/divisor:.2f} {unit}\n")
+
+        f.write("\n")
+        f.write("=" * 40 + "\n")
+        f.write("TOP 3 WORST CONFIGS (highest AVG)\n")
+        f.write("=" * 40 + "\n")
+        for i, (cfg, stats) in enumerate(reversed(bottom_3), 1):
+            f.write(f"\n#{i}: {cfg}\n")
+            f.write(f"  AVG: {stats['AVG']/divisor:.2f} {unit}\n")
+            f.write(f"  MIN: {stats['MIN']/divisor:.2f} {unit}\n")
+            f.write(f"  MAX: {stats['MAX']/divisor:.2f} {unit}\n")
+            f.write(f"  STD: {stats['STD']/divisor:.2f} {unit}\n")
+
+    logger.info(f"Saved summary TXT to: {txt_path}")
+
     return chart_path
 
 
@@ -416,8 +560,13 @@ def run_perf_test(base_command: str, test_filter: str, test_name: str, num_iters
 
     # Step 3: Post-process logs by config
     logger.info(f"=== Post-processing logs for test filter: {test_filter} ===")
-    results_by_config = post_process_ops_log_by_config(
-        subdir,
+    # results_by_config = post_process_ops_log_by_config(
+    #    subdir,
+    #    test_configs,
+    #    num_iters,
+    # )
+    results_by_config = post_process_cpp_log_by_config(
+        f"generated/profiler/{subdir}/.logs/cpp_device_perf_report.csv",
         test_configs,
         num_iters,
     )
