@@ -25,6 +25,9 @@
 - 2026-01-23: Hoisted `relu_tile_init()` out of the per-layer matmul+relu block (single init per kernel).
   - B=1, K=512, layers=4: DEVICE FW avg 8.88 us; DEVICE KERNEL avg 7.85 us.
   - B=1, K=1024, layers=4: DEVICE FW avg 12.20 us; DEVICE KERNEL avg 10.46 us.
+- 2026-01-23: Replaced SFPU relu with packer relu (toggle `llk_pack_relu_config` around MM1 pack).
+  - B=1, K=512, layers=4: DEVICE FW avg 8.19 us; DEVICE KERNEL avg 7.16 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 11.52 us; DEVICE KERNEL avg 9.77 us.
 
 ## Knowledge
 - Resblock uses five kernels in `models/demos/resblock/kernels/` with compute in `compute.cpp` and data movement in `reader.cpp`/`writer.cpp` + mcast.
@@ -34,3 +37,4 @@
 - `binary_dest_reuse_tiles` (eltwise_binary) can add bias directly from CB to the matmul DST without a separate copy tile; this substantially reduced kernel duration.
 - `DeviceZoneScopedN` profiler scopes in the hot-path resblock kernels add ~0.7–0.8 us of device kernel overhead for K=512/1024; removing them improved kernel duration without changing math.
 - `relu_tile_init()` can be called once per kernel without correctness issues; per-layer init was redundant and cost a small but measurable amount.
+- Packer relu (`llk_pack_relu_config(ReluType::ZERO_RELU)`) is a drop-in replacement for SFPU relu in this kernel and cuts another ~0.7 us for K=512/1024.

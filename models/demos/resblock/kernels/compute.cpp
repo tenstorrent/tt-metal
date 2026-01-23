@@ -6,8 +6,6 @@
 
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/relu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
 #include "../../deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
@@ -37,9 +35,6 @@ FORCE_INLINE void matmul_with_relu_block() {
             }
         }
     }
-    {
-        relu_tile(0);
-    }
     tile_regs_commit();
 
     if constexpr (PopA) {
@@ -48,7 +43,9 @@ FORCE_INLINE void matmul_with_relu_block() {
     cb_pop_front(CbB, NumTilesK);  // Pop weight CB to advance to next layer's weights
 
     tile_regs_wait();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     pack_tile(0, CbOut, OutputTileId);  // Pack at offset OutputTileId
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
     tile_regs_release();
 
     cb_push_back(CbOut, num_output_tiles);
@@ -127,8 +124,6 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
-
-    relu_tile_init();
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
