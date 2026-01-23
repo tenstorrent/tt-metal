@@ -165,18 +165,28 @@ def run_all_gather_matmul_galaxy_impl(
     # Setup fabric
     all_gather_topology = ttnn.Topology.Linear
 
-    worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    # Sub-device setup only needed for fused path (like Galaxy decode mode)
+    # Non-fused path runs without sub-device (like Galaxy prefill mode)
+    worker_sub_device_id = None
+    sub_device_stall_group = None
+    sub_device_manager = None
+
+    if use_fused:
+        worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # Create semaphores - need 2 semaphores per iteration for all_gather_async
     num_buffers = 8
     # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
+    semaphore_cores = (
+        SUB_DEVICE_CRS if use_fused else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})
+    )
     ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers * 2)
+        ttnn.create_global_semaphore(mesh_device, semaphore_cores, 0) for _ in range(num_buffers * 2)
     ]
 
     # Memory configs - use PREFETCHER_NOC1_GRID to avoid overlap with intermediate cores (3,0)-(3,3)
@@ -474,12 +484,13 @@ def run_all_gather_matmul_galaxy_impl(
         return outs if store_all_results else [out]
 
     def run_non_fused_op(n_iters, store_all_results=True):
-        """Run non-fused: all_gather_async + ttnn.linear."""
+        """Run non-fused: all_gather_async + ttnn.linear (like Galaxy model prefill mode)."""
         outs = []
-        # Use DRAM interleaved for non-fused path (simpler, like model does for some paths)
+        # Use DRAM interleaved for non-fused path (like model does in prefill mode)
         dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
         for i in range(n_iters):
             # AllGather - requires 2 semaphores passed as a list
+            # No sub-device (like Galaxy prefill mode)
             sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
@@ -490,18 +501,15 @@ def run_all_gather_matmul_galaxy_impl(
                 memory_config=dram_interleaved,
                 topology=all_gather_topology,
                 num_links=num_links,
-                subdevice_id=worker_sub_device_id,
             )
-            # Matmul - use sharded output like fused op for fair comparison
-            # Reshard ag_out to match fused path intermediate, then do matmul
-            ag_out_sharded = ttnn.to_memory_config(ag_out, ag_output_mem_config)
+            # Matmul with DRAM interleaved and auto core_grid (like model prefill mode)
             mm_out = ttnn.linear(
-                ag_out_sharded,
-                tt_in1_tensor,  # Sharded weights (same as fused)
-                memory_config=mm_output_sharded_mem_config,
-                program_config=non_fused_program_config,  # mcast_in0 config (no global CB needed)
+                ag_out,
+                tt_in1_tensor_non_fused,  # DRAM interleaved weights
+                memory_config=dram_interleaved,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
+                core_grid=ttnn.CoreGrid(y=7, x=10),  # Full device grid (7x10 for TG)
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -567,8 +575,10 @@ def run_all_gather_matmul_galaxy_impl(
     for tensor_index in range(len(tt_outs)):
         validate(tt_outs[tensor_index], output_tensor_goldens_list[tensor_index])
 
-    mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    # Only cleanup sub-device if it was set up (fused path)
+    if use_fused:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
     logger.info("AllGather+Matmul Galaxy test completed successfully")
     return avg_time_per_iter_us
