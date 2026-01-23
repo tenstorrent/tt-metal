@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-
+from models.common.utility_functions import skip_for_blackhole
 
 # ============================================================================
 # Basic Functionality Tests
@@ -232,6 +232,7 @@ def test_memory_configs(device, memory_config):
     assert comparison_passed, f"Memory config test failed for {memory_config}"
 
 
+@skip_for_blackhole("Incorrect result on BH github issue #36263")
 @pytest.mark.parametrize("shard_strategy", ["height", "width", "block"])
 def test_sharded_memory(device, shard_strategy):
     """Test rotation with height, width and block sharded memory configurations using full grid.

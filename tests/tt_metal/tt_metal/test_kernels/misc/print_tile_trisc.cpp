@@ -35,8 +35,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in0_cb, num_tiles);
     untilize_uninit(in0_cb);
 }
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Read out the tile we want to print using BRISC, put it in c_in0
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_intermed = tt::CBIndex::c_1;
@@ -61,4 +60,3 @@ void MAIN {
     DPRINT_PACK(DPRINT << "Print tile from Pack:" << ENDL();
                 DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL(););
 }
-}  // namespace NAMESPACE

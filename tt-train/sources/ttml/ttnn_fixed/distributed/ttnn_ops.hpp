@@ -7,9 +7,12 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim);
-tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor);
-tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim);
+tt::tt_metal::Tensor all_gather(
+    const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
+tt::tt_metal::Tensor all_reduce(
+    const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis = std::nullopt);
+tt::tt_metal::Tensor reduce_scatter(
+    const tt::tt_metal::Tensor& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 
 /**
  * Direction for ring shift operation.
