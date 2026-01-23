@@ -354,7 +354,7 @@ if [[ "$BUNDLE_PYTHON" == "true" ]]; then
 
     # Patch bin/activate (bash/zsh) using awk for portability
     # Key insight: The activate script has a section that unsets PYTHONHOME midway through,
-    # so we must set PYTHONHOME at the END of the script, after all unset logic runs.
+    # so we must set PYTHONHOME after that, right before the final hash -r call.
     # We also need to modify deactivate() to unset PYTHONHOME if no old value was saved.
     if [ -f "$PYTHON_ENV_DIR/bin/activate" ]; then
         awk '
@@ -371,13 +371,16 @@ if [[ "$BUNDLE_PYTHON" == "true" ]]; then
             }
             next
         }
-        { print }
-        END {
-            print ""
+        # Insert PYTHONHOME export right before the final hash -r call
+        /^hash -r 2>\/dev\/null \|\| true$/ {
             print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
             print "PYTHONHOME=\"$VIRTUAL_ENV\""
             print "export PYTHONHOME"
+            print ""
+            print $0
+            next
         }
+        { print }
         ' "$PYTHON_ENV_DIR/bin/activate" > "$PYTHON_ENV_DIR/bin/activate.tmp"
         mv "$PYTHON_ENV_DIR/bin/activate.tmp" "$PYTHON_ENV_DIR/bin/activate"
         chmod +x "$PYTHON_ENV_DIR/bin/activate"
@@ -386,12 +389,15 @@ if [[ "$BUNDLE_PYTHON" == "true" ]]; then
     # Patch bin/activate.csh (C shell)
     if [ -f "$PYTHON_ENV_DIR/bin/activate.csh" ]; then
         awk '
-        { print }
-        END {
-            print ""
+        # Insert PYTHONHOME export right before the rehash call
+        /^rehash$/ {
             print "# Set PYTHONHOME for bundled Python (required for NFS/distributed contexts)"
             print "setenv PYTHONHOME \"$VIRTUAL_ENV\""
+            print ""
+            print $0
+            next
         }
+        { print }
         ' "$PYTHON_ENV_DIR/bin/activate.csh" > "$PYTHON_ENV_DIR/bin/activate.csh.tmp"
         mv "$PYTHON_ENV_DIR/bin/activate.csh.tmp" "$PYTHON_ENV_DIR/bin/activate.csh"
     fi
