@@ -608,15 +608,19 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                                      ProgramConfigType,
                                      operations::matmul::
                                          MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                TT_FATAL(
-                    input_tensor_a.is_sharded(),
-                    "Input tensor A must be sharded for batched DRAM sharded program config");
+                // Batch-sharded DRAM matmul validations
+                // For batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+                // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
+                // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
+                // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
+                // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/12 complete [M, K] matrices)
+                TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for batch-sharded DRAM matmul");
                 TT_FATAL(
                     attributes.output_mem_config.is_sharded(),
-                    "Output memory config must be sharded for batched DRAM sharded program config");
+                    "Output memory config must be sharded for batch-sharded DRAM matmul");
                 TT_FATAL(
-                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                    "Input A memory layout must be WIDTH_SHARDED, got: {}",
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Input A memory layout must be HEIGHT_SHARDED for batch-sharded DRAM matmul, got: {}",
                     input_tensor_a.memory_config().memory_layout());
                 TT_FATAL(
                     input_tensor_a.memory_config().buffer_type() == attributes.output_mem_config.buffer_type(),
@@ -632,34 +636,20 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                     "Input A shard orientation must be ROW_MAJOR, got: {}",
                     input_tensor_a.shard_spec().value().orientation);
-                const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
-                const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
-                uint32_t per_core_M = program_config.per_core_M;
-                auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-                // No padding
-                TT_FATAL(M == per_core_M, "M ({}) must equal per_core_M ({})", M, per_core_M);
-                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
+                // For batch sharding, the contracted dimension (N in A, N in B) must be divisible by in0_block_w
+                const auto N_dim =
+                    operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);  // K dim of A = N
                 TT_FATAL(
-                    per_core_M == (shard_shape[0] / in0_tile.get_height()),
-                    "per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",
-                    per_core_M,
-                    (shard_shape[0] / in0_tile.get_height()));
-                TT_FATAL(
-                    K % program_config.in0_block_w == 0,
-                    "K ({}) must be divisible by in0_block_w ({})",
-                    K,
-                    program_config.in0_block_w);
-                TT_FATAL(
-                    (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-                    "shard_shape[1] / in0_tile.get_width() ({}) must be divisible by in0_block_w ({})",
-                    (shard_shape[1] / in0_tile.get_width()),
+                    N_dim % program_config.in0_block_w == 0,
+                    "N dimension ({}) must be divisible by in0_block_w ({})",
+                    N_dim,
                     program_config.in0_block_w);
 
-                // tensor in1
+                // tensor in1: HEIGHT_SHARDED in DRAM (batch-sharded)
                 TT_FATAL(
-                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                    "Input B memory layout must be WIDTH_SHARDED, got: {}",
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Input B memory layout must be HEIGHT_SHARDED for batch-sharded DRAM matmul, got: {}",
                     input_tensor_b.memory_config().memory_layout());
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

@@ -506,31 +506,54 @@ def test_batched_mm_wkv_b1(device):
 @skip_for_blackhole("Deepseek tests target Wormhole")
 def test_matmul_batched_hs_dram_sharded_config(device):
     """
-    Simple test for MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.
-    Uses L1 width-sharded in0 and DRAM width-sharded in1.
+    Test for Batch-Sharded DRAM Matmul.
+
+    Batched matmul: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+
+    Batch sharding layout - each worker handles B/12 complete matmuls:
+    - in0: L1 sharded by batch - each core has B/12 complete [M, N] matrices
+    - in1: DRAM sharded by batch - each bank has B/12 complete [N, K] matrices
+    - output: L1 sharded by batch - each core outputs B/12 complete [M, K] matrices
+
+    This is simpler than height/width sharding because each worker operates
+    independently on its batch partition with no cross-worker communication.
     """
     torch.manual_seed(0)
 
-    # Simple dimensions: M=32, K=128, N=384 (divisible by 12 DRAM banks)
-    m, k, n = 32, 128, 384
-    tile_h, tile_w = 32, 32
+    # Dimensions for batched matmul
+    # B must be divisible by 12 (number of DRAM banks)
     num_dram_banks = 12
+    num_cores_x, num_cores_y = 4, 3  # 4x3 = 12 compute cores (valid on Wormhole)
+    num_cores = num_cores_x * num_cores_y
+    batch = 12  # Total batches (divisible by 12)
+    m, n, k = 32, 64, 32  # Each matmul: [M, N] x [N, K] = [M, K]
+    tile_h, tile_w = 32, 32
+    batches_per_core = batch // num_dram_banks  # 1 batch per core/bank
 
-    in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k, n]
+    # Shapes: [1, B, M, N] x [1, B, N, K] = [1, B, M, K]
+    in0_shape = [1, batch, m, n]
+    in1_shape = [1, batch, n, k]
+    out_shape = [1, batch, m, k]
 
     # Create torch tensors
     in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
     in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
 
-    # in0: L1 width-sharded (shard K across 4 cores)
-    in0_core_grid = ttnn.CoreGrid(y=1, x=4)
-    in0_memory_config = ttnn.create_sharded_memory_config(
-        in0_shape,
-        core_grid=in0_core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # L1 shard grid: 4x3 = 12 compute cores (valid 2D grid on Wormhole)
+    l1_shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
     )
+
+    # DRAM shard grid: 12 DRAM banks (1D grid from 0 to 11)
+    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+    # in0: L1 sharded by batch
+    # Each core gets batches_per_core complete [M, N] matrices
+    # Shard shape: [batches_per_core * M, N]
+    in0_shard_shape = [batches_per_core * m, n]
+    in0_shard_spec = ttnn.ShardSpec(l1_shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, tile_w)),
@@ -539,15 +562,16 @@ def test_matmul_batched_hs_dram_sharded_config(device):
         device=device,
         memory_config=in0_memory_config,
     )
-    print("Created in0_t")
-    print(f"in0_memory_config: {in0_memory_config}")
-    print(in0_t.is_sharded())
+    print(f"Created in0_t (batch-sharded in L1 on {num_cores} cores)")
+    print(f"in0_shape: {in0_shape}, shard_shape: {in0_shard_shape}")
 
-    # in1: DRAM width-sharded across 12 banks
-    in1_shard_shape = [k, n // num_dram_banks]
-    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    # in1: DRAM sharded by batch across 12 DRAM banks
+    # Each DRAM bank gets batches_per_core complete [N, K] matrices
+    # Shard shape: [batches_per_core * N, K]
+    in1_shard_shape = [batches_per_core * n, k]
+    in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+
     in1_t = ttnn.from_torch(
         in1,
         tile=ttnn.Tile((tile_h, tile_w)),
@@ -556,28 +580,35 @@ def test_matmul_batched_hs_dram_sharded_config(device):
         device=device,
         memory_config=in1_memory_config,
     )
+    print(f"Created in1_t (batch-sharded in DRAM across {num_dram_banks} banks)")
+    print(f"in1_shape: {in1_shape}, shard_shape: {in1_shard_shape}")
 
-    # Output: L1 width-sharded
-    out_core_grid = ttnn.CoreGrid(y=1, x=4)
-    out_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, m, n],
-        core_grid=out_core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+    # Output: L1 sharded by batch
+    # Each core outputs batches_per_core complete [M, K] matrices
+    # Shard shape: [batches_per_core * M, K]
+    out_shard_shape = [batches_per_core * m, k]
+    out_shard_spec = ttnn.ShardSpec(l1_shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+    print(f"Created out_memory_config (batch-sharded)")
+    print(f"out_shape: {out_shape}, shard_shape: {out_shard_shape}")
 
-    # Program config
-    in0_block_w = k // 4 // tile_w  # K per core / tile_w = 32 / 32 = 1
-    per_core_M = m // tile_h  # 32 / 32 = 1
-    per_core_N = n // 4 // tile_w  # N per core / tile_w = 96 / 32 = 3
+    # Program config for batch sharding:
+    # - in0_block_w: N tiles per block (inner loop over N dimension)
+    # - per_core_M: M tiles per matmul (full M)
+    # - per_core_N: K tiles per matmul (full K) - note: this is output width
+    in0_block_w = n // tile_w  # N / tile_w = 64 / 32 = 2
+    per_core_M = m // tile_h  # M / tile_h = 32 / 32 = 1
+    per_core_N = k // tile_w  # K / tile_w = 32 / 32 = 1 (output width)
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
         in0_block_w=in0_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         fused_activation=None,
     )
+    print(f"Program config: in0_block_w={in0_block_w}, per_core_M={per_core_M}, per_core_N={per_core_N}")
 
-    # Run matmul
+    # Run batched matmul
     output_t = ttnn.matmul(
         in0_t,
         in1_t,
@@ -588,11 +619,12 @@ def test_matmul_batched_hs_dram_sharded_config(device):
 
     # Validate
     output_tensor = ttnn.to_torch(output_t)
-    pt_out = in0 @ in1
+    # PyTorch batched matmul
+    pt_out = torch.matmul(in0, in1)
 
     expected_pcc = 0.99
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(f"Batched HS DRAM Sharded test: {pcc_message}")
+    logger.info(f"Batch-sharded DRAM matmul test: {pcc_message}")
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
