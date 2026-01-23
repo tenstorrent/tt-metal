@@ -47,9 +47,9 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
-            return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
+            return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices), and returns a ROW_MAJOR layout output tensor. Defaults to `False`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
-            output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            output_layout (ttnn.Layout, optional): the layout for the output tensor. If not specified, matches the input tensor layout. Defaults to `None`.
 
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
@@ -73,7 +73,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout,
+               const std::optional<Layout> output_layout,
                bool config_tensor_in_dram) -> nb::object {
                 auto result = self(
                     input_tensor,
@@ -120,7 +120,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             nb::arg("reallocate_halo_output") = true,
             nb::arg("return_indices") = false,
             nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+            nb::arg("output_layout") = nb::none(),
             nb::arg("config_tensor_in_dram") = false});
 }
 
@@ -152,7 +152,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
-            output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            output_layout (ttnn.Layout, optional): the layout for the output tensor. If not specified, matches the input tensor layout. Defaults to `None`.
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
 
         Returns:
@@ -178,7 +178,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                bool deallocate_input,
                bool reallocate_halo_output,
                const DataType dtype,
-               const Layout output_layout,
+               const std::optional<Layout> output_layout,
                bool config_tensor_in_dram) -> ttnn::Tensor {
                 return self(
                     input_tensor,
@@ -221,7 +221,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,
             nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
-            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR),
+            nb::arg("output_layout") = nb::none(),
             nb::arg("config_tensor_in_dram") = false});
 }
 
