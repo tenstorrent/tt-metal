@@ -173,6 +173,9 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
+    // Method to emit merged cabling descriptor
+    void emit_cabling_descriptor(const std::string& output_path) const;
+
 private:
     // Common initialization logic for all constructors
     void initialize_cluster(
