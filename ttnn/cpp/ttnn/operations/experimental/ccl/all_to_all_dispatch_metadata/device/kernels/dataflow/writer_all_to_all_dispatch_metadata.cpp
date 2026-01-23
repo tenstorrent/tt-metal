@@ -1127,7 +1127,7 @@ void kernel_main() {
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
             {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
     cb_pop_front(metadata_buffer_id, tokens_per_device);
-    // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including antipodal
+    // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal device
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis, true>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, global_noc_semaphore_address);
 
