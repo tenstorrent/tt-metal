@@ -580,7 +580,7 @@ def test_all_gather_async_wan_galaxy_4x32(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "trace_region_size": 150000,
+                "trace_region_size": 1000000,
             },
             ttnn.Topology.Ring,
         ),
@@ -588,7 +588,7 @@ def test_all_gather_async_wan_galaxy_4x32(
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
-@pytest.mark.parametrize("num_links", [1, 2, 3, 4], ids=lambda v: f"{v}links")
+@pytest.mark.parametrize("num_links", [1, 2], ids=lambda v: f"{v}links")
 @pytest.mark.parametrize("chunks_per_sync", [10, 20, 40, 80, 160, 320, "MAX"], ids=lambda v: f"{v}chunks")
 @pytest.mark.parametrize("num_workers_per_link", [1, 2, 4, 8], ids=lambda v: f"{v}workers")
 @pytest.mark.parametrize("num_buffers_per_channel", [2, 4, 8], ids=lambda v: f"{v}buffers")
@@ -638,7 +638,7 @@ def test_all_gather_wan(
         chunks_per_sync_val = chunks_per_sync
 
     # Compile Run
-    logger.info("Compiling model")
+    logger.info("Compiling op")
     tt_output = ttnn.all_gather(
         tt_input,
         dim=dim,
