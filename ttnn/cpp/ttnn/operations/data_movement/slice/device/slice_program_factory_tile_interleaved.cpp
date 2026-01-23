@@ -216,7 +216,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
 }
 
 void SliceTileInterleavedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
     auto& program = cached_program.program;
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
