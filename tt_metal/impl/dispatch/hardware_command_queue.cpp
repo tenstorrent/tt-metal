@@ -13,6 +13,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "llrt/tt_cluster.hpp"
+#include "dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -55,8 +57,6 @@ void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
-
-HWCommandQueue::~HWCommandQueue() = default;
 
 IDevice* HWCommandQueue::device() { return this->device_; }
 
