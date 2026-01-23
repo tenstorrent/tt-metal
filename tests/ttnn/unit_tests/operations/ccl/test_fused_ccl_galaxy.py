@@ -413,13 +413,13 @@ def run_all_gather_matmul_galaxy_impl(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
-    # Weights tensor for non-fused path (on rectangular grid)
+    # Weights tensor for non-fused path (DRAM interleaved)
     tt_in1_tensor_non_fused = ttnn.from_torch(
         in1_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=in1_dtype,
-        memory_config=non_fused_in1_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
@@ -495,7 +495,7 @@ def run_all_gather_matmul_galaxy_impl(
             # Matmul - let ttnn auto-select program config
             mm_out = ttnn.linear(
                 ag_out,
-                tt_in1_tensor,  # Use original weights (will be moved to DRAM if needed)
+                tt_in1_tensor_non_fused,  # DRAM interleaved weights
                 memory_config=dram_interleaved,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
