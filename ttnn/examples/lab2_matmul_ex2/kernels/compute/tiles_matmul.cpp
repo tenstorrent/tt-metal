@@ -12,10 +12,12 @@ namespace NAMESPACE {
 void MAIN {
     // Note: The argument index to get_compile_time_arg_val() must be a compile time constant.
     const uint32_t num_k_blocks = get_compile_time_arg_val(0);
-
-    // Read parameters from the kernel's runtime arguments.
-    int arg_idx = 0;
-    uint32_t num_tiles = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t M_block_tiles = get_compile_time_arg_val(1);
+    const uint32_t N_block_tiles = get_compile_time_arg_val(2);
+    const uint32_t K_block_tiles = get_compile_time_arg_val(3);
+    const uint32_t A_slab_tiles = get_compile_time_arg_val(4);
+    const uint32_t B_slab_tiles = get_compile_time_arg_val(5);
+    const uint32_t C_block_tiles = get_compile_time_arg_val(6);
 
     // We are going to read from these two circular buffers.
     // Note that indices have to be in sync with the reader kernel.
@@ -24,6 +26,8 @@ void MAIN {
     // And write to this circular buffer.
     // Note that indices have to be in sync with the writer kernel.
     constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;
+
+    constexpr tt::CBIndex cb_intermediate = tt::CBIndex::c_24;
 
     // FPU has a destination register, which is an array that can fit multiple tiles (details vary on data type).
     // For our case, FPU will add two tiles and produce a result that is a single tile.
@@ -38,15 +42,45 @@ void MAIN {
     // The reader is expected to read the A's and B's tile rows and tile
     // columns for each output tile
     // Loop over all the MtxNt tiles in the output matrix and compute each tile of the result.
-    for (uint32_t out_tile = 0; out_tile < num_tiles; ++out_tile) {
-        // Make sure destination register array is ready for FPU to write its result to.
-        // Note that this will also initialize all the tiles in the destination register array to 0,
-        // so it's important that this is done before the Kt loop, since that loop needs to
-        // accumulate sum of partial products into the destination tile.
-        tile_regs_acquire();
+    for (uint32_t b = 0; b < num_k_blocks; ++b) {
+        cb_wait_front(cb_in0, A_slab_tiles); // Ensure that A_slab(b) is in CB0
+        cb_wait_front(cb_in1, B_slab_tiles); // Ensure that B_slab(b) is in CB1
 
         // Loop over all the tiles along the K dimension to accumulate partial products.
-        for (uint32_t kt = 0; kt < Kt; kt++) {
+        for (uint32_t i = 0; i < M_block_tiles; i++) {
+            for (uint32_t j = 0; j < N_block_tiles; j++) {
+                // Get the current accumulator tile for C(i,j)
+                if (b == 0) {
+                    // First K-block: start from zero
+                    tile_regs_acquire();
+                } else {
+                    copy_tile_to_dst_init_short(cb_intermediate);
+                    cb_wait_front(cb_intermediate, C_block_tiles);
+
+                    copy_tile(cb_intermediate, i * N_block_tiles + j, dst_reg_idx);
+
+                    mm_init_short(cb_in0, cb_in1);
+                }
+
+               // Add this K-block's contribution to acc_tile
+               for (k_local in 0 .. K_block_tiles) {
+                // Indices into the current A and B slabs
+                a_tile = A_slab_tile(i, k_local)
+                b_tile = B_slab_tile(k_local, j)
+
+                // Multiply and accumulate into the accumulator tile
+                acc_tile += matmul(a_tile, b_tile)    // tile × tile → tile accumulate
+            }
+            // Store updated result for C(i,j)
+            if (b == num_blocks - 1)
+               // Last K-block: acc_tile is the final result forC(i,j)
+               store_final_C_tile(i, j, acc_tile)
+            else
+               // Not last K-block: acc_tile is a partial result to be reused later
+               store_partial_C_tile(i, j, acc_tile)
+
+
+
             // Wait until there is a tile in each of the input circular buffers.
             // In more advanced applications we could wait for multiple tiles in each buffer and use them to
             // perform a more complex operation or to improve performance.
