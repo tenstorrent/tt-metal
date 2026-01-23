@@ -113,14 +113,11 @@ tt::tt_metal::Tensor ring_shift(
 
     // Build connections for even->odd and odd->even transfers separately
     // This two-phase approach avoids deadlock since send is blocking
+    const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
     std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
     even_to_odd_connections.reserve(num_devices / 2);
     odd_to_even_connections.reserve(num_devices / 2);
-
-    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> send_recv_logical_coord = {
-        {tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 0)},
-    };
 
     const bool forward = (direction == RingShiftDirection::Forward);
     for (auto sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
@@ -131,11 +128,9 @@ tt::tt_metal::Tensor ring_shift(
         recv_coord[cluster_axis_value] = target_idx;
 
         auto& target_connections = (idx % 2U == 0U) ? even_to_odd_connections : odd_to_even_connections;
-        for (auto [sender_core, recv_core] : send_recv_logical_coord) {
-            target_connections.emplace_back(
-                tt::tt_metal::distributed::MeshCoreCoord{sender_coord, sender_core},
-                tt::tt_metal::distributed::MeshCoreCoord{recv_coord, recv_core});
-        }
+        target_connections.emplace_back(
+            tt::tt_metal::distributed::MeshCoreCoord{sender_coord, send_recv_core},
+            tt::tt_metal::distributed::MeshCoreCoord{recv_coord, send_recv_core});
     }
 
     // For intra-mesh, we use same distributed context and rank (same host)
