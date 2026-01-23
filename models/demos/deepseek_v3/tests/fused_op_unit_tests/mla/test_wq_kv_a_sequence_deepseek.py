@@ -49,15 +49,20 @@ def run_wq_kv_a_sequence_with_trace(
         topology=ttnn.Topology.Linear,
         subdevice_id=subdevice_id,
     )
+    reduce_config = {
+        "dims": [1],
+        "output": None,
+        "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        "memory_config": ttnn.L1_MEMORY_CONFIG,
+    }
 
     # Fast reduce
-    tt_q_kv = ttnn.experimental.fast_reduce_nc(
-        tt_q_kv,
-        dims=[1],
-        output=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        compute_kernel_config=None,
-    )
+    tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
     # Slice operations
     tt_q = ttnn.slice(
@@ -105,13 +110,7 @@ def run_wq_kv_a_sequence_with_trace(
         )
 
         # Fast reduce
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(
-            tt_q_kv,
-            dims=[1],
-            output=None,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=None,
-        )
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
         # Slice operations
         tt_q = ttnn.slice(
@@ -164,13 +163,7 @@ def run_wq_kv_a_sequence_with_trace(
         )
 
         # Fast reduce
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(
-            tt_q_kv,
-            dims=[1],
-            output=None,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=None,
-        )
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **reduce_config)
 
         # Slice operations
         tt_q = ttnn.slice(
