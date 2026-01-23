@@ -93,10 +93,10 @@ class TtGemma3MultiModalProjector(LightweightModule):
             reshaped_vision_outputs, (batch_size, seq_length, self.patches_per_image, self.patches_per_image)
         )
 
-        reshaped_vision_outputs = ttnn.to_layout(reshaped_vision_outputs, ttnn.TILE_LAYOUT)
+        #reshaped_vision_outputs = ttnn.to_layout(reshaped_vision_outputs, ttnn.TILE_LAYOUT)
 
         in_n, in_c, in_h, in_w = reshaped_vision_outputs.shape
-        reshaped_vision_outputs = ttnn.to_layout(reshaped_vision_outputs, ttnn.ROW_MAJOR_LAYOUT)
+        #reshaped_vision_outputs = ttnn.to_layout(reshaped_vision_outputs, ttnn.ROW_MAJOR_LAYOUT)
         reshaped_vision_outputs = ttnn.permute(reshaped_vision_outputs, (0, 2, 3, 1))
         reshaped_vision_outputs = ttnn.reshape(reshaped_vision_outputs, (1, 1, in_n * in_h * in_w, in_c))
         pooled_vision_outputs = ttnn.avg_pool2d(
@@ -118,10 +118,10 @@ class TtGemma3MultiModalProjector(LightweightModule):
         pooled_vision_outputs = ttnn.reshape(pooled_vision_outputs, (in_n, HOUT, WOUT, in_c))
 
         pooled_vision_outputs = ttnn.permute(pooled_vision_outputs, (0, 3, 1, 2))
-        pooled_vision_outputs = ttnn.to_layout(pooled_vision_outputs, ttnn.TILE_LAYOUT)
+        #pooled_vision_outputs = ttnn.to_layout(pooled_vision_outputs, ttnn.TILE_LAYOUT)
 
         # Potential FIX
-        pooled_vision_outputs = ttnn.to_layout(pooled_vision_outputs, ttnn.ROW_MAJOR_LAYOUT)
+        #pooled_vision_outputs = ttnn.to_layout(pooled_vision_outputs, ttnn.ROW_MAJOR_LAYOUT)
 
         pooled_vision_outputs = ttnn.reshape(
             pooled_vision_outputs, (pooled_vision_outputs.shape[0], pooled_vision_outputs.shape[1], -1)
