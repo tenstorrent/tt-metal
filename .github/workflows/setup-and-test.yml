@@ -106,10 +106,8 @@ jobs:
           CHIP_ARCH=unknown
           if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
             CHIP_ARCH=wormhole
-            RUN_PARALEL_FLAG="--tx 8*popen://python=python"
           elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
             CHIP_ARCH=blackhole
-            RUN_PARALEL_FLAG="-n 8"
           fi
           export CHIP_ARCH
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
@@ -138,7 +136,7 @@ jobs:
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
 
           echo "Running tests"
-          pytest $COVERAGE_FLAG --compile-consumer \
+          pytest $COVERAGE_FLAG --compile-consumer -n 10 \
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
