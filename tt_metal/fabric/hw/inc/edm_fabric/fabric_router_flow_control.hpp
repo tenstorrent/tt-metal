@@ -22,9 +22,9 @@
 // - WH (!multi_txq_enabled): Uses packed stream registers when ENABLE_FIRST_LEVEL_ACK_VC0 is true
 // - BH (multi_txq_enabled): Uses counter-based mechanism regardless of ENABLE_FIRST_LEVEL_ACK_VC0
 //
-constexpr bool USE_PACKED_PACKET_SENT_CREDITS = false;      // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
-constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = false;  // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
-constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = false;   // ENABLE_FIRST_LEVEL_ACK_VC0;// && !multi_txq_enabled;
+constexpr bool USE_PACKED_PACKET_SENT_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;      // && !multi_txq_enabled;
+constexpr bool USE_PACKED_FIRST_LEVEL_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;  // && !multi_txq_enabled;
+constexpr bool USE_PACKED_COMPLETION_ACK_CREDITS = ENABLE_FIRST_LEVEL_ACK_VC0;   // && !multi_txq_enabled;
 
 // Validation: If VC1 enables first-level ack, VC0 must also have it enabled
 // because the packing policy (USE_PACKED_*) is derived from VC0's setting.

@@ -96,7 +96,8 @@ struct PackedCredits {
                 //
                 // not that we are guaranteed to have enough carry bits here when credit is byte sized
                 // because max slot count fits in 6 bits
-                auto partial = PackedCreditData{.packed = (data.halfs[0] + data.halfs[1])};
+                auto partial = PackedCreditData{
+                    .packed = (static_cast<uint32_t>(data.halfs[0]) + static_cast<uint32_t>(data.halfs[1]))};
                 return partial.bytes[0] + data.bytes[1];
             }
         } else {
