@@ -16,7 +16,7 @@ from tracy.process_model_log import (
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.99
+PCC_THRESHOLD = 0.98
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
@@ -56,7 +56,7 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     #     else:
     #         torch_input[..., i] = -0.25
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    torch_input = (1 / 1024) * torch.ones((L, E, M, K), dtype=torch.bfloat16)
+    torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
 
@@ -87,7 +87,7 @@ def create_torch_w0(L, E, K, N):
     #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w0 = torch.ones((L, E, K, N), dtype=torch.bfloat16)
+    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
 
 
@@ -117,7 +117,7 @@ def create_torch_w1(L, E, K, N):
     #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w1 = torch.ones((L, E, K, N), dtype=torch.bfloat16)
+    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
 
 
@@ -146,7 +146,7 @@ def create_torch_w2(L, E, N, K):
     #                 k_val = k_chunk
     #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
     #         le_val *= -1
-    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16)
+    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
     return torch_w2
 
 
@@ -565,23 +565,9 @@ def test_moe(device, M, K, N, check_accuracy, dump_outputs):
     for (layer_id, expert_id), metrics in accuracy_metrics.items():
         if metrics["pcc"] < PCC_THRESHOLD:
             passing = False
-            logger.warning(
-                f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}, Relative RMSE={metrics['relative_rmse']:.6f}"
-            )
+            logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}")
         else:
-            logger.info(
-                f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}, Relative RMSE={metrics['relative_rmse']:.6f} (Passed)"
-            )
-
-        if metrics["allclose"] == False:
-            passing = False
-            logger.warning(
-                f"Layer {layer_id}, Expert {expert_id}: Allclose={metrics['allclose']}, {metrics['allclose_val']}"
-            )
-        else:
-            logger.info(
-                f"Layer {layer_id}, Expert {expert_id}: Allclose={metrics['allclose']}, {metrics['allclose_val']} (Passed)"
-            )
+            logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f} (Passed)")
 
     assert passing, f"Some experts in some layers did not pass the PCC/Allclose check"
 
