@@ -310,7 +310,6 @@ void MAIN {
 #endif
 
 #ifdef FUSE_TERNARY
-#error "FUSE_TERNARY not implemented"
             cb_wait_front(cb_id_ternary_a, out_block_num_tiles);
             cb_wait_front(cb_id_ternary_b, out_block_num_tiles);
 #endif  // FUSE_TERNARY
@@ -331,7 +330,6 @@ void MAIN {
 #endif  // FUSE_BIAS
 
 #ifdef FUSE_TERNARY
-#error "FUSE_TERNARY not implemented"
             cb_pop_front(cb_id_ternary_a, out_block_num_tiles);
             cb_pop_front(cb_id_ternary_b, out_block_num_tiles);
 #endif  // FUSE_TERNARY

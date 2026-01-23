@@ -99,11 +99,18 @@ void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
 #endif
 #endif
-    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
-    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
 
     constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
     constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
@@ -118,14 +125,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
-#endif
-
-    DPRINT << "Running dm_in0_sender kernel" << ENDL();
-
-#ifdef FUSE_TERNARY
-    DPRINT << "FUSE_TERNARY enabled in dm_in0_sender" << ENDL();
-    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
 #endif
 
 #ifdef FUSE_AG
