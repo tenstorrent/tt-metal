@@ -143,6 +143,52 @@ struct PersistentPolicy {
     static constexpr PopMode pop = PopMode::NO_POP;
 };
 
+// =============================================================================
+// Init Policies - control whether reduce_init/reduce_uninit are called
+// =============================================================================
+
+/**
+ * @brief Init both policy - calls both reduce_init and reduce_uninit
+ *
+ * Default behavior: initialize at start, uninitialize at end.
+ * Use when reduce is a standalone operation.
+ */
+struct InitBothPolicy {
+    static constexpr bool init = true;
+    static constexpr bool uninit = true;
+};
+
+/**
+ * @brief Init only policy - calls reduce_init but not reduce_uninit
+ *
+ * Use when caller will call reduce_uninit manually, e.g., to insert
+ * custom operations (like recip_tile) before uninitializing.
+ */
+struct InitOnlyPolicy {
+    static constexpr bool init = true;
+    static constexpr bool uninit = false;
+};
+
+/**
+ * @brief Uninit only policy - calls reduce_uninit but not reduce_init
+ *
+ * Use when caller already called reduce_init externally.
+ */
+struct UninitOnlyPolicy {
+    static constexpr bool init = false;
+    static constexpr bool uninit = true;
+};
+
+/**
+ * @brief No init policy - caller manages both init and uninit externally
+ *
+ * Use when multiple reduce calls share the same init/uninit scope.
+ */
+struct NoInitPolicy {
+    static constexpr bool init = false;
+    static constexpr bool uninit = false;
+};
+
 }  // namespace policies
 
 // Type trait to detect if a type is an input policy struct
@@ -188,20 +234,6 @@ struct InputModeToPolicy {
  * BOTH: Reconfig both unpacker and packer (DEFAULT)
  */
 enum class ReduceDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, BOTH = 3 };
-
-/**
- * @brief Init/uninit lifecycle mode for reduce operations
- *
- * Controls whether reduce_init() and reduce_uninit() are called automatically.
- * Replaces the previous bool init/uninit template parameters with a single enum
- * for better readability at call sites.
- *
- * BOTH: Call both reduce_init() at start and reduce_uninit() at end (DEFAULT)
- * INIT_ONLY: Only call reduce_init() - caller will call reduce_uninit() manually
- * UNINIT_ONLY: Only call reduce_uninit() - caller already called reduce_init()
- * NONE: Neither - caller manages both init and uninit externally
- */
-enum class ReduceInitMode { BOTH, INIT_ONLY, UNINIT_ONLY, NONE };
 
 /**
  * @brief Circular buffer specification for reduce operations
@@ -456,7 +488,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * IMPORTANT - SCALER CB REQUIREMENT:
  * The scaler CB (icb_scaler) must contain the scaling factor tile BEFORE calling
- * this function. The function will wait for it automatically when init_mode includes init.
+ * this function. The function will wait for it automatically when InitPolicy::init is true.
  *
  * IMPORTANT - REDUCE_COL DATA LAYOUT:
  * - STREAMING mode: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
@@ -479,7 +511,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
  * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
- * @tparam init_mode Init/uninit lifecycle mode (BOTH, INIT_ONLY, UNINIT_ONLY, NONE) - defaults to BOTH
+ * @tparam InitPolicy Init/uninit lifecycle policy - defaults to policies::InitBothPolicy
+ *         Available policies: InitBothPolicy, InitOnlyPolicy, UninitOnlyPolicy, NoInitPolicy
  *
  * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
@@ -534,10 +567,10 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
- *   // Set init_mode=INIT_ONLY since lambda calls reduce_uninit() before recip
+ *   // Use InitOnlyPolicy since lambda calls reduce_uninit() before recip
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED,
  *       compute_kernel_lib::ReduceDataFormatReconfig::BOTH,
- *       compute_kernel_lib::ReduceInitMode::INIT_ONLY>(
+ *       compute_kernel_lib::policies::InitOnlyPolicy>(
  *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileGrid::row(Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
  *       compute_kernel_lib::NoAccumulation{},
@@ -565,7 +598,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
-    ReduceInitMode init_mode = ReduceInitMode::BOTH,
+    typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -594,8 +627,8 @@ ALWI void reduce(
     // Auto-detect FP32 dest accumulation mode from compile-time define
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
 
-    // Initialization
-    if constexpr (init_mode == ReduceInitMode::BOTH || init_mode == ReduceInitMode::INIT_ONLY) {
+    // Initialization - use policy pattern for cleaner code
+    if constexpr (InitPolicy::init) {
         reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, ocb);
     }
     cb_wait_front(icb_scaler, 1);  // Wait for scaler tile
@@ -880,7 +913,7 @@ ALWI void reduce(
     }
 
     // Cleanup
-    if constexpr (init_mode == ReduceInitMode::BOTH || init_mode == ReduceInitMode::UNINIT_ONLY) {
+    if constexpr (InitPolicy::uninit) {
         reduce_uninit<enforce_fp32_accumulation>();
     }
 }
@@ -907,7 +940,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
-    ReduceInitMode init_mode = ReduceInitMode::BOTH,
+    typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -916,7 +949,7 @@ ALWI void reduce(
     TileLayout layout = TileLayout::contiguous(),
     AccumT accum = AccumT{},
     PostReduceOp post_reduce_op = PostReduceOp{}) {
-    reduce<reduce_type, reduce_dim, input_mode, reconfig, init_mode, AccumT, PostReduceOp>(
+    reduce<reduce_type, reduce_dim, input_mode, reconfig, InitPolicy, AccumT, PostReduceOp>(
         cbs.input, cbs.scaler, cbs.output, grid, layout, accum, post_reduce_op);
 }
 
