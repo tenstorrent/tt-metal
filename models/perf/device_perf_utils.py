@@ -207,18 +207,34 @@ def run_device_perf_detailed(
         warmup_iters=warmup_iters,
         per_op=per_op,
     )
-    for d_col in duration_cols:
-        results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
-        results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
-        results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
-        results[f"STD {d_col}"] = r[f"STD {d_col}"]
-
     post_processed_results = defaultdict(dict)
-    for col, d_col in zip(cols, duration_cols):
-        post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
-        post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
-        post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
-        post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    if not per_op:
+        for d_col in duration_cols:
+            results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
+            results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
+            results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
+            results[f"STD {d_col}"] = r[f"STD {d_col}"]
+
+        for col, d_col in zip(cols, duration_cols):
+            post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
+            post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
+            post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
+            post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    else:
+        for op in r.keys():
+            for d_col in duration_cols:
+                results[op][f"AVG {d_col}"] = r[op][f"AVG {d_col}"]
+                results[op][f"MIN {d_col}"] = r[op][f"MIN {d_col}"]
+                results[op][f"MAX {d_col}"] = r[op][f"MAX {d_col}"]
+                results[op][f"STD {d_col}"] = r[op][f"STD {d_col}"]
+
+            for col, d_col in zip(cols, duration_cols):
+                post_processed_results[op][col]["AVG"] = results[op][f"AVG {d_col}"]
+                post_processed_results[op][col]["MIN"] = results[op][f"MIN {d_col}"]
+                post_processed_results[op][col]["MAX"] = results[op][f"MAX {d_col}"]
+                post_processed_results[op][col]["STD"] = results[op][f"STD {d_col}"]
 
     logger.info(
         f"\nTest: {command}\nPerformance statistics for op: {op_name}\n{json.dumps(post_processed_results, indent=4)}"
