@@ -11,7 +11,6 @@ from models.experimental.BEVFormerV2.tt.ttnn_temporal_self_attention import TtTe
 from models.experimental.BEVFormerV2.tt.ttnn_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.BEVFormerV2.tt.ttnn_ffn import TtFFN
 
-
 class TtEncoder:
     """TTNN implementation of Encoder"""
 
