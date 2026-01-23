@@ -219,7 +219,7 @@ void kernel_main() {
         const uint32_t batch_size = input_tensor_B;
         const uint32_t chunks_per_mm_N_block = 1;
         const uint32_t chunk_width = 2;
-        const uint32_t mm_block_ht = 1;
+        const uint32_t mm_block_ht = 2;
 
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
