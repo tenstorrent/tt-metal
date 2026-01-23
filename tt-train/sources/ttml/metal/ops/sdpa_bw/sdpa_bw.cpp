@@ -7,9 +7,9 @@
 #include "device/sdpa_bw_kv_device_operation.hpp"
 #include "device/sdpa_bw_q_device_operation.hpp"
 
-namespace ttml::metal::ops::sdpa_bw {
+namespace ttml::metal {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> SDPABackwardOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     const ttnn::Tensor& grad_output,
     const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query,
@@ -30,4 +30,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> SDPABackwardOperation::invo
     return {grad_Q, grad_K, grad_V};
 }
 
-}  // namespace ttml::metal::ops::sdpa_bw
+}  // namespace ttml::metal
