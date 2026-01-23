@@ -15,6 +15,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/perf_telemetry.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdev/dev_msgs.h"
 
@@ -68,23 +69,6 @@ volatile uint32_t last_wait_stream = 0;
 constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
-}
-
-// Wall clock register indices (reading LOW latches HIGH for atomic read)
-constexpr int WALL_CLOCK_HIGH_INDEX = 1;
-constexpr int WALL_CLOCK_LOW_INDEX = 0;
-
-// Record timestamp into a telemetry_timestamp_t struct
-// Similar to kernel_profiler's mark_time_at_index_inlined
-// Reading wall clock LOW first latches HIGH for atomic 64-bit read
-FORCE_INLINE
-void record_timestamp(volatile telemetry_timestamp_t* ts) {
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    // Read LOW first to latch HIGH
-    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-    ts->time_lo = time_lo;
-    ts->time_hi = time_hi;
 }
 
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
@@ -155,6 +139,27 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
         false   // posted
     );
     WAYPOINT("NWID");
+}
+
+// Record end timestamp, signal telemetry core, and switch local state.
+// Call this at the end of each iteration to complete the telemetry cycle.
+FORCE_INLINE
+void signal_telemetry_and_switch(volatile tt_l1_ptr perf_telemetry_msg_t* mailbox) {
+    // Determine which buffer we just wrote to (same logic as record_telemetry_timestamp)
+    TelemetryState current_state = static_cast<TelemetryState>(mailbox->telemetry_state);
+    bool used_buffer_a = (current_state == TELEMETRY_STATE_PUSH_B);
+
+    // New state: push the buffer we just wrote to
+    TelemetryState new_state = used_buffer_a ? TELEMETRY_STATE_PUSH_A : TELEMETRY_STATE_PUSH_B;
+
+    // Update local mailbox state (so next iteration writes to other buffer)
+    mailbox->telemetry_state = new_state;
+
+    // Signal telemetry core if configured
+    if (mailbox->telemetry_core_noc_xy != 0) {
+        uint64_t telemetry_addr = get_noc_addr_helper(mailbox->telemetry_core_noc_xy, mailbox->telemetry_mailbox_addr);
+        dispatch_s_noc_inline_dw_write(telemetry_addr, static_cast<uint32_t>(new_state), my_noc_index);
+    }
 }
 
 FORCE_INLINE
@@ -380,26 +385,10 @@ void kernel_main() {
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
-    bool use_buffer_a = true;  // Ping-pong buffer selector
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        {
-            DeviceZoneScopedN("SET-telem-push");
-            // Signal telemetry core to push the OTHER buffer (the one we just finished)
-            if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
-                uint64_t telemetry_push_addr = get_noc_addr_helper(
-                    perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
-                // Signal to push the buffer we're NOT currently writing to
-                TelemetryState push_state = use_buffer_a ? TELEMETRY_STATE_PUSH_B : TELEMETRY_STATE_PUSH_A;
-                dispatch_s_noc_inline_dw_write(telemetry_push_addr, push_state, my_noc_index);
-            }
-            // Record start timestamp into current buffer
-            if (use_buffer_a) {
-                record_timestamp(&perf_telemetry_mailbox->kernel_start_a);
-            } else {
-                record_timestamp(&perf_telemetry_mailbox->kernel_start_b);
-            }
-        }
+        // Record start timestamp (buffer selection based on mailbox state)
+        record_telemetry_timestamp(perf_telemetry_mailbox, true);
         {
             DeviceZoneScopedN("GET_CMD");
             cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
@@ -425,13 +414,6 @@ void kernel_main() {
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
-        // Record end timestamp into current buffer, then toggle
-        if (use_buffer_a) {
-            record_timestamp(&perf_telemetry_mailbox->kernel_end_a);
-        } else {
-            record_timestamp(&perf_telemetry_mailbox->kernel_end_b);
-        }
-        use_buffer_a = !use_buffer_a;  // Toggle ping-pong buffer
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
@@ -442,6 +424,8 @@ void kernel_main() {
             cmd_ptr = cb_base;
         }
         total_pages_acquired++;
+
+        signal_telemetry_and_switch(perf_telemetry_mailbox);
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
