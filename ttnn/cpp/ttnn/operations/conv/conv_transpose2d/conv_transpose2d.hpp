@@ -35,9 +35,11 @@ namespace ttnn {
 
 using operations::conv::conv_transpose2d::Conv2dConfig;
 using operations::conv::conv_transpose2d::Conv2dSliceConfig;
-using operations::conv::conv_transpose2d::ResultWithOptions;
+// Use a specific alias for the conv_transpose2d result to avoid a generic
+// ResultWithOptions symbol in the top-level ttnn namespace.
+using ConvTranspose2dResultWithOptions = operations::conv::conv_transpose2d::ResultWithOptions;
 
-ResultWithOptions conv_transpose2d(
+ConvTranspose2dResultWithOptions conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
