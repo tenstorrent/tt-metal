@@ -161,7 +161,12 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w1_out_reduced)
 
         # Non-fused path: line_all_gather + ttnn.linear
-        # Note: Fused all_gather_matmul available but requires L1 buffer too large for model dims
+        # Note: Fused all_gather_matmul (llama_all_gather_matmul_async) available but requires
+        # L1 intermediate buffer too large for 70B model dims. The fused op internally creates
+        # an aggregated tensor of [32, 14336] per core across 60 cores (~458KB/core) which
+        # exceeds available L1 when combined with model's pre-allocated CCL buffers.
+        # See tests/ttnn/unit_tests/operations/ccl/test_fused_ccl_galaxy.py for validation
+        # of the fused op with smaller test dimensions.
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
             dim=3,

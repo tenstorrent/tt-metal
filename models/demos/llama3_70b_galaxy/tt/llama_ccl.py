@@ -103,8 +103,13 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
-            # Note: all_gather_matmul_buffers not used - model dims too large for L1
-            # Fused op works for unit test dims but not actual model
+            # Note: all_gather_matmul_buffers not used for 70B model. The fused
+            # llama_all_gather_matmul_async op internally creates an aggregated tensor
+            # in L1 with shape [32, K_gathered] per core across 60 cores. For 70B dims
+            # (K_gathered=14336), this requires ~458KB/core which exceeds available L1
+            # when combined with pre-allocated CCL buffers. Validated via unit tests with
+            # smaller dims. To enable for 70B, would need C++ changes to support DRAM
+            # intermediate or model changes to reduce L1 pressure during MLP.
             self.all_gather_matmul_buffers = None
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
