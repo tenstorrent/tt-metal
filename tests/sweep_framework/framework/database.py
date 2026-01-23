@@ -102,6 +102,95 @@ def postgres_connection():
             conn.close()
 
 
+def get_ttnn_ops_config():
+    """
+    Get ttnn_ops database configuration for loading operation configurations.
+
+    Checks for TTNN_OPS_DATABASE_URL first (full connection string),
+    then falls back to standard POSTGRES_* environment variables.
+
+    Returns:
+        dict: Configuration for psycopg2.connect() - either {"dsn": url} or individual params
+
+    Raises:
+        ValueError: If no valid database configuration is found
+    """
+    # Option 1: Full connection string (preferred for ttnn_ops)
+    url = os.getenv("TTNN_OPS_DATABASE_URL")
+    if url:
+        return {"dsn": url}
+
+    # Option 2: Fall back to standard POSTGRES_* env vars
+    try:
+        return get_postgres_config()
+    except ValueError:
+        raise ValueError(
+            "Missing ttnn_ops database configuration. Set either:\n"
+            "  - TTNN_OPS_DATABASE_URL (full connection string), or\n"
+            "  - POSTGRES_HOST, POSTGRES_DATABASE, POSTGRES_USER, POSTGRES_PASSWORD"
+        )
+
+
+def is_ttnn_ops_db_available():
+    """
+    Check if ttnn_ops database configuration is available.
+
+    Returns:
+        bool: True if database can be configured, False otherwise
+    """
+    if not PSYCOPG2_AVAILABLE:
+        return False
+
+    try:
+        get_ttnn_ops_config()
+        return True
+    except ValueError:
+        return False
+
+
+@contextmanager
+def ttnn_ops_connection():
+    """
+    Context manager for ttnn_ops database connections.
+    Used for loading TTNN operation configurations from the ttnn_ops schema.
+
+    Uses TTNN_OPS_DATABASE_URL if set, otherwise falls back to POSTGRES_* vars.
+
+    Usage:
+        with ttnn_ops_connection() as (conn, cursor):
+            cursor.execute("SELECT * FROM ttnn_ops.ttnn_operation")
+            # Read-only operations, auto-committed on success
+
+    Raises:
+        RuntimeError: If psycopg2 is not installed
+        ValueError: If no valid database configuration is found
+    """
+    if not PSYCOPG2_AVAILABLE:
+        raise RuntimeError(
+            "The psycopg2 library is required but not installed. "
+            "Please install it using 'pip install psycopg2' or 'pip install psycopg2-binary'."
+        )
+
+    ttnn_ops_config = get_ttnn_ops_config()
+    conn = None
+    cursor = None
+
+    try:
+        conn = psycopg2.connect(**ttnn_ops_config)
+        cursor = conn.cursor()
+        yield conn, cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
 def initialize_postgres_database():
     """Initialize PostgreSQL database with required tables for both sweeps and unit tests."""
     try:
