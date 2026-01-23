@@ -52,6 +52,9 @@
   - Outcome: Tiny improvement for K=1024, unchanged for K=512.
   - B=1, K=512, layers=4: DEVICE FW avg 8.20 us; DEVICE KERNEL avg 7.16 us.
   - B=1, K=1024, layers=4: DEVICE FW avg 11.49 us; DEVICE KERNEL avg 9.76 us.
+- 2026-01-23: Switched resblock reader gather to stateful `noc_async_write_one_packet` (set state once) and precomputed receiver NOC addresses.
+  - B=1, K=512, layers=4: DEVICE FW avg 8.05 us; DEVICE KERNEL avg 7.01 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 11.37 us; DEVICE KERNEL avg 9.63 us.
 
 ## Knowledge
 - Resblock uses five kernels in `models/demos/resblock/kernels/` with compute in `compute.cpp` and data movement in `reader.cpp`/`writer.cpp` + mcast.
@@ -68,3 +71,4 @@
 - Running with `dst_full_sync_en=False` (while keeping FP32 destination accumulation enabled) regressed slightly for both K=512 and K=1024, so the full sync path appears to be the better choice here.
 - Forcing a `#pragma unroll` on the per-layer loop did not improve performance in the current configuration.
 - Enabling `math_approx_mode=True` yielded a very small improvement at K=1024 (no change at K=512); this seems safe for the current matmul+relu+bias path but should be kept in mind if future SFPU ops are added.
+- The reader gather path benefits from stateful NOC writes: using `noc_async_write_one_packet_set_state` once and `noc_async_write_one_packet_with_state` per gather cut ~0.15 us (K=512) / ~0.13 us (K=1024) from kernel duration.

@@ -14,24 +14,18 @@ FORCE_INLINE void wait_for_mcast(volatile tt_l1_ptr uint32_t* mcast_sender_semap
     noc_semaphore_set(mcast_sender_semaphore_addr_ptr, 0);
 }
 
-template <
-    uint32_t CbIn,
-    uint32_t CbOut,
-    uint32_t NumTiles,
-    uint32_t MCastReceiverNocX,
-    uint32_t MCastReceiverNocY,
-    uint32_t MCastReceiverSemaphoreId>
-void gather(uint32_t receiver_data_addr, uint32_t offset) {
+template <uint32_t CbIn, uint32_t NumTiles>
+FORCE_INLINE void init_gather_state(uint64_t mcast_receiver_noc_coord) {
+    const uint32_t gather_bytes = get_tile_size(CbIn) * NumTiles;
+    noc_async_write_one_packet_set_state<true>(mcast_receiver_noc_coord, gather_bytes);
+}
+
+template <uint32_t CbIn, uint32_t NumTiles>
+FORCE_INLINE void gather(uint32_t receiver_data_addr, uint32_t offset, uint64_t mcast_receiver_semaphore_noc_addr) {
     cb_wait_front(CbIn, NumTiles);
 
     // Gather to receiver core (write and then signal using semaphore)
-    const uint64_t mcast_receiver_noc_coord = get_noc_addr(MCastReceiverNocX, MCastReceiverNocY, 0);
-    const uint64_t mcast_receiver_noc_addr = mcast_receiver_noc_coord | (uint64_t)(receiver_data_addr + offset);
-    const uint32_t mcast_receiver_semaphore_addr = get_semaphore(MCastReceiverSemaphoreId);
-    const uint64_t mcast_receiver_semaphore_noc_addr =
-        mcast_receiver_noc_coord | (uint64_t)mcast_receiver_semaphore_addr;
-
-    noc_async_write_one_packet<true, true>(get_read_ptr(CbIn), mcast_receiver_noc_addr, get_tile_size(CbIn) * NumTiles);
+    noc_async_write_one_packet_with_state<true>(get_read_ptr(CbIn), receiver_data_addr + offset);
     noc_semaphore_inc<true>(mcast_receiver_semaphore_noc_addr, 1);
     noc_async_posted_writes_flushed();
 
@@ -57,6 +51,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mcast_sender_semaphore_addr_ptr =
         (volatile tt_l1_ptr uint32_t*)mcast_sender_semaphore_addr;
 
+    const uint64_t mcast_receiver_noc_coord = get_noc_addr(mcast_receiver_noc_x, mcast_receiver_noc_y, 0);
+    const uint64_t mcast_receiver_semaphore_noc_addr =
+        mcast_receiver_noc_coord | (uint64_t)get_semaphore(mcast_receiver_semaphore_id);
+
     constexpr uint32_t num_layers = get_compile_time_arg_val(12);
 
     const uint32_t tile_index = get_arg_val<uint32_t>(0);
@@ -64,6 +62,8 @@ void kernel_main() {
     const uint32_t mcast_receiver_base_address = get_write_ptr(mcast_receiver_cb);
 
     constexpr uint32_t num_output_tiles = 1;  // Set to 1 because we only iterate over K tiles at a time
+
+    init_gather_state<intermediate_pregather_cb, num_output_tiles>(mcast_receiver_noc_coord);
 
     cb_reserve_back(mm1_full_cb, num_tiles_k);
     cb_push_back(mm1_full_cb, num_tiles_k);
@@ -83,25 +83,15 @@ void kernel_main() {
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         {
             // Gather after first matmul so that we can mcast full result to all cores
-            gather<
-                intermediate_pregather_cb,
-                mm2_full_cb,
-                num_output_tiles,
-                mcast_receiver_noc_x,
-                mcast_receiver_noc_y,
-                mcast_receiver_semaphore_id>(mcast_receiver_base_address, gather_destination_tile_offset_bytes);
+            gather<intermediate_pregather_cb, num_output_tiles>(
+                mcast_receiver_base_address, gather_destination_tile_offset_bytes, mcast_receiver_semaphore_noc_addr);
             // Wait for mcast to complete and then push back to mm2_full_cb which will start the second matmul
             wait_for_mcast<mm2_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
         {
             // Gather after second matmul so that we can mcast full result to all cores
-            gather<
-                intermediate_pregather_cb,
-                mm2_full_cb,
-                num_output_tiles,
-                mcast_receiver_noc_x,
-                mcast_receiver_noc_y,
-                mcast_receiver_semaphore_id>(mcast_receiver_base_address, gather_destination_tile_offset_bytes);
+            gather<intermediate_pregather_cb, num_output_tiles>(
+                mcast_receiver_base_address, gather_destination_tile_offset_bytes, mcast_receiver_semaphore_noc_addr);
             // Wait for mcast to complete and then push back to mm1_full_cb (ping-pong back)
             wait_for_mcast<mm1_full_cb, num_tiles_k>(mcast_sender_semaphore_addr_ptr);
         }
