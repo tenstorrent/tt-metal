@@ -25,6 +25,8 @@ struct SoftmaxProgramFactoryAttentionOptimized {
         uint32_t scalar_tile_size{}, in0_tile_size{}, im_tile_size{}, out0_tile_size{}, mask_tile_size{};
         tt::tt_metal::CBHandle cb_in0_id{}, cb_out0_id{}, cb_intermed1_id{}, cb_in2_id{}, cb_intermed0_id{};
         std::optional<tt::tt_metal::CBHandle> cb_intermed3_id, cb_in3_id, cb_in4_id, cb_intermed2_id, cb_intermed4_id;
+        bool use_large_kernel{};
+        uint32_t cb_length{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     static cached_program_t create(const SoftmaxParams&, const SoftmaxInputs&, Tensor&);
