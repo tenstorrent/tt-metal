@@ -138,17 +138,6 @@ inline void calculate_cosine() {
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_sfpu_trig() {
-    if constexpr (operation == SfpuType::sine) {
-        calculate_sine<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::cosine) {
-        calculate_cosine<APPROXIMATION_MODE, ITERATIONS>();
-    } else if constexpr (operation == SfpuType::tan) {
-        calculate_tangent<APPROXIMATION_MODE, ITERATIONS>();
-    }
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat t0 = sfpi::abs(val);
