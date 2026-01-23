@@ -22,6 +22,9 @@
 - 2026-01-23: Removed `DeviceZoneScopedN` profiler scopes from resblock compute + dataflow kernels to cut per-layer instrumentation overhead.
   - B=1, K=512, layers=4: DEVICE FW avg 8.91 us; DEVICE KERNEL avg 7.87 us.
   - B=1, K=1024, layers=4: DEVICE FW avg 12.22 us; DEVICE KERNEL avg 10.48 us.
+- 2026-01-23: Hoisted `relu_tile_init()` out of the per-layer matmul+relu block (single init per kernel).
+  - B=1, K=512, layers=4: DEVICE FW avg 8.88 us; DEVICE KERNEL avg 7.85 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 12.20 us; DEVICE KERNEL avg 10.46 us.
 
 ## Knowledge
 - Resblock uses five kernels in `models/demos/resblock/kernels/` with compute in `compute.cpp` and data movement in `reader.cpp`/`writer.cpp` + mcast.
@@ -30,3 +33,4 @@
 - In this kernel, `MM1_FULL_CB` is already waited on for matmul1 and not popped until after matmul2, so waiting again for bias tiles is unnecessary overhead.
 - `binary_dest_reuse_tiles` (eltwise_binary) can add bias directly from CB to the matmul DST without a separate copy tile; this substantially reduced kernel duration.
 - `DeviceZoneScopedN` profiler scopes in the hot-path resblock kernels add ~0.7–0.8 us of device kernel overhead for K=512/1024; removing them improved kernel duration without changing math.
+- `relu_tile_init()` can be called once per kernel without correctness issues; per-layer init was redundant and cost a small but measurable amount.

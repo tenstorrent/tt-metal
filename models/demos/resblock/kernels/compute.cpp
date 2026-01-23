@@ -38,7 +38,6 @@ FORCE_INLINE void matmul_with_relu_block() {
         }
     }
     {
-        relu_tile_init();
         relu_tile(0);
     }
     tile_regs_commit();
@@ -128,6 +127,8 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = 1;
     constexpr uint32_t out_subblock_w = 1;
     constexpr uint32_t in0_block_w = 1;
+
+    relu_tile_init();
 
     // All layers use the same pattern: MM1_FULL_CB -> matmul+relu, then MM2_FULL_CB (bias MM1_FULL_CB) -> matmul+bias
     // The ping-pong mcast restores MM1_FULL_CB after each layer
