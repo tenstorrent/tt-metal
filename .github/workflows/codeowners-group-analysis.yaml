@@ -2334,7 +2334,7 @@ jobs:
                 if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
                   PING_MESSAGE="$PING_MESSAGE $USER_NAME (@$owner)"
                 else
-                  PING_MESSAGE="$PING_MESSAGE @$owner"
+                  PING_MESSAGE="$PING_MESSAGE (@$owner)"
                 fi
 
                 # Add comma if not the last owner
