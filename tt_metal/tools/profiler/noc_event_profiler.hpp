@@ -56,7 +56,11 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     KernelProfilerNocEventMetadata ev_md;
     ev_md.data.local_event_dst_trailer.setSrcAddr(src_addr);
     ev_md.data.local_event_dst_trailer.setDstAddr(dst_addr);
-    if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_) {
+    if constexpr (
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_ ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_REMOTE ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_MULTICAST) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<true, posted>(noc_index);
     } else if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<false, posted>(noc_index);
@@ -103,16 +107,17 @@ FORCE_INLINE void recordNocEvent(
     }
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordMulticastNocEvent(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     int32_t mcast_dst_start_x,
     int32_t mcast_dst_start_y,
     int32_t mcast_dst_end_x,
     int32_t mcast_dst_end_y,
     uint32_t num_bytes,
     int8_t vc = -1,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint32_t local_addr = 0,
+    uint64_t dst_noc_addr = 0) {
     KernelProfilerNocEventMetadata ev_md;
 
     auto& local_noc_event = ev_md.data.local_event;
@@ -126,8 +131,22 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    if constexpr (kernel_profiler::NON_DROPPING) {
+        uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
+        KernelProfilerNocEventMetadata dst_data =
+            createNocEventDstTrailer<noc_event_type, /*posted=*/false>(local_addr, dst_local_addr);
+
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
+
+        kernel_profiler::timeStampedData<
+            STATIC_ID,
+            kernel_profiler::DoingDispatch::DISPATCH,
+            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+    } else {
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    }
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>
@@ -170,20 +189,22 @@ FORCE_INLINE void recordNocEventWithAddr(
 #define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                      \
     {                                                                                                                 \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                            \
-        if constexpr (event_type != NocEventType::WRITE_MULTICAST) {                                                  \
+        if constexpr (                                                                                                \
+            event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST) {     \
             noc_event_profiler::recordNocEventWithAddr<event_type, posted>(local_addr, noc_addr, num_bytes, vc, noc); \
         } else {                                                                                                      \
             auto [mcast_dst_start_x, mcast_dst_start_y, mcast_dst_end_x, mcast_dst_end_y] =                           \
                 noc_event_profiler::decode_noc_addr_to_multicast_coord(noc_addr);                                     \
-            noc_event_profiler::recordMulticastNocEvent(                                                              \
-                event_type,                                                                                           \
+            noc_event_profiler::recordMulticastNocEvent<event_type>(                                                  \
                 mcast_dst_start_x,                                                                                    \
                 mcast_dst_start_y,                                                                                    \
                 mcast_dst_end_x,                                                                                      \
                 mcast_dst_end_y,                                                                                      \
                 num_bytes,                                                                                            \
                 vc,                                                                                                   \
-                noc);                                                                                                 \
+                noc,                                                                                                  \
+                local_addr,                                                                                           \
+                noc_addr);                                                                                            \
         }                                                                                                             \
     }
 
