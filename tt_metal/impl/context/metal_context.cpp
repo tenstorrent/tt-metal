@@ -1088,13 +1088,10 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
-    // Skip for Mock devices as they don't have real device coordinates or need NOC tables
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_debug(tt::LogMetal, "generate_device_bank_to_noc_tables: Skipping for Mock device {}", device_id);
+    // Skip for simulator/mock devices as they don't have real device coordinates or need NOC tables
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
         return;
     }
-
-    log_debug(tt::LogMetal, "generate_device_bank_to_noc_tables: Starting for device {}", device_id);
     // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
@@ -1122,26 +1119,22 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 
     // Cache the bank_id -> dram_view mapping for use by WH proximity-based routing
-    // Skip for Mock devices as they don't have real device coordinates
-    if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        bank_id_to_dram_view_[device_id].clear();
-        bank_id_to_dram_view_[device_id].resize(num_dram_banks);
-        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-            bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
-        }
+    bank_id_to_dram_view_[device_id].clear();
+    bank_id_to_dram_view_[device_id].resize(num_dram_banks);
+    for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
     }
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
-                                   cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
             CoreCoord dram_noc_coord;
-            if (cluster_->get_target_device_type() != tt::TargetDevice::Mock && !bank_id_to_dram_view_[device_id].empty()) {
+            if (!bank_id_to_dram_view_[device_id].empty()) {
                 dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
             } else {
                 dram_noc_coord = soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
@@ -1172,8 +1165,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 }
 
 void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
-    // Skip for Mock devices as they don't have real device coordinates
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+    // Skip for simulator/mock devices as they don't have real device coordinates
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
         return;
     }
 
@@ -1205,13 +1198,12 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
     // For Wormhole, each DRAM channel has multiple NOC endpoints. This function generates
     // a per-core table that picks the closest DRAM NOC endpoint for each bank based on
     // Manhattan distance from the worker core.
-    log_debug(
-        tt::LogMetal,
-        "generate_dram_bank_to_noc_table_by_proximity: Called for device {}, core ({},{}), target_device_type={}",
-        device_id,
-        virtual_core.x,
-        virtual_core.y,
-        cluster_->get_target_device_type() == tt::TargetDevice::Mock ? "Mock" : "Real");
+
+    // This function should only be called for Silicon devices as it uses translate_coord_to
+    TT_ASSERT(
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon,
+        "generate_dram_bank_to_noc_table_by_proximity should only be called for Silicon devices");
+
     const auto& soc_d = cluster_->get_soc_desc(device_id);
 
     // bank_id_to_dram_view must be pre-populated by generate_device_bank_to_noc_tables
@@ -1228,12 +1220,8 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
 
-    log_debug(tt::LogMetal, "generate_dram_bank_to_noc_table_by_proximity: About to translate_coord_to for core ({},{})",
-              virtual_core.x, virtual_core.y);
-    tt::umd::CoreCoord worker_noc0_coord =
-        soc_d.translate_coord_to(tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
-    log_debug(tt::LogMetal, "generate_dram_bank_to_noc_table_by_proximity: Translated to NOC0 coord ({},{})",
-              worker_noc0_coord.x, worker_noc0_coord.y);
+    tt::umd::CoreCoord worker_noc0_coord = soc_d.translate_coord_to(
+        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
 
     std::vector<uint16_t> dram_bank_to_noc_xy;
     dram_bank_to_noc_xy.reserve(hal_->get_num_nocs() * num_dram_banks);
@@ -1247,11 +1235,6 @@ std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity
             uint32_t min_distance = std::numeric_limits<uint32_t>::max();
 
             for (size_t subchan = 0; subchan < channel_endpoints.size(); subchan++) {
-                log_trace(
-                    tt::LogMetal,
-                    "generate_dram_bank_to_noc_table_by_proximity: Getting DRAM core for channel {} subchan {}",
-                    physical_channel,
-                    subchan);
                 tt::umd::CoreCoord dram_endpoint_noc0 =
                     soc_d.get_dram_core_for_channel(physical_channel, subchan, CoordSystem::NOC0);
 
@@ -1292,19 +1275,10 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    // Skip for Mock devices as they don't need NOC tables written to cores
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Skipping for Mock device {}", device_id);
+    // Skip for simulator/mock devices as they don't need NOC tables written to cores
+    if (cluster_->get_target_device_type() != tt::TargetDevice::Silicon) {
         return;
     }
-
-    log_debug(
-        tt::LogMetal,
-        "initialize_device_bank_to_noc_tables: Starting for device {}, core ({},{}), end_core: {}",
-        device_id,
-        virtual_core.x,
-        virtual_core.y,
-        end_core.has_value() ? "present" : "none");
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1320,22 +1294,13 @@ void MetalContext::initialize_device_bank_to_noc_tables(
 
     // For Wormhole, generate per-core DRAM tables picking the closest NOC endpoint.
     // Each core needs its own unique table, so we iterate and unicast to each core.
-    // Skip for Mock devices as they don't have real DRAM endpoints.
-    log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Checking WH multicast path - arch={}, has_end_core={}, is_mock={}",
-              cluster_->arch() == ARCH::WORMHOLE_B0 ? "WH_B0" : "other",
-              end_core.has_value() ? "yes" : "no",
-              cluster_->get_target_device_type() == tt::TargetDevice::Mock ? "yes" : "no");
     if (cluster_->arch() == ARCH::WORMHOLE_B0 && end_core.has_value() &&
-        cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Taking WH multicast per-core path for device {}", device_id);
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
         auto start = virtual_core;
         auto end = end_core.value();
-        log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Iterating cores from ({},{}) to ({},{})",
-                  start.x, start.y, end.x, end.y);
         for (uint32_t y = start.y; y <= end.y; y++) {
             for (uint32_t x = start.x; x <= end.x; x++) {
                 CoreCoord core(x, y);
-                log_trace(tt::LogMetal, "initialize_device_bank_to_noc_tables: Processing core ({},{})", x, y);
                 auto dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, core);
 
                 cluster_->write_core(
@@ -1405,20 +1370,12 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             l1_offset_addr);
     } else {
         // Unicast to single core (for WH single core, generate per-core table)
-        log_debug(
-            tt::LogMetal,
-            "initialize_device_bank_to_noc_tables: Unicast path for device {}, core ({},{})",
-            device_id,
-            virtual_core.x,
-            virtual_core.y);
         const std::vector<uint16_t>* dram_table_ptr;
         std::vector<uint16_t> dram_bank_to_noc_xy;
-        if (cluster_->arch() == ARCH::WORMHOLE_B0 && cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-            log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Generating per-core table for WH device {}", device_id);
+        if (cluster_->arch() == ARCH::WORMHOLE_B0 && cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
             dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, virtual_core);
             dram_table_ptr = &dram_bank_to_noc_xy;
         } else {
-            log_debug(tt::LogMetal, "initialize_device_bank_to_noc_tables: Using shared table for device {}", device_id);
             dram_table_ptr = &dram_bank_to_noc_xy_[device_id];
         }
 
@@ -1761,16 +1718,26 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     // to multiple DRAM endpoints can hang the card.
     std::unordered_set<tt::umd::CoreCoord> dram_cores;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
+    bool is_silicon = cluster_->get_target_device_type() == tt::TargetDevice::Silicon;
     for (uint32_t dram_channel = 0; dram_channel < num_dram_channels; dram_channel++) {
         for (uint32_t noc = 0; noc < hal_->get_num_nocs(); noc++) {
             auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
             auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
-            auto physical_worker_dram_ep =
-                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-            auto physical_eth_dram_ep =
-                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-            dram_cores.insert(physical_worker_dram_ep);
-            dram_cores.insert(physical_eth_dram_ep);
+            if (is_silicon) {
+                auto physical_worker_dram_ep =
+                    soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                auto physical_eth_dram_ep =
+                    soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                dram_cores.insert(physical_worker_dram_ep);
+                dram_cores.insert(physical_eth_dram_ep);
+            } else {
+                // For simulator/mock devices, use the coordinates directly as they're already in the right system
+                // Convert metal CoreCoord to umd CoreCoord
+                dram_cores.insert(tt::umd::CoreCoord(
+                    tt_xy_pair(worker_dram_ep.x, worker_dram_ep.y), CoreType::DRAM, CoordSystem::NOC0));
+                dram_cores.insert(
+                    tt::umd::CoreCoord(tt_xy_pair(eth_dram_ep.x, eth_dram_ep.y), CoreType::DRAM, CoordSystem::NOC0));
+            }
         }
     }
 

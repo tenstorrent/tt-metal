@@ -779,8 +779,10 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled = true;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        // For Mock/Simulator devices, skip DRAM virtualization as coordinate translation is not supported
+        bool noc_translation_enabled = false;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
+            tt::TargetDevice::Silicon) {
             noc_translation_enabled = tt::tt_metal::MetalContext::instance()
                                           .get_cluster()
                                           .get_cluster_desc()
@@ -827,15 +829,23 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
         // Convert to physical worker coordinates to logical. This gets returned to the user.
         for (auto physical_worker_core : physical_worker_cores) {
-            tt::umd::CoreCoord logical_coord_translated =
-                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
-            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
-                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
-            TT_ASSERT(
-                logical_coord_translated.core_type == CoreType::TENSIX,
-                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
-                "invalid",
-                logical_coord_translated.str());
+            if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                tt::TargetDevice::Silicon) {
+                // For mock/simulator devices, use physical coordinates directly as logical
+                this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                    CoreCoord(physical_worker_core.x, physical_worker_core.y));
+            } else {
+                tt::umd::CoreCoord logical_coord_translated =
+                    soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+                this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                    CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
+                TT_ASSERT(
+                    logical_coord_translated.core_type == CoreType::TENSIX,
+                    "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing "
+                    "workers is "
+                    "invalid",
+                    logical_coord_translated.str());
+            }
         }
     }
     return this->optimal_dram_bank_to_logical_worker_assignment_;
