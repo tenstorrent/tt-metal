@@ -18,11 +18,12 @@ sfpi_inline void calculate_fmod_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    // Compute unsigned remainder
-    sfpi::vInt r;
-    sfpi::vInt a_signed;
-    sfpi::vInt b_signed;
-    compute_unsigned_remainder_int32(dst_index_in0, dst_index_in1, r, a_signed, b_signed);
+    // Read inputs
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+    // Compute unsigned remainder (b_signed only used for computation, not sign)
+    sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
 
     // FMOD sign handling (result has the same sign as a)
     v_if(a_signed < 0) { r = -r; }

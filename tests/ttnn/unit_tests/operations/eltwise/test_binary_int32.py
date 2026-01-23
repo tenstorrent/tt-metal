@@ -1142,7 +1142,10 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     "input_shapes",
     ((torch.Size([1, 2, 32, 128])),),
 )
-def test_binary_remainder_fmod_int32_full_range(input_shapes, ttnn_op, device):
+def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
+    """
+    Sampled pairwise INT32 remainder/fmod test for range [-1e15, 1e15].
+    """
     value_ranges_a = [
         (-300, 300),
         (-500, 500),

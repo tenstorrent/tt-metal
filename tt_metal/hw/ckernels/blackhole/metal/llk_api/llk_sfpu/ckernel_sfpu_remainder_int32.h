@@ -16,77 +16,62 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 
 // Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
 // Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
-// Returns: r (unsigned remainder), a_signed, b_signed (original signed values)
-sfpi_inline void compute_unsigned_remainder_int32(
-    const uint dst_index_in0, const uint dst_index_in1, sfpi::vInt& r, sfpi::vInt& a_signed, sfpi::vInt& b_signed) {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-
-    b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-
-    // When converting to float, integers are treated as sign-magnitude.
-    // Convert inputs to positive values to avoid conversion problems.
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
+    // Get absolute values for unsigned remainder computation
+    sfpi::vInt a = sfpi::abs(a_signed);
     sfpi::vInt b = sfpi::abs(b_signed);
 
     // Convert to float for reciprocal computation
-    // Handle edge case: if conversion results in negative
+    // Handle 2^31 edge case where sign-magnitude conversion yields negative
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
     sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
+    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
+    v_endif;
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
     v_endif;
 
-    // Compute reciprocal of b
+    // Compute reciprocal of b with Newton-Raphson refinement
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
-    a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
-    sfpi::vInt a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
-    v_endif;
 
-    // Initial quotient approximation : q = a * 1/b
+    // Initial quotient approximation: q = a * (1/b)
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
-    // Compute q * b
-    // SFPMUL24 multiplies two 23-bit integers
+    // Compute q * b using 24-bit multiplication
     sfpi::vInt qb;
-
     qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
-
-    q <<= 10;
     qb <<= 10;
 
-    // Compute remainder
-    r = a - qb;
+    // Compute initial remainder
+    sfpi::vInt r = a - qb;
+
+    // Compute correction for approximation error: correction = |r| / b
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
+    sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, 0);
 
-    // Compute correction: r / b in float32
-    sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
-
-    // Compute tmp = correction * b
-    sfpi::vInt tmp_hi;
-    sfpi::vInt tmp_lo;
-    b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
-    tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
+    // Compute correction * b (full 32-bit result from 24-bit multiplies)
+    sfpi::vInt tmp_lo, tmp_hi, b_hi;
     tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
-    tmp_hi += b1;
-    tmp_hi <<= 23;
-    sfpi::vInt tmp = tmp_lo + tmp_hi;
+    tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
+    b_hi = b >> 23;
+    b_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b_hi.get(), 0);
+    sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
-    // Adjust remainder based on its sign
+    // Adjust remainder based on sign
     v_if(r < 0) { r += tmp; }
     v_else { r -= tmp; }
     v_endif;
 
-    // Since the correction might have been rounded, we may need to correct one
-    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
+    // Final adjustment to ensure r is in [0, b)
     v_if(r < 0 && (r - 1) < 0) { r += b; }
     v_elseif(r >= b) { r -= b; }
     v_endif;
+
+    return r;
 }
 
 // Remainder = a - floor(a / b) * b
@@ -95,13 +80,14 @@ sfpi_inline void calculate_remainder_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    // Compute unsigned remainder
-    sfpi::vInt r;
-    sfpi::vInt a_signed;
-    sfpi::vInt b_signed;
-    compute_unsigned_remainder_int32(dst_index_in0, dst_index_in1, r, a_signed, b_signed);
+    // Read inputs
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-    // Remainder sign handling
+    // Compute unsigned remainder
+    sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
+
+    // Remainder sign handling (uses both a_signed and b_signed for sign)
     sfpi::vInt sign = a_signed ^ b_signed;
     v_if(r != 0) {
         v_if(sign < 0) {
