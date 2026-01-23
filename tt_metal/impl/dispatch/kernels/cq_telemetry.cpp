@@ -7,12 +7,32 @@
 // Uses Brisc NOC 0 command buffer 0 for PCIe writes
 
 #include <cstdint>
+#include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "hostdev/dev_msgs.h"
 
 // Perf telemetry page size - must match host-side kPerfTelemetryPageSize
 constexpr uint32_t perf_telemetry_page_size = 64;
+
+// Wall clock register indices (reading LOW latches HIGH for atomic read)
+constexpr int WALL_CLOCK_HIGH_INDEX = 1;
+constexpr int WALL_CLOCK_LOW_INDEX = 0;
+
+// Record timestamp into a telemetry_timestamp_t struct
+// Similar to kernel_profiler's mark_time_at_index_inlined
+// Reading wall clock LOW first latches HIGH for atomic 64-bit read
+FORCE_INLINE
+void record_timestamp(volatile telemetry_timestamp_t* ts, uint32_t id, uint32_t header) {
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    // Read LOW first to latch HIGH
+    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+    ts->time_lo = time_lo;
+    ts->time_hi = time_hi;
+    ts->id = id;
+    ts->header = header;
+}
 
 // Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
 volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
