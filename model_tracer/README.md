@@ -30,11 +30,11 @@ The following models have been traced and their configurations are available in 
 | vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
 | stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
-| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 | gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/gemma3/demo/text_demo.py` |
 | falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
 | sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
-| segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/segmentation_evaluation/test_segmentation_eval.py` |
+| segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py` |
 
 **T3K Machine:**
 
@@ -48,7 +48,7 @@ The following models have been traced and their configurations are available in 
 
 | Model | Purpose | Pytest command used for tracing |
 |-------|---------|----------------------------------|
-| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 
 **WH Galaxy (32 cards):**
 
