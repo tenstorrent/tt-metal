@@ -107,6 +107,17 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     return pconfig;
 }
 
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+    uint32_t hw = in_h * in_w;
+    if (hw <= std::numeric_limits<uint16_t>::max()) {
+        return DataType::UINT16;
+    } else if (hw <= std::numeric_limits<uint32_t>::max()) {
+        return DataType::UINT32;
+    } else {
+        TT_THROW("Input HW {} is too large to be indexed with uint32", hw);
+    }
+}
+
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
     const DataType& input_dtype,
@@ -116,15 +127,18 @@ FactoryParameters get_factory_parameters(
     uint32_t in_channels,
     Pool2DType pool_type,
     bool return_indices,
+    uint32_t in_h,
+    uint32_t in_w,
     const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
     auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
-    tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
-    tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    auto index_dtype = get_index_data_type(in_h, in_w);
+    tt::DataFormat index_format = tt::tt_metal::datatype_to_dataformat_converter(index_dtype);
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t nbytes = datum_size(data_format);
     uint32_t index_nbytes = datum_size(index_format);
 
@@ -148,9 +162,7 @@ FactoryParameters get_factory_parameters(
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
-        TT_FATAL(
-            !is_avg_pool && !is_large_kernel,
-            "Currently only small full width max pool is supported with return_indices");
+        TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
     const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
@@ -176,6 +188,8 @@ FactoryParameters get_factory_parameters(
 
 uint32_t calculate_L1_usage(
     DataType input_dtype,
+    uint32_t in_h,
+    uint32_t in_w,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -216,6 +230,8 @@ uint32_t calculate_L1_usage(
         in_channels,
         pool_type,
         return_indices,
+        in_h,
+        in_w,
         output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -260,9 +276,13 @@ uint32_t calculate_L1_usage(
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
         uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
-        // 1 data sized tile (pack_tmp_cb) and 5 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
-        // up_left_wrap_inc)
-        total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
+        // 1 data sized tile (pack_tmp_cb) and 6 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
+        // up_left_wrap_inc, compute_idx_tmp)
+        total_mpwi_cb_size = (6 * idx_tile_size) + data_tile_size;
+        if (params.is_large_kernel) {
+            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
+            total_mpwi_cb_size += 2 * idx_tile_size;
+        }
     }
 
     uint32_t out_cb_pagesize;
@@ -270,7 +290,7 @@ uint32_t calculate_L1_usage(
     const bool is_output_tiled = output_layout == Layout::TILE;
 
     if (is_output_tiled) {
-        out_cb_pagesize = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
+        out_cb_pagesize = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
         out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
                         tt::constants::TILE_HW;
     } else {
@@ -291,10 +311,10 @@ uint32_t calculate_L1_usage(
 
     uint32_t out_idx_cb_config_size = 0;
     if (return_indices) {
-        uint32_t out_cb_pagesize =
+        uint32_t out_idx_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
             params.index_nbytes;
-        out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
+        out_idx_cb_config_size = out_cb_npages * out_idx_cb_pagesize;
     }
     uint32_t config_tensor_l1_CB_size = 0;
     if (config_tensor_in_dram) {
@@ -379,6 +399,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
         }
         uint32_t l1_usage = calculate_L1_usage(
             input_dtype,
+            sliding_window_config.input_hw.first,
+            sliding_window_config.input_hw.second,
             sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
