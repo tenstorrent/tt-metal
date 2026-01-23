@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dispatch/command_queue.hpp"
+#include "dispatch/hardware_command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
@@ -56,9 +56,6 @@ struct ReadBufferDescriptor {
         dst_offset(dst_offset),
         num_pages_read(num_pages_read) {}
 };
-
-using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {

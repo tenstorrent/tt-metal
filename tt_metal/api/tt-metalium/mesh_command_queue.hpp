@@ -62,7 +62,7 @@ class ShardDataTransfer;
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
     // Currently only supports dispatching workloads and relies on the
-    // tt::tt_metal::CommandQueue.
+    // tt::tt_metal::HWCommandQueue.
     // Additional support for Reads and Writes to be added
 protected:
     MeshDevice* mesh_device_ = nullptr;

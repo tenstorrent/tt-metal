@@ -646,11 +646,9 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
-CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
+HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
-    if (!using_fast_dispatch_) {
-        return *(CommandQueue*)(IDevice*)this;
-    }
+    TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
