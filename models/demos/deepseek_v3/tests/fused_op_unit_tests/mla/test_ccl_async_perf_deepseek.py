@@ -958,11 +958,10 @@ def test_wq_kv_a_sequence_deepseek_perf(
     profiler.start("run")
     profiler.start(step_name)
     results = run_device_perf_detailed(
-        command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters, num_unique_ops=4
+        command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters, per_op=True
     )
     profiler.end(step_name)
     profiler.end("run")
-
     # Get the measured performance
     measured_min = results[cols[0]]["MIN"]
     measured_max = results[cols[0]]["MAX"]
