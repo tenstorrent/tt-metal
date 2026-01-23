@@ -483,31 +483,6 @@ class FastOperation:
         """Check if this operation supports parallel execution via branch()."""
         return hasattr(self.function, "branch")
 
-    def step(self, *args, **kwargs):
-        """
-        Create a step descriptor for sequential execution with ttnn.sequential.
-
-        This method is only available for operations that support sequential execution.
-        The operation must implement a C++ step() method.
-
-        Returns:
-            StepDescriptor: A step descriptor for use with ttnn.sequential().
-
-        Raises:
-            AttributeError: If the operation does not support sequential execution.
-        """
-        if not hasattr(self.function, "step"):
-            raise AttributeError(
-                f"{self.python_fully_qualified_name} does not support sequential execution. "
-                "The operation must implement a step() method."
-            )
-        return self.function.step(*args, **kwargs)
-
-    @property
-    def supports_sequential(self) -> bool:
-        """Check if this operation supports sequential execution via step()."""
-        return hasattr(self.function, "step")
-
     def __post_init__(self):
         if self.function.__doc__ is None:
             return

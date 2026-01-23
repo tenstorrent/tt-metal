@@ -14,7 +14,6 @@
 // Forward declaration for parallel branch support
 namespace ttnn::experimental::prim {
 struct BranchDescriptor;
-struct StepDescriptor;
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -34,19 +33,6 @@ struct ExecuteRMSNorm {
     // Create a branch descriptor for parallel execution
     // Usage: auto branch = ttnn::rms_norm.branch(input, 1e-5, weight, cores);
     static std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> branch(
-        const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::CoreRangeSet& cores,
-        float epsilon = 1e-12,
-        const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias = std::nullopt,
-        const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    // Create a step descriptor for sequential execution
-    // Usage: auto step = ttnn::rms_norm.step(input, cores, 1e-5, weight);
-    static std::shared_ptr<ttnn::experimental::prim::StepDescriptor> step(
         const ttnn::Tensor& input_tensor,
         const tt::tt_metal::CoreRangeSet& cores,
         float epsilon = 1e-12,

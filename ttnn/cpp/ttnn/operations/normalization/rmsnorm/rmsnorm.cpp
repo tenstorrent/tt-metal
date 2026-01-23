@@ -10,7 +10,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/experimental/parallel/device/parallel_device_operation_types.hpp"
-#include "ttnn/operations/experimental/sequential/device/sequential_device_operation_types.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::operations::normalization {
@@ -94,37 +93,6 @@ std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> ExecuteRMSNorm::bran
         .input = input_tensor, .residual_input_tensor = residual_input_tensor, .weight = weight, .bias = bias};
 
     return ttnn::experimental::prim::create_branch<LayerNormDeviceOp>(cores, op_attrs, tensor_args);
-}
-
-std::shared_ptr<ttnn::experimental::prim::StepDescriptor> ExecuteRMSNorm::step(
-    const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::CoreRangeSet& cores,
-    float epsilon,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& bias,
-    const std::optional<const ttnn::Tensor>& residual_input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
-                                                                   : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-
-    LayerNormDeviceOp::operation_attributes_t op_attrs{
-        .norm_type = ttnn::prim::LayerNormType::RMSNORM,
-        .distributed_norm_stage = ttnn::prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
-        .eps = epsilon,
-        .output_mem_config = output_memory_config,
-        .program_config = program_config.value_or(ttnn::prim::create_program_config(input_tensor.shard_spec())),
-        .compute_kernel_config = kernel_config_val};
-
-    LayerNormDeviceOp::tensor_args_t tensor_args{
-        .input = input_tensor, .residual_input_tensor = residual_input_tensor, .weight = weight, .bias = bias};
-
-    return ttnn::experimental::prim::create_step<LayerNormDeviceOp>(cores, op_attrs, tensor_args);
 }
 
 }  // namespace ttnn::operations::normalization
