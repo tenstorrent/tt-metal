@@ -779,10 +779,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
         };
-        // TOOD: Add fused ternary op support in kernel
-        // if (use_fused_ternary) {
-        //     compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
-        // }
+        if (use_fused_ternary) {
+            compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
+        }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 
@@ -793,6 +792,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in0_receiver_kernels_id,
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
+        compute_kernels_id,
         transpose_core_grid,
         fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
@@ -825,7 +825,7 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
 // Common helper for override_runtime_arguments - works with both single and multiple output tensors
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const MinimalMatmulParams& /*operation_attributes*/,
+    const MinimalMatmulParams& operation_attributes,
     const MinimalMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
@@ -848,6 +848,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
+    auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
 
     // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
     // [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
@@ -942,6 +943,20 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
                 in1_receiver_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
             }
+        }
+    }
+
+    // Update compute kernel runtime args for scalar
+    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
+        CoreCoord core = override_variables.cores.at(i);
+        auto& compute_args = compute_runtime_args[core.x][core.y];
+
+        // Compute RT args: [M_start, M_end, N_start, N_end, [optional: scalar]]
+        // If ternary is present and scalar arg exists, update it at index 4
+        if (has_fused_ternary && operation_attributes.fused_ternary_scalar.has_value()) {
+            float scalar = operation_attributes.fused_ternary_scalar.value();
+            uint32_t scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
+            compute_args[4] = scalar_as_uint;
         }
     }
 }
