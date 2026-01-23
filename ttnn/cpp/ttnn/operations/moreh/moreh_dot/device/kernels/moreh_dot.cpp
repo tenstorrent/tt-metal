@@ -38,7 +38,7 @@ void MAIN {
             REDUCE_OP,
             REDUCE_DIM,
             compute_kernel_lib::policies::StreamingPolicy,
-            compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+            compute_kernel_lib::policies::ReconfigNonePolicy>(
             compute_kernel_lib::ReduceCBs::of(
                 tt::CBIndex::c_24, tt::CBIndex::c_2, is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25),
             compute_kernel_lib::TileGrid::single(),

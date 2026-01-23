@@ -24,7 +24,7 @@ void calc_numeric_stable(
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::policies::PersistentPolicy,
-        compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
+        compute_kernel_lib::policies::ReconfigInputPolicy>(
         compute_kernel_lib::ReduceCBs::of(cb_in, cb_bcast_scaler, cb_max), compute_kernel_lib::TileGrid::row(Wt));
 
     // calculate x-max(x)

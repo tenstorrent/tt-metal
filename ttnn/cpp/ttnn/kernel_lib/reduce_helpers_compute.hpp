@@ -10,6 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helper_policies.hpp"
 /**
  * @file reduce_helpers.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -61,136 +62,7 @@
 namespace compute_kernel_lib {
 
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
-
-// =============================================================================
-// Input Policy Structs - control how input tiles are synchronized and consumed
-// =============================================================================
-
-namespace policies {
-
-/**
- * @brief When to synchronize on input tiles
- */
-enum class WaitMode {
-    PER_TILE,   // wait/process/pop one tile at a time
-    PER_BATCH,  // wait for batch, process all, pop batch
-    UPFRONT,    // wait for everything upfront
-    NONE        // caller manages synchronization
-};
-
-/**
- * @brief Whether to pop tiles after processing
- */
-enum class PopMode {
-    POP,    // pop tiles after processing
-    NO_POP  // leave tiles in CB (for reuse)
-};
-
-/**
- * @brief Streaming policy - processes tiles one at a time
- *
- * Wait: per-tile, Pop: yes
- * Safe for numerical precision, compatible with any CB size.
- * Use when tiles arrive one at a time from dataflow.
- */
-struct StreamingPolicy {
-    static constexpr WaitMode wait = WaitMode::PER_TILE;
-    static constexpr PopMode pop = PopMode::POP;
-};
-
-/**
- * @brief Streaming batched policy - processes tiles in batches
- *
- * Wait: per-batch, Pop: yes
- * Optimal performance when tiles are pre-loaded in CB per batch/row.
- */
-struct StreamingBatchedPolicy {
-    static constexpr WaitMode wait = WaitMode::PER_BATCH;
-    static constexpr PopMode pop = PopMode::POP;
-};
-
-/**
- * @brief Preloaded policy - caller manages synchronization
- *
- * Wait: none (caller already waited), Pop: no (caller manages)
- * Use when tiles are already in CB and caller handles wait/pop externally.
- */
-struct PreloadedPolicy {
-    static constexpr WaitMode wait = WaitMode::NONE;
-    static constexpr PopMode pop = PopMode::NO_POP;
-};
-
-/**
- * @brief Persistent policy - tiles remain for reuse
- *
- * Wait: upfront (all tiles), Pop: no (tiles persist)
- * Ideal for softmax pattern where tiles are reused in subsequent operations.
- */
-struct PersistentPolicy {
-    static constexpr WaitMode wait = WaitMode::UPFRONT;
-    static constexpr PopMode pop = PopMode::NO_POP;
-};
-
-// =============================================================================
-// Init Policies - control whether reduce_init/reduce_uninit are called
-// =============================================================================
-
-/**
- * @brief Init both policy - calls both reduce_init and reduce_uninit
- *
- * Default behavior: initialize at start, uninitialize at end.
- * Use when reduce is a standalone operation.
- */
-struct InitBothPolicy {
-    static constexpr bool init = true;
-    static constexpr bool uninit = true;
-};
-
-/**
- * @brief Init only policy - calls reduce_init but not reduce_uninit
- *
- * Use when caller will call reduce_uninit manually, e.g., to insert
- * custom operations (like recip_tile) before uninitializing.
- */
-struct InitOnlyPolicy {
-    static constexpr bool init = true;
-    static constexpr bool uninit = false;
-};
-
-/**
- * @brief Uninit only policy - calls reduce_uninit but not reduce_init
- *
- * Use when caller already called reduce_init externally.
- */
-struct UninitOnlyPolicy {
-    static constexpr bool init = false;
-    static constexpr bool uninit = true;
-};
-
-/**
- * @brief No init policy - caller manages both init and uninit externally
- *
- * Use when multiple reduce calls share the same init/uninit scope.
- */
-struct NoInitPolicy {
-    static constexpr bool init = false;
-    static constexpr bool uninit = false;
-};
-
-}  // namespace policies
-
-/**
- * @brief Data format reconfiguration mode for reduce operations
- *
- * Controls whether the library automatically reconfigures the unpacker and packer
- * data formats before executing the reduce operation.
- *
- * NONE: No reconfig - use when reduce is first operation or formats already match
- * INPUT: Reconfig unpacker only (reconfig_data_format)
- * OUTPUT: Reconfig packer only (pack_reconfig_data_format)
- * BOTH: Reconfig both unpacker and packer (DEFAULT)
- */
-enum class ReduceDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, BOTH = 3 };
+// Policy structs are provided by reduce_helper_policies.hpp
 
 /**
  * @brief Circular buffer specification for reduce operations
@@ -469,7 +341,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam InputPolicy Input handling policy - defaults to policies::StreamingPolicy
  *         Available policies: StreamingPolicy, StreamingBatchedPolicy, PreloadedPolicy, PersistentPolicy
- * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
+ * @tparam ReconfigPolicy Data format reconfiguration policy - defaults to policies::ReconfigBothPolicy
+ *         Available policies: ReconfigNonePolicy, ReconfigInputPolicy, ReconfigOutputPolicy, ReconfigBothPolicy
  * @tparam InitPolicy Init/uninit lifecycle policy - defaults to policies::InitBothPolicy
  *         Available policies: InitBothPolicy, InitOnlyPolicy, UninitOnlyPolicy, NoInitPolicy
  *
@@ -527,7 +400,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   // Use InitOnlyPolicy since lambda calls reduce_uninit() before recip
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy,
- *       compute_kernel_lib::ReduceDataFormatReconfig::BOTH,
+ *       compute_kernel_lib::policies::ReconfigBothPolicy,
  *       compute_kernel_lib::policies::InitOnlyPolicy>(
  *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileGrid::row(Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
@@ -555,7 +428,7 @@ template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
     typename InputPolicy = policies::StreamingPolicy,
-    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
+    typename ReconfigPolicy = policies::ReconfigBothPolicy,
     typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
@@ -576,11 +449,11 @@ ALWI void reduce(
     const uint32_t Wt = grid.cols;
     const uint32_t num_batches = grid.batches;
 
-    // Apply reconfig based on mode
-    if constexpr (reconfig == ReduceDataFormatReconfig::INPUT || reconfig == ReduceDataFormatReconfig::BOTH) {
+    // Apply reconfig based on policy
+    if constexpr (ReconfigPolicy::reconfig_input) {
         reconfig_data_format(icb, icb_scaler);
     }
-    if constexpr (reconfig == ReduceDataFormatReconfig::OUTPUT || reconfig == ReduceDataFormatReconfig::BOTH) {
+    if constexpr (ReconfigPolicy::reconfig_output) {
         pack_reconfig_data_format(ocb);
     }
 

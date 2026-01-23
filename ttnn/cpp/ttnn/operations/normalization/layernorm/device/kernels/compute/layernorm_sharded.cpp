@@ -146,7 +146,7 @@ void MAIN {
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::policies::PreloadedPolicy,
-        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        compute_kernel_lib::policies::ReconfigNonePolicy>(
         compute_kernel_lib::ReduceCBs::of(cb_in, cb_scaler, cb_ex_partial),
         compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
@@ -254,7 +254,7 @@ void MAIN {
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::policies::PreloadedPolicy,
-        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        compute_kernel_lib::policies::ReconfigNonePolicy>(
         compute_kernel_lib::ReduceCBs::of(cb_xmm2, cb_scaler, cb_ex_partial2),
         compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
