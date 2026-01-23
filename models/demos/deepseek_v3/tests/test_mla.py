@@ -592,7 +592,10 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 )
 @pytest.mark.parametrize(
     "test_closure",
-    [run_test_forward_pass_mla1d, run_test_forward_pass_mla2d],
+    [
+        pytest.param(run_test_forward_pass_mla1d, marks=pytest.mark.requires_device(["TG"])),
+        pytest.param(run_test_forward_pass_mla2d, marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"])),
+    ],
 )
 def test_forward_pass(
     mode,
