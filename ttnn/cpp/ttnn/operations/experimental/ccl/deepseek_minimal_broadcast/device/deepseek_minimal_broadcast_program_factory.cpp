@@ -40,7 +40,6 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const DeepseekMinimalBroadcastInputs& tensor_args,
     Tensor& tensor_return_value) {
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - START");
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -55,17 +54,13 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - creating semaphores");
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto secondary_sync_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - semaphores created, synchronizing devices");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - devices synchronized");
 
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - creating programs for {} coords", tensor_coords.coords().size());
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+
     for (const auto& coord : tensor_coords.coords()) {
-        log_info(tt::LogOp, "DEBUG: create_mesh_workload - creating program for coord {}", coord);
         auto cached_program = DeepseekMinimalBroadcastProgramFactory::create_at(
             operation_attributes,
             coord,
@@ -74,12 +69,10 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
             final_barrier_semaphore,
             init_barrier_semaphore,
             secondary_sync_semaphore);
-        log_info(tt::LogOp, "DEBUG: create_mesh_workload - program created for coord {}", coord);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
 
-    log_info(tt::LogOp, "DEBUG: create_mesh_workload - END");
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
@@ -239,7 +232,6 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         has_reverse_secondary_connection = 1;
     }
 
-    printf("num_pages_per_packet: %u\n", num_pages_per_packet);
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {

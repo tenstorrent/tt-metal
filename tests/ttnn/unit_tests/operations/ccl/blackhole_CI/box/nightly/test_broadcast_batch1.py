@@ -290,12 +290,13 @@ def run_broadcast_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize(
     "device_params",
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(15232),
                 "trace_region_size": 573440,
             }
@@ -319,10 +320,10 @@ def test_broadcast_batch1(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    topology,
 ):
-    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
     mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    print("mesh device shape: ", mesh_device.shape)
     sender_coord_tuple = (sender_idx, 0)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
 
@@ -337,7 +338,7 @@ def test_broadcast_batch1(
         layout,
         function_level_defaults,
         cluster_axis=0,
-        broadcast_topology=ttnn.Topology.Linear,
+        broadcast_topology=topology,
         num_iters=num_iters,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
@@ -367,6 +368,7 @@ def test_broadcast_batch1(
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize(
     "input_dtype",
     [
@@ -403,6 +405,7 @@ def test_broadcast_batch1_dual_axis(
     input_shard_shape,
     input_shard_grid,
     tensor_mem_layout,
+    topology,
 ):
     """
     Test dual-axis broadcast on a 2D mesh.
@@ -411,12 +414,9 @@ def test_broadcast_batch1_dual_axis(
     2. Then both sender and secondary sender broadcast along cluster_axis (axis 0) to all devices in their columns
     """
     num_devices = mesh_rows * mesh_cols
-    print("num_devices: ", num_devices)
-    print("bh_2d_mesh_device.shape: ", bh_2d_mesh_device.shape)
-    print("ttnn.MeshShape(mesh_rows, mesh_cols):", ttnn.MeshShape((mesh_rows, mesh_cols)))
-    # validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, 0)
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
     mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    print(f"mesh device shape: {mesh_device.shape}")
 
     sender_coord_tuple = (sender_row, sender_col)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
@@ -475,7 +475,7 @@ def test_broadcast_batch1_dual_axis(
         sender_coord=sender_coord,
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         subdevice_id=worker_sub_device_id,
         cluster_axis=0,
         secondary_cluster_axis=1,
@@ -491,7 +491,7 @@ def test_broadcast_batch1_dual_axis(
             sender_coord=sender_coord,
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             subdevice_id=worker_sub_device_id,
             cluster_axis=0,
             secondary_cluster_axis=1,
@@ -515,7 +515,6 @@ def test_broadcast_batch1_dual_axis(
     slice_size = output_shape[0]  # Batch dimension
     # Validate ALL devices (mesh_rows * mesh_cols)
     for device_idx in range(num_devices):
-        print("checking device idx: ", device_idx)
         start = device_idx * slice_size
         end = start + slice_size
         received = output_tensor_torch[start:end, :]
