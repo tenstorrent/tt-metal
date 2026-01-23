@@ -125,11 +125,11 @@ void kernel_main() {
                                     Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
                             }
                         }
-                    } else if constexpr (use_padded_mask) {
-                        // Generate non-causal padded mask only once per q chunk since it is only non-zero on the last K
-                        // chunk if it exists at all.
+                    } else if constexpr (use_padded_mask && !use_provided_mask) {
+                        // Non-causal with K padding but no user mask: generate padding mask
                         generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk);
                     }
+                    // When use_provided_mask && use_padded_mask, reader handles padding
 
                     // Wait for compute to deliver output chunk
                     /*
