@@ -123,9 +123,7 @@ void MAIN {
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-        cb_in,
-        cb_scaler,
-        cb_ex_partial2,
+        compute_kernel_lib::ReduceCBs::of(cb_in, cb_scaler, cb_ex_partial2),
         compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
@@ -167,9 +165,7 @@ void MAIN {
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
     compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy>(
-        cb_x2,
-        cb_scaler,
-        cb_ex_partial2,
+        compute_kernel_lib::ReduceCBs::of(cb_x2, cb_scaler, cb_ex_partial2),
         compute_kernel_lib::TileGrid::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
     cb_pop_front(cb_x2, num_tiles_per_block);

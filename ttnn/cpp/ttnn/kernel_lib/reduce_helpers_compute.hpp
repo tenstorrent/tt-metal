@@ -560,13 +560,15 @@ template <
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
-    uint32_t icb,
-    uint32_t icb_scaler,
-    uint32_t ocb,
+    ReduceCBs cbs,
     TileGrid grid,
     TileLayout layout = TileLayout::contiguous(),
     AccumT accum = AccumT{},
     PostReduceOp post_reduce_op = PostReduceOp{}) {
+    // Extract CB indices for cleaner code
+    const uint32_t icb = cbs.input;
+    const uint32_t icb_scaler = cbs.scaler;
+    const uint32_t ocb = cbs.output;
     // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumT>;
     // Extract grid components
@@ -862,41 +864,6 @@ ALWI void reduce(
     if constexpr (InitPolicy::uninit) {
         reduce_uninit<enforce_fp32_accumulation>();
     }
-}
-
-/**
- * @brief Overload accepting ReduceCBs struct for self-documenting code
- *
- * This overload groups the three CB arguments into a single struct, making the code
- * more readable and preventing argument-swapping bugs.
- *
- * @param cbs Circular buffer specification (input, scaler, output)
- * @param grid Tile grid dimensions (rows x cols x batches)
- * @param layout Tile memory layout specification for PRELOADED/PERSISTENT modes
- * @param accum Accumulation configuration (NoAccumulation or Accumulate)
- * @param post_reduce_op Optional callback after each reduction
- *
- * @example
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
- *       compute_kernel_lib::ReduceCBs::of(cb_in, cb_scaler, cb_out),
- *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
- */
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    typename InputPolicy = policies::StreamingPolicy,
-    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
-    typename InitPolicy = policies::InitBothPolicy,
-    typename AccumT = NoAccumulation,
-    typename PostReduceOp = NoOp>
-ALWI void reduce(
-    ReduceCBs cbs,
-    TileGrid grid,
-    TileLayout layout = TileLayout::contiguous(),
-    AccumT accum = AccumT{},
-    PostReduceOp post_reduce_op = PostReduceOp{}) {
-    reduce<reduce_type, reduce_dim, InputPolicy, reconfig, InitPolicy, AccumT, PostReduceOp>(
-        cbs.input, cbs.scaler, cbs.output, grid, layout, accum, post_reduce_op);
 }
 
 }  // namespace compute_kernel_lib

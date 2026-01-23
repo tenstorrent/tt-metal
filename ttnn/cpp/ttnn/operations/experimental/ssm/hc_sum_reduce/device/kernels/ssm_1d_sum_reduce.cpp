@@ -56,7 +56,8 @@ void MAIN {
                     ReduceDim::REDUCE_COL,
                     compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-                    intermed_cb_id0, scalar_cb_id, intermed_cb_id1, compute_kernel_lib::TileGrid::single());  // 1 x B
+                    compute_kernel_lib::ReduceCBs::of(intermed_cb_id0, scalar_cb_id, intermed_cb_id1),
+                    compute_kernel_lib::TileGrid::single());  // 1 x B
             }
             // Get full tile back from writer and transpose it
             pack_reconfig_data_format(intermed_cb_id0, output_cb_id);

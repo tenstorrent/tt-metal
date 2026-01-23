@@ -49,7 +49,8 @@ void MAIN {
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::TileGrid::col(Ht - 1));
+                    compute_kernel_lib::ReduceCBs::of(cb_input, cb_scaler, cb_accum_dst),
+                    compute_kernel_lib::TileGrid::col(Ht - 1));
             }
 
             // Optional masking of last H tile
@@ -80,9 +81,7 @@ void MAIN {
             // - If Ht == 1 (single tile): iteration=0, no accumulator reload
             // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                cb_input,
-                cb_scaler,
-                cb_out,
+                compute_kernel_lib::ReduceCBs::of(cb_input, cb_scaler, cb_out),
                 compute_kernel_lib::TileGrid::single(),
                 compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));

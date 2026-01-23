@@ -131,7 +131,8 @@ void MAIN {
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
-        cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::TileGrid::row(num_reduce_tiles_per_block_h));
+        compute_kernel_lib::ReduceCBs::of(cb_x2, cb_scaler, cb_ex_partial2),
+        compute_kernel_lib::TileGrid::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
@@ -149,9 +150,7 @@ void MAIN {
             ReduceDim::REDUCE_ROW,
             compute_kernel_lib::policies::StreamingPolicy,
             compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
-            cb_ex_external2,
-            cb_scaler_global,
-            cb_reduction_out,
+            compute_kernel_lib::ReduceCBs::of(cb_ex_external2, cb_scaler_global, cb_reduction_out),
             compute_kernel_lib::TileGrid::of(num_tiles_per_allgather_worker, num_blocks_reduce));
     }
 
@@ -176,7 +175,8 @@ void MAIN {
                 ReduceDim::REDUCE_ROW,
                 compute_kernel_lib::policies::StreamingPolicy,
                 compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-                cb_stats, post_cb_scaler_global, cb_var, compute_kernel_lib::TileGrid::row(num_distributed_blocks));
+                compute_kernel_lib::ReduceCBs::of(cb_stats, post_cb_scaler_global, cb_var),
+                compute_kernel_lib::TileGrid::row(num_distributed_blocks));
 
             // 1/[sqrt(Var + eps)],
             reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm

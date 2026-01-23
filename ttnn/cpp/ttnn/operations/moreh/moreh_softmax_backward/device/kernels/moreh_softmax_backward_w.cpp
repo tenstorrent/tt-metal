@@ -34,19 +34,22 @@ void MAIN {
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter2, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileGrid::single());
+                compute_kernel_lib::ReduceCBs::of(cb_inter2, cb_bcast_scaler, cb_sum),
+                compute_kernel_lib::TileGrid::single());
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
             compute_kernel_lib::
                 reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
-                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::TileGrid::row(Wt - 1));
+                    compute_kernel_lib::ReduceCBs::of(cb_dy, cb_bcast_scaler, cb_inter0),
+                    compute_kernel_lib::TileGrid::row(Wt - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::TileGrid::single());
+                compute_kernel_lib::ReduceCBs::of(cb_inter1, cb_bcast_scaler, cb_inter2),
+                compute_kernel_lib::TileGrid::single());
 
             add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
         }

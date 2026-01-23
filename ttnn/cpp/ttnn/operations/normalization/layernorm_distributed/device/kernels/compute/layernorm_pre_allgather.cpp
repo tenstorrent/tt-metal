@@ -64,7 +64,7 @@ void MAIN {
         // Batched mode for optimal performance
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
-                cb_x2, cb_reduce, cb_out, compute_kernel_lib::TileGrid::row(Wt));
+                compute_kernel_lib::ReduceCBs::of(cb_x2, cb_reduce, cb_out), compute_kernel_lib::TileGrid::row(Wt));
 
         /*
          * sum(x)
@@ -73,7 +73,7 @@ void MAIN {
         // Batched mode for optimal performance
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
-                cb_inp, cb_reduce, cb_out, compute_kernel_lib::TileGrid::row(Wt));
+                compute_kernel_lib::ReduceCBs::of(cb_inp, cb_reduce, cb_out), compute_kernel_lib::TileGrid::row(Wt));
     }
     cb_pop_front(cb_reduce, 1);
 }
