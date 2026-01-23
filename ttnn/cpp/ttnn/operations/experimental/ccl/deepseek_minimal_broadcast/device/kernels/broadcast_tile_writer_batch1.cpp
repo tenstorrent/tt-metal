@@ -70,6 +70,7 @@ void kernel_main() {
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
+    const size_t secondary_sync_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
@@ -100,6 +101,8 @@ void kernel_main() {
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+    uint64_t secondary_sync_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, secondary_sync_sem, 0);
 
     // Secondary axis barrier between primary sender and secondary sender
     // Both devices send an atomic inc to each other and wait
@@ -109,19 +112,15 @@ void kernel_main() {
         volatile PACKET_HEADER_TYPE* sec_sync_header = PacketHeaderPool::header_table[route_id].first;
         fabric_set_unicast_route(fabric_connection, sec_sync_header, secondary_connection_idx);
 
-        uint64_t out_ready_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-
-        // Send atomic inc to the other device
+        // Send atomic inc to the other device's secondary sync semaphore
         fabric_unicast_noc_unicast_atomic_inc(
             &secondary_slot.sender,
             sec_sync_header,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 1},
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{secondary_sync_sem_noc_addr_in_pkt, 1},
             1);
 
-        // Wait for the other device's atomic inc
-        volatile tt_l1_ptr uint32_t* sync_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+        // Wait for the other device's atomic inc on secondary_sync_sem
+        volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(secondary_sync_sem);
         noc_semaphore_wait_min(sync_sem_ptr, 1);
         noc_semaphore_set(sync_sem_ptr, 0);
     }
@@ -198,8 +197,6 @@ void kernel_main() {
             tensor0_page_size * num_pages_to_read);
 
         noc_async_write(l1_read_addr, dst_noc_addr, tensor0_page_size * num_pages_to_read);
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, packet_size_in_pages);
 
         // increment locally
         uint64_t out_ready_sem_noc_addr =
@@ -217,10 +214,9 @@ void kernel_main() {
         if (reset_global_semaphore) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
         }
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, packet_size_in_pages);
 
-        close_connections(fabric_connection);
-
-        noc_async_write_barrier();
     } else if constexpr (is_secondary_sender) {
         // Secondary sender: wait for data from primary sender, then broadcast along primary axis
         // First wait for data to arrive from primary sender
@@ -254,9 +250,6 @@ void kernel_main() {
             tensor0_page_size * num_pages_to_read);
         noc_async_writes_flushed();
 
-        close_connections(fabric_connection);
-
-        noc_async_write_barrier();
     } else {
         // Receiver: wait for data from broadcaster
         if (wait_output_semaphore) {
@@ -269,9 +262,8 @@ void kernel_main() {
         if (reset_global_semaphore) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
         }
-
-        close_connections(fabric_connection);
-
-        noc_async_write_barrier();
     }
+    close_connections(fabric_connection);
+
+    noc_async_write_barrier();
 }

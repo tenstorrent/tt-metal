@@ -13,6 +13,7 @@ struct DeepseekMinimalBroadcastProgramFactory {
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore semaphore;
         tt::tt_metal::GlobalSemaphore barrier_semaphore;
+        tt::tt_metal::GlobalSemaphore secondary_sync_semaphore;
         uint32_t ring_index = 0;
         bool is_secondary_sender = false;
     };
@@ -40,7 +41,8 @@ private:
         const DeepseekMinimalBroadcastInputs& tensor_args,
         Tensor& output_tensor,
         const tt::tt_metal::GlobalSemaphore& semaphore,
-        const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
+        const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+        const tt::tt_metal::GlobalSemaphore& secondary_sync_semaphore);
 };
 
 }  // namespace ttnn::experimental::prim

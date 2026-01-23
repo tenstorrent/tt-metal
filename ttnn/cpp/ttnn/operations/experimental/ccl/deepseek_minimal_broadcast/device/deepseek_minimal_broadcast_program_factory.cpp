@@ -58,6 +58,7 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
     log_info(tt::LogOp, "DEBUG: create_mesh_workload - creating semaphores");
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto secondary_sync_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_info(tt::LogOp, "DEBUG: create_mesh_workload - semaphores created, synchronizing devices");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_info(tt::LogOp, "DEBUG: create_mesh_workload - devices synchronized");
@@ -71,7 +72,8 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
             tensor_args,
             tensor_return_value,
             final_barrier_semaphore,
-            init_barrier_semaphore);
+            init_barrier_semaphore,
+            secondary_sync_semaphore);
         log_info(tt::LogOp, "DEBUG: create_mesh_workload - program created for coord {}", coord);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
@@ -87,7 +89,8 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     const DeepseekMinimalBroadcastInputs& tensor_args,
     Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& secondary_sync_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
@@ -345,8 +348,8 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         uint32_t output_tile_id_end = input_tile_id_end;
 
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            output_tensor.buffer()->address(),  // tensor_address0
+            semaphore.address(),                // out_ready_sem_bank_addr
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -358,6 +361,7 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
             barrier_core.x,                     // barrier_sem_noc0_x
             barrier_core.y,                     // barrier_sem_noc0_y
             ring_index,
+            secondary_sync_semaphore.address(),  // secondary_sync_sem
         };
 
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
@@ -406,6 +410,7 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .semaphore = semaphore,
         .barrier_semaphore = barrier_semaphore,
+        .secondary_sync_semaphore = secondary_sync_semaphore,
         .ring_index = ring_index,
         .is_secondary_sender = is_secondary_sender,
     };
@@ -442,6 +447,7 @@ void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
             worker_writer_sender_runtime_args[0] = output.buffer()->address();
             worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
             worker_writer_sender_runtime_args[9] = shared_vars.barrier_semaphore.address();
+            worker_writer_sender_runtime_args[13] = shared_vars.secondary_sync_semaphore.address();
         }
     }
 }
