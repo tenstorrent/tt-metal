@@ -9,6 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def apply_rotary_pos_emb_torch(x, cos, sin, trans_mat):
@@ -41,7 +42,7 @@ def apply_rotary_pos_emb_torch(x, cos, sin, trans_mat):
     for i in range(0, head_dim, 32):
         chunk = x[..., i : i + 32]  # [..., 32]
         # rotated = chunk @ trans_mat.T (matmul on last dimension)
-        rotated_chunk = chunk @ trans_mat_2d.T  # [..., 32] @ [32, 32] = [..., 32]
+        rotated_chunk = chunk @ trans_mat_2d  # [..., 32] @ [32, 32] = [..., 32]
         rotated_chunks.append(rotated_chunk)
 
     rotated = torch.cat(rotated_chunks, dim=-1)
@@ -199,11 +200,8 @@ def test_deepseek_v3_mla_rope_trace_mode(
     # Create RoPE tensors (cos, sin, trans matrices)
     rope_tensors = create_rope_tensors(device, head_dim, batch_size)
 
-    # In decode mode, we use position 0 for all batch elements (simplest case for testing)
-    # The cos/sin from create_rope_tensors are [1, batch_size, 1, head_dim] where index i has values for position i
-    # For testing, we'll use position 0's values for all positions
-    torch_cos_single = rope_tensors["torch_cos"][:, 0:1, :, :]  # [1, 1, 1, head_dim]
-    torch_sin_single = rope_tensors["torch_sin"][:, 0:1, :, :]  # [1, 1, 1, head_dim]
+    torch_cos_single = rope_tensors["torch_cos"]
+    torch_sin_single = rope_tensors["torch_sin"]
 
     # Get transformation matrix from rope_tensors
     # It's shaped [1, 1, batch_size*32, 32] where the 32x32 matrix is repeated vertically
@@ -324,5 +322,5 @@ def test_deepseek_v3_mla_rope_trace_mode(
     ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
 
     # Compare with torch reference implementation
-    # assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.99)
+    assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.99)
     # TODO fix torch implementation sao it passes pcc
