@@ -65,7 +65,7 @@ void bind_bcast(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_b,
                ttnn::BcastOpMath bcast_op,
                ttnn::BcastOpDim bcast_dim,
-               std::optional<Tensor> output_tensor,
+               const std::optional<Tensor>& output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
             },

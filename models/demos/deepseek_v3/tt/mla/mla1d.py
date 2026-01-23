@@ -547,6 +547,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=2,
             out_dim=1,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -581,6 +582,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
