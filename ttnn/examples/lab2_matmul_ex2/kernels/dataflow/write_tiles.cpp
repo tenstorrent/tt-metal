@@ -9,8 +9,23 @@ void kernel_main() {
     // Read parameters from the kernel's runtime arguments.
     int arg_idx = 0;
     uint32_t out0_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tile_offset = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t Nt = get_arg_val<uint32_t>(arg_idx++);
+    // Size of the output C_block is M_block_tiles x N_block_tiles.
+    uint32_t M_block_tiles = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t N_block_tiles = get_arg_val<uint32_t>(arg_idx++);
+    // Offset of the output C_block in the output matrix.
+    uint32_t tile_offset_row = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tile_offset_col = get_arg_val<uint32_t>(arg_idx++);
+
+    // Example computation: Mt = 9, Nt = 6
+    // M_block_tiles = 3, N_block_tiles = 3
+    // tile_offset_row = 6, tile_offset_col = 3
+    // starting index = 6 * 6 + 3 = 39
+    // As we iterate over the tiles, index can't be simply incrmeneted.
+    // Here's a simple method:
+    // effective_row = tile_offset_row + block_row
+    // effective_col = tile_offset_col + block_col
+    // effective_index = effective_row * Nt + effective_col
 
     // The circular buffer that contains the result, which this kernel will
     // read from and then write to device memory.
@@ -32,18 +47,23 @@ void kernel_main() {
     const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
 
     // Loop over all the tiles and write them to the output buffer.
-    uint32_t tile_index = tile_offset;
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        // Make sure there is a tile ready in the circular buffer. This is a blocking call.
-        cb_wait_front(cb_out0, 1);
-        uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-        // Write the tile to device memory. This is a non-blocking call.
-        noc_async_write_tile(tile_index, out0_addr_gen, cb_out0_addr);
-        tile_index++;
-        
-        // Wait until the write is done. This is a blocking call.
-        noc_async_write_barrier();
-        // Mark the tile in the circular buffer as consumed, freeing up space for the next tile.
-        cb_pop_front(cb_out0, 1);
+    for (uint32_t block_row = 0; block_row < M_block_tiles; block_row++) {
+        uint32_t effective_row = tile_offset_row + block_row;
+        for (uint32_t block_col = 0; block_col < N_block_tiles; block_col++) {
+            uint32_t effective_col = tile_offset_col + block_col;
+            uint32_t tile_index = effective_row * Nt + effective_col;
+
+            // Make sure there is a tile ready in the circular buffer. This is a blocking call.
+            cb_wait_front(cb_out0, 1);
+            uint32_t cb_out0_addr = get_read_ptr(cb_out0);
+            // Write the tile to device memory. This is a non-blocking call.
+            noc_async_write_tile(tile_index, out0_addr_gen, cb_out0_addr);
+            tile_index++;
+            
+            // Wait until the write is done. This is a blocking call.
+            noc_async_write_barrier();
+            // Mark the tile in the circular buffer as consumed, freeing up space for the next tile.
+            cb_pop_front(cb_out0, 1);
+        }
     }
 }

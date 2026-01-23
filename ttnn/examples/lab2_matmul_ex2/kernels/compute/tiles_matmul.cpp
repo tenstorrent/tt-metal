@@ -38,10 +38,7 @@ void MAIN {
     // and output circular buffers.
     mm_init(cb_in0, cb_in1, cb_out0);
 
-    // The simplest possible version of outer product blocked matmul.
-    // The reader is expected to read the A's and B's tile rows and tile
-    // columns for each output tile
-    // Loop over all the MtxNt tiles in the output matrix and compute each tile of the result.
+    // Loop over all the K-blocks.
     for (uint32_t b = 0; b < num_k_blocks; ++b) {
         cb_wait_front(cb_in0, A_slab_tiles); // Ensure that A_slab(b) is in CB0
         cb_wait_front(cb_in1, B_slab_tiles); // Ensure that B_slab(b) is in CB1
@@ -49,68 +46,58 @@ void MAIN {
         // Loop over all the tiles along the K dimension to accumulate partial products.
         for (uint32_t i = 0; i < M_block_tiles; i++) {
             for (uint32_t j = 0; j < N_block_tiles; j++) {
+                tile_regs_acquire();
                 // Get the current accumulator tile for C(i,j)
-                if (b == 0) {
-                    // First K-block: start from zero
-                    tile_regs_acquire();
-                } else {
+                if (b != 0) {
                     copy_tile_to_dst_init_short(cb_intermediate);
-                    cb_wait_front(cb_intermediate, C_block_tiles);
+                    // This is one way to do this: wait for all the tiles in the intermediate CB to be ready
+                    // and then index into CB manually.
+                    // Another way is to just push and pop one tile at a time.
+                    // This is possible because the i, j loop goes in the same order for every block.
+                    cb_wait_front(cb_intermediate, 1);
+                    copy_tile(cb_intermediate, 0, dst_reg_idx);
+                    cb_pop_front(cb_intermediate, 1);
 
-                    copy_tile(cb_intermediate, i * N_block_tiles + j, dst_reg_idx);
-
+                    // Reinitialize the FPU for matmul.
                     mm_init_short(cb_in0, cb_in1);
                 }
 
-               // Add this K-block's contribution to acc_tile
-               for (k_local in 0 .. K_block_tiles) {
-                // Indices into the current A and B slabs
-                a_tile = A_slab_tile(i, k_local)
-                b_tile = B_slab_tile(k_local, j)
+                for (uint32_t k_local = 0; k_local < K_block_tiles; k_local++) {
+                    matmul_tiles(cb_in0, cb_in1, i * K_block_tiles + k_local, k_local * N_block_tiles + j, dst_reg_idx);
+                }
 
-                // Multiply and accumulate into the accumulator tile
-                acc_tile += matmul(a_tile, b_tile)    // tile × tile → tile accumulate
+                // Last K-block: destination register has the final result for C(i,j)
+                // Release the destination register array because the computation is done.
+                tile_regs_commit();
+
+                // Make sure destination register array is ready for packer RISC core to read from.
+                tile_regs_wait();
+                // Store updated result for C(i,j)
+                if (b == num_k_blocks - 1) {
+                    // Last K-block: acc_tile has the final result for C(i,j)
+                    
+                    cb_reserve_back(cb_out0, 1);
+                    // Copy the result of addition from destination register to the output circular buffer.
+                    pack_tile(dst_reg_idx, cb_out0);
+                    // Mark the tile in the output circular buffer as ready.
+                    cb_push_back(cb_out0, 1);
+                } else {
+                    // Not last K-block: acc_tile is a partial result to be reused later
+                    cb_reserve_back(cb_intermediate, 1);
+                    // Copy the result of addition from destination register to the output circular buffer.
+                    pack_tile(dst_reg_idx, cb_intermediate);
+                    // Mark the tile in the output circular buffer as ready.
+                    cb_push_back(cb_intermediate, 1);
+                }
+
+                // Release the destination register array because packing is done.
+                tile_regs_release();
             }
-            // Store updated result for C(i,j)
-            if (b == num_blocks - 1)
-               // Last K-block: acc_tile is the final result forC(i,j)
-               store_final_C_tile(i, j, acc_tile)
-            else
-               // Not last K-block: acc_tile is a partial result to be reused later
-               store_partial_C_tile(i, j, acc_tile)
-
-
-
-            // Wait until there is a tile in each of the input circular buffers.
-            // In more advanced applications we could wait for multiple tiles in each buffer and use them to
-            // perform a more complex operation or to improve performance.
-            // These are blocking calls.
-            cb_wait_front(cb_in0, 1);
-            cb_wait_front(cb_in1, 1);
-
-            // Perform the matrix multiplication for the current tile.
-            // NOTE: This function accumulates the result into the destination tile.
-            matmul_tiles(cb_in0, cb_in1, 0, 0, dst_reg_idx);
-
-            // Mark the tiles in the input circular buffers as consumed.
-            cb_pop_front(cb_in0, 1);
-            cb_pop_front(cb_in1, 1);
         }
 
-        // Release the destination register array because the computation is done.
-        tile_regs_commit();
+        cb_pop_front(cb_in0, A_slab_tiles); // Ensure that A_slab(b) is in CB0
+        cb_pop_front(cb_in1, B_slab_tiles); // Ensure that B_slab(b) is in CB1
 
-        // Make sure destination register array is ready for packer RISC core to read from.
-        tile_regs_wait();
-        // Make sure there is space in the output circular buffer to write result to.
-        cb_reserve_back(cb_out0, 1);
-        // Copy the result of addition from destination register to the output circular buffer.
-        pack_tile(dst_reg_idx, cb_out0);
-        // Mark the tile in the output circular buffer as ready.
-        cb_push_back(cb_out0, 1);
-
-        // Release the destination register array because packing is done.
-        tile_regs_release();
     }
 }
 }  // namespace NAMESPACE
