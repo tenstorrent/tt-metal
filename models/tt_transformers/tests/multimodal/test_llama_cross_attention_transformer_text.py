@@ -108,7 +108,7 @@ def test_cross_attention_transformer_text_inference(
     # config.text_config.num_hidden_layers = 2
     # config.text_config.cross_attention_layers = [0]
     reference_model = MllamaForCausalLM.from_pretrained(model_repo_name, torch_dtype="auto", config=config)  # (config)
-    reference_model.to(torch.bfloat16)
+    reference_model.to(torch.float32)  # .to(torch.bfloat16)
     reference_model.eval()
 
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
@@ -123,6 +123,10 @@ def test_cross_attention_transformer_text_inference(
     )
     partial_state_dict.update(lm_head_weights)
     weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
+
+    for k, v in partial_state_dict.items():
+        if isinstance(v, torch.Tensor):
+            partial_state_dict[k] = v.float()  # force float32
 
     # import re
 
@@ -253,9 +257,9 @@ def test_cross_attention_transformer_text_inference(
             T = reference_model.forward(
                 attention_mask=None,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
-                cross_attention_states=vision_tokens.to(torch.bfloat16),
-                cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
-                full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
+                cross_attention_states=vision_tokens,  # .to(torch.bfloat16),
+                cross_attention_mask=xattn_mask.squeeze(1),  # .to(torch.bfloat16),
+                full_text_row_masked_out_mask=full_text_mask,  # .to(torch.bfloat16),
                 inputs_embeds=h,
                 use_cache=True,  # to also get past_key_values
                 cache_position=position_ids,  # torch.arange(seq_len),  # torch.tensor([T.past_key_values[0][0].shape[-2]]),
@@ -272,8 +276,8 @@ def test_cross_attention_transformer_text_inference(
             T = reference_model.forward(
                 attention_mask=None,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
-                cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
-                full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
+                cross_attention_mask=xattn_mask.squeeze(1),  # .to(torch.bfloat16),
+                full_text_row_masked_out_mask=full_text_mask,  # .to(torch.bfloat16),
                 inputs_embeds=h,
                 past_key_values=T.past_key_values,
                 use_cache=True,  # to also get past_key_values
