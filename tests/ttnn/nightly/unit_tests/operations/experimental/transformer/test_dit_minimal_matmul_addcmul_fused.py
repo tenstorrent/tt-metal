@@ -109,7 +109,7 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
     # For skeleton implementation, compare against matmul output only
     # TODO: When fusion is implemented, compare against torch_expected_fused
-    check_result = assert_quality(torch_expected_skeleton, tt_output_torch, min_pcc=0.999, max_rmse=0.05)
+    check_result = assert_quality(torch_expected_fused, tt_output_torch, min_pcc=0.999, max_rmse=0.05)
 
     logger.info(f"Test passed for M={M}, K={K}, N={N}")
     return check_result
