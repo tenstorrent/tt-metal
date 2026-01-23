@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helper_policies.hpp"
 /**
- * @file reduce_helpers.hpp
+ * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
  *
  * Provides ONE function that handles all reduce operations:
