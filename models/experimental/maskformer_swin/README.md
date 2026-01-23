@@ -1,10 +1,9 @@
 # MaskFormer Swin‑B (TT‑NN)
 
-Hybrid TTNN run for the Hugging Face checkpoint `facebook/maskformer-swin-base-coco`.
+TTNN bring-up for the Hugging Face checkpoint `facebook/maskformer-swin-base-coco`.
 
 Coverage:
-- CPU (Hugging Face): Swin‑B backbone + pixel decoder
-- TT (TTNN): transformer decoder + heads
+- TT (TTNN): Swin‑B backbone + pixel decoder + transformer decoder + heads
 
 ## Platforms
 - Wormhole (N300)
@@ -31,6 +30,19 @@ This writes:
 - Overlay PNG: `generated/maskformer_overlay.png`
 - Perf JSON: `generated/maskformer_perf.json`
 - Perf header JSON: `generated/maskformer_perf_header.json`
+
+## Generate perf sheet (device ops CSV)
+
+This generates the per-op device perf sheet (CSV) described in the TTNN bring-up report:
+
+```bash
+./tools/tracy/profile_this.py -n maskformer_swin_base_coco_320 -c \\
+  "python -m models.experimental.maskformer_swin.demo.runner \\
+     --image models/sample_data/demo.jpeg \\
+     --weights facebook/maskformer-swin-base-coco \\
+     --device wormhole_n300 \\
+     --height 320 --width 320"
+```
 
 ## Run: COCO evaluation (optional)
 
