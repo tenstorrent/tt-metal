@@ -99,7 +99,7 @@ FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
     cb_reserve_back(CbOut, num_output_tiles);
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
-    cb_wait_front(CbBias, NumTilesBias);
+    // Bias tiles are already available because MM1_FULL_CB was waited on for the preceding matmul.
 
     tile_regs_acquire();
 

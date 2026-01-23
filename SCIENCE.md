@@ -9,8 +9,12 @@
 - 2026-01-23: Removed redundant pre-loop `custom_mm_block_init` in `models/demos/resblock/kernels/compute.cpp` and migrated compute kernel entry point to `kernel_main`.
   - B=1, K=512, layers=4: DEVICE FW avg 10.57 us; DEVICE KERNEL avg 9.52 us.
   - B=1, K=1024, layers=4: DEVICE FW avg 13.90 us; DEVICE KERNEL avg 12.15 us.
+- 2026-01-23: Removed redundant `cb_wait_front` on the bias CB inside `matmul_with_bias_block`.
+  - B=1, K=512, layers=4: DEVICE FW avg 10.55 us; DEVICE KERNEL avg 9.51 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 13.86 us; DEVICE KERNEL avg 12.10 us.
 
 ## Knowledge
 - Resblock uses five kernels in `models/demos/resblock/kernels/` with compute in `compute.cpp` and data movement in `reader.cpp`/`writer.cpp` + mcast.
 - `compute.cpp` currently initializes custom MM before the layer loop and again inside the loop; the pre-loop init appears redundant.
 - Migrating resblock compute kernel to `kernel_main()` removes the deprecated namespace/MAIN warning and slightly reduces kernel duration for K=512/1024.
+- In this kernel, `MM1_FULL_CB` is already waited on for matmul1 and not popped until after matmul2, so waiting again for bias tiles is unnecessary overhead.
