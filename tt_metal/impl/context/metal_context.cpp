@@ -338,6 +338,7 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
+    distributed_context_->barrier();
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
@@ -913,7 +914,9 @@ void MetalContext::reset_cores(ChipId device_id) {
                 if (rtoptions_.get_enable_2_erisc_mode()) {
                     erisc_send_exit_signal(
                         device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-                    llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+                    std::cout << "Returning to base firmware: " << virtual_core.str() << std::endl;
+                    llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core, 25000);
+                    std::cout << "Base firmware returned: " << virtual_core.str() << std::endl;
                 }
                 // Only send reset to subordinate cores
                 // Assert all cores except ERISC0, which is running base firmware.
@@ -924,7 +927,7 @@ void MetalContext::reset_cores(ChipId device_id) {
     }
     // Early exiting dispatch cores should show RUN_MSG_DONE when they exit.
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;  // 10 seconds for now
+        const int timeout_ms = 25000;  // 10 seconds for now
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1774,7 +1777,8 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = 10000;  // 10 seconds for now
+    const int timeout_ms = 25000;  // 10 seconds for now
+    std::cout << "Waiting for firmware init complete" << std::endl;
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error& e) {

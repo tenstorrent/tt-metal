@@ -108,10 +108,23 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
-        {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
-        {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
-        {.tray_id = 4, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
-        {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 1}};
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 3},
+        // {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        // {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        // {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        // {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        // {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        // {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        // {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        // {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+    };
 
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
     for (auto stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {

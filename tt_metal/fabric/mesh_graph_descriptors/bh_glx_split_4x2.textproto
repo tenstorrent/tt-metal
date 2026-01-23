@@ -18,20 +18,45 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 7 } }
+
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 16 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 16 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 5 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 7 } }
+    channels { count: 8 policy: RELAXED }
   }
 }
 # --- Instantiation ----------------------------------------------------------
