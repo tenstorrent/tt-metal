@@ -3,6 +3,7 @@
 ## Table of Contents
 - [Overview](#overview)
 - [YAML Structure](#yaml-structure)
+- [Global Settings](#global-settings)
 - [Operation Fields](#operation-fields)
 - [Operation Chaining](#operation-chaining)
 - [Running and Debugging Tests](#running-and-debugging-tests)
@@ -27,9 +28,14 @@ In a fused pipeline, intermediate results from one operation are written to L1 m
 
 ## YAML Structure
 
-Each configuration file must contain an `operations` list. Each operation is a complete computation unit with the following structure:
+Each configuration file contains global settings followed by an `operations` list:
 
 ```yaml
+# Global Settings (apply to all operations)
+dest_acc: "Yes"              # 16-bit or 32-bit dest mode
+profiler_enabled: true       # Enable performance profiling
+loop_factor: 16              # Loop factor for performance tests
+
 operations:
   - # Input/Output Configuration
     src_a: "input_A"           # First input operand
@@ -52,12 +58,48 @@ operations:
     packer: "Packer"          # Which packer to use
 
     # Hardware Settings
-    dest_acc: "No"
     math_fidelity: "HiFi3"
     dest_sync: "Full"
     unpack_transpose_within_face: "Yes"
     unpack_transpose_faces: "Yes"
 ```
+
+---
+
+## Global Settings
+
+Global settings are specified at the top level of the YAML file. These settings apply to all operations in the pipeline.
+
+### `dest_acc` (string, required)
+Controls whether dest operates in 32-bit accumulation mode for all operations in the pipeline. When set to `"Yes"`, dest operates in 32-bit format. When set to `"No"`, dest operates in 16-bit format.
+
+**Important:** The `dest_acc` setting cannot be changed in the middle of kernel execution. All operations in a fused pipeline must use the same `dest_acc` setting.
+
+**When to use `dest_acc: "Yes"`:**
+
+1. **Any 32‑bit formats (Float32)**
+   If any operation in the fused pipeline uses a 32‑bit data format (`Float32`) as `input_format` or `output_format`, `dest_acc` should be set to `"Yes"` for all operations so that dest can store 32‑bit values.
+
+2. **8‑bit exponent → Float16 conversions (`Float16_b` / `Bfp8_b` → `Float16`)**
+   When the input format has an 8‑bit exponent (`Float16_b`, `Bfp8_b`) and the `output_format` is `Float16` (5‑bit exponent), a 32‑bit intermediate in dest is required. In this case `dest_acc` must be set to `"Yes"`.
+
+3. **Improved numerical precision (optional)**
+   For all other supported format combinations where both `dest_acc: "No"` and `"Yes"` are allowed, you can enable `dest_acc: "Yes"` to accumulate in 32‑bit for better numerical accuracy, at the cost of reduced dest tile capacity.
+
+**Dest Tile Capacity:**
+
+The available dest tile capacity depends on both `dest_acc` and the per-operation `dest_sync` setting:
+
+| Dest Capacity                 | `dest_acc: "No"` (16-bit) | `dest_acc: "Yes"` (32-bit) |
+|-------------------------------|-----------------------------|----------------------------|
+| `dest_sync: "Half"` (default) | 8 tiles                     | 4 tiles                    |
+| `dest_sync: "Full"`           | 16 tiles                    | 8 tiles                    |
+
+### `profiler_enabled` (boolean, optional)
+Enables performance profiling for the fused kernel. When set to `true`, the test framework measures and reports execution time and throughput metrics. When set to `false` or omitted (default), performance profiling is disabled and the test only validates correctness.
+
+### `loop_factor` (integer, optional)
+Specifies the number of times to repeat the operation sequence when performance profiling is enabled. This allows measuring sustained performance over multiple iterations. The value must be a positive integer. This setting is only used when `profiler_enabled` is `true`.
 
 ---
 
@@ -284,24 +326,10 @@ Specifies which packer to use. Options:
 
 ### Hardware Configuration
 
-#### `dest_acc` (string, required)
-Controls whether dest operates in 32-bit accumulation mode. When set to `"Yes"`, dest operates in 32-bit format, which is required when using 32-bit data formats like `Float32`. When set to `"No"` (the default), dest operates in 16-bit format. The available dest tile capacity depends on this setting. See the dest tile capacity table below.
-
-**Important:** The `dest_acc` setting cannot be changed in the middle of kernel execution. All operations in a fused pipeline must use the same `dest_acc` setting. If any operation uses a 32-bit data format, `dest_acc` must be set to `"Yes"` for all operations.
-
 #### `dest_sync` (string, optional)
 Controls the synchronization mode between the math unit and packer. When set to `"Half"` (the default), dest operates in half synchronization mode (double buffering), where the math unit and packer can work on different halves of dest simultaneously. When set to `"Full"`, dest operates in full synchronization mode (single buffering), where the math unit and packer share the full dest space without overlap.
 
-**Important:** Due to the synchronization between unpacker and packer (the unpacker waits for the packer from the previous operation to finish), `dest_sync` does not impact overall pipeline performance. It only affects dest capacity.
-
-**Dest Tile Capacity:**
-
-The available dest tile capacity depends on both `dest_sync` and `dest_acc` settings:
-
-| Dest Capacity                 | `dest_acc: "No"` (16-bit, default) | `dest_acc: "Yes"` (32-bit) |
-|-------------------------------|------------------------------------|----------------------------|
-| `dest_sync: "Half"` (default) | 8 tiles                            | 4 tiles                    |
-| `dest_sync: "Full"`           | 16 tiles                           | 8 tiles                    |
+**Important:** Due to the synchronization between unpacker and packer (the unpacker waits for the packer from the previous operation to finish), `dest_sync` does not impact overall pipeline performance. It only affects dest capacity. See the dest tile capacity table in the [Global Settings](#global-settings) section for how `dest_sync` and `dest_acc` interact.
 
 #### `math_fidelity` (string, required)
 Controls the precision/speed tradeoff for math operations. Available settings are `"LoFi"`, `"HiFi2"`, `"HiFi3"`, and `"HiFi4"`. Higher fidelity settings provide greater precision at the cost of slower execution. The actual impact depends on the specific operation.

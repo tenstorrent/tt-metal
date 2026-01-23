@@ -5,22 +5,22 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
-from .fused_operation import FusedOperation
+from .fuser_config import FuserConfig
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
 
 @dataclass
 class UnpackKernelGenerator:
-    def __init__(self, operations: List[FusedOperation]):
-        self.operations = operations
+    def __init__(self, config: FuserConfig):
+        self.config = config
 
     def generate(self) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
-        for op in self.operations:
+        for op in self.config.pipeline:
             unpacker_instance = op.unpacker()
             all_headers.update(unpacker_instance.get_headers())
 
@@ -28,7 +28,9 @@ class UnpackKernelGenerator:
         includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
 
         # Generate unpacker calls for all operations
-        unpack_calls = "".join([op.unpack() for op in self.operations])
+        unpack_calls = "".join(
+            [op.unpack(self.config.global_config) for op in self.config.pipeline]
+        )
 
         code = (
             f"\n"
@@ -49,20 +51,22 @@ class UnpackKernelGenerator:
 
 @dataclass
 class MathKernelGenerator:
-    def __init__(self, operations: List[FusedOperation]):
-        self.operations = operations
+    def __init__(self, config: FuserConfig):
+        self.config = config
 
     def generate(self) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
-        for op in self.operations:
+        for op in self.config.pipeline:
             all_headers.update(op.math.get_headers())
 
         # Generate include statements
         includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
 
         # Generate math calls for all operations
-        math_calls = "".join([op.do_math() for op in self.operations])
+        math_calls = "".join(
+            [op.do_math(self.config.global_config) for op in self.config.pipeline]
+        )
 
         code = (
             f"\n"
@@ -83,13 +87,13 @@ class MathKernelGenerator:
 
 @dataclass
 class PackKernelGenerator:
-    def __init__(self, operations: List[FusedOperation]):
-        self.operations = operations
+    def __init__(self, config: FuserConfig):
+        self.config = config
 
     def generate(self) -> str:
         # Collect all unique headers from all operations
         all_headers = set()
-        for op in self.operations:
+        for op in self.config.pipeline:
             packer_instance = op.packer()
             all_headers.update(packer_instance.get_headers())
 
@@ -97,7 +101,9 @@ class PackKernelGenerator:
         includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
 
         # Generate packer calls for all operations
-        pack_calls = "".join([op.pack() for op in self.operations])
+        pack_calls = "".join(
+            [op.pack(self.config.global_config) for op in self.config.pipeline]
+        )
 
         code = (
             f"\n"
@@ -117,18 +123,11 @@ class PackKernelGenerator:
 
 
 class FusedKernelGenerator:
-
-    def __init__(self, operations: List[FusedOperation]):
-        self.operations = operations
-        num_stages = len(self.operations)
-
-        for i, op in enumerate(self.operations):
-            op.stage_id = i
-            op.num_stages = num_stages
-
-        self.unpack_gen = UnpackKernelGenerator(self.operations)
-        self.math_gen = MathKernelGenerator(self.operations)
-        self.pack_gen = PackKernelGenerator(self.operations)
+    def __init__(self, config: FuserConfig):
+        self.config = config
+        self.unpack_gen = UnpackKernelGenerator(self.config)
+        self.math_gen = MathKernelGenerator(self.config)
+        self.pack_gen = PackKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
         return {
@@ -143,6 +142,11 @@ class FusedKernelGenerator:
 
         kernels = self.generate_all()
 
+        profiler_include = ""
+        if self.config.global_config.profiler_enabled:
+            profiler_include += '#include "profiler.h"\n'
+            profiler_include += '#include "perf.h"\n'
+
         combined = (
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
@@ -152,6 +156,7 @@ class FusedKernelGenerator:
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
             f'#include "operand.h"\n'
+            f"{profiler_include}"
             f"\n"
             f"uint32_t unp_cfg_context          = 0;\n"
             f"uint32_t pack_sync_tile_dst_ptr   = 0;\n"

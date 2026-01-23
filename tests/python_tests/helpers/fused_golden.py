@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-
 import torch
 
 from .fused_operation import FusedOperation
+from .fuser_config import FuserConfig
 from .llk_params import format_dict
 from .utils import passed_test
 
@@ -16,9 +15,7 @@ class FusedGolden:
         self.verbose = verbose
         self.results = []
 
-    def check_operation(self, operation: FusedOperation, step_number: int) -> bool:
-        src_a = operation.src_a
-        src_b = operation.src_b
+    def check_operation(self, operation: FusedOperation) -> bool:
         output = operation.output
 
         if self.verbose:
@@ -49,30 +46,17 @@ class FusedGolden:
 
         passed = l1_passed and master_passed
 
-        result = {
-            "step": step_number,
-            "operation": str(operation.math.__class__.__name__),
-            "src_a": src_a.name,
-            "src_b": src_b.name,
-            "output": output.name,
-            "passed": passed,
-        }
-        self.results.append(result)
-
         if self.verbose:
             print("✓ PASS") if passed else print("✗ FAIL")
 
         return passed
 
-    def check_pipeline(self, pipeline: List[FusedOperation]) -> bool:
+    def check_pipeline(self, config: FuserConfig) -> bool:
         result = True
-        for i, operation in enumerate(pipeline, start=1):
-            operation.golden()
-            passed = self.check_operation(operation, i)
+        for operation in config.pipeline:
+            operation.golden(config.global_config)
+            passed = self.check_operation(operation)
             if not passed:
                 result = False
 
         return result
-
-    def get_results(self) -> List[dict]:
-        return self.results.copy()

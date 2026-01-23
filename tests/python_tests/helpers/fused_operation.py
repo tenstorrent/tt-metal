@@ -8,7 +8,6 @@ from typing import Tuple, Type
 import torch
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .data_format_inference import data_formats, is_format_combination_outlier
 from .format_config import DataFormat
 from .fused_math import Math
 from .fused_operand import Operand, OperandMapping
@@ -16,14 +15,11 @@ from .fused_packer import Packer
 from .fused_unpacker import Unpacker, UnpackerTilizeA
 from .llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     StochasticRounding,
     Tilize,
     Transpose,
-    UnpackerEngine,
     format_tile_sizes,
 )
 from .matmul_sweep import validate_tile_dimensions
@@ -37,12 +33,8 @@ class FusedOperation:
     operand_mapping: OperandMapping
     stage_id: int = 0
     num_stages: int = 1
-    dest_acc: DestAccumulation = DestAccumulation.No
     math_fidelity: MathFidelity = MathFidelity.HiFi4
-    loop_factor: int = 1
     unpack_to_dest: bool = False
-    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
-    unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
     unpack_transpose_faces: Transpose = Transpose.No
     unpack_transpose_within_face: Transpose = Transpose.No
     math_transpose_faces: Transpose = Transpose.No
@@ -68,8 +60,6 @@ class FusedOperation:
     output_pack_dims: Tuple[int, int] = None
 
     def __post_init__(self):
-        self.architecture = get_chip_architecture()
-
         mapping = self.operand_mapping
         registry = mapping.operand_registry
 
@@ -85,10 +75,6 @@ class FusedOperation:
         formats = InputOutputFormat(
             input_format=src_a.data_format, output_format=output.data_format
         )
-
-        if get_chip_architecture() == ChipArchitecture.QUASAR:
-            self.implied_math_format = ImpliedMathFormat.No
-            self.unpacker_engine_sel = UnpackerEngine.UnpA
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -116,27 +102,6 @@ class FusedOperation:
         self.buffer_A_tile_size = format_tile_sizes[formats.input_format]
         self.buffer_B_tile_size = format_tile_sizes[formats.input_format]
         self.buffer_Res_tile_size = format_tile_sizes[formats.output_format]
-
-        if is_format_combination_outlier(
-            formats.input_format, formats.output_format, self.dest_acc
-        ):
-            self.dest_acc = DestAccumulation.Yes
-
-        formats_config = data_formats(
-            input_format=formats.input_format,
-            output_format=formats.output_format,
-            is_fp32_dest_acc_en=self.dest_acc,
-            num_iterations=1,
-            unpacking_to_dest=self.unpack_to_dest,
-            chip_arch=get_chip_architecture(),
-            disable_format_inference=False,
-        )[0]
-
-        self.unpack_a_in = formats_config.unpack_A_src
-        self.unpack_a_out = formats_config.unpack_A_dst
-        self.math_format = formats_config.math
-        self.pack_in = formats_config.pack_src
-        self.pack_out = formats_config.pack_dst
 
         num_rows = 32
         num_cols = 32
@@ -179,7 +144,7 @@ class FusedOperation:
         self.output.pack_dims = self.output_pack_dims
 
         if (
-            self.architecture == ChipArchitecture.BLACKHOLE
+            get_chip_architecture() == ChipArchitecture.BLACKHOLE
             and self.unpacker is UnpackerTilizeA
             and formats.input_format != DataFormat.Bfp8_b
         ):
@@ -202,18 +167,18 @@ class FusedOperation:
         mapping = self.operand_mapping
         return mapping.operand_registry.get(mapping.output)
 
-    def unpack(self) -> str:
+    def unpack(self, config) -> str:
         unpacker_instance = self.unpacker()
-        return unpacker_instance.exec(self)
+        return unpacker_instance.exec(self, config)
 
-    def do_math(self) -> str:
-        return self.math.exec(self)
+    def do_math(self, config) -> str:
+        return self.math.exec(self, config)
 
-    def pack(self) -> str:
+    def pack(self, config) -> str:
         packer_instance = self.packer()
-        return packer_instance.pack(self)
+        return packer_instance.exec(self, config)
 
-    def golden(self) -> torch.Tensor:
+    def golden(self, config) -> torch.Tensor:
         # calculate l1 golden
         src_a_dims = self.src_a.dimensions
         src_b_dims = self.src_b.dimensions
@@ -221,11 +186,9 @@ class FusedOperation:
         tensor_a = self.src_a.raw_data.view(src_a_dims)
         tensor_b = self.src_b.raw_data.view(src_b_dims)
 
-        tensor_a, tensor_b = self.unpacker().golden(tensor_a, tensor_b, self)
-        l1_golden_tensor = self.math.golden(tensor_a, tensor_b, self)
-
-        packer_instance = self.packer()
-        l1_golden_tensor = packer_instance.golden(l1_golden_tensor, self)
+        tensor_a, tensor_b = self.unpacker().golden(tensor_a, tensor_b, self, config)
+        l1_golden_tensor = self.math.golden(tensor_a, tensor_b, self, config)
+        l1_golden_tensor = self.packer().golden(l1_golden_tensor, self, config)
 
         self.output.l1_golden = l1_golden_tensor.flatten()
 
@@ -234,13 +197,12 @@ class FusedOperation:
         golden_tensor_b = self.src_b.master_golden.view(src_b_dims)
 
         golden_tensor_a, golden_tensor_b = self.unpacker().golden(
-            golden_tensor_a, golden_tensor_b, self
+            golden_tensor_a, golden_tensor_b, self, config
         )
-
-        master_golden_tensor = self.math.golden(golden_tensor_a, golden_tensor_b, self)
-
-        packer_instance = self.packer()
-        master_golden_tensor = packer_instance.golden(master_golden_tensor, self)
+        master_golden_tensor = self.math.golden(
+            golden_tensor_a, golden_tensor_b, self, config
+        )
+        master_golden_tensor = self.packer().golden(master_golden_tensor, self, config)
 
         self.output._master_golden = master_golden_tensor.flatten()
 
@@ -262,7 +224,6 @@ class FusedOperation:
             f"  Src_B: {self.src_b}\n"
             f"  Output: {self.output}\n"
             f"  Math Fidelity: {self.math_fidelity}\n"
-            f"  Dest Accumulation: {self.dest_acc}\n"
             f"  Unpack Transpose Faces: {self.unpack_transpose_faces}\n"
             f"  Unpack Transpose Within Faces: {self.unpack_transpose_within_face}\n"
         )

@@ -8,17 +8,18 @@ import torch
 
 if TYPE_CHECKING:
     from .fused_operation import FusedOperation
+    from .fuser_config import GlobalConfig
 
 from .chip_architecture import ChipArchitecture
 from .fused_math import ReduceFpu
 from .golden_generators import TransposeGolden, get_golden_generator
-from .llk_params import Transpose
+from .llk_params import PerfRunType, Transpose
 from .tilize_untilize import tilize_block
 
 
 class Unpacker:
-    def sync(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
+    def packer_sync(self, operation: "FusedOperation") -> str:
+        stage = operation.stage_id
 
         code = ""
         if stage > 0:
@@ -29,15 +30,15 @@ class Unpacker:
 
         return code
 
-    def hw_configure(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        unpa_tile_size = operation_config.tile_size_unpack_a
-        unpb_tile_size = operation_config.tile_size_unpack_b
-        dest_acc = operation_config.dest_acc.value
-        unpa_face_r_dim = operation_config.face_r_dim
-        unpb_face_r_dim = operation_config.face_r_dim
-        unpa_num_faces = operation_config.num_faces_A
-        unpb_num_faces = operation_config.num_faces_B
+    def hw_configure(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        unpa_tile_size = operation.tile_size_unpack_a
+        unpb_tile_size = operation.tile_size_unpack_b
+        dest_acc = config.dest_acc.value
+        unpa_face_r_dim = operation.face_r_dim
+        unpb_face_r_dim = operation.face_r_dim
+        unpa_num_faces = operation.num_faces_A
+        unpb_num_faces = operation.num_faces_B
 
         if stage == 0:
             code = (
@@ -57,26 +58,73 @@ class Unpacker:
             )
         return code
 
-    def unpack(self, operation_config: "FusedOperation") -> str:
+    def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         return ""
 
-    def uninit(self, operation_config: "FusedOperation") -> str:
+    def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         return ""
 
-    def exec(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        buffer_A_address = operation_config.src_a.l1_address
-        buffer_B_address = operation_config.src_b.l1_address
-        buffer_A_tile_size = operation_config.buffer_A_tile_size
-        buffer_B_tile_size = operation_config.buffer_B_tile_size
-        unpack_a_src = operation_config.unpack_a_in
-        unpack_a_dst = operation_config.unpack_a_out
-        unpack_b_src = operation_config.unpack_a_in
-        unpack_b_dst = operation_config.unpack_a_out
+    def uninit(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        return ""
 
-        code = self.sync(operation_config)
+    def perf_set_valid(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        tile_cnt = operation.output.tile_count
+        num_faces = operation.num_faces
+        return (
+            f"    _perf_unpack_loop_set_valid<true, true>({tile_cnt} * {num_faces});\n"
+        )
 
-        code += (
+    def unpack_with_perf(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        if config.perf_run_type == PerfRunType.PACK_ISOLATE:
+            return ""
+        elif config.perf_run_type == PerfRunType.MATH_ISOLATE:
+            return self.perf_set_valid(operation, config)
+        else:
+            return self.unpack(operation, config)
+
+    def exec_perf(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        code = "{\n"
+        code += '    ZONE_SCOPED("INIT")\n'
+        code += self.hw_configure(operation, config)
+        code += self.init(operation, config)
+        code += "    PROFILER_SYNC();\n"
+        code += "}\n"
+
+        code += "{\n"
+        code += '    ZONE_SCOPED("TILE_LOOP")\n'
+
+        code += self.packer_sync(operation)
+        code += f"    for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
+        code += "    {\n"
+        code += self.unpack_with_perf(operation, config)
+        code += "    }\n"
+        code += "    PROFILER_SYNC();\n"
+        code += "}\n"
+
+        code += "{\n"
+        code += '    ZONE_SCOPED("INIT")\n'
+        code += self.uninit(operation, config)
+        code += "    PROFILER_SYNC();\n"
+        code += "}\n"
+
+        return code
+
+    def exec(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        buffer_A_address = operation.src_a.l1_address
+        buffer_B_address = operation.src_b.l1_address
+        buffer_A_tile_size = operation.buffer_A_tile_size
+        buffer_B_tile_size = operation.buffer_B_tile_size
+        unpack_a_src = operation.unpack_a_in
+        unpack_a_dst = operation.unpack_a_out
+        unpack_b_src = operation.unpack_a_in
+        unpack_b_dst = operation.unpack_a_out
+
+        code = (
             f"    // Operation {stage}: {self.__class__.__name__}\n"
             f"    UNUSED const Operand buffer_A{stage}({hex(buffer_A_address)}, {buffer_A_tile_size});\n"
             f"    UNUSED const Operand buffer_B{stage}({hex(buffer_B_address)}, {buffer_B_tile_size});\n"
@@ -86,20 +134,26 @@ class Unpacker:
             f"    UNUSED const uint32_t unpack_b_dst_format{stage} = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{unpack_b_dst.name});\n"
         )
 
-        code += self.hw_configure(operation_config)
-        code += self.unpack(operation_config)
-        code += self.uninit(operation_config)
+        if config.profiler_enabled:
+            code += self.exec_perf(operation, config)
+        else:
+            code += self.hw_configure(operation, config)
+            code += self.init(operation, config)
+            code += self.packer_sync(operation)
+            code += self.unpack_with_perf(operation, config)
+            code += self.uninit(operation, config)
 
         return code
 
     def get_headers(self) -> List[str]:
-        return []
+        return ["perf.h"]
 
     def golden(
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation_config: "FusedOperation",
+        operation: "FusedOperation",
+        config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
@@ -111,47 +165,52 @@ class MatmulUnpacker(Unpacker):
             "llk_unpack_common.h",
         ]
 
+    def perf_set_valid(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        rt_dim = operation.rt_dim
+        kt_dim = operation.kt_dim
+        ct_dim = operation.ct_dim
+        return f"    _perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
     def golden(
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation_config: "FusedOperation",
+        operation: "FusedOperation",
+        config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        if operation_config.unpack_transpose_faces == Transpose.Yes:
+        if operation.unpack_transpose_faces == Transpose.Yes:
             tensor_b = t_matrix.transpose_faces_multi_tile(
                 tensor_b,
-                operation_config.src_b.data_format,
-                operation_config.src_b.tile_count,
+                operation.src_b.data_format,
+                operation.src_b.tile_count,
                 tilize=True,
-                input_dimensions=operation_config.src_b.dimensions,
+                input_dimensions=operation.src_b.dimensions,
             )
 
-        if operation_config.unpack_transpose_within_face == Transpose.Yes:
+        if operation.unpack_transpose_within_face == Transpose.Yes:
             tensor_b = t_matrix.transpose_within_faces_multi_tile(
                 tensor_b,
-                operation_config.src_b.data_format,
-                operation_config.src_b.tile_count,
+                operation.src_b.data_format,
+                operation.src_b.tile_count,
                 untilize=True,
-                input_dimensions=operation_config.src_b.dimensions,
+                input_dimensions=operation.src_b.dimensions,
             )
 
         return tensor_a, tensor_b
 
-    def unpack(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        face_r_dim = operation_config.face_r_dim
-        ct_dim = operation_config.ct_dim
-        rt_dim = operation_config.rt_dim
-        kt_dim = operation_config.kt_dim
-        unpack_tile_size_a = operation_config.tile_size_unpack_a
-        unpack_tile_size_b = operation_config.tile_size_unpack_b
-        transpose_faces = (
-            "true" if operation_config.unpack_transpose_faces.value else "false"
-        )
+    def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        face_r_dim = operation.face_r_dim
+        ct_dim = operation.ct_dim
+        rt_dim = operation.rt_dim
+        kt_dim = operation.kt_dim
+
+        transpose_faces = "true" if operation.unpack_transpose_faces.value else "false"
         transpose_within_face = (
-            "true" if operation_config.unpack_transpose_within_face.value else "false"
+            "true" if operation.unpack_transpose_within_face.value else "false"
         )
 
         if transpose_within_face != transpose_faces:
@@ -159,8 +218,17 @@ class MatmulUnpacker(Unpacker):
                 "MatmulUnpacker does not support different values for transpose_faces and transpose_within_face"
             )
 
+        return f"    _llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+
+    def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        ct_dim = operation.ct_dim
+        rt_dim = operation.rt_dim
+        kt_dim = operation.kt_dim
+        unpack_tile_size_a = operation.tile_size_unpack_a
+        unpack_tile_size_b = operation.tile_size_unpack_b
+
         code = (
-            f"    _llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
             f"    for (uint32_t j = 0; j < {kt_dim}; j++)\n"
             f"    {{\n"
             f"        _llk_unpack_AB_matmul_<>(\n"
@@ -186,43 +254,41 @@ class UnpackerAB(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation_config: "FusedOperation",
+        operation: "FusedOperation",
+        config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        if operation_config.unpack_transpose_faces == Transpose.Yes:
+        if operation.unpack_transpose_faces == Transpose.Yes:
             tensor_a = t_matrix.transpose_faces_multi_tile(
                 tensor_a,
-                operation_config.src_a.data_format,
-                operation_config.src_a.tile_count,
+                operation.src_a.data_format,
+                operation.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation_config.src_a.dimensions,
+                input_dimensions=operation.src_a.dimensions,
             )
 
-        if operation_config.unpack_transpose_within_face == Transpose.Yes:
+        if operation.unpack_transpose_within_face == Transpose.Yes:
             tensor_a = t_matrix.transpose_within_faces_multi_tile(
                 tensor_a,
-                operation_config.src_a.data_format,
-                operation_config.src_a.tile_count,
+                operation.src_a.data_format,
+                operation.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation_config.src_a.dimensions,
+                input_dimensions=operation.src_a.dimensions,
             )
 
         return tensor_a.flatten(), tensor_b.flatten()
 
-    def unpack(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        face_r_dim = operation_config.face_r_dim
-        num_faces = operation_config.num_faces
-        tile_cnt = operation_config.output.tile_count
+    def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        face_r_dim = operation.face_r_dim
+        num_faces = operation.num_faces
         broadcast_type = "BroadcastType::NONE"
-        transpose_faces = (
-            "true" if operation_config.unpack_transpose_faces.value else "false"
-        )
+
+        transpose_faces = "true" if operation.unpack_transpose_faces.value else "false"
         transpose_within_face = (
-            "true" if operation_config.unpack_transpose_within_face.value else "false"
+            "true" if operation.unpack_transpose_within_face.value else "false"
         )
 
         if transpose_within_face != transpose_faces:
@@ -230,29 +296,31 @@ class UnpackerAB(Unpacker):
                 "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
             )
 
-        if isinstance(operation_config.math.fpu, ReduceFpu):
-            reduce_dim = operation_config.math.fpu.reduce_dim()
+        if isinstance(operation.math.fpu, ReduceFpu):
+            reduce_dim = operation.math.fpu.reduce_dim()
             within_face_16x16_transpose = (
                 1 if reduce_dim == "ReduceDim::REDUCE_ROW" else 0
             )
-            code = (
+            return (
                 f"    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>({within_face_16x16_transpose});\n"
                 f"    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;\n"
                 f"    config_unpacker_x_end<UNP_SEL>({face_r_dim});\n"
                 f"    _llk_unpack_AB_mop_config_<BroadcastType::NONE>(false, 4, false);\n"
             )
         else:
-            code = f"    _llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
+            return f"    _llk_unpack_AB_init_<{broadcast_type}>({face_r_dim}, {num_faces}, false, {transpose_faces});\n"
 
-        code += (
+    def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        tile_cnt = operation.output.tile_count
+
+        return (
             f"    for (int i = 0; i < {tile_cnt}; i++)\n"
             f"    {{\n"
             f"        _llk_unpack_AB_<>(L1_ADDRESS(buffer_A{stage}[i]), L1_ADDRESS(buffer_B{stage}[i]));\n"
             f"    }}\n"
             f"\n"
         )
-
-        return code
 
 
 class UnpackerA(Unpacker):
@@ -267,51 +335,57 @@ class UnpackerA(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation_config: "FusedOperation",
+        operation: "FusedOperation",
+        config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
 
-        if operation_config.unpack_transpose_faces == Transpose.Yes:
+        if operation.unpack_transpose_faces == Transpose.Yes:
             tensor_a = t_matrix.transpose_faces_multi_tile(
                 tensor_a,
-                operation_config.src_a.data_format,
-                operation_config.src_a.tile_count,
+                operation.src_a.data_format,
+                operation.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation_config.src_a.dimensions,
+                input_dimensions=operation.src_a.dimensions,
             )
 
-        if operation_config.unpack_transpose_within_face == Transpose.Yes:
+        if operation.unpack_transpose_within_face == Transpose.Yes:
             tensor_a = t_matrix.transpose_within_faces_multi_tile(
                 tensor_a,
-                operation_config.src_a.data_format,
-                operation_config.src_a.tile_count,
+                operation.src_a.data_format,
+                operation.src_a.tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operation_config.src_a.dimensions,
+                input_dimensions=operation.src_a.dimensions,
             )
 
         return tensor_a.flatten(), tensor_b.flatten()
 
-    def unpack(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        tile_cnt = operation_config.output.tile_count
-        unpack_to_dest = "true" if operation_config.unpack_to_dest else "false"
+    def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = "BroadcastType::NONE"
         eltwise_reuse_type = "NONE"
-        face_r_dim = operation_config.face_r_dim
-        num_faces = operation_config.num_faces
-        transpose_faces = (
-            "true" if operation_config.unpack_transpose_faces.value else "false"
-        )
+        face_r_dim = operation.face_r_dim
+        num_faces = operation.num_faces
+        transpose_faces = "true" if operation.unpack_transpose_faces.value else "false"
         transpose_within_face = (
-            "true" if operation_config.unpack_transpose_within_face.value else "false"
+            "true" if operation.unpack_transpose_within_face.value else "false"
         )
-
-        code = (
+        return (
             f"    _llk_unpack_A_init_<{broadcast_type}, false, EltwiseBinaryReuseDestType::{eltwise_reuse_type}, {unpack_to_dest}>(\n"
             f"        {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f"    );\n"
+        )
+
+    def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        tile_cnt = operation.output.tile_count
+        unpack_to_dest = "true" if operation.unpack_to_dest else "false"
+        broadcast_type = "BroadcastType::NONE"
+
+        code = (
             f"    for (int i = 0; i < {tile_cnt}; ++i)\n"
             f"    {{\n"
             f"        _llk_unpack_A_<{broadcast_type}, false, EltwiseBinaryReuseDestType::NONE, {unpack_to_dest}>(\n"
@@ -330,56 +404,50 @@ class UnpackerTilizeA(Unpacker):
             "llk_unpack_tilize.h",
         ]
 
+    def perf_set_valid(
+        self, operation: "FusedOperation", config: "GlobalConfig"
+    ) -> str:
+        tile_cnt = operation.output.tile_count
+        return f"    _perf_unpack_loop_set_valid<true, true>({tile_cnt});\n"
+
     def golden(
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation_config: "FusedOperation",
+        operation: "FusedOperation",
+        config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         tilized_a = tilize_block(
             tensor_a,
-            operation_config.src_a.dimensions,
-            operation_config.src_a.data_format,
-            operation_config.num_faces,
+            operation.src_a.dimensions,
+            operation.src_a.data_format,
+            operation.num_faces,
         )
 
         return tilized_a, tensor_b
 
-    def uninit(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        face_r_dim = operation_config.face_r_dim
-        num_faces = operation_config.num_faces
-
-        # Blackhole
-        if operation_config.architecture == ChipArchitecture.BLACKHOLE:
-            code = f"    _llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {num_faces}, {face_r_dim});\n"
-
-        # Wormhole
-        elif operation_config.architecture == ChipArchitecture.WORMHOLE:
-            code = f"    _llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {face_r_dim});\n\n"
-
-        else:
-            raise ValueError("Architecture is not supported")
-
-        return code
-
-    def unpack(self, operation_config: "FusedOperation") -> str:
-        stage = operation_config.stage_id
-        face_r_dim = operation_config.face_r_dim
-        num_faces = operation_config.num_faces
-        block_rt_dim = operation_config.block_rt_dim
-        block_ct_dim = operation_config.block_ct_dim
-        transpose_faces = operation_config.unpack_transpose_faces.value
-        transpose_within_face = operation_config.unpack_transpose_within_face.value
+    def init(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        face_r_dim = operation.face_r_dim
+        block_ct_dim = operation.block_ct_dim
+        transpose_faces = operation.unpack_transpose_faces.value
+        transpose_within_face = operation.unpack_transpose_within_face.value
 
         if transpose_faces or transpose_within_face:
             raise ValueError("UnpackerTilizeA does not support transpose")
 
-        code = f"    _llk_unpack_tilize_init_(unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, false);\n"
+        return f"    _llk_unpack_tilize_init_(unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, false);\n"
+
+    def unpack(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        face_r_dim = operation.face_r_dim
+        num_faces = operation.num_faces
+        block_rt_dim = operation.block_rt_dim
+        block_ct_dim = operation.block_ct_dim
 
         # Blackhole
-        if operation_config.architecture == ChipArchitecture.BLACKHOLE:
-            code += (
+        if config.architecture == ChipArchitecture.BLACKHOLE:
+            return (
                 f"    for (uint32_t i = 0; i < {block_rt_dim}; i++)\n"
                 f"    {{\n"
                 f"        for (uint32_t j = 0; j < {block_ct_dim}; j++)\n"
@@ -390,8 +458,8 @@ class UnpackerTilizeA(Unpacker):
             )
 
         # Wormhole
-        elif operation_config.architecture == ChipArchitecture.WORMHOLE:
-            code += (
+        elif config.architecture == ChipArchitecture.WORMHOLE:
+            return (
                 f"    for (uint32_t i = 0; i < {block_rt_dim}; i++)\n"
                 f"    {{\n"
                 f"        for (uint32_t j = 0; j < {block_ct_dim}; j++)\n"
@@ -400,6 +468,22 @@ class UnpackerTilizeA(Unpacker):
                 f"        }}\n"
                 f"    }}\n"
             )
+
+        else:
+            raise ValueError("Architecture is not supported")
+
+    def uninit(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+        stage = operation.stage_id
+        face_r_dim = operation.face_r_dim
+        num_faces = operation.num_faces
+
+        # Blackhole
+        if config.architecture == ChipArchitecture.BLACKHOLE:
+            code = f"    _llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {num_faces}, {face_r_dim});\n"
+
+        # Wormhole
+        elif config.architecture == ChipArchitecture.WORMHOLE:
+            code = f"    _llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {face_r_dim});\n\n"
 
         else:
             raise ValueError("Architecture is not supported")

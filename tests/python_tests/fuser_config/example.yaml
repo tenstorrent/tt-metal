@@ -1,3 +1,7 @@
+dest_acc: "Yes"
+profiler_enabled: true
+loop_factor: 16
+
 operations:
   - src_a: "input_A"
     src_b: "input_B"
@@ -17,7 +21,6 @@ operations:
           dst_dest_tile_index: 2
           fill_const_value: 1.0
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "LoFi"
     unpack_transpose_within_face: "Yes"
     unpack_transpose_faces: "No"
@@ -49,7 +52,6 @@ operations:
           src2_dest_tile_index: 1
           dst_dest_tile_index: 1
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "LoFi"
 
   - src_a: "tilized_output"
@@ -73,7 +75,6 @@ operations:
           src2_dest_tile_index: 1
           dst_dest_tile_index: 2
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "HiFi4"
 
   - src_a: "reduced_output"
@@ -92,7 +93,6 @@ operations:
           approximation_mode: "No"
           iterations: 128
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "HiFi3"
     dest_sync: "Full"
     unpack_transpose_within_face: "Yes"
@@ -118,7 +118,6 @@ operations:
           approximation_mode: "No"
           iterations: 128
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "HiFi2"
     output_pack_dims: [32, 64]
 
@@ -145,7 +144,6 @@ operations:
           src2_dest_tile_index: 0
           dst_dest_tile_index: 0
     packer: "Packer"
-    dest_acc: "Yes"
     math_fidelity: "LoFi"
     unpack_transpose_within_face: "Yes"
     unpack_transpose_faces: "Yes"
