@@ -63,9 +63,6 @@ public:
 
     SystemMemoryManager& sysmem_manager();
 
-    // This function is temporarily needed since MeshCommandQueue relies on the HWCommandQueue object
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
-
     IDevice* device();
 
     // needed interface items
@@ -81,7 +78,6 @@ private:
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call

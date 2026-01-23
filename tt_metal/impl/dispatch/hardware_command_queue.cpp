@@ -109,11 +109,6 @@ HWCommandQueue::HWCommandQueue(
     this->completion_queue_thread_ = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
     set_device_thread_affinity(this->completion_queue_thread_, this->completion_queue_reader_core_);
-    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        this->config_buffer_mgr_,
-        this->expected_num_workers_completed_,
-        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-        device_->allocator_impl()->get_config().l1_unreserved_base);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -273,7 +268,5 @@ void HWCommandQueue::terminate() {
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     command.process();
 }
-
-WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
 
 }  // namespace tt::tt_metal
