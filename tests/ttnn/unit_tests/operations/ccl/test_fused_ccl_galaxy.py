@@ -27,6 +27,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tracy import signpost
+from models.demos.llama3_70b_galaxy.tt.model_config import PREFETCHER_NOC1_GRID
 
 
 def create_global_semaphores(mesh_device, cores, initial_value, num_buffers=3):
@@ -161,10 +162,6 @@ def run_all_gather_matmul_galaxy_impl(
     if device_grid != (7, 10):
         pytest.skip("Not TG! Requires 7x10 grid")
 
-    storage_grid = num_cores_to_rectangle_grid(output_num_cores, mesh_device)
-    if storage_grid is None:
-        pytest.skip(f"Could not find a rectangle grid for num_cores: {output_num_cores}")
-
     # Setup fabric
     all_gather_topology = ttnn.Topology.Linear
 
@@ -179,9 +176,29 @@ def run_all_gather_matmul_galaxy_impl(
     num_buffers = 8
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
 
+    # Memory configs - use PREFETCHER_NOC1_GRID to avoid overlap with intermediate cores (3,0)-(3,3)
+    # RING_CRS pattern from existing tests - uses cores in columns 1,2,5,6 only (24 cores)
+    RING_CRS = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in PREFETCHER_NOC1_GRID]
+    )
+    # For input, use BINARY_MULT_CRS pattern - 30 cores from SUB_DEVICE_CRS
+    BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True
+    )
+    input_core_range_set = BINARY_MULT_CRS
+    output_core_range_set = RING_CRS
+    # Override num_cores to match the actual core range sets (MUST be done before shard calculations)
+    input_num_cores = 30
+    output_num_cores = len(PREFETCHER_NOC1_GRID)  # 24
+
+    # Now calculate storage_grid with correct output_num_cores
+    storage_grid = num_cores_to_rectangle_grid(output_num_cores, mesh_device)
+    if storage_grid is None:
+        pytest.skip(f"Could not find a rectangle grid for num_cores: {output_num_cores}")
+
     logger.info(f"AllGather+Matmul Galaxy: M={M}, K={K}, N={N}")
 
-    # Input shapes
+    # Input shapes - use overridden num_cores values
     K_per_device = K // cluster_shape[cluster_axis]
     K_per_device_per_shard = round_up(math.ceil(K_per_device / input_num_cores), ttnn.TILE_SIZE)
     in0_shape = [*cluster_shape, M, K_per_device]
@@ -217,14 +234,6 @@ def run_all_gather_matmul_galaxy_impl(
     logger.debug(f"in0 block h w {in0_block_h} {in0_block_w}")
     logger.debug(f"out block h w {out_block_h} {out_block_w}")
     logger.debug(f"out subblock h w {out_subblock_h} {out_subblock_w}")
-
-    # Memory configs
-    input_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(1, 0), input_num_cores, SUB_DEVICE_CRS, row_wise=True
-    )
-    output_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(1, 0), output_num_cores, SUB_DEVICE_CRS, row_wise=True
-    )
 
     input_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
