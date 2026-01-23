@@ -139,7 +139,7 @@ def run_all_gather_matmul_galaxy_impl(
     fidelity,
     fp32_acc_mode,
     packer_l1_acc,
-    op_mode="non_fused",  # "fused", "non_fused", "chunked_allgather", "local_matmul_allreduce"
+    op_mode="non_fused",  # "fused", "non_fused", "chunked_fused", "local_matmul_allreduce"
     num_iters=1,
     trace_mode=True,
 ):
@@ -149,7 +149,7 @@ def run_all_gather_matmul_galaxy_impl(
     Supports multiple operation modes:
     - "fused": llama_all_gather_matmul_async (requires large L1 intermediate)
     - "non_fused": all_gather_async + ttnn.linear (standard approach)
-    - "chunked_allgather": Chunked AllGather + Matmul (smaller intermediate)
+    - "chunked_fused": Chunked fused AllGather + Matmul (smaller intermediate)
     - "local_matmul_allreduce": Local matmul + AllReduce (most memory efficient)
 
     Uses tensor dimensions from Llama 70B MLP FF2 path:
@@ -167,13 +167,13 @@ def run_all_gather_matmul_galaxy_impl(
     # Setup fabric
     all_gather_topology = ttnn.Topology.Linear
 
-    # Sub-device setup only needed for fused path (like Galaxy decode mode)
+    # Sub-device setup needed for fused paths (fused and chunked_fused)
     # Non-fused path runs without sub-device (like Galaxy prefill mode)
     worker_sub_device_id = None
     sub_device_stall_group = None
     sub_device_manager = None
 
-    if op_mode == "fused":
+    if op_mode in ("fused", "chunked_fused"):
         worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
         worker_sub_device_id = ttnn.SubDeviceId(0)
         sub_device_stall_group = [worker_sub_device_id]
@@ -186,7 +186,7 @@ def run_all_gather_matmul_galaxy_impl(
     # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
     semaphore_cores = (
         SUB_DEVICE_CRS
-        if op_mode == "fused"
+        if op_mode in ("fused", "chunked_fused")
         else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))})  # 7x10 = 70 cores
     )
     ccl_semaphore_handles = [
@@ -428,7 +428,7 @@ def run_all_gather_matmul_galaxy_impl(
     # Use same DRAM weight tensor for non-fused path
     tt_in1_tensor_non_fused = tt_in1_tensor
 
-    # Chunked weight tensor for chunked approach:
+    # Chunked weight tensor for local_matmul_allreduce approach:
     # Each device gets a K_per_device slice of the weight, sharded along K dimension
     # This allows matmul without all_gather by doing local matmul + all_reduce
     in1_chunked_tensor = torch.randn(in1_chunked_shape)
@@ -440,6 +440,121 @@ def run_all_gather_matmul_galaxy_impl(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
+
+    # =========================================================================
+    # Chunked fused approach: Split K dimension to reduce intermediate buffer size
+    # =========================================================================
+    # With num_chunks=4:
+    # - K_per_device = 3584, K_chunk_per_device = 896
+    # - K_gathered = 14336, K_chunk_gathered = 3584
+    # - Intermediate size reduced from [32, 14336] to [32, 3584] (4x smaller)
+    # - This should fit in available L1 (~133KB vs ~458KB needed for full)
+    num_chunks = 4
+    K_chunk_per_device = K_per_device // num_chunks
+    K_chunk_gathered = K // num_chunks  # K_chunk_per_device * cluster_shape[cluster_axis]
+
+    # Create chunked input tensors - slice along K dimension
+    tt_input_chunks = []
+    for c in range(num_chunks):
+        chunk_start = c * K_chunk_per_device
+        chunk_end = (c + 1) * K_chunk_per_device
+        in0_chunk = in0_tensor[:, :, :, chunk_start:chunk_end].contiguous()
+        K_chunk_per_shard = round_up(math.ceil(K_chunk_per_device / input_num_cores), ttnn.TILE_SIZE)
+        chunk_input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                input_core_range_set,
+                [M, K_chunk_per_shard],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        tt_input_chunk = ttnn.from_torch(
+            in0_chunk,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=in0_dtype,
+            memory_config=chunk_input_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        tt_input_chunks.append(tt_input_chunk)
+
+    # Create chunked weight tensors - slice along K_gathered dimension
+    tt_weight_chunks = []
+    for c in range(num_chunks):
+        chunk_start = c * K_chunk_gathered
+        chunk_end = (c + 1) * K_chunk_gathered
+        in1_chunk = in1_tensor[:, :, chunk_start:chunk_end, :].contiguous()
+        tt_weight_chunk = ttnn.from_torch(
+            in1_chunk,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=in1_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        tt_weight_chunks.append(tt_weight_chunk)
+
+    # Create smaller intermediate tensors for chunked fused op
+    # Intermediate shape is [8, 4, M, K_chunk_gathered] instead of [8, 4, M, K_gathered]
+    chunk_intermediate_shape = [*cluster_shape, M, K_chunk_gathered]
+    chunk_intermediate_N_per_shard = round_up(math.ceil(K_chunk_gathered / intermediate_num_cores), ttnn.TILE_SIZE)
+    chunk_intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [M, chunk_intermediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    chunk_ag_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [M, chunk_intermediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    chunk_intermediate_tensor = torch.zeros(chunk_intermediate_shape)
+    tt_chunk_intermediate_tensors = []
+    for i in range(num_buffers):
+        tt_chunk_intermediate = ttnn.from_torch(
+            chunk_intermediate_tensor,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=in0_dtype,
+            memory_config=chunk_intermediate_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        tt_chunk_intermediate_tensors.append(tt_chunk_intermediate)
+
+    logger.info(
+        f"Chunked fused: num_chunks={num_chunks}, K_chunk_per_device={K_chunk_per_device}, K_chunk_gathered={K_chunk_gathered}"
+    )
+    logger.info(f"Chunk intermediate shape: {chunk_intermediate_shape}, shard: [M, {chunk_intermediate_N_per_shard}]")
+
+    # Program config for chunked fused op (smaller K dimension)
+    chunk_in0_block_w = K_chunk_per_device // ttnn.TILE_SIZE
+    while (K_chunk_gathered / ttnn.TILE_SIZE) % chunk_in0_block_w != 0:
+        chunk_in0_block_w -= 1
+    chunked_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=storage_grid,
+        in0_block_w=chunk_in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=HOP_GRID,
+        num_global_cb_receivers=24,
+        untilize_out=False,
+    )
+    logger.debug(f"Chunked fused program config: in0_block_w={chunk_in0_block_w}")
 
     # Intermediate tensors
     intermediate_tensor = torch.zeros(intermediate_shape)
@@ -541,58 +656,64 @@ def run_all_gather_matmul_galaxy_impl(
                 outs.append(mm_out)
         return outs if store_all_results else [mm_out]
 
-    def run_chunked_allgather_op(n_iters, store_all_results=True):
+    def run_chunked_fused_op(n_iters, store_all_results=True):
         """
-        Run chunked AllGather + Matmul approach.
+        Run chunked fused AllGather + Matmul approach.
 
-        This is functionally equivalent to non_fused (full AllGather + full Matmul)
-        but serves as a baseline for testing the pattern.
+        This splits the K dimension into chunks to reduce intermediate buffer size,
+        allowing the fused op to fit in L1 for large model dimensions.
 
-        Pattern:
-        1. AllGather: [M, K_per_device] -> [M, K_gathered] (full gather)
-        2. Matmul with full weight matrix
+        For each iteration:
+        1. For each chunk c in [0, num_chunks):
+           - AllGather chunk: [M, K_chunk_per_device] -> [M, K_chunk_gathered]
+           - Matmul chunk: [M, K_chunk_gathered] @ [K_chunk_gathered, N] -> [M, N] (partial)
+        2. Sum all partial results to get final output
 
-        Note: For true memory savings with chunked processing, you would need:
-        - Multiple smaller AllGathers (not supported in current API)
-        - Or use local_matmul_allreduce which avoids the large intermediate entirely
-
-        The local_matmul_allreduce approach is mathematically equivalent:
-        [A0|A1|A2|A3] @ [W0;W1;W2;W3] = A0@W0 + A1@W1 + A2@W2 + A3@W3
-        and is more memory efficient.
+        Memory savings:
+        - Original intermediate: [M, K_gathered] = [32, 14336] = 458KB per core
+        - Chunked intermediate: [M, K_chunk_gathered] = [32, 3584] = 114KB per core
+        - 4x reduction allows fitting in ~133KB available L1
         """
         outs = []
-        dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
 
         for iter_idx in range(n_iters):
-            # Step 1: Full AllGather
-            sem_idx = (iter_idx % num_buffers) * 2
-            gathered = ttnn.experimental.all_gather_async(
-                tt_input_tensor,  # [M, K_per_device] per device
-                dim=3,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
-                memory_config=dram_interleaved,
-                topology=all_gather_topology,
-                num_links=num_links,
-            )
-            # gathered shape: [M, K_gathered] = [32, 14336]
+            accumulated_result = None
 
-            # Step 2: Matmul with full weight
-            result = ttnn.linear(
-                gathered,
-                tt_in1_tensor_non_fused,
-                memory_config=dram_interleaved,
-                compute_kernel_config=compute_kernel_config,
-                dtype=output_dtype,
-                core_grid=ttnn.CoreGrid(y=7, x=10),
-            )
+            for chunk_idx in range(num_chunks):
+                # Use different semaphores for each chunk within an iteration
+                sem_idx = (iter_idx * num_chunks + chunk_idx) % num_buffers
+                buffer_idx = (iter_idx * num_chunks + chunk_idx) % num_buffers
+
+                # Run fused AllGather + Matmul on this chunk
+                chunk_out = ttnn.experimental.llama_all_gather_matmul_async(
+                    tt_input_chunks[chunk_idx],
+                    tt_weight_chunks[chunk_idx],
+                    tt_chunk_intermediate_tensors[buffer_idx],
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    multi_device_global_semaphore=ccl_semaphore_handles[sem_idx],
+                    ag_memory_config=chunk_ag_output_mem_config,
+                    mm_memory_config=mm_output_sharded_mem_config,
+                    topology=all_gather_topology,
+                    num_links=num_links,
+                    subdevice_id=worker_sub_device_id,
+                    program_config=chunked_fused_program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    dtype=output_dtype,
+                )
+
+                # Accumulate partial results
+                if accumulated_result is None:
+                    accumulated_result = chunk_out
+                else:
+                    accumulated_result = ttnn.add(accumulated_result, chunk_out)
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:
-                outs.append(result)
-        return outs if store_all_results else [result]
+                outs.append(accumulated_result)
+        return outs if store_all_results else [accumulated_result]
 
     def run_local_matmul_allreduce_op(n_iters, store_all_results=True):
         """
@@ -646,7 +767,7 @@ def run_all_gather_matmul_galaxy_impl(
     op_functions = {
         "fused": run_fused_op,
         "non_fused": run_non_fused_op,
-        "chunked_allgather": run_chunked_allgather_op,
+        "chunked_fused": run_chunked_fused_op,
         "local_matmul_allreduce": run_local_matmul_allreduce_op,
     }
     if op_mode not in op_functions:
@@ -716,8 +837,8 @@ def run_all_gather_matmul_galaxy_impl(
     for tensor_index in range(len(tt_outs)):
         validate(tt_outs[tensor_index], output_tensor_goldens_list[tensor_index])
 
-    # Only cleanup sub-device if it was set up (fused path)
-    if op_mode == "fused":
+    # Only cleanup sub-device if it was set up (fused paths)
+    if op_mode in ("fused", "chunked_fused"):
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
 
@@ -765,8 +886,8 @@ def run_all_gather_matmul_galaxy_impl(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "op_mode",
-    ["non_fused", "chunked_allgather", "local_matmul_allreduce"],  # Skip "fused" - requires too much L1 for model dims
-    ids=["non_fused", "chunked_allgather", "local_matmul_allreduce"],
+    ["non_fused", "chunked_fused"],  # chunked_fused splits K to reduce L1 intermediate size
+    ids=["non_fused", "chunked_fused"],
 )
 def test_all_gather_matmul_galaxy_check(
     mesh_device,
@@ -790,9 +911,9 @@ def test_all_gather_matmul_galaxy_check(
 
     Tests different operation modes:
     - non_fused: all_gather_async + ttnn.linear (standard approach)
-    - local_matmul_allreduce: Local matmul + AllReduce (most memory efficient)
+    - chunked_fused: llama_all_gather_matmul_async with K split into chunks (reduces L1 intermediate)
 
-    Note: "fused" mode skipped - llama_all_gather_matmul_async requires too much L1 for 70B model dims.
+    Note: "fused" mode (full K) skipped - requires too much L1 for 70B model dims.
     """
     run_all_gather_matmul_galaxy_impl(
         mesh_device,
@@ -868,17 +989,17 @@ def test_all_gather_matmul_galaxy_perf_comparison(
     """
     Performance comparison test for AllGather + Matmul on Galaxy (32 devices, 8x4 mesh).
 
-    Compares all operation modes:
+    Compares operation modes:
     - non_fused: all_gather_async + ttnn.linear (standard approach)
-    - local_matmul_allreduce: Local matmul + AllReduce (most memory efficient)
+    - chunked_fused: llama_all_gather_matmul_async with K split into chunks (reduces L1 intermediate)
 
-    Note: "fused" mode skipped - requires too much L1 for 70B model dims.
+    Note: "fused" mode (full K) skipped - requires too much L1 for 70B model dims.
     """
     num_iters = 5
     results = {}
 
     # Test all modes that work with model dimensions
-    modes_to_test = ["non_fused", "chunked_allgather", "local_matmul_allreduce"]
+    modes_to_test = ["non_fused", "chunked_fused"]
 
     for mode in modes_to_test:
         logger.info(f"Running {mode.upper()} operation...")
