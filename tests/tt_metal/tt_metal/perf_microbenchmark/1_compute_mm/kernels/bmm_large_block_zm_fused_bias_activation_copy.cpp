@@ -15,8 +15,6 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-namespace NAMESPACE {
-
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -73,7 +71,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-void MAIN {
+void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
@@ -380,4 +378,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

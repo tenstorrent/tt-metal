@@ -96,9 +96,7 @@ inline void reduce_h(
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
@@ -147,5 +145,3 @@ void MAIN {
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }
-
-}  // namespace NAMESPACE

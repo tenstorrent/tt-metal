@@ -8,8 +8,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
     // do not call cb_wait_front() because there is no wait. And we ensured there is enough
     // spece in the circular buffers for the entirty of the computation.
@@ -62,4 +61,3 @@ void MAIN {
         cb_push_back(cb_out0, 1);
     }
 }
-}  // namespace NAMESPACE

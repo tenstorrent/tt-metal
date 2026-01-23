@@ -19,7 +19,6 @@
 #define PACK_COUNTERS 7
 #define PACK_STRIDES 8
 
-namespace NAMESPACE {
 #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_alu_config(ckernel::unpacker::alu_config_t& config) {
     config.ALU_ROUNDING_MODE_Fpu_srnd_en = 1;
@@ -219,7 +218,7 @@ void write_pack_counters(
     PACK(cfg[address] = counter.val;)
 }
 
-void MAIN {
+void kernel_main() {
     uint32_t register_name = get_compile_time_arg_val(0);
 
     // Get pointer to registers for current state ID
@@ -390,4 +389,3 @@ void MAIN {
             break;
     }
 }
-}  // namespace NAMESPACE

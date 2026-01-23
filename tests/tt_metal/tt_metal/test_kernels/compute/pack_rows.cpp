@@ -9,9 +9,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_rows = get_compile_time_arg_val(0);
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
@@ -38,4 +36,3 @@ void MAIN {
     cb0.pop_front(1);
     cb16.push_back(1);
 }
-}  // namespace NAMESPACE
