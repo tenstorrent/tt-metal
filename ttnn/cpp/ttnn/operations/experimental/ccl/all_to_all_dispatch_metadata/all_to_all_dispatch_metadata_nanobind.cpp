@@ -14,7 +14,6 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "all_to_all_dispatch_metadata.hpp"
-#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -44,10 +43,12 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
-            subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
             output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
             drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `(0, 0)`.
+            use_mux (bool, optional): whether to use fabric mux for multi-worker per link support. Defaults to `True`.
+            worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,3) - 4 cores for 4 links.
+            mux_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for mux workers when use_mux is True. Defaults to cores (1,0) to (1,7) - 8 cores (2 per link × 4 links).
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor, indices tensor, and scores tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The indices and scores tensors are all-gathered and L1 sharded to the drain_sync_tilizer_core.
@@ -66,9 +67,9 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             num_links=num_links,
                             topology=topology,
                             memory_config=memory_config,
-                            subdevice_id=subdevice_id,
                             output_concat_dim=output_concat_dim,
-                            drain_sync_tilizer_core=(0, 0))
+                            drain_sync_tilizer_core=(0, 0),
+                            use_mux=True)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::all_to_all_dispatch_metadata);
@@ -84,12 +85,14 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                const ttnn::Tensor& expert_mapping_tensor,
                const std::optional<uint32_t> output_concat_dim,
                const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
-               const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core) /*-> std::array*/ {
+               const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
+               bool use_mux,
+               const std::optional<CoreRangeSet>& worker_core_range_set,
+               const std::optional<CoreRangeSet>& mux_core_range_set) /*-> std::array*/ {
                 std::optional<CoreCoord> drain_core = std::nullopt;
                 if (drain_sync_tilizer_core.has_value()) {
                     drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
@@ -104,9 +107,11 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                     num_links,
                     topology,
                     memory_config,
-                    subdevice_id,
                     output_concat_dim,
-                    drain_core);
+                    drain_core,
+                    use_mux,
+                    worker_core_range_set,
+                    mux_core_range_set);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
@@ -115,12 +120,14 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("output_concat_dim") = 1,
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensors") = nb::none(),
             nb::arg("num_links") = nb::none(),
             nb::arg("topology") = nb::none(),
-            nb::arg("drain_sync_tilizer_core") = nb::none()});
+            nb::arg("drain_sync_tilizer_core") = nb::none(),
+            nb::arg("use_mux") = true,
+            nb::arg("worker_core_range_set") = nb::none(),
+            nb::arg("mux_core_range_set") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

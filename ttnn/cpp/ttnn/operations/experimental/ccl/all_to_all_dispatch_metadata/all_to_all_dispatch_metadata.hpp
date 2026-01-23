@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn {
@@ -22,9 +22,11 @@ struct ExecuteAllToAllDispatchMetadata {
         std::optional<uint32_t> num_links = std::nullopt,
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
         const std::optional<uint32_t>& output_concat_dim = std::nullopt,
-        const std::optional<CoreCoord>& drain_sync_tilizer_core = std::nullopt);
+        const std::optional<CoreCoord>& drain_sync_tilizer_core = std::nullopt,
+        bool use_mux = true,
+        const std::optional<CoreRangeSet>& worker_core_range_set = std::nullopt,
+        const std::optional<CoreRangeSet>& mux_core_range_set = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

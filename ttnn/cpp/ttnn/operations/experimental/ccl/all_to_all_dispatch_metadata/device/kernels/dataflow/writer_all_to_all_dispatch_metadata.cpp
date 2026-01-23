@@ -51,9 +51,10 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
-    bool DoubleAntipodalAtomicInc = false>
+    bool DoubleAntipodalAtomicInc = false,
+    typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint64_t semaphore_noc_addr) {
@@ -110,9 +111,10 @@ template <
     uint32_t LinearizedSrcMeshCoord,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis>
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
@@ -198,9 +200,10 @@ template <
     uint32_t LinearizedSrcMeshCoord,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis>
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
@@ -290,9 +293,10 @@ template <
     uint32_t FabricMaxPacketSize,
     uint32_t NumDevices,
     uint32_t SelectedExpertsK,
-    typename OutputAddrGenT>
+    typename OutputAddrGenT,
+    typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_point_to_point_unicast(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* unicast_packet_header,
     const OutputAddrGenT& output_addr_gen,
     const uint16_t* expert_mapping,
@@ -379,9 +383,10 @@ template <
     uint32_t FabricMaxPacketSize,
     uint32_t NumDevices,
     uint32_t SelectedExpertsK,
-    typename OutputAddrGenT>
+    typename OutputAddrGenT,
+    typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_sparse_multicast(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* unicast_packet_header,
     const OutputAddrGenT& output_addr_gen,
     const uint16_t* expert_mapping,
@@ -482,9 +487,10 @@ template <
     uint32_t FabricMaxPacketSize,
     uint32_t NumDevices,
     uint32_t SelectedExpertsK,
-    typename OutputAddrGenT>
+    typename OutputAddrGenT,
+    typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     const OutputAddrGenT& output_addr_gen,
@@ -623,9 +629,10 @@ template <
     uint32_t FabricMaxPacketSize,
     uint32_t NumDevices,
     uint32_t SelectedExpertsK,
-    typename OutputAddrGenT>
+    typename OutputAddrGenT,
+    typename FabricConnectionsType>
 FORCE_INLINE bool dispatch_token_split_bandwidth(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     const OutputAddrGenT& output_addr_gen,
@@ -760,9 +767,10 @@ template <
     uint32_t LinearizedSrcMeshCoord,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis>
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    typename FabricConnectionsType>
 FORCE_INLINE void dispatch_token_bidirectional_multicast(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t input_token_read_addr,
@@ -847,6 +855,16 @@ void kernel_main() {
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto scores_out_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
+#ifdef USE_MUX
+    // Mux compile-time args (appended after TensorAccessorArgs when USE_MUX is defined)
+    constexpr uint32_t mux_ct_args_offset = scores_out_args.next_compile_time_args_offset();
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_args_offset + 0);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_args_offset + 1);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_args_offset + 2);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_args_offset + 3);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_args_offset + 4);
+#endif
+
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -869,8 +887,84 @@ void kernel_main() {
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
 
+#ifdef USE_MUX
+    // ========================================================================
+    // MUX PATH: Use WorkerToFabricMuxSender connections via fabric mux
+    // ========================================================================
+    // Read mux runtime args for each direction (neighbors)
+    std::array<bool, num_directions> mux_connection_valid_arr = {false, false, false, false};
+    std::array<bool, num_directions> is_termination_master_arr = {false, false, false, false};
+    std::array<uint8_t, num_directions> fabric_mux_x_arr = {0, 0, 0, 0};
+    std::array<uint8_t, num_directions> fabric_mux_y_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_channel_base_address_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_connection_info_address_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_connection_handshake_address_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_flow_control_address_arr = {0, 0, 0, 0};
+    std::array<size_t, num_directions> fabric_mux_buffer_index_address_arr = {0, 0, 0, 0};
+    std::array<uint8_t, num_directions> fabric_mux_channel_id_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> termination_sync_address_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> local_fabric_mux_status_address_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> local_flow_control_address_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> local_teardown_address_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> local_buffer_index_address_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> termination_master_noc_x_arr = {0, 0, 0, 0};
+    std::array<uint32_t, num_directions> termination_master_noc_y_arr = {0, 0, 0, 0};
+
+    bool any_is_termination_master = false;
+    for (uint32_t dir = 0; dir < num_directions; dir++) {
+        if (directions[dir]) {
+            mux_connection_valid_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+            is_termination_master_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+            fabric_mux_x_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_y_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_channel_base_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_connection_info_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_connection_handshake_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_flow_control_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_buffer_index_address_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            fabric_mux_channel_id_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            termination_sync_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            local_fabric_mux_status_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            local_flow_control_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            local_teardown_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            local_buffer_index_address_arr[dir] = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+            termination_master_noc_x_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            termination_master_noc_y_arr[dir] = get_arg_val<uint32_t>(rt_args_idx++);
+            if (is_termination_master_arr[dir]) {
+                any_is_termination_master = true;
+            }
+        }
+    }
+
+    // Build mux connections for each direction
+    std::array<tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, num_directions>
+        fabric_connections;
+    for (uint32_t dir = 0; dir < num_directions; dir++) {
+        if (directions[dir] && mux_connection_valid_arr[dir]) {
+            fabric_connections[dir] =
+                tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+                    fabric_mux_x_arr[dir],
+                    fabric_mux_y_arr[dir],
+                    fabric_mux_channel_id_arr[dir],
+                    fabric_mux_num_buffers_per_channel,
+                    fabric_mux_channel_buffer_size_bytes,
+                    fabric_mux_channel_base_address_arr[dir],
+                    fabric_mux_connection_info_address_arr[dir],
+                    fabric_mux_connection_handshake_address_arr[dir],
+                    fabric_mux_flow_control_address_arr[dir],
+                    fabric_mux_buffer_index_address_arr[dir],
+                    local_flow_control_address_arr[dir],
+                    local_teardown_address_arr[dir],
+                    local_buffer_index_address_arr[dir]);
+        }
+    }
+#else
+    // ========================================================================
+    // DIRECT EDM PATH: Use WorkerToFabricEdmSender connections directly
+    // ========================================================================
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
+#endif
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
@@ -916,11 +1010,28 @@ void kernel_main() {
     uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
 
     detail::zero_buffer_barrier();
+
+#ifdef USE_MUX
+    DPRINT << "Waiting for mux to be ready and connecting" << ENDL();
+    // Wait for mux to be ready and connect
+    for (uint32_t dir = 0; dir < num_directions; dir++) {
+        if (directions[dir] && mux_connection_valid_arr[dir]) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                fabric_mux_x_arr[dir],
+                fabric_mux_y_arr[dir],
+                fabric_mux_status_address,
+                local_fabric_mux_status_address_arr[dir]);
+            tt::tt_fabric::fabric_client_connect(fabric_connections[dir]);
+        }
+    }
+#else
     open_direction_connections_barrier(directions, fabric_connections);
+#endif
 
     // Send initialization semaphore to configured targets for synchronization
     // Use bidirectional multicast for 1D ring topology (2 packets instead of dispatch_devices-1 unicasts)
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    DPRINT << "Initializing semaphore" << ENDL();
     detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
@@ -928,6 +1039,7 @@ void kernel_main() {
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
     noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+    DPRINT << "Waiting for all devices to complete initialization synchronization" << ENDL();
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
@@ -953,7 +1065,9 @@ void kernel_main() {
         SPARSE_MCAST_SHORTEST_PATH,  // Sparse multicast with bidirectional shortest path routing
         SPARSE_MCAST_SPLIT_BW        // Sparse multicast, split token data 50/50 between directions
     };
-    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SPLIT_BW;
+    constexpr DispatchAlgorithm dispatch_algorithm = DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH;
+
+    DPRINT << "Dispatching tokens" << ENDL();
 
     for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
         // global_token is the global token index for the current token
@@ -1088,6 +1202,10 @@ void kernel_main() {
     if (needs_barrier) {
         noc_async_write_barrier();
     }
+
+    DPRINT << "Sending selected experts tensor to all other devices and signaling that we are done dispatching the "
+              "input tokens"
+           << ENDL();
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore. Write directly to the output metadata tensor on the drain sync tilizer core.
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
@@ -1133,6 +1251,37 @@ void kernel_main() {
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
+#ifdef USE_MUX
+    DPRINT << "MUX teardown" << ENDL();
+    // MUX teardown for Phase 1: Each worker has exclusive access to its link's mux cores
+    // Since each mux core has only 1 client (this worker), no coordination is needed.
+    // Simply disconnect and terminate.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+
+    // First: disconnect from all mux cores
+    for (uint32_t dir = 0; dir < num_directions; dir++) {
+        if (directions[dir] && mux_connection_valid_arr[dir]) {
+            DPRINT << "Disconnecting from mux core dir=" << dir << ENDL();
+            tt::tt_fabric::fabric_client_disconnect(fabric_connections[dir]);
+        }
+    }
+
+    // Second: terminate all mux cores this worker is connected to
+    // Each worker owns its link's mux cores exclusively, so no signaling/waiting needed
+    for (uint32_t dir = 0; dir < num_directions; dir++) {
+        if (directions[dir] && mux_connection_valid_arr[dir]) {
+            DPRINT << "Terminating mux core dir=" << dir << ENDL();
+            tt::tt_fabric::fabric_endpoint_terminate(
+                fabric_mux_x_arr[dir], fabric_mux_y_arr[dir], fabric_mux_termination_signal_address);
+        }
+    }
+
+    DPRINT << "MUX teardown complete" << ENDL();
+
+    noc_async_write_barrier();
+#else
     close_direction_connections(directions, fabric_connections);
     noc_async_write_barrier();
+#endif
 }

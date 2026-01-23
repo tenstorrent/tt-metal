@@ -24,12 +24,12 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<uint32_t>& output_concat_dim,
-    const std::optional<CoreCoord>& drain_sync_tilizer_core) {
+    const std::optional<CoreCoord>& drain_sync_tilizer_core,
+    bool use_mux,
+    const std::optional<CoreRangeSet>& worker_core_range_set,
+    const std::optional<CoreRangeSet>& mux_core_range_set) {
     auto* mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
     log_debug(tt::LogOp, "num_links: {}", num_links_);
@@ -43,6 +43,19 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType::FullPacket;
 
+    // Default worker cores: (0,0) to (0,3) - 4 cores for 4 links
+    CoreRangeSet worker_cores =
+        worker_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 3))));
+
+    // Default mux cores: (1,0) to (1,7) - 8 cores (2 per link × 4 links)
+    CoreRangeSet mux_cores = mux_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(1, 0), CoreCoord(1, 7))));
+
+    if (use_mux) {
+        log_debug(tt::LogOp, "use_mux: true");
+    } else {
+        log_debug(tt::LogOp, "use_mux: false");
+    }
+
     return ttnn::prim::all_to_all_dispatch_metadata(
         input_tensor,
         expert_indices_tensor,
@@ -53,10 +66,12 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         num_links_,
         topology_,
         memory_config_,
-        subdevice_core_range_set,
+        worker_cores,
         impl,
         output_concat_dim_,
-        drain_core);
+        drain_core,
+        use_mux,
+        mux_cores);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

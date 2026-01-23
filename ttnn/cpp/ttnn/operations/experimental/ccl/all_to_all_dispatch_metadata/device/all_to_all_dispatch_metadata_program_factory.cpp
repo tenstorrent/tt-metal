@@ -23,6 +23,76 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
+// Launch mux worker kernels for fabric communication
+// Returns: tuple of (mux_kernel_id, mux_kernel_config, mux_neighbor_core_maps)
+auto launch_mux_workers(
+    const MeshDevice& mesh_device,
+    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_fabric::FabricNodeId src_node_id,
+    const std::vector<ttnn::MeshCoordinate>& neighbors,
+    const uint32_t num_links,
+    const uint32_t num_workers,
+    tt::tt_metal::Program& program) {
+    auto num_full_size_channels = num_workers;
+    constexpr auto num_header_only_channels = 0;
+    constexpr auto num_buffers_full_size_channels = 1;
+    const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t l1_unreserved_base_address =
+        mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        0,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address);
+
+    // Need num_links × neighbors.size() mux cores (one per link per direction)
+    const uint32_t num_mux_cores_needed = num_links * neighbors.size();
+    TT_FATAL(
+        corerange_to_cores(mux_core_range_set).size() >= num_mux_cores_needed,
+        "Not enough mux cores in mux_core_range_set. Need {} cores ({} links × {} neighbors), have {}",
+        num_mux_cores_needed,
+        num_links,
+        neighbors.size(),
+        corerange_to_cores(mux_core_range_set).size());
+    const auto needed_mux_core_range_set =
+        tt::tt_metal::select_from_corerangeset(mux_core_range_set, 0, num_mux_cores_needed - 1);
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        needed_mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
+    mux_neigbor_core_maps.reserve(num_links);
+
+    const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
+    auto mux_core_iter = mux_cores.begin();
+    for (uint32_t link = 0; link < num_links; ++link) {
+        std::map<ttnn::MeshCoordinate, CoreCoord> mux_neigbor_core_map;
+        for (const auto& neighbor_coord : neighbors) {
+            auto mux_logical_core = *(mux_core_iter++);
+            const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
+
+            std::vector<uint32_t> mux_rt_args = {};
+            const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
+            mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                src_node_id, dst_node_id, link, program, {mux_logical_core});
+
+            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
+        }
+        mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
+    }
+
+    return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
+}
+
 uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
 uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
@@ -448,6 +518,40 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
 
+    // Conditionally set up mux infrastructure
+    const bool use_mux = operation_attributes.use_mux;
+    std::optional<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
+    std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
+    [[maybe_unused]] tt::tt_metal::KernelHandle mux_kernel_id = 0;
+
+    if (use_mux) {
+        writer_defines["USE_MUX"] = "1";
+        log_debug(tt::LogOp, "Using fabric mux for dispatch");
+
+        // Launch mux workers
+        auto [launched_mux_kernel_id, launched_mux_config, launched_mux_neigbor_core_maps] = detail::launch_mux_workers(
+            *mesh_device,
+            operation_attributes.mux_core_range_set,
+            src_fabric_node_id,
+            neighbors,
+            num_links,
+            num_cores,  // num_workers = num_cores for Phase 1 (1 worker per link)
+            program);
+        mux_kernel_id = launched_mux_kernel_id;
+        mux_kernel_config = launched_mux_config;
+        mux_neigbor_core_maps = std::move(launched_mux_neigbor_core_maps);
+    }
+
+    // Build writer compile-time args - add mux args if enabled
+    std::vector<uint32_t> writer_compile_time_args_final = writer_compile_time_args;
+    if (use_mux) {
+        ttnn::ccl::fabric_mux_connection_ct_args(
+            num_cores,  // num_mux_clients
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config.value(),
+            writer_compile_time_args_final);
+    }
+
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/device/kernels/dataflow/"
@@ -456,7 +560,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = writer_compile_time_args,
+            .compile_args = writer_compile_time_args_final,
             .defines = writer_defines});
 
     std::vector<uint32_t> reader_runtime_args = {
@@ -495,8 +599,17 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         drain_sync_tilizer_noc_core.x,
         drain_sync_tilizer_noc_core.y);
 
+    // For mux: set up termination master (first worker core is the sync core)
+    const auto& termination_master_core = sender_cores[0];
+    const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
+    uint32_t termination_master_semaphore_id = 0;
+    if (use_mux) {
+        termination_master_semaphore_id = tt::tt_metal::CreateSemaphore(program, {termination_master_core}, 0);
+    }
+
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
+    auto mux_core_map_iter = mux_neigbor_core_maps.cbegin();
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
@@ -522,26 +635,53 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         writer_runtime_args[writer_token_start_idx] = tokens_per_core_start;
         writer_runtime_args[writer_token_end_idx] = reader_runtime_args[reader_token_end_idx];
         tokens_per_core_start = reader_runtime_args[reader_token_end_idx];
-        for (const auto& neighbor_coordinate : neighbors) {
-            log_debug(
-                tt::LogOp,
-                "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
-                "token indices from {} to {}",
-                mesh_coordinate[0],
-                mesh_coordinate[1],
-                neighbor_coordinate[0],
-                neighbor_coordinate[1],
-                sender_core,
-                link_id,
-                reader_runtime_args[8],
-                reader_runtime_args[9]);
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                mesh_device->get_fabric_node_id(neighbor_coordinate),
-                link_id,
-                program,
-                sender_core,
-                writer_runtime_args);
+
+        if (use_mux) {
+            // Use mux connection runtime args
+            const bool is_termination_master = (sender_core == termination_master_core);
+            for (const auto& neighbor_coordinate : neighbors) {
+                const auto& mux_virtual_core = mux_core_map_iter->at(neighbor_coordinate);
+                ttnn::ccl::fabric_mux_connection_rt_args(
+                    true,  // is_sender
+                    is_termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core,
+                    link_id,  // worker_index within the mux channel
+                    sender_core,
+                    mux_kernel_config.value(),
+                    program,
+                    termination_master_virtual_core,
+                    writer_runtime_args,
+                    termination_master_semaphore_id);
+            }
+            // Move to next mux core map for next link
+            if (link_id < num_links - 1) {
+                ++mux_core_map_iter;
+            }
+        } else {
+            // Use direct fabric connection runtime args
+            for (const auto& neighbor_coordinate : neighbors) {
+                log_debug(
+                    tt::LogOp,
+                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and "
+                    "handles "
+                    "token indices from {} to {}",
+                    mesh_coordinate[0],
+                    mesh_coordinate[1],
+                    neighbor_coordinate[0],
+                    neighbor_coordinate[1],
+                    sender_core,
+                    link_id,
+                    reader_runtime_args[8],
+                    reader_runtime_args[9]);
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    link_id,
+                    program,
+                    sender_core,
+                    writer_runtime_args);
+            }
         }
 
         tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);

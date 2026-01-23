@@ -46,6 +46,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
         const AllToAllTransferType impl;
         const uint32_t output_concat_dim;
         const CoreCoord drain_sync_tilizer_core;  // Core where indices/scores are sharded for selective_tilize
+        const bool use_mux;                       // Whether to use fabric mux (allows multiple workers per link)
+        const CoreRangeSet mux_core_range_set;    // Cores to run mux kernels on (only used if use_mux is true)
         static constexpr auto attribute_names = std::forward_as_tuple(
             "worker_core_range_set",
             "output_mem_config",
@@ -54,7 +56,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "topology",
             "impl",
             "output_concat_dim",
-            "drain_sync_tilizer_core");
+            "drain_sync_tilizer_core",
+            "use_mux",
+            "mux_core_range_set");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 worker_core_range_set,
@@ -64,7 +68,9 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 topology,
                 impl,
                 output_concat_dim,
-                drain_sync_tilizer_core);
+                drain_sync_tilizer_core,
+                use_mux,
+                mux_core_range_set);
         };
     };
     struct tensor_args_t {
@@ -148,5 +154,7 @@ all_to_all_dispatch_metadata(
     const CoreRangeSet& worker_core_range_set,
     ttnn::operations::experimental::ccl::AllToAllDispatchMetadataDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim,
-    const CoreCoord& drain_sync_tilizer_core);
+    const CoreCoord& drain_sync_tilizer_core,
+    bool use_mux,
+    const CoreRangeSet& mux_core_range_set);
 }  // namespace ttnn::prim
