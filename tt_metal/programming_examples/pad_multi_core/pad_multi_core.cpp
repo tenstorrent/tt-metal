@@ -131,6 +131,7 @@ int main() {
     // create kernels (borrowed from TTNN production code)
     KernelHandle reader_id = CreateKernel(
         program,
+        OVERRIDE_KERNEL_PREFIX
         "tt_metal/programming_examples/pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
@@ -139,6 +140,7 @@ int main() {
             .compile_args = reader_compile_time_args});
     KernelHandle writer_id = CreateKernel(
         program,
+        OVERRIDE_KERNEL_PREFIX
         "tt_metal/programming_examples/pad_multi_core/kernels/pad_writer_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
