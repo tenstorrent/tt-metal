@@ -676,7 +676,8 @@ static std::vector<Tensor> pool2d_DRAM(
             std::nullopt,
             config_tensor_in_dram);
     }
-    TT_FATAL(!return_indices, "DRAM pooling with return_indices=True is not supported yet.");
+    // Note: We allow return_indices=True to proceed here so we can check if it fits in a single slice.
+    // The verification happens after slice configuration is determined.
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     auto dilation = dilation_.value_or(std::array<uint32_t, 2>{1, 1});
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -772,6 +773,13 @@ static std::vector<Tensor> pool2d_DRAM(
             output_layout,
             input_tensor_on_device.device());
     }
+
+    // Verify that return_indices operations can fit in a single slice
+    TT_FATAL(
+        !return_indices || dram_slice_config.num_slices == 1,
+        "Max pool with return_indices=True requires {} slices to fit in L1 memory. "
+        "DRAM pooling with return_indices=True and multiple slices is not supported yet. ",
+        dram_slice_config.num_slices);
 
     // If automatic determination resulted in num_slices=1, use L1 path for efficiency
     if (dram_slice_config.num_slices == 1) {
