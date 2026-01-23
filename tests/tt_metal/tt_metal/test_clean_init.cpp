@@ -30,7 +30,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 
-
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
  * recover from a "bad" state.

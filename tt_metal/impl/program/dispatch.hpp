@@ -203,12 +203,13 @@ void set_core_go_message_mapping_on_device(
     uint8_t cq_id);
 
 // ProgramImpl version - does not support CQs
-uint32_t program_base_addr_on_core(
-    detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);
+uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);
 
 // MeshWorkloadImpl version - supports both CQs and not having CQs
 uint32_t program_base_addr_on_core(
-    distributed::MeshWorkloadImpl& mesh_workload, distributed::MeshDevice* mesh_device, HalProgrammableCoreType core_type);
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 

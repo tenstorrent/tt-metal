@@ -32,7 +32,6 @@ struct TraceDescriptor;
 
 namespace tt::tt_metal {
 
-
 class HWCommandQueue {
 public:
     HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index);
