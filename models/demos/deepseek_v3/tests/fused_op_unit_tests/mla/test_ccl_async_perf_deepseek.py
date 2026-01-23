@@ -913,3 +913,81 @@ def test_flash_mla_deepseek_perf(
     assert (
         measured_avg_us > perf_target_us - threshold
     ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
+
+
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
+        (
+            "wq_kv_a_sequence",
+            10,
+            179.46,
+        ),  # Sum: linear(28.81) + all-gather(106) + fast_reduce(7.75) + 3*slices(1.5+1.3+1)
+    ],
+)
+# 33uS slower than sum of unit tests
+@pytest.mark.models_device_performance_bare_metal
+def test_wq_kv_a_sequence_deepseek_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+    galaxy_type,
+):
+    """
+    Test performance of the complete wq_kv_a sequence from mla1d.py (lines 1092-1134).
+
+    This test measures the end-to-end performance of the operation sequence:
+    1. Linear projection (wq_kv_a): 28.81 µs
+    2. All-gather: 106 µs
+    3. Fast reduce: 7.75 µs
+    4. Slice q: 1.5 µs
+    5. Slice kv_nope: 1.3 µs
+    6. Slice kv_rope: 1 µs
+
+    Total expected: 146.36 µs
+    """
+    subdir = "fused_op_unit_tests/mla"
+    command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_wq_kv_a_sequence_deepseek.py -k {step_name}"
+    cols = ["DEVICE FW"]
+
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    op_name = ""
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(
+        command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters, num_unique_ops=4
+    )
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_wq_kv_a_sequence",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    threshold = max(THRESHOLD, perf_target_us * THRESHOLD_PERCENTAGE)
+
+    assert (
+        measured_avg_us < perf_target_us + threshold
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us, the threshold was {threshold} us"
+    assert (
+        measured_avg_us > perf_target_us - threshold
+    ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
