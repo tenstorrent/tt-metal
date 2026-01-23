@@ -151,9 +151,10 @@ void kernel_main() {
         return offset;
     };
     uint32_t trid = 0;
-    auto wr_cmd_buf_regs_base_addr = get_cmd_buf_reg_base_addr(noc_index, write_cmd_buf);
+    auto slave_cmd_buf = write_cmd_buf;
+    auto wr_cmd_buf_regs_base_addr = get_cmd_buf_reg_base_addr(noc_index, slave_cmd_buf);
     constexpr size_t size_regs_in_bytes = (NOC_CMD_CTRL_OFFSET / 4) + 1;
-    auto slave_cmd_buf = write_reg_cmd_buf;
+    auto master_cmd_buf = write_reg_cmd_buf;
     // waiting for the slave cmd buf to be ready
     while (!noc_cmd_buf_ready(noc_index, slave_cmd_buf));
     noc_async_write_one_packet_with_trid(
@@ -161,7 +162,7 @@ void kernel_main() {
         get_noc_addr(wr_cmd_buf_regs_base_addr),
         size_regs_in_bytes,
         trid,
-        slave_cmd_buf,
+        master_cmd_buf,
         noc_index,
         NOC_UNICAST_WRITE_VC);
 
