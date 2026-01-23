@@ -40,10 +40,10 @@ void bind_fold_operation(nb::module_& mod) {
                uint32_t stride_h,
                uint32_t stride_w,
                bool use_transpose_as_fold,
-               std::optional<ttnn::Shape> output_shape,
+               const std::optional<ttnn::Shape>& output_shape,
                std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
-               std::optional<CoreRangeSet> grid_size,
-               std::optional<MemoryConfig> override_memory_config) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet>& grid_size,
+               const std::optional<MemoryConfig>& override_memory_config) -> ttnn::Tensor {
                 return op(
                     input,
                     stride_h,
