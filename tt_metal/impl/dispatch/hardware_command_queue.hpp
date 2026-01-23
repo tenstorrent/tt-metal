@@ -67,7 +67,6 @@ public:
 
     // needed interface items
     void terminate();
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 private:
     uint32_t id_;
@@ -77,11 +76,6 @@ private:
 
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<CQSharedState> cq_shared_state_;
-
-    // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
-    //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
-    //  call
-    DispatchArray<uint32_t> expected_num_workers_completed_{};
 
     std::atomic<bool> exit_condition_;
     std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
@@ -103,8 +97,6 @@ private:
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
-
-    void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
 
 }  // namespace tt::tt_metal
