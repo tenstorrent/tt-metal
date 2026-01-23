@@ -1,0 +1,8 @@
+﻿ttnn.rotate
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rotate:
+
+.. autooperation:: ttnn.rotate

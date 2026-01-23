@@ -1,0 +1,8 @@
+﻿ttnn.cumsum
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cumsum:
+
+.. autooperation:: ttnn.cumsum
