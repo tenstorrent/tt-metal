@@ -593,10 +593,10 @@ Steps
    blocking variables and an intermediate circular buffer.
 
 #. Set fixed value for ``K_block_tiles`` 
-   Define ``K_block_tiles`` to be a parameter and start by setting it to 2. This ensures that
+   Define ``K_block_tiles`` to be a parameter and start by setting it to ``2``. This ensures that
    all the data fits into on-chip SRAM.
 
-#. Determine appropriate values for other blocking variables, based on the core grid size (``8x8``)
+#. Determine appropriate values for other blocking variables, based on the core grid size (``5x5``)
    and the matrix sizes (``640x320`` by ``320x640``). Use predefined variables ``TILE_HEIGHT``
    and ``TILE_WIDTH`` to compute the number of tiles. As before, you can assume that
    ``TILE_HEIGHT == TILE_WIDTH``, and that ``M``, ``N``, and ``K`` are divisible by ``TILE_HEIGHT``.
