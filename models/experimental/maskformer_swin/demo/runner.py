@@ -5,8 +5,7 @@
 """MaskFormer Swin-B demo runner.
 
 Pipeline:
-- CPU (Hugging Face): Swin backbone + pixel decoder
-- TT (TTNN): transformer decoder + heads
+- TT (TTNN): Swin backbone + pixel decoder + transformer decoder + heads
 
 Entry point:
 `python -m models.experimental.maskformer_swin.demo.runner --help`
@@ -175,9 +174,12 @@ def _build_runner(ref_config: Dict[str, object], state_dict: Dict[str, object], 
     backbone_cfg = ref_config.get("backbone_config", {}) if isinstance(ref_config, dict) else {}
     decoder_cfg = ref_config.get("decoder_config", {}) if isinstance(ref_config, dict) else {}
 
-    backbone = MaskFormerSwinBackbone.from_huggingface(state_dict, device=None, config_dict=backbone_cfg)
+    backbone = MaskFormerSwinBackbone.from_huggingface(state_dict, device=device, config_dict=backbone_cfg)
 
-    pixel_cfg = PixelDecoderConfig(fpn_dim=int(ref_config.get("fpn_feature_size", 256)))
+    pixel_cfg = PixelDecoderConfig(
+        fpn_dim=int(ref_config.get("fpn_feature_size", 256)),
+        mask_dim=int(ref_config.get("mask_feature_size", 256)),
+    )
     pixel_decoder = MaskFormerPixelDecoder.from_huggingface(state_dict, config=pixel_cfg, device=device)
 
     transformer_cfg = TransformerDecoderConfig(
@@ -246,7 +248,7 @@ def _timed_inference(
         "fps": fps,
         "image_size_hw": image_hw,
         "num_queries": int(outputs.class_logits.shape[1]),
-        "tt_submodules": ["decoder", "heads"],
+        "tt_submodules": ["backbone", "pixel_decoder", "decoder", "heads"],
     }
     return outputs, perf_payload
 
