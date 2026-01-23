@@ -157,7 +157,14 @@ def run_matmul_reduce_scatter_galaxy_impl(
     ]
     logger.info("Done creating persistent buffers")
 
+    # Get mesh shape from device for proper tensor mapping
+    mesh_shape = mesh_device.shape
+    num_rows = mesh_shape[0]  # 8 for Galaxy
+    num_cols = mesh_shape[1]  # 4 for Galaxy
+
     # Matmul weight setup
+    # For Galaxy (8x4 mesh): replicate weights across rows, shard across columns
+    # This matches the input tensor mapping
     weights_tensor = torch.randn(mm_weights_shape).bfloat16()
     weight_tt = ttnn.from_torch(
         weights_tensor,
@@ -165,7 +172,12 @@ def run_matmul_reduce_scatter_galaxy_impl(
         layout=layout,
         device=mesh_device,
         memory_config=mem_config_weights,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=mm_shard_dim),
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(mm_shard_dim)], ttnn.MeshShape(num_rows, num_cols)
+            ),
+        ),
     )
 
     if use_bias:
@@ -248,11 +260,6 @@ def run_matmul_reduce_scatter_galaxy_impl(
     # MM input setup
     logger.info(f"Matmul+ReduceScatter Galaxy: rs_input_shape={rs_input_shape}, mm_weights_shape={mm_weights_shape}")
     logger.info(f"Num devices: {num_devices}, Scatter dim: {rs_scatter_dim}")
-
-    # Get mesh shape from device
-    mesh_shape = mesh_device.shape
-    num_rows = mesh_shape[0]  # 8 for Galaxy
-    num_cols = mesh_shape[1]  # 4 for Galaxy
 
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
