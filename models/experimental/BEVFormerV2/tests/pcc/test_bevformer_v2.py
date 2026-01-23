@@ -1,6 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
+import tracy
 import pytest
 import torch
 import ttnn
@@ -164,6 +166,7 @@ def test_bevformerv2(
     tensor = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     img = []
     img.append(tensor)
+
     tt_model = TtBevFormerV2(
         device=device,
         params=parameter,
@@ -173,13 +176,13 @@ def test_bevformerv2(
         pts_bbox_head=dict(bev_h=100, bev_w=100, num_query=900, num_classes=10, in_channels=256),
         video_test_mode=True,
     )
-
+    tracy.signpost("start")
     ttnn_outputs = tt_model(
         return_loss=False,
         img=img,
         img_metas=input_dict["img_metas"],
     )
-
+    tracy.signpost("stop")
     keys_to_check = [
         "bev_embed",
         "all_cls_scores",

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -8,6 +9,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_utils import inverse_sigmoid
 
 
 class TtLearnedPositionalEncoding:
+    """TTNN implementation of LearnedPositionalEncoding"""
+
     def __init__(
         self,
         params,
@@ -51,6 +54,8 @@ class TtLearnedPositionalEncoding:
 
 
 class TtBEVFormerHead:
+    """TTNN implementation of BEVFormerHead"""
+
     def __init__(
         self,
         *args,

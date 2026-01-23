@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -8,53 +9,7 @@ from models.common.utility_functions import comp_pcc
 
 from models.experimental.BEVFormerV2.reference.decoder import DetrTransformerDecoderLayer
 from models.experimental.BEVFormerV2.tt.ttnn_decoder_layer import TtDecoderLayer
-from models.experimental.BEVFormerV2.tt.model_preprocessing import (
-    preprocess_attention_parameters,
-    preprocess_norm_parameters,
-)
-from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
-
-
-def prepare_decoder_layer_parameters(decoder_layer, device):
-    class Parameters:
-        pass
-
-    params = Parameters()
-    params.attentions = {}
-    params.ffn = {}
-    params.norms = {}
-
-    for j, attn in enumerate(decoder_layer.attentions):
-        attn_params = preprocess_attention_parameters(attn, device, dtype=ttnn.bfloat16)
-        params.attentions[f"attn{j}"] = attn_params
-
-    for k, ffn in enumerate(decoder_layer.ffns):
-        ffn_params = Parameters()
-        ffn_params.linear1 = Parameters()
-        ffn_params.linear1.weight = ttnn.to_device(
-            preprocess_linear_weight(ffn.layers[0][0].weight, dtype=ttnn.bfloat16), device
-        )
-        ffn_params.linear1.bias = (
-            ttnn.to_device(preprocess_linear_bias(ffn.layers[0][0].bias, dtype=ttnn.bfloat16), device)
-            if ffn.layers[0][0].bias is not None
-            else None
-        )
-        ffn_params.linear2 = Parameters()
-        ffn_params.linear2.weight = ttnn.to_device(
-            preprocess_linear_weight(ffn.layers[1].weight, dtype=ttnn.bfloat16), device
-        )
-        ffn_params.linear2.bias = (
-            ttnn.to_device(preprocess_linear_bias(ffn.layers[1].bias, dtype=ttnn.bfloat16), device)
-            if ffn.layers[1].bias is not None
-            else None
-        )
-        params.ffn[f"ffn{k}"] = ffn_params
-
-    for n, norm in enumerate(decoder_layer.norms):
-        norm_params = preprocess_norm_parameters(norm, device, dtype=ttnn.bfloat16)
-        params.norms[f"norm{n}"] = norm_params
-
-    return params
+from models.experimental.BEVFormerV2.tt.model_preprocessing import prepare_decoder_layer_parameters_for_test
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -160,9 +115,9 @@ def test_decoder_layer_pcc(
         "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
     }
 
-    decoder_layer_params = prepare_decoder_layer_parameters(pytorch_decoder_layer, device)
+    decoder_layer_params = prepare_decoder_layer_parameters_for_test(pytorch_decoder_layer, device)
     ttnn_decoder_layer = TtDecoderLayer(
-        parameters=decoder_layer_params,
+        params=decoder_layer_params,
         device=device,
         attn_cfgs=[
             {"type": "MultiheadAttention", "embed_dims": embed_dims, "num_heads": num_heads},

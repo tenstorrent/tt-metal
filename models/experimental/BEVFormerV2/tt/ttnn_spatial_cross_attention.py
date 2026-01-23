@@ -1,9 +1,15 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import warnings
 import ttnn
 from models.experimental.BEVFormerV2.tt.ttnn_utils import multi_scale_deformable_attn
 
 
 class TtSpatialCrossAttention:
+    """TTNN implementation of SpatialCrossAttention"""
+
     def __init__(
         self,
         device,
@@ -147,6 +153,8 @@ class TtSpatialCrossAttention:
 
 
 class TtMSDeformableAttention3D:
+    """TTNN implementation of MSDeformableAttention3D"""
+
     def __init__(
         self,
         device,

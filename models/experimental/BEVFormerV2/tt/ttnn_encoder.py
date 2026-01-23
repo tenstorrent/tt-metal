@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import numpy as np
 import copy
@@ -9,6 +13,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_ffn import TtFFN
 
 
 class TtEncoder:
+    """TTNN implementation of Encoder"""
+
     def __init__(
         self,
         params,
@@ -322,6 +328,8 @@ class TtEncoder:
 
 
 class TtEncoderLayer:
+    """TTNN implementation of EncoderLayer"""
+
     def __init__(
         self,
         device,

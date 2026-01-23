@@ -1,5 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
+
+##########################################################################
+# Adapted from BEVFormer (https://github.com/fundamentalvision/BEVFormer).
+# Original work Copyright (c) OpenMMLab.
+# Modified by Zhiqi Li.
+# Licensed under the Apache License, Version 2.0.
+##########################################################################
 
 import torch
 import numpy as np

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,31 +11,13 @@ from models.experimental.BEVFormerV2.tt.ttnn_multihead_attention import TtMultih
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_linear_bias,
 )
 from models.experimental.BEVFormerV2.common import download_bevformerv2_weights
 
 
-def custom_preprocessor(model, name):
-    parameters = {}
-    if isinstance(model, MultiheadAttention):
-        parameters["multihead_attention"] = {}
-        parameters["multihead_attention"]["in_proj"] = {}
-        parameters["multihead_attention"]["in_proj"]["weight"] = preprocess_linear_weight(
-            model.attn.in_proj_weight, dtype=ttnn.bfloat16
-        )
-        parameters["multihead_attention"]["in_proj"]["bias"] = preprocess_linear_bias(
-            model.attn.in_proj_bias, dtype=ttnn.bfloat16
-        )
-        parameters["multihead_attention"]["out_proj"] = {}
-        parameters["multihead_attention"]["out_proj"]["weight"] = preprocess_linear_weight(
-            model.attn.out_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["multihead_attention"]["out_proj"]["bias"] = preprocess_linear_bias(
-            model.attn.out_proj.bias, dtype=ttnn.bfloat16
-        )
-    return parameters
+from models.experimental.BEVFormerV2.tests.pcc.custom_preprocessors import (
+    custom_preprocessor_multihead_attention as custom_preprocessor,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

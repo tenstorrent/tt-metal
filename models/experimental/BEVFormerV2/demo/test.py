@@ -1,10 +1,16 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
+##########################################################################
+# Adapted from BEVFormer (https://github.com/fundamentalvision/BEVFormer).
+# Original work Copyright (c) OpenMMLab.
+# Modified by Zhiqi Li.
+# Licensed under the Apache License, Version 2.0.
+##########################################################################
+
 import argparse
-import sys
 import os
-import pickle
 import json
 import torch
 import numpy as np
@@ -17,16 +23,19 @@ import ttnn
 import gc
 from models.experimental.BEVFormerV2.common import load_torch_model
 from models.experimental.BEVFormerV2.tt.model_preprocessing import create_bevformerv2_model_parameters
-
-user_site = os.path.expanduser("~/.local/lib/python3.10/site-packages")
-if os.path.exists(user_site) and user_site not in sys.path:
-    sys.path.insert(0, user_site)
+from models.experimental.BEVFormerV2.demo.demo_data_loader import load_demo_data
 
 
+Quaternion = None
 try:
     from pyquaternion import Quaternion
 except ImportError:
     Quaternion = None
+    print(
+        "Warning: pyquaternion not found in virtual environment. "
+        "Coordinate transformations will use lidar space (not converted to global). "
+        "Install with: pip install pyquaternion"
+    )
 
 # Class order must match the reference config: bevformerv2-r50-t1-base-24ep.py
 CLASSES = [
@@ -51,28 +60,12 @@ def parse_args():
     parser.add_argument(
         "--data-root", default="models/experimental/BEVFormerV2/demo/demo_data", help="data root directory"
     )
-    parser.add_argument(
-        "--pkl-file", default="nuscenes_infos_temporal_val.pkl", help="pkl file path relative to data-root"
-    )
     parser.add_argument("--sample-idx", type=int, default=0, help="sample index to test (default: 0, use -1 for all)")
     parser.add_argument(
         "--out", default="models/experimental/BEVFormerV2/demo/outputs/results.json", help="output result file"
     )
     parser.add_argument("--eval", action="store_true", help="run evaluation")
     return parser.parse_args()
-
-
-def load_pkl_data(pkl_path):
-    with open(pkl_path, "rb") as f:
-        data = pickle.load(f)
-    if isinstance(data, dict):
-        if "infos" in data:
-            return data["infos"]
-        elif "data_list" in data:
-            return data["data_list"]
-    elif isinstance(data, list):
-        return data
-    return data
 
 
 def load_image(image_path):
@@ -295,9 +288,26 @@ def format_results_to_json(results, infos, output_path):
 
             try:
                 if Quaternion is not None:
-                    lidar2ego_rot = Quaternion(info["lidar2ego_rotation"]).rotation_matrix
+                    # Handle quaternion format (4 elements) vs rotation matrix (3x3)
+                    lidar2ego_rot_data = np.array(info["lidar2ego_rotation"])
+                    ego2global_rot_data = np.array(info["ego2global_rotation"])
+
+                    # Check if it's a quaternion (4 elements) or rotation matrix (3x3)
+                    if lidar2ego_rot_data.shape == (4,):
+                        lidar2ego_rot = Quaternion(lidar2ego_rot_data).rotation_matrix
+                    elif lidar2ego_rot_data.shape == (3, 3):
+                        lidar2ego_rot = lidar2ego_rot_data
+                    else:
+                        raise ValueError(f"Unexpected lidar2ego_rotation shape: {lidar2ego_rot_data.shape}")
+
+                    if ego2global_rot_data.shape == (4,):
+                        ego2global_rot = Quaternion(ego2global_rot_data).rotation_matrix
+                    elif ego2global_rot_data.shape == (3, 3):
+                        ego2global_rot = ego2global_rot_data
+                    else:
+                        raise ValueError(f"Unexpected ego2global_rotation shape: {ego2global_rot_data.shape}")
+
                     lidar2ego_trans = np.array(info["lidar2ego_translation"])
-                    ego2global_rot = Quaternion(info["ego2global_rotation"]).rotation_matrix
                     ego2global_trans = np.array(info["ego2global_translation"])
 
                     center_ego = center_lidar @ lidar2ego_rot.T + lidar2ego_trans
@@ -308,9 +318,20 @@ def format_results_to_json(results, infos, output_path):
                     vel_global = vel_ego @ ego2global_rot.T
                     velocity = [float(vel_global[0]), float(vel_global[1])]
                 else:
+                    if sample_id == 0 and i == 0:  # Print warning only once per sample
+                        print(
+                            f"Warning: pyquaternion not available. Coordinates for sample {sample_token} "
+                            "are in lidar space (not converted to global). "
+                            "Install with: pip install pyquaternion"
+                        )
                     center_global = center_lidar
                     velocity = [float(vx), float(vy)]
             except Exception as e:
+                if sample_id == 0 and i == 0:  # Print warning only once per sample
+                    print(
+                        f"Warning: Failed to convert coordinates for sample {sample_token}: {e}. "
+                        "Using lidar coordinates (not converted to global)."
+                    )
                 center_global = center_lidar
                 velocity = [float(vx), float(vy)]
 
@@ -389,13 +410,9 @@ def main():
     )
     torch_model.pts_bbox_head.transformer.decoder.num_layers = 1
 
-    pkl_path = os.path.join(args.data_root, args.pkl_file)
-    if not os.path.exists(pkl_path):
-        print(f"Error: PKL file not found: {pkl_path}")
-        return
-
-    print(f"Loading data from {pkl_path}")
-    infos = load_pkl_data(pkl_path)
+    # Load demo data (generated on-the-fly)
+    print("Loading demo data (sample 0)")
+    infos = load_demo_data(sample_idx=args.sample_idx if args.sample_idx >= 0 else 0)
     print(f"Loaded {len(infos)} samples")
 
     if args.sample_idx >= len(infos):
@@ -498,10 +515,11 @@ def main():
             json_path = format_results_to_json(outputs, infos, args.out)
             print(f"Results saved to JSON: {json_path}")
         else:
+            # For non-JSON outputs, save as JSON instead of pickle
             os.makedirs(os.path.dirname(args.out) if os.path.dirname(args.out) else ".", exist_ok=True)
-            with open(args.out, "wb") as f:
-                pickle.dump(outputs, f)
-            print(f"Results saved to pickle: {args.out}")
+            json_path = args.out.replace(".pkl", ".json") if args.out.endswith(".pkl") else args.out + ".json"
+            json_path = format_results_to_json(outputs, infos, json_path)
+            print(f"Results saved to JSON: {json_path}")
 
     ttnn.close_device(device)
 

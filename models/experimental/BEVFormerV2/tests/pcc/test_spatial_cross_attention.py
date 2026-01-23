@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -11,46 +12,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_linear_bias,
 )
-
-
-def custom_preprocessor(model, name):
-    parameters = {}
-
-    if isinstance(model, SpatialCrossAttention):
-        parameters["spatial_cross_attention"] = {}
-        parameters["spatial_cross_attention"]["sampling_offsets"] = {}
-        parameters["spatial_cross_attention"]["sampling_offsets"]["weight"] = preprocess_linear_weight(
-            model.deformable_attention.sampling_offsets.weight, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["sampling_offsets"]["bias"] = preprocess_linear_bias(
-            model.deformable_attention.sampling_offsets.bias, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["attention_weights"] = {}
-        parameters["spatial_cross_attention"]["attention_weights"]["weight"] = preprocess_linear_weight(
-            model.deformable_attention.attention_weights.weight, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["attention_weights"]["bias"] = preprocess_linear_bias(
-            model.deformable_attention.attention_weights.bias, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["value_proj"] = {}
-        parameters["spatial_cross_attention"]["value_proj"]["weight"] = preprocess_linear_weight(
-            model.deformable_attention.value_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["value_proj"]["bias"] = preprocess_linear_bias(
-            model.deformable_attention.value_proj.bias, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["output_proj"] = {}
-        parameters["spatial_cross_attention"]["output_proj"]["weight"] = preprocess_linear_weight(
-            model.output_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["spatial_cross_attention"]["output_proj"]["bias"] = preprocess_linear_bias(
-            model.output_proj.bias, dtype=ttnn.bfloat16
-        )
-
-    return parameters
+from models.experimental.BEVFormerV2.tests.pcc.custom_preprocessors import (
+    custom_preprocessor_spatial_cross_attention as custom_preprocessor,
+)
 
 
 def create_bevformerv2_model_parameters_sca(model: SpatialCrossAttention, input_tensor, device=None):

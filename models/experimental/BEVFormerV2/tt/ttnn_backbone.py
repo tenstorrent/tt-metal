@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -9,6 +10,8 @@ from .utils import create_conv2d_config, create_maxpool_config, post_process_con
 
 @dataclass
 class ResNet50Optimizations:
+    """TTNN implementation of ResNet50Optimizations"""
+
     conv1_7x7: dict
     bottleneck_1x1_first: dict
     bottleneck_3x3: dict
@@ -61,6 +64,8 @@ resnet50_optimizations = ResNet50Optimizations(
 
 
 class TtBottleneck:
+    """TTNN implementation of Bottleneck"""
+
     expansion = 4
 
     def __init__(
@@ -259,6 +264,8 @@ class TtBottleneck:
 
 
 class TtResNet50:
+    """TTNN implementation of ResNet50"""
+
     def __init__(self, conv_args, parameters, device, model_config=None, optimizations=None, out_indices=(1, 2, 3)):
         self.device = device
         self.style = "caffe"

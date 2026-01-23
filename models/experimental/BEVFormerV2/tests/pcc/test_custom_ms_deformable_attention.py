@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,45 +11,13 @@ from models.experimental.BEVFormerV2.tt.ttnn_custom_ms_deformable_attention impo
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_linear_bias,
 )
 from models.experimental.BEVFormerV2.common import download_bevformerv2_weights
 
 
-def custom_preprocessor(model, name):
-    parameters = {}
-    if isinstance(model, CustomMSDeformableAttention):
-        parameters["custom_ms_deformable_attention"] = {}
-        parameters["custom_ms_deformable_attention"]["sampling_offsets"] = {}
-        parameters["custom_ms_deformable_attention"]["sampling_offsets"]["weight"] = preprocess_linear_weight(
-            model.sampling_offsets.weight, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["sampling_offsets"]["bias"] = preprocess_linear_bias(
-            model.sampling_offsets.bias, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["attention_weights"] = {}
-        parameters["custom_ms_deformable_attention"]["attention_weights"]["weight"] = preprocess_linear_weight(
-            model.attention_weights.weight, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["attention_weights"]["bias"] = preprocess_linear_bias(
-            model.attention_weights.bias, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["value_proj"] = {}
-        parameters["custom_ms_deformable_attention"]["value_proj"]["weight"] = preprocess_linear_weight(
-            model.value_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["value_proj"]["bias"] = preprocess_linear_bias(
-            model.value_proj.bias, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["output_proj"] = {}
-        parameters["custom_ms_deformable_attention"]["output_proj"]["weight"] = preprocess_linear_weight(
-            model.output_proj.weight, dtype=ttnn.bfloat16
-        )
-        parameters["custom_ms_deformable_attention"]["output_proj"]["bias"] = preprocess_linear_bias(
-            model.output_proj.bias, dtype=ttnn.bfloat16
-        )
-    return parameters
+from models.experimental.BEVFormerV2.tests.pcc.custom_preprocessors import (
+    custom_preprocessor_custom_ms_deformable_attention as custom_preprocessor,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

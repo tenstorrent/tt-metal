@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import copy
 import warnings
@@ -7,6 +11,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_custom_ms_deformable_attention impo
 
 
 class TtDecoderLayer:
+    """TTNN implementation of DecoderLayer"""
+
     def __init__(
         self,
         params,

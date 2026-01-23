@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -6,6 +7,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_utils import multi_scale_deformable
 
 
 class TtTemporalSelfAttention:
+    """TTNN implementation of TemporalSelfAttention"""
+
     def __init__(
         self,
         device,

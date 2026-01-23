@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -9,6 +10,8 @@ from .utils import create_conv2d_config, post_process_conv_output
 
 @dataclass
 class FPNOptimizations:
+    """TTNN implementation of FPNOptimizations"""
+
     lateral_conv: dict
     fpn_conv: dict
     extra_conv: dict
@@ -43,6 +46,8 @@ fpn_optimizations = FPNOptimizations(
 
 
 class TtFPN:
+    """TTNN implementation of FPN"""
+
     def __init__(
         self,
         conv_args,

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -8,26 +9,7 @@ from models.common.utility_functions import comp_pcc
 
 from models.experimental.BEVFormerV2.reference.ffn import FFN
 from models.experimental.BEVFormerV2.tt.ttnn_ffn import TtFFN
-
-
-def prepare_ffn_parameters(ffn_module, device):
-    class Parameters:
-        pass
-
-    params = Parameters()
-    params.linear1 = Parameters()
-    params.linear1.weight = ffn_module.layers[0][0].weight.to(torch.bfloat16)
-    params.linear1.bias = (
-        ffn_module.layers[0][0].bias.to(torch.bfloat16) if ffn_module.layers[0][0].bias is not None else None
-    )
-
-    params.linear2 = Parameters()
-    params.linear2.weight = ffn_module.layers[1].weight.to(torch.bfloat16)
-    params.linear2.bias = (
-        ffn_module.layers[1].bias.to(torch.bfloat16) if ffn_module.layers[1].bias is not None else None
-    )
-
-    return params
+from models.experimental.BEVFormerV2.tt.model_preprocessing import prepare_ffn_parameters_for_test
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -67,17 +49,10 @@ def test_ffn_pcc(
     )
     x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
 
-    model_config = {
-        "WEIGHTS_DTYPE": ttnn.bfloat16,
-        "ACTIVATIONS_DTYPE": ttnn.bfloat16,
-        "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
-    }
-
-    ffn_params = prepare_ffn_parameters(pytorch_ffn, device)
+    ffn_params = prepare_ffn_parameters_for_test(pytorch_ffn, device)
     ttnn_ffn = TtFFN(
-        parameters=ffn_params,
+        params=ffn_params,
         device=device,
-        model_config=model_config,
     )
 
     ttnn_output = ttnn_ffn(x_ttnn)

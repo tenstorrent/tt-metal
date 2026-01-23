@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -12,52 +13,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
     preprocess_model_parameters,
-    fold_batch_norm2d_into_conv2d,
 )
-
-
-def custom_preprocessor(model, name):
-    parameters = {}
-    if isinstance(model, ResNet):
-        weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.norm1)
-        parameters["conv1"] = {
-            "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-            "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-        }
-
-        for layer_idx in range(1, 5):
-            layer = getattr(model, f"layer{layer_idx}")
-            for block_idx, block in enumerate(layer):
-                prefix = f"layer{layer_idx}_{block_idx}"
-                parameters[prefix] = {}
-
-                for conv_name in ["conv1", "conv2", "conv3"]:
-                    conv = getattr(block, conv_name)
-                    norm = getattr(block, f"norm{conv_name[-1]}")
-                    w, b = fold_batch_norm2d_into_conv2d(conv, norm)
-                    parameters[prefix][conv_name] = {
-                        "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                        "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                    }
-
-                if hasattr(block, "downsample") and block.downsample is not None:
-                    ds = block.downsample
-                    if isinstance(ds, torch.nn.Sequential):
-                        conv = ds[0]
-                        norm = ds[1]
-                        w, b = fold_batch_norm2d_into_conv2d(conv, norm)
-                        parameters[prefix]["downsample"] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                        }
-
-    return parameters
+from models.experimental.BEVFormerV2.tests.pcc.custom_preprocessors import custom_preprocessor_resnet
 
 
 def create_backbone_parameters(model: ResNet, input_tensor, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=custom_preprocessor_resnet,
         device=device,
     )
     parameters.conv_args = {}

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_utils import multi_scale_deformable
 
 
 class TtCustomMSDeformableAttention:
+    """TTNN implementation of CustomMSDeformableAttention"""
+
     def __init__(
         self,
         params,

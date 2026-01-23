@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 import numpy as np
@@ -7,6 +11,8 @@ from models.experimental.BEVFormerV2.tt.ttnn_decoder import TtDecoder, TtMapDeco
 
 
 class TtPerceptionTransformer:
+    """TTNN implementation of PerceptionTransformer"""
+
     def __init__(
         self,
         params,

@@ -1,9 +1,15 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.BEVFormerV2.tt.ttnn_decoder_layer import TtDecoderLayer
 from models.experimental.BEVFormerV2.tt.ttnn_utils import inverse_sigmoid
 
 
 class TtDecoder:
+    """TTNN implementation of Decoder"""
+
     def __init__(self, num_layers, embed_dim, num_heads, params, params_branches, device):
         self.return_intermediate = True
         self.device = device
@@ -109,6 +115,8 @@ class TtDecoder:
 
 
 class TtMapDecoder:
+    """TTNN implementation of MapDecoder"""
+
     def __init__(self, num_layers, embed_dim, num_heads, params, params_branches, device):
         self.return_intermediate = True
         self.device = device
