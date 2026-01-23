@@ -43,7 +43,7 @@ void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
 void SingleHostContext::barrier() const { return; }
 
-  /* Remaining methods throw for single-host context */
+/* Sending/receiving to/from self does not make sense. So single-host context throws for these methods.*/
 void SingleHostContext::send(
     tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");
@@ -69,39 +69,62 @@ RequestPtr SingleHostContext::irecv(
     TT_THROW("method irecv is unsupported for single-host distributed contexts.");
 }
 
+/* Broadcast is a no-op for single-host context. */
 void SingleHostContext::broadcast(tt::stl::Span<std::byte> buf [[maybe_unused]], Rank root [[maybe_unused]]) const {
-    TT_THROW("method broadcast is unsupported for single-host distributed contexts.");
+    return;
 }
 
+/* In a single-host context, collectives basically only copy data between send and receive buffers. */
 void SingleHostContext::all_reduce(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    tt::stl::Span<std::byte> send_buf,
+    tt::stl::Span<std::byte> recv_buf,
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
-    TT_THROW("method all_reduce is unsupported for single-host distributed contexts.");
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
 void SingleHostContext::reduce(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    tt::stl::Span<std::byte> send_buf,
+    tt::stl::Span<std::byte> recv_buf,
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method reduce is unsupported for single-host distributed contexts.");
+    Rank root) const {
+    TT_FATAL(root == rank(), "reduce: only one rank in context, {} has to be {}", *root, *rank());
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
-void SingleHostContext::gather(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method gather is unsupported for single-host distributed contexts.");
+void SingleHostContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    TT_FATAL(root == rank(), "gather: only one rank in context, {} has to be {}", *root, *rank());
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "gather: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
-void SingleHostContext::scatter(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method scatter is unsupported for single-host distributed contexts.");
+void SingleHostContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    TT_FATAL(root == rank(), "scatter: only one rank in context, {} has to be {}", *root, *rank());
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "scatter: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
 void SingleHostContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
@@ -114,11 +137,17 @@ void SingleHostContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::S
     std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
-void SingleHostContext::all_to_all(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]], tt::stl::Span<std::byte> recv_buf [[maybe_unused]]) const {
-    TT_THROW("method all_to_all is unsupported for single-host distributed contexts.");
+void SingleHostContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_to_all: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
+/* Throw for more complex collectives and communicator management methods. */
 void SingleHostContext::reduce_scatter(
     tt::stl::Span<std::byte> send_buf [[maybe_unused]],
     tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
