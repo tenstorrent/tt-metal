@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
+import re
 
 import pytest
 import torch
@@ -19,6 +20,25 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
     TtLlamaCrossAttentionTransformerText,
 )
 from models.tt_transformers.tt.rope import get_rot_mats
+
+
+def prune_weights_90b(partial_state_dict):
+    weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
+    for k in partial_state_dict.keys():
+        found = re.search(r"\d+", k)
+        if found:
+            if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
+                partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
+
+    rename = lambda k: (
+        k.replace(".layers.0.", ".layers.1.")
+        if ".layers.0." in k
+        else k.replace(".layers.3.", ".layers.0.")
+        if ".layers.3." in k
+        else k
+    )
+
+    return {rename(k): v for k, v in partial_state_dict.items()}
 
 
 @pytest.mark.parametrize(
@@ -55,60 +75,44 @@ def test_cross_attention_transformer_text_inference(
     decode_pcc_required = 0.965
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
-    # Limit the max seqlen to 4k to avoid OOM on host
-    model_args.max_seq_len = 4096
-    kv_cache_dtype = torch.float32
-    n_iter = 10
-    if model_args.is_90b:
-        # [INFO] use bfloat16 for in reference model to avoid OOM on host
-        torch.set_default_dtype(torch.bfloat16)
-        kv_cache_dtype = torch.bfloat16
-        # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
-        n_iter = 3
-        if is_ci_env:
-            model_args.n_layers = 1
-            model_args.vision_num_cross_attention_layers = 1
-            logger.info(
-                f"Load and test {model_args.n_layers} layers and {model_args.vision_num_cross_attention_layers} cross attention layer in CI for Llama 90B model"
-            )
-
-    state_dict = model_args.load_state_dict()
-
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "text_model."
-    partial_state_dict_meta = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    if model_args.is_90b and is_ci_env:
-        # removing extra cross attention layers from the state dict as the Ref model decrees
-        x_atten_prefix = "cross_attention_layers."
-        partial_state_dict = {
-            k: v
-            for k, v in partial_state_dict.items()
-            if (not k.startswith(x_atten_prefix))
-            or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
-        }
-
-    # model_args.n_layers = 1
-    # model_args.vision_num_cross_attention_layers = 1
-    dim = model_args.dim
-    head_dim = model_args.head_dim
-    n_heads = model_args.n_heads
-    n_kv_heads = model_args.n_kv_heads
-    # model_args.multiple_of = 1
-    # reference_model_meta = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
-    # reference_model_meta.setup_cache(model_args.max_batch_size, kv_cache_dtype)
-    # reference_model_meta.load_state_dict(partial_state_dict_meta, strict=False)
-
+    model_args.is_90b = True
     model_repo_name = os.getenv("HF_MODEL")
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config._attn_implementation = "sdpa"
     config.text_config._attn_implementation = "sdpa"
-    # config.text_config.num_hidden_layers = 2
-    # config.text_config.cross_attention_layers = [0]
+
+    # Limit the max seqlen to 4k to avoid OOM on host
+    model_args.max_seq_len = 4096
+    model_dtype_hf = (
+        torch.float32
+    )  # prefereably torch.bfloat16 but unit tests may run on machines without bfloat16 support
+    n_iter = 10
+    if model_args.is_90b:
+        # [INFO] use bfloat16 for in reference model to avoid OOM on host
+        model_dtype_hf = torch.bfloat16
+        torch.set_default_dtype(model_dtype_hf)
+        # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
+        n_iter = 3
+        config.text_config.num_hidden_layers = 2
+        config.text_config.cross_attention_layers = [0]
+        model_args.n_layers = 1
+        model_args.vision_num_cross_attention_layers = 1
+        logger.info(
+            f"Load and test {model_args.n_layers} layers and {model_args.vision_num_cross_attention_layers} cross attention layer in CI for Llama 90B model"
+        )
+
+    state_dict = model_args.load_state_dict()
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = "text_model."
+    dim = model_args.dim
+    head_dim = model_args.head_dim
+    n_heads = model_args.n_heads
+    n_kv_heads = model_args.n_kv_heads
+
     reference_model = MllamaForCausalLM.from_pretrained(model_repo_name, torch_dtype="auto", config=config)  # (config)
-    reference_model.to(torch.float32)  # .to(torch.bfloat16)
+    reference_model.to(model_dtype_hf)
     reference_model.eval()
 
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
@@ -122,32 +126,16 @@ def test_cross_attention_transformer_text_inference(
         "lm_head.",
     )
     partial_state_dict.update(lm_head_weights)
-    weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
 
-    for k, v in partial_state_dict.items():
-        if isinstance(v, torch.Tensor):
-            partial_state_dict[k] = v.float()  # force float32
+    if model_args.is_90b:
+        partial_state_dict = prune_weights_90b(partial_state_dict)
 
-    # import re
+    if model_dtype_hf == torch.float32:
+        for k, v in partial_state_dict.items():
+            if isinstance(v, torch.Tensor) and v.dtype == torch.bfloat16:
+                partial_state_dict[k] = v.to(torch.float32)  # force float32
 
-    # for k in partial_state_dict.keys():
-    #     found = re.search(r"\d+", k)
-    #     if found:
-    #         if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
-    #             partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
-
-    # rename = lambda k: (
-    #     k.replace(".layers.0.", ".layers.1.")
-    #     if ".layers.0." in k
-    #     else k.replace(".layers.3.", ".layers.0.")
-    #     if ".layers.3." in k
-    #     else k
-    # )
-
-    # partial_state_dict = {rename(k): v for k, v in partial_state_dict.items()}
-
-    reference_model.load_state_dict(partial_state_dict, strict=False)
-    torch.manual_seed(41)
+    reference_model.load_state_dict(partial_state_dict)
 
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
@@ -171,21 +159,6 @@ def test_cross_attention_transformer_text_inference(
     """
     Test compute_xattn_kv_cache
     """
-    # xattn_caches = torch.stack(
-    #     [layer.compute_xattn_kv_cache(vision_tokens) for layer in reference_model_meta.cross_attention_layers]
-    # )
-    # pt_xattn_cache_chunks = torch.chunk(xattn_caches, len(reference_model_meta.cross_attention_layers), dim=0)
-    # # unstack k/v
-    # pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
-    # pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
-    # pt_xattn_cache_chunks = [
-    #     x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
-    # ]
-    # pt_xattn_cache_chunks = [
-    #     kv
-    #     for i in reference_model.model.cross_attention_layers
-    #     for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
-    # ]
     # Iterate over batch
     # Preallocate K and V caches
     tt_xattn_cache = tt_model.setup_cache(max_batch_size=batch)
@@ -196,7 +169,7 @@ def test_cross_attention_transformer_text_inference(
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
     logger.info(f"Running reference model for validation")
-    get_ref_model_logits = lambda _, *args, **kwargs: reference_model_meta.forward(*args, **kwargs)
+    get_ref_model_logits = lambda _, *args, **kwargs: reference_model.forward(*args, **kwargs)
     get_ref_model_xattn_cache = lambda _: pt_xattn_cache_chunks
 
     for i in range(n_iter):
@@ -244,25 +217,16 @@ def test_cross_attention_transformer_text_inference(
 
         TEXT_ONLY = False
 
-        # logits = get_ref_model_logits(
-        #     i,
-        #     position_ids,
-        #     h,
-        #     xattn_mask,
-        #     full_text_mask,
-        #     xattn_caches,
-        #     text_only_inference=TEXT_ONLY,
-        # )
         if mode == "prefill":
-            T = reference_model.forward(
-                attention_mask=None,
+            T = get_ref_model_logits(
+                i,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
-                cross_attention_states=vision_tokens,  # .to(torch.bfloat16),
-                cross_attention_mask=xattn_mask.squeeze(1),  # .to(torch.bfloat16),
-                full_text_row_masked_out_mask=full_text_mask,  # .to(torch.bfloat16),
+                cross_attention_states=vision_tokens.to(model_dtype_hf),
+                cross_attention_mask=xattn_mask.squeeze(1).to(model_dtype_hf),
+                full_text_row_masked_out_mask=full_text_mask.to(model_dtype_hf),
                 inputs_embeds=h,
                 use_cache=True,  # to also get past_key_values
-                cache_position=position_ids,  # torch.arange(seq_len),  # torch.tensor([T.past_key_values[0][0].shape[-2]]),
+                cache_position=position_ids,
                 output_hidden_states=False,
                 output_attentions=False,
                 return_dict=True,
@@ -273,11 +237,11 @@ def test_cross_attention_transformer_text_inference(
                 for kv in (T.past_key_values.key_cache[i], T.past_key_values.value_cache[i])
             ]
         else:
-            T = reference_model.forward(
-                attention_mask=None,
+            T = get_ref_model_logits(
+                i,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
-                cross_attention_mask=xattn_mask.squeeze(1),  # .to(torch.bfloat16),
-                full_text_row_masked_out_mask=full_text_mask,  # .to(torch.bfloat16),
+                cross_attention_mask=xattn_mask.squeeze(1).to(model_dtype_hf),
+                full_text_row_masked_out_mask=full_text_mask.to(model_dtype_hf),
                 inputs_embeds=h,
                 past_key_values=T.past_key_values,
                 use_cache=True,  # to also get past_key_values
@@ -444,7 +408,6 @@ def test_cross_attention_transformer_text_inference(
             pcc_required = decode_pcc_required
 
         passing, pcc_message = comp_pcc(logits, tt_out, pcc_required)
-        pcc_message = torch.corrcoef(torch.stack([logits.flatten(), tt_out.flatten()]))
         logger.info(comp_allclose(logits, tt_out))
         logger.info(f"PCC: {pcc_message}")
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
