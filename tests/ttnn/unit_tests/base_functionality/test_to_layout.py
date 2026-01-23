@@ -683,7 +683,7 @@ def test_shard_untilize2(device):
     assert torch.allclose(torch_tensor, output_tensor, 0.9999)
 
 
-# regression test for issue 19309: Tensor.to(Layout) does not pad tensor
+# regression test for issue 19309: Tensor.to(Layout) does not pad tensor and throws
 @pytest.mark.parametrize(
     "shape",
     [
