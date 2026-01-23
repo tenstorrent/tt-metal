@@ -1408,8 +1408,6 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     // Start background scrubbing thread to receive telemetry data
     perf_telemetry_stop_.store(false);
     perf_telemetry_thread_ = std::thread([this]() {
-        constexpr uint32_t page_size = 64;  // Same as kPerfTelemetryPageSize
-        uint32_t page_size_words = page_size / sizeof(uint32_t);
         uint64_t pages_received = 0;
 
         log_info(tt::LogMetal, "[Perf Telemetry] Receiver thread started");
@@ -1428,12 +1426,13 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
                 perf_telemetry_socket_->wait_for_pages(1);
                 uint32_t* read_ptr = perf_telemetry_socket_->get_read_ptr();
 
-                // Print first few words of telemetry data
-                std::cout << "[Perf Telemetry] Page " << pages_received << ": ";
-                for (uint32_t i = 0; i < page_size_words && i < 4; i++) {
-                    std::cout << "0x" << std::hex << read_ptr[i] << " ";
-                }
-                std::cout << std::dec << std::endl;
+                // Extract timestamps: kernel_start (words 0-1), kernel_end (words 4-5)
+                uint64_t start_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
+                uint64_t end_time = (static_cast<uint64_t>(read_ptr[4]) << 32) | read_ptr[5];
+                uint64_t duration = end_time - start_time;
+
+                std::cout << "[Perf Telemetry] Page " << pages_received << " | Start: " << start_time
+                          << " | End: " << end_time << " | Duration: " << duration << std::endl;
 
                 perf_telemetry_socket_->pop_pages(1);
                 perf_telemetry_socket_->notify_sender();
