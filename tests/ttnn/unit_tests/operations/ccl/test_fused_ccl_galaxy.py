@@ -371,14 +371,14 @@ def run_all_gather_matmul_galaxy_impl(
         num_global_cb_receivers=24,
         untilize_out=False,
     )
-    # Program config for non-fused op (uses mcast_in0, contiguous rectangular grid)
+    # Program config for non-fused op (uses mcast_in0, same grid as fused but no global CB)
     non_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=non_fused_grid,
-        in0_block_w=non_fused_in0_block_w,
+        compute_with_storage_grid_size=storage_grid,
+        in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
-        out_subblock_w=non_fused_out_subblock_w,
+        out_subblock_w=out_subblock_w,
         per_core_M=out_block_h,
-        per_core_N=non_fused_out_block_w,
+        per_core_N=out_block_w,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -492,11 +492,14 @@ def run_all_gather_matmul_galaxy_impl(
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
-            # Matmul - let ttnn auto-select program config
+            # Matmul - use sharded output like fused op for fair comparison
+            # Reshard ag_out to match fused path intermediate, then do matmul
+            ag_out_sharded = ttnn.to_memory_config(ag_out, ag_output_mem_config)
             mm_out = ttnn.linear(
-                ag_out,
-                tt_in1_tensor_non_fused,  # DRAM interleaved weights
-                memory_config=dram_interleaved,
+                ag_out_sharded,
+                tt_in1_tensor,  # Sharded weights (same as fused)
+                memory_config=mm_output_sharded_mem_config,
+                program_config=non_fused_program_config,  # mcast_in0 config (no global CB needed)
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
             )
