@@ -183,7 +183,9 @@ def run_all_gather_matmul_galaxy_impl(
     num_buffers = 8
     # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
     semaphore_cores = (
-        SUB_DEVICE_CRS if use_fused else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})
+        SUB_DEVICE_CRS
+        if use_fused
+        else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))})  # 7x10 = 70 cores
     )
     ccl_semaphore_handles = [
         ttnn.create_global_semaphore(mesh_device, semaphore_cores, 0) for _ in range(num_buffers * 2)
