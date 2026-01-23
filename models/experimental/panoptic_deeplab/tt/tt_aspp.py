@@ -338,7 +338,6 @@ class TtASPP(LightweightModule):
         # Reshape logic for aspp.project that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
         res_concat = reshape_flattened_conv_output(res_concat, batch_size=N, layer_name="aspp.project")
         logger.debug(f"TtASPP forward pass complete - output shape: {res_concat.shape}")
-        # res_dram = ttnn.to_memory_config(res_concat, ttnn.DRAM_MEMORY_CONFIG)
 
         # Deallocate L1 tensors
         for r in res:

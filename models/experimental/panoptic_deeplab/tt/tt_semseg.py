@@ -344,7 +344,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
         stage = self.decoder[aspp_feature_key]
         logger.info(f"🔷 Executing conv: decoder.{aspp_feature_key}.project_conv (ASPP)")
         y = stage["project_conv"](x)
-        # y = reshape_flattened_conv_output(y, batch_size=1, layer_name=f"decoder.{aspp_feature_key}.project_conv")
         # Keep in L1 for next stages
         y = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
         logger.debug(f"TtDeepLabV3PlusHead ASPP stage complete, output shape: {y.shape}")
@@ -432,9 +431,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
 
             # Use single conv versions - slicing handled by config, ReLU is fused
             logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.0")
-            # y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
             y_conv0 = stage["fuse_conv_0"](y)
-            # ttnn.deallocate(y)
 
             is_flattened = y_conv0.shape[1] == 1 and y_conv0.shape[2] == expected_H * expected_W
             if is_flattened:
