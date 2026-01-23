@@ -322,5 +322,6 @@ def test_deepseek_v3_mla_rope_trace_mode(
     ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
 
     # Compare with torch reference implementation
-    assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.99)
-    # TODO fix torch implementation sao it passes pcc
+    assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.9999)
+
+    logger.info(f"✓ Trace mode {op_name} test passed with correct output")
