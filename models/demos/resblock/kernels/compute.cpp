@@ -65,11 +65,11 @@ template <
     bool PopBias = false,
     bool UseCustomMM = true>
 FORCE_INLINE void matmul_with_bias_block(uint32_t bias_tile_index) {
-    constexpr uint32_t num_output_tiles = 1;
-    cb_reserve_back(CbOut, num_output_tiles);
     cb_wait_front(CbA, NumTilesK);
     cb_wait_front(CbB, NumTilesK);
     // Bias tiles are already available because MM1_FULL_CB was waited on for the preceding matmul.
+    constexpr uint32_t num_output_tiles = 1;
+    cb_reserve_back(CbOut, num_output_tiles);
 
     tile_regs_acquire();
 

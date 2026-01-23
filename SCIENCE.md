@@ -55,6 +55,13 @@
 - 2026-01-23: Switched resblock reader gather to stateful `noc_async_write_one_packet` (set state once) and precomputed receiver NOC addresses.
   - B=1, K=512, layers=4: DEVICE FW avg 8.05 us; DEVICE KERNEL avg 7.01 us.
   - B=1, K=1024, layers=4: DEVICE FW avg 11.37 us; DEVICE KERNEL avg 9.63 us.
+- 2026-01-23: Dynamically selected an mcast core adjacent to the matmul grid to reduce hop distance.
+  - Outcome: Regressed slightly vs prior best (and triggered a CoreRangeSet size assertion until reverted).
+  - B=1, K=512, layers=4: DEVICE FW avg 7.91 us; DEVICE KERNEL avg 7.10 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 12.08 us; DEVICE KERNEL avg 9.79 us.
+- 2026-01-23: Reordered `cb_reserve_back` in `matmul_with_bias_block` to wait for inputs before reserving the output CB.
+  - B=1, K=512, layers=4: DEVICE FW avg 8.04 us; DEVICE KERNEL avg 7.00 us.
+  - B=1, K=1024, layers=4: DEVICE FW avg 11.37 us; DEVICE KERNEL avg 9.62 us.
 
 ## Knowledge
 - Resblock uses five kernels in `models/demos/resblock/kernels/` with compute in `compute.cpp` and data movement in `reader.cpp`/`writer.cpp` + mcast.
@@ -72,3 +79,6 @@
 - Forcing a `#pragma unroll` on the per-layer loop did not improve performance in the current configuration.
 - Enabling `math_approx_mode=True` yielded a very small improvement at K=1024 (no change at K=512); this seems safe for the current matmul+relu+bias path but should be kept in mind if future SFPU ops are added.
 - The reader gather path benefits from stateful NOC writes: using `noc_async_write_one_packet_set_state` once and `noc_async_write_one_packet_with_state` per gather cut ~0.15 us (K=512) / ~0.13 us (K=1024) from kernel duration.
+- `CoreRangeSet.size()` reports the number of ranges, not the number of cores. When placing mcast cores adjacent to the matmul grid, the union can split into multiple ranges even if the core is disjoint; use `num_cores()` for cardinality checks.
+- Moving the mcast core closer to the matmul grid (adjacent column) did not improve performance for K=512/1024; it slightly regressed kernel duration.
+- Reserving the output CB after input waits in the bias matmul avoids early output backpressure; this yielded a small but consistent kernel-duration reduction for K=512/1024.
