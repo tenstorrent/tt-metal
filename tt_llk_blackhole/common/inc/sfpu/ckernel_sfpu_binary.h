@@ -123,28 +123,7 @@ inline void _calculate_sfpu_binary_(const uint dst_index_in0, const uint dst_ind
         }
         else if constexpr (BINOP == BinaryOp::DIV)
         {
-            v_if (in1 == 0)
-            {
-                v_if (in0 == 0)
-                {
-                    result = std::numeric_limits<float>::quiet_NaN();
-                }
-                v_else
-                {
-                    result = std::numeric_limits<float>::infinity();
-                    result = sfpi::setsgn(result, in0);
-                }
-                v_endif;
-            }
-            v_elseif (in0 == in1)
-            {
-                result = sfpi::vConst1;
-            }
-            v_else
-            {
-                result = in0 * _sfpu_reciprocal_<2>(in1);
-            }
-            v_endif;
+            result = in0 * _sfpu_reciprocal_<2>(in1);
         }
         else if constexpr (BINOP == BinaryOp::RSUB)
         {
