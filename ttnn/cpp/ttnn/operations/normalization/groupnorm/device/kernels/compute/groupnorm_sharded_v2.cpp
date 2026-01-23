@@ -234,8 +234,7 @@ void MAIN {
             cb_push_back(cb_ex2pe, 1);
 
             // reduce only one final tile
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                compute_kernel_lib::ReduceCBs::of(cb_ex2pe, cb_scaler, cb_ex_partial),
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe, cb_scaler, cb_ex_partial>(
                 compute_kernel_lib::TileGrid::single());
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
@@ -243,10 +242,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
                     compute_kernel_lib::policies::StreamingPolicy,
-                    compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_ex_external, cb_scaler_global, cb_ex_global),
-                    compute_kernel_lib::TileGrid::single());
+                    compute_kernel_lib::policies::ReconfigNonePolicy>(compute_kernel_lib::TileGrid::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -331,8 +331,7 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
 
-            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
-                compute_kernel_lib::ReduceCBs::of(cb_ex2pe, cb_scaler, cb_ex_partial),
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe, cb_scaler, cb_ex_partial>(
                 compute_kernel_lib::TileGrid::single());
 
             cb_wait_front(cb_ex_partial, 1);
@@ -340,10 +339,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
                     compute_kernel_lib::policies::StreamingPolicy,
-                    compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_ex_external, cb_scaler_global, cb_ex_global),
-                    compute_kernel_lib::TileGrid::single());
+                    compute_kernel_lib::policies::ReconfigNonePolicy>(compute_kernel_lib::TileGrid::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }

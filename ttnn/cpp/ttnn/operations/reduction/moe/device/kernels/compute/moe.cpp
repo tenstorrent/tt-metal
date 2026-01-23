@@ -162,8 +162,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim>
-void reduce_c(uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb>
+void reduce_c(uint32_t rows, uint32_t cols) {
     // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -171,8 +171,9 @@ void reduce_c(uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows,
     // Postcondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::policies::PersistentPolicy>(
-        compute_kernel_lib::ReduceCBs::of(in_cb, scale_cb, out_cb), compute_kernel_lib::TileGrid::of(rows, cols));
+    compute_kernel_lib::
+        reduce<pool_type, reduce_dim, in_cb, scale_cb, out_cb, compute_kernel_lib::policies::PersistentPolicy>(
+            compute_kernel_lib::TileGrid::of(rows, cols));
 
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
@@ -379,9 +380,9 @@ void MAIN {
     eqz_block_inplace(output_ind_cb_index, Ht * Kt);
 
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt);
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max>(Ht, Kt);
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt);
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum>(Ht, Kt);
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
@@ -389,6 +390,6 @@ void MAIN {
     mul_block_inplace(values_cb_index, output_ind_cb_index, Ht * Kt);
 
     // final sum
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW>(values_cb_index, scale_cb_index, out_cb_index, Ht, Kt);
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index>(Ht, Kt);
 }
 }  // namespace NAMESPACE

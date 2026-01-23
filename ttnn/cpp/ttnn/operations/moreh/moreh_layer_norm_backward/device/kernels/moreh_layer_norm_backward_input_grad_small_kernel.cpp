@@ -274,8 +274,8 @@ void MAIN {
 
         // Compute cb_dysum
         // Sum[dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_dyadd, cb_scaler, cb_dysum), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, cb_dysum>(
+            compute_kernel_lib::TileGrid::single());
 
         // Compute cb_ydy and cb_ydyadd
         constexpr auto cb_ydy = cb_tmp2;
@@ -335,8 +335,8 @@ void MAIN {
 
         // Compute cb_ydysum
         // Sum[y * dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_ydyadd, cb_scaler, cb_ydysum), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, cb_ydysum>(
+            compute_kernel_lib::TileGrid::single());
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)

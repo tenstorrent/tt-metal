@@ -23,9 +23,11 @@ void calc_numeric_stable(
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
+        cb_in,
+        cb_bcast_scaler,
+        cb_max,
         compute_kernel_lib::policies::PersistentPolicy,
-        compute_kernel_lib::policies::ReconfigInputPolicy>(
-        compute_kernel_lib::ReduceCBs::of(cb_in, cb_bcast_scaler, cb_max), compute_kernel_lib::TileGrid::row(Wt));
+        compute_kernel_lib::policies::ReconfigInputPolicy>(compute_kernel_lib::TileGrid::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -259,16 +261,20 @@ void MAIN {
 
         // SUM reduce with reciprocal operation using PERSISTENT mode
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
-                compute_kernel_lib::ReduceCBs::of(cb_exps, cb_bcast_scaler, cb_recipsumexps),
-                compute_kernel_lib::TileGrid::row(Wt),
-                compute_kernel_lib::TileLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t) {
-                    recip_tile_init();
-                    recip_tile(0);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::policies::PersistentPolicy>(
+            compute_kernel_lib::TileGrid::row(Wt),
+            compute_kernel_lib::TileLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t) {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 

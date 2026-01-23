@@ -166,8 +166,8 @@ void MAIN {
          * E[x] - reduce single pre-accumulated tile
          * cb_ex
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_xsum, cb_scaler, cb_ex), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xsum, cb_scaler, cb_ex>(
+            compute_kernel_lib::TileGrid::single());
 
         cb_wait_front(cb_ex, onetile);
         if (mean_has_value) {
@@ -290,8 +290,8 @@ void MAIN {
          * E[(x-E[x])^2 = Var[x] - reduce single pre-accumulated tile
          * cb_var
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_xmm2sum, cb_scaler, cb_var), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, cb_var>(
+            compute_kernel_lib::TileGrid::single());
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))

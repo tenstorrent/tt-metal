@@ -43,19 +43,19 @@
  *   // Library waits/pops each tile individually. No manual CB management needed!
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  *   // Reduce types and dimensions must now be specified explicitly as template parameters
- *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  */
 
@@ -63,21 +63,6 @@ namespace compute_kernel_lib {
 
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 // Policy structs are provided by reduce_helper_policies.hpp
-
-/**
- * @brief Circular buffer specification for reduce operations
- *
- * Groups the three CB arguments (input, scaler, output) into a single struct
- * for self-documenting code and preventing argument-swapping bugs.
- */
-struct ReduceCBs {
-    uint32_t input;   // Input CB containing tiles to reduce
-    uint32_t scaler;  // CB containing scaler tile
-    uint32_t output;  // Output CB for reduced tiles
-
-    // Factory method for convenient inline construction
-    static constexpr ReduceCBs of(uint32_t in, uint32_t scaler, uint32_t out) { return {in, scaler, out}; }
-};
 
 /**
  * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
@@ -339,6 +324,9 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
+ * @tparam icb Input circular buffer containing tiles to reduce
+ * @tparam icb_scaler Circular buffer containing scaler tile
+ * @tparam ocb Output circular buffer for reduced tiles
  * @tparam InputPolicy Input handling policy - defaults to policies::StreamingPolicy
  *         Available policies: StreamingPolicy, StreamingBatchedPolicy, PreloadedPolicy, PersistentPolicy
  * @tparam ReconfigPolicy Data format reconfiguration policy - defaults to policies::ReconfigBothPolicy
@@ -348,9 +336,6 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
- * @param icb Input circular buffer containing tiles to reduce
- * @param icb_scaler Circular buffer containing scaler tile
- * @param ocb Output circular buffer for reduced tiles
  * @param grid Tile grid dimensions (rows x cols x batches)
  *             Use TileGrid::of(r, c, b), TileGrid::row(c), TileGrid::col(r), or TileGrid::single()
  * @param layout Tile memory layout specification for PreloadedPolicy/PersistentPolicy (default: contiguous)
@@ -358,51 +343,54 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce type and dimension must be specified explicitly as template parameters
- *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::single());
  *
  * @example
  *   // PreloadedPolicy: caller manages wait/pop, with custom stride between rows
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy>(
- *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileGrid::of(Ht, Wt, NC),
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, cb_in, cb_scaler, cb_out,
+ *                              compute_kernel_lib::policies::PreloadedPolicy>(
+ *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC),
  *       compute_kernel_lib::TileLayout::with_row_stride(input_stride));
  *
  * @example
  *   // PersistentPolicy: tiles persist for reuse (ideal for softmax pattern)
  *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
- *   compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW,
+ *   compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_values, cb_scaler, cb_max,
  *                              compute_kernel_lib::policies::PersistentPolicy>(
- *       cb_values, cb_scaler, cb_max, compute_kernel_lib::TileGrid::of(Ht, Wt));
+ *       compute_kernel_lib::TileGrid::of(Ht, Wt));
  *   // cb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
  *   // StreamingBatchedPolicy (optimal when tiles already in CB, symmetric wait/pop)
  *   // Library waits for all Wt tiles per row, processes them, then pops all Wt tiles
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
- *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, cb_in, cb_scaler, cb_out,
+ *                              compute_kernel_lib::policies::StreamingBatchedPolicy>(
+ *       compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   // Use InitOnlyPolicy since lambda calls reduce_uninit() before recip
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, cb_exps, cb_scaler, cb_out,
+ *       compute_kernel_lib::policies::PreloadedPolicy,
  *       compute_kernel_lib::policies::ReconfigBothPolicy,
  *       compute_kernel_lib::policies::InitOnlyPolicy>(
- *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileGrid::row(Wt),
+ *       compute_kernel_lib::TileGrid::row(Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
  *       compute_kernel_lib::NoAccumulation{},
  *       [](uint32_t) {
@@ -414,8 +402,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * @example
  *   // REDUCE_COL with post_reduce_op: apply recip_tile to each column result
  *   // dst_idx indicates which DEST register contains the column result (0 to current_chunk-1)
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
- *       cb_in, cb_scaler, cb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL, cb_in, cb_scaler, cb_out>(
  *       compute_kernel_lib::TileGrid::of(Ht, Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
  *       compute_kernel_lib::NoAccumulation{},
@@ -427,21 +414,19 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
+    uint32_t icb,
+    uint32_t icb_scaler,
+    uint32_t ocb,
     typename InputPolicy = policies::StreamingPolicy,
     typename ReconfigPolicy = policies::ReconfigBothPolicy,
     typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
-    ReduceCBs cbs,
     TileGrid grid,
     TileLayout layout = TileLayout::contiguous(),
     AccumT accum = AccumT{},
     PostReduceOp post_reduce_op = PostReduceOp{}) {
-    // Extract CB indices for cleaner code
-    const uint32_t icb = cbs.input;
-    const uint32_t icb_scaler = cbs.scaler;
-    const uint32_t ocb = cbs.output;
     // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumT>;
     // Extract grid components

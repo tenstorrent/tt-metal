@@ -133,8 +133,8 @@ void MAIN {
             }
         }
         // reduce f(x)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_cal, cb_one, cb_reduce), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_cal, cb_one, cb_reduce>(
+            compute_kernel_lib::TileGrid::single());
 
         tile_regs_acquire();
 

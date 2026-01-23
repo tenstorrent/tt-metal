@@ -129,9 +129,11 @@ void MAIN {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
+        cb_x2,
+        cb_scaler,
+        cb_ex_partial2,
         compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::policies::ReconfigInputPolicy>(
-        compute_kernel_lib::ReduceCBs::of(cb_x2, cb_scaler, cb_ex_partial2),
         compute_kernel_lib::TileGrid::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
@@ -148,9 +150,11 @@ void MAIN {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
+            cb_ex_external2,
+            cb_scaler_global,
+            cb_reduction_out,
             compute_kernel_lib::policies::StreamingPolicy,
             compute_kernel_lib::policies::ReconfigInputPolicy>(
-            compute_kernel_lib::ReduceCBs::of(cb_ex_external2, cb_scaler_global, cb_reduction_out),
             compute_kernel_lib::TileGrid::of(num_tiles_per_allgather_worker, num_blocks_reduce));
     }
 
@@ -173,9 +177,11 @@ void MAIN {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
+                cb_stats,
+                post_cb_scaler_global,
+                cb_var,
                 compute_kernel_lib::policies::StreamingPolicy,
                 compute_kernel_lib::policies::ReconfigNonePolicy>(
-                compute_kernel_lib::ReduceCBs::of(cb_stats, post_cb_scaler_global, cb_var),
                 compute_kernel_lib::TileGrid::row(num_distributed_blocks));
 
             // 1/[sqrt(Var + eps)],

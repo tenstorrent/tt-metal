@@ -37,19 +37,20 @@ void MAIN {
         if (Wt == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                compute_kernel_lib::ReduceCBs::of(cb_tmp, cb_bcast_scaler, cb_max),
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_bcast_scaler, cb_max>(
                 compute_kernel_lib::TileGrid::single());
         } else {
-            compute_kernel_lib::
-                reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_in0, cb_bcast_scaler, cb_max),
-                    compute_kernel_lib::TileGrid::row(Wt - 1));
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                cb_in0,
+                cb_bcast_scaler,
+                cb_max,
+                compute_kernel_lib::policies::PersistentPolicy>(compute_kernel_lib::TileGrid::row(Wt - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                compute_kernel_lib::ReduceCBs::of(cb_tmp, cb_bcast_scaler, cb_max),
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_bcast_scaler, cb_max>(
                 compute_kernel_lib::TileGrid::single(),
                 compute_kernel_lib::TileLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
@@ -107,28 +108,36 @@ void MAIN {
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
-                compute_kernel_lib::ReduceCBs::of(cb_exps, cb_bcast_scaler, cb_recipsumexps),
-                compute_kernel_lib::TileGrid::row(Wt),
-                compute_kernel_lib::TileLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    log_tile_init();
-                    log_tile(dst_idx);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::policies::StreamingBatchedPolicy>(
+            compute_kernel_lib::TileGrid::row(Wt),
+            compute_kernel_lib::TileLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                log_tile_init();
+                log_tile(dst_idx);
+            });
 #else
         // 1/sum - keep tiles for subsequent multiplication
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
-                compute_kernel_lib::ReduceCBs::of(cb_exps, cb_bcast_scaler, cb_recipsumexps),
-                compute_kernel_lib::TileGrid::row(Wt),
-                compute_kernel_lib::TileLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t dst_idx) {
-                    recip_tile_init();
-                    recip_tile(dst_idx);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::policies::PersistentPolicy>(
+            compute_kernel_lib::TileGrid::row(Wt),
+            compute_kernel_lib::TileLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t dst_idx) {
+                recip_tile_init();
+                recip_tile(dst_idx);
+            });
 #endif
 
         // compute final result

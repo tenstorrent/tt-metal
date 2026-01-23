@@ -21,9 +21,10 @@ void MAIN {
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_2,
+        tt::CBIndex::c_3,
         compute_kernel_lib::policies::StreamingPolicy,
-        compute_kernel_lib::policies::ReconfigNonePolicy>(
-        compute_kernel_lib::ReduceCBs::of(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3),
-        compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
+        compute_kernel_lib::policies::ReconfigNonePolicy>(compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
 }
 }  // namespace NAMESPACE

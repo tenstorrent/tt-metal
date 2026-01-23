@@ -305,13 +305,13 @@ void MAIN {
 
         // Compute cb_dysum
         // Sum[dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_dyadd, cb_scaler, cb_dysum), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, cb_dysum>(
+            compute_kernel_lib::TileGrid::single());
 
         // Compute cb_ydysum
         // Sum[y * dy]
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_ydyadd, cb_scaler, cb_ydysum), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, cb_ydysum>(
+            compute_kernel_lib::TileGrid::single());
 
         // Compute cb_recip_nrstd
         // rstd / n -> cb_tmp3

@@ -70,8 +70,7 @@ void MAIN {
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            compute_kernel_lib::ReduceCBs::of(stats_cb, reduce_scalar_cb, reduce_result_cb),
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
             compute_kernel_lib::TileGrid::row(stats_tiles_cols));
 
         /*

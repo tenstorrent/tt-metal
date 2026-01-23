@@ -128,8 +128,8 @@ void MAIN {
             }
         }
         // Sum(|x|^p)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            compute_kernel_lib::ReduceCBs::of(cb_xpowadd, cb_one, cb_xpowsum), compute_kernel_lib::TileGrid::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(
+            compute_kernel_lib::TileGrid::single());
 
         power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
     }

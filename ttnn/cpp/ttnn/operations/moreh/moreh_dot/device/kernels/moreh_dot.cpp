@@ -37,10 +37,11 @@ void MAIN {
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
+            tt::CBIndex::c_24,
+            tt::CBIndex::c_2,
+            is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
             compute_kernel_lib::policies::StreamingPolicy,
             compute_kernel_lib::policies::ReconfigNonePolicy>(
-            compute_kernel_lib::ReduceCBs::of(
-                tt::CBIndex::c_24, tt::CBIndex::c_2, is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25),
             compute_kernel_lib::TileGrid::single(),
             compute_kernel_lib::TileLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));

@@ -87,8 +87,7 @@ void MAIN {
                 }
 
                 auto output_cb = last_out ? cb_out0 : cb_intermed1;
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    compute_kernel_lib::ReduceCBs::of(cb_reduce, cb_scaler, output_cb),
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_reduce, cb_scaler, output_cb>(
                     compute_kernel_lib::TileGrid::single(),
                     compute_kernel_lib::TileLayout::contiguous(),
                     compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done));

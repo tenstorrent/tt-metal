@@ -163,9 +163,11 @@ void reduce_c() {
     compute_kernel_lib::reduce<
         pool_type,
         reduce_dim,
+        in0_cb,
+        scale_cb,
+        out_cb,
         compute_kernel_lib::policies::PersistentPolicy,
-        compute_kernel_lib::policies::ReconfigInputPolicy>(
-        compute_kernel_lib::ReduceCBs::of(in0_cb, scale_cb, out_cb), compute_kernel_lib::TileGrid::of(rows, cols));
+        compute_kernel_lib::policies::ReconfigInputPolicy>(compute_kernel_lib::TileGrid::of(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

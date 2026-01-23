@@ -314,9 +314,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_x,
+                    cb_scaler,
+                    cb_ex_partial,
                     compute_kernel_lib::policies::PreloadedPolicy,
                     compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_x, cb_scaler, cb_ex_partial),
                     compute_kernel_lib::TileGrid::of(out_block_h_actual, block_w));
                 cb_pop_front(cb_x, out_block_hw_normal);
 
@@ -328,9 +330,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex_global,
                     compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_ex_external, cb_scaler_global, cb_ex_global),
                     compute_kernel_lib::TileGrid::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex, 1);
@@ -442,9 +446,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_xmm,
+                    cb_scaler,
+                    cb_ex2_partial,
                     compute_kernel_lib::policies::PreloadedPolicy,
                     compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_xmm, cb_scaler, cb_ex2_partial),
                     compute_kernel_lib::TileGrid::of(out_block_h_actual, block_w));
                 cb_pop_front(cb_xmm, out_block_hw_normal);
             }
@@ -454,9 +460,11 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
+                    cb_ex_external,
+                    cb_scaler_global,
+                    cb_ex2_global,
                     compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::policies::ReconfigNonePolicy>(
-                    compute_kernel_lib::ReduceCBs::of(cb_ex_external, cb_scaler_global, cb_ex2_global),
                     compute_kernel_lib::TileGrid::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_reserve_back(cb_ex2, 1);
