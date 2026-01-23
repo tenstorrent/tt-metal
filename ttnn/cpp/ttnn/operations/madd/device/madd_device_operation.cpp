@@ -35,8 +35,6 @@ static void validate_operand(const Tensor& x) {
         x.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "Only interleaved memory layout is supported for tiled input");
     TT_FATAL(x.padded_shape() == x.logical_shape(), "Only tile aligned tile input is currently supported");
-
-    TT_FATAL(x.dtype() == tt::tt_metal::DataType::FLOAT32, "Only float32 type supported, found {}", x.dtype());
 }
 
 void MAddOperation::validate_on_program_cache_miss(
