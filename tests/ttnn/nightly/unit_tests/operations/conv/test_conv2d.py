@@ -3167,8 +3167,8 @@ def test_conv2d_model_fruit(
         (1, 4, 320, 64, 64,     ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
 
         # regular 3x3 kernel
-        (1, 320, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
         (1, 320, 320, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
+        (1, 320, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
         (1, 640, 640, 32, 32,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
         (1, 640, 1280, 16, 16,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
         (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, True, ttnn.MathFidelity.HiFi2, False, False, False, False),
