@@ -40,7 +40,6 @@ void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload
  *
  * Call this function when you want to make a new Inspector RPC channel available for use.
  */
-void RegisterInspectorRpcChannel(
-    const std::string& name, tt::tt_metal::inspector::rpc::InspectorChannel::Client channel);
+void RegisterInspectorRpcChannel(std::string_view name, tt::tt_metal::inspector::rpc::InspectorChannel::Client channel);
 
 }  // namespace tt::tt_metal::experimental::inspector

@@ -538,8 +538,8 @@ void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload
 
 // API function to register an Inspector RPC channel
 void RegisterInspectorRpcChannel(
-    const std::string& name, tt::tt_metal::inspector::rpc::InspectorChannel::Client channel) {
-    Inspector::get_rpc_server().registerChannel(name, kj::mv(channel));
+    std::string_view name, tt::tt_metal::inspector::rpc::InspectorChannel::Client channel) {
+    Inspector::get_rpc_server().registerChannel(std::string(name), kj::mv(channel));
 }
 
 }  // namespace experimental::inspector
