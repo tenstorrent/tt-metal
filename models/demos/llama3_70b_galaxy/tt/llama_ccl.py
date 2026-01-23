@@ -449,7 +449,9 @@ class TT_CCL:
         """
         Creates double buffered intermediate tensors for fused all_gather + matmul operation.
 
-        For FF2 path: all_gather output shape is [8, 4, 32, 3584] (gathered hidden_dim)
+        For FF2 path:
+        - Input per device: [1, 1, 32, K_per_device] where K_per_device = hidden_dim/4 = 3584
+        - After all_gather along axis 1 (4 devices): [1, 1, 32, K_per_device * 4] = [1, 1, 32, 14336]
 
         The fused llama_all_gather_matmul_async requires the intermediate buffer to be sharded
         across cluster_shape[cluster_axis] cores (4 cores for axis=1).
@@ -461,7 +463,14 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 1 (FF2 path gathers along this axis)
         cluster_axis = 1
-        hidden_dim = 3584 if not self.is_qwen else 3200
+
+        # K_per_device is the width per device before all_gather
+        # For Llama 70B: hidden_size/4 = 14336/4 = 3584
+        # For Qwen: hidden_size/4 = 12800/4 = 3200
+        K_per_device = 3584 if not self.is_qwen else 3200
+
+        # After all_gather, the gathered width = K_per_device * num_devices_in_gather_dim
+        gathered_width = K_per_device * cluster_shape[cluster_axis]  # 3584 * 4 = 14336
 
         # Fused all_gather_matmul requires intermediate buffer sharded across cluster_shape[cluster_axis] cores
         # Use cores (3,0) to (3,3) - 4 cores matching the gather dimension
@@ -469,8 +478,12 @@ class TT_CCL:
         intermediate_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, intermediate_num_cores - 1))]
         )
-        # Shard width = hidden_dim / num_cores, rounded up to tile size
-        shard_width = ((hidden_dim + intermediate_num_cores - 1) // intermediate_num_cores + 31) // 32 * 32
+
+        # Shard width = gathered_width / num_cores, rounded up to tile size
+        # Each core holds one "slice" of the gathered data
+        shard_width_raw = (gathered_width + intermediate_num_cores - 1) // intermediate_num_cores
+        shard_width = ((shard_width_raw + 31) // 32) * 32  # Round up to tile size
+
         intermediate_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -483,7 +496,7 @@ class TT_CCL:
 
         for _ in range(self.num_cbs):
             tt_buffer = ttnn.from_torch(
-                torch.zeros((*cluster_shape, M, hidden_dim)),
+                torch.zeros((*cluster_shape, M, gathered_width)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
