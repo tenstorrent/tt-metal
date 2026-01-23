@@ -5,7 +5,6 @@
 #include "parallel_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
 
 #include "parallel.hpp"
@@ -23,7 +22,7 @@ using ttnn::experimental::prim::BranchDescriptor;
 //=============================================================================
 
 void bind_parallel_operation(nb::module_& mod) {
-    // Bind BranchDescriptor as an opaque type
+    // Bind BranchDescriptor with value semantics
     // BranchDescriptor instances are created via operation-specific branch() methods
     // e.g., ttnn.rms_norm.branch(input, cores, epsilon=1e-5, weight=w)
     nb::class_<BranchDescriptor>(
@@ -39,13 +38,22 @@ void bind_parallel_operation(nb::module_& mod) {
             Example:
                 >>> branch = ttnn.rms_norm.branch(input, cores, epsilon=1e-5, weight=w)
                 >>> results = ttnn.parallel([branch1, branch2])
-        )doc");
+        )doc")
+        .def_prop_ro("operation_name", &BranchDescriptor::operation_name, "The name of the underlying operation")
+        .def(
+            "__bool__", [](const BranchDescriptor& self) { return bool(self); }, "Check if the descriptor is valid")
+        .def("__repr__", [](const BranchDescriptor& self) {
+            if (self) {
+                return fmt::format("<BranchDescriptor: {}>", self.operation_name());
+            }
+            return std::string("<BranchDescriptor: empty>");
+        });
 
     // Bind the parallel execution function
     mod.def(
         "parallel",
-        [](const std::vector<std::shared_ptr<BranchDescriptor>>& branches) {
-            return ExecuteParallel::invoke(std::vector<std::shared_ptr<BranchDescriptor>>(branches));
+        [](const std::vector<BranchDescriptor>& branches) {
+            return ExecuteParallel::invoke(std::vector<BranchDescriptor>(branches));
         },
         nb::arg("branches"),
         R"doc(
@@ -80,7 +88,7 @@ void bind_parallel_operation(nb::module_& mod) {
 
             Supported Operations:
                 - ttnn.rms_norm.branch() - RMS normalization
-                - ttnn.layer_norm.branch() - Layer normalization (when implemented)
+                - ttnn.layer_norm.branch() - Layer normalization
                 - Additional operations can be added by implementing a branch() method
 
             Notes:

@@ -50,7 +50,7 @@ struct ParallelDeviceOperation {
 
 namespace ttnn::prim {
 
-// Launch the parallel device operation
-std::vector<std::vector<Tensor>> parallel(const ttnn::experimental::prim::ParallelParams& operation_attributes);
+// Launch the parallel device operation (takes ownership via move)
+std::vector<std::vector<Tensor>> parallel(ttnn::experimental::prim::ParallelParams operation_attributes);
 
 }  // namespace ttnn::prim

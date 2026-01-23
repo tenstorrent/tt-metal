@@ -13,7 +13,7 @@
 
 // Forward declaration for parallel branch support
 namespace ttnn::experimental::prim {
-struct BranchDescriptor;
+class BranchDescriptor;
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -30,9 +30,9 @@ struct ExecuteRMSNorm {
         const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-    // Create a branch descriptor for parallel execution
-    // Usage: auto branch = ttnn::rms_norm.branch(input, 1e-5, weight, cores);
-    static std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> branch(
+    // Create a branch descriptor for parallel execution (returns by value)
+    // Usage: auto branch = ttnn::rms_norm.branch(input, cores, 1e-5, weight);
+    static ttnn::experimental::prim::BranchDescriptor branch(
         const ttnn::Tensor& input_tensor,
         const tt::tt_metal::CoreRangeSet& cores,
         float epsilon = 1e-12,

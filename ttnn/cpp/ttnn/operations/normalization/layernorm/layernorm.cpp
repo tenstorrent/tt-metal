@@ -55,7 +55,7 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
         kernel_config_val);
 }
 
-std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> ExecuteLayerNorm::branch(
+ttnn::experimental::prim::BranchDescriptor ExecuteLayerNorm::branch(
     const ttnn::Tensor& input_tensor,
     const tt::tt_metal::CoreRangeSet& cores,
     float epsilon,

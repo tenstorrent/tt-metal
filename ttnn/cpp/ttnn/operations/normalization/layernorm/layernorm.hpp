@@ -11,7 +11,7 @@
 
 // Forward declaration for parallel branch support
 namespace ttnn::experimental::prim {
-struct BranchDescriptor;
+class BranchDescriptor;
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -28,8 +28,8 @@ struct ExecuteLayerNorm {
         const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-    // Create a branch descriptor for parallel execution
-    static std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> branch(
+    // Create a branch descriptor for parallel execution (returns by value)
+    static ttnn::experimental::prim::BranchDescriptor branch(
         const ttnn::Tensor& input_tensor,
         const tt::tt_metal::CoreRangeSet& cores,
         float epsilon = 1e-12,

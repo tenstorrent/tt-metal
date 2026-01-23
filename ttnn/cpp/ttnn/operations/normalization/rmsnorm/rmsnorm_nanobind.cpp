@@ -6,7 +6,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/shared_ptr.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "rmsnorm.hpp"
@@ -104,7 +103,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()});
 
     // Add branch() method for parallel execution support
-    // Using a lambda to wrap the static function since py_operation.def() expects a method with 'self'
+    // Returns BranchDescriptor by value (move semantics)
     py_operation.def(
         "branch",
         [](const std::decay_t<decltype(ttnn::rms_norm)>& /*self*/,

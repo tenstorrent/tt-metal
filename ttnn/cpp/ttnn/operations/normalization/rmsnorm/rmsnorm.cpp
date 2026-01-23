@@ -64,7 +64,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
         ttnn::prim::LayerNormType::RMSNORM);
 }
 
-std::shared_ptr<ttnn::experimental::prim::BranchDescriptor> ExecuteRMSNorm::branch(
+ttnn::experimental::prim::BranchDescriptor ExecuteRMSNorm::branch(
     const ttnn::Tensor& input_tensor,
     const tt::tt_metal::CoreRangeSet& cores,
     float epsilon,

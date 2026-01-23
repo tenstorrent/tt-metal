@@ -27,8 +27,8 @@ void ParallelDeviceOperation::validate_on_program_cache_miss(
     // Validate that core ranges don't overlap between branches
     for (size_t i = 0; i < operation_attributes.branches.size(); ++i) {
         for (size_t j = i + 1; j < operation_attributes.branches.size(); ++j) {
-            const auto& cores_i = operation_attributes.branches[i]->core_range;
-            const auto& cores_j = operation_attributes.branches[j]->core_range;
+            const auto& cores_i = operation_attributes.branches[i].core_range();
+            const auto& cores_j = operation_attributes.branches[j].core_range();
 
             auto intersection = cores_i.intersection(cores_j);
             TT_FATAL(
@@ -42,7 +42,7 @@ void ParallelDeviceOperation::validate_on_program_cache_miss(
 
     // Validate each individual branch
     for (const auto& branch : operation_attributes.branches) {
-        branch->check_on_cache_miss();
+        branch.check_on_cache_miss();
     }
 }
 
@@ -52,7 +52,7 @@ ParallelDeviceOperation::spec_return_value_t ParallelDeviceOperation::compute_ou
     specs.reserve(operation_attributes.branches.size());
 
     for (const auto& branch : operation_attributes.branches) {
-        specs.push_back(branch->get_output_specs());
+        specs.push_back(branch.get_output_specs());
     }
 
     return specs;
@@ -64,8 +64,7 @@ ParallelDeviceOperation::tensor_return_value_t ParallelDeviceOperation::create_o
     outputs.reserve(operation_attributes.branches.size());
 
     for (const auto& branch : operation_attributes.branches) {
-        // Compute output specs, use for creating output tensors
-        outputs.push_back(branch->make_output_tensors());
+        outputs.push_back(branch.make_output_tensors());
     }
 
     return outputs;
@@ -74,15 +73,14 @@ ParallelDeviceOperation::tensor_return_value_t ParallelDeviceOperation::create_o
 tt::stl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     // Hash together the operation type, number of branches, and core ranges
-    // Each unique configuration of branches and core ranges should have a distinct hash
     tt::stl::hash::hash_t combined_hash = typeid(ParallelDeviceOperation).hash_code();
 
     for (const auto& branch : operation_attributes.branches) {
         // Hash the branch's operation type
-        combined_hash = tt::stl::hash::hash_objects(combined_hash, branch->type_info().hash_code());
+        combined_hash = tt::stl::hash::hash_objects(combined_hash, branch.type_info().hash_code());
 
         // Hash the core range to ensure different core configurations get different programs
-        for (const auto& range : branch->core_range.ranges()) {
+        for (const auto& range : branch.core_range().ranges()) {
             combined_hash = tt::stl::hash::hash_objects(
                 combined_hash, range.start_coord.x, range.start_coord.y, range.end_coord.x, range.end_coord.y);
         }
@@ -95,11 +93,11 @@ tt::stl::hash::hash_t ParallelDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-std::vector<std::vector<Tensor>> parallel(const ttnn::experimental::prim::ParallelParams& operation_attributes) {
+std::vector<std::vector<Tensor>> parallel(ttnn::experimental::prim::ParallelParams operation_attributes) {
     using OperationType = ttnn::experimental::prim::ParallelDeviceOperation;
     auto tensor_args = OperationType::tensor_args_t{};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(std::move(operation_attributes), tensor_args);
 }
 
 }  // namespace ttnn::prim

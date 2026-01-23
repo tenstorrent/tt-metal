@@ -20,58 +20,167 @@
 
 namespace ttnn::experimental::prim {
 
-// Forward declaration
-struct BranchDescriptor;
+// =============================================================================
+// BranchDescriptor - Value semantics with internal type erasure
+// =============================================================================
+//
+// This class uses the "type erasure" pattern to provide polymorphic behavior
+// with value semantics. Instead of exposing an abstract base class and using
+// shared_ptr everywhere, BranchDescriptor is a regular value type that can
+// be stored in std::vector<BranchDescriptor>.
+//
+// Copies are cheap (shared ownership via internal shared_ptr), making this
+// compatible with frameworks that require copyable types while still
+// presenting a clean value-semantics API.
+//
+
+class BranchDescriptor {
+public:
+    // =========================================================================
+    // Constructors and assignment
+    // =========================================================================
+
+    // Default constructor - creates an empty/invalid descriptor
+    BranchDescriptor() = default;
+
+    // Copy and move are all allowed - copies share the underlying data
+    BranchDescriptor(BranchDescriptor&&) noexcept = default;
+    BranchDescriptor& operator=(BranchDescriptor&&) noexcept = default;
+    BranchDescriptor(const BranchDescriptor&) = default;
+    BranchDescriptor& operator=(const BranchDescriptor&) = default;
+
+    // =========================================================================
+    // Factory method - creates a BranchDescriptor for a specific DeviceOp
+    // =========================================================================
+
+    template <typename DeviceOp>
+    static BranchDescriptor make(
+        const CoreRangeSet& cores,
+        const typename DeviceOp::operation_attributes_t& op_attrs,
+        const typename DeviceOp::tensor_args_t& tensor_args);
+
+    // =========================================================================
+    // Validity check
+    // =========================================================================
+
+    explicit operator bool() const { return impl_ != nullptr; }
+
+    // =========================================================================
+    // Public interface - delegates to internal implementation
+    // =========================================================================
+
+    const CoreRangeSet& core_range() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->core_range();
+    }
+
+    std::vector<const Tensor*> get_input_tensors() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->get_input_tensors();
+    }
+
+    std::vector<TensorSpec> get_output_specs() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->get_output_specs();
+    }
+
+    std::vector<Tensor> make_output_tensors() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->make_output_tensors();
+    }
+
+    void check_on_cache_hit() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        impl_->check_on_cache_hit();
+    }
+
+    void check_on_cache_miss() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        impl_->check_on_cache_miss();
+    }
+
+    void add_to_program(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        impl_->add_to_program(program, outputs);
+    }
+
+    void update_runtime_args(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        impl_->update_runtime_args(program, outputs);
+    }
+
+    bool has_shared_variables() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->has_shared_variables();
+    }
+
+    const std::type_info& type_info() const {
+        TT_ASSERT(impl_, "BranchDescriptor is empty");
+        return impl_->type_info();
+    }
+
+    std::string operation_name() const {
+        if (!impl_) {
+            return "<empty>";
+        }
+        return impl_->operation_name();
+    }
+
+    // Hash support for tt::stl::hash (via to_hash() method)
+    tt::stl::hash::hash_t to_hash() const {
+        if (!impl_) {
+            return 0;
+        }
+        return impl_->to_hash();
+    }
+
+private:
+    // =========================================================================
+    // Type Erasure: Concept (abstract interface)
+    // =========================================================================
+
+    struct Concept {
+        virtual ~Concept() = default;
+
+        virtual const CoreRangeSet& core_range() const = 0;
+        virtual std::vector<const Tensor*> get_input_tensors() const = 0;
+        virtual std::vector<TensorSpec> get_output_specs() const = 0;
+        virtual std::vector<Tensor> make_output_tensors() const = 0;
+        virtual void check_on_cache_hit() const = 0;
+        virtual void check_on_cache_miss() const = 0;
+        virtual void add_to_program(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) = 0;
+        virtual void update_runtime_args(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) = 0;
+        virtual bool has_shared_variables() const = 0;
+        virtual const std::type_info& type_info() const = 0;
+        virtual std::string operation_name() const = 0;
+        virtual tt::stl::hash::hash_t to_hash() const = 0;
+    };
+
+    // =========================================================================
+    // Type Erasure: Model<DeviceOp> (concrete implementation)
+    // =========================================================================
+
+    template <typename DeviceOp>
+    struct Model;
+
+    // Shared ownership allows cheap copies while maintaining value semantics API
+    std::shared_ptr<Concept> impl_;
+};
 
 // =============================================================================
 // ParallelDeviceOperation Types
 // =============================================================================
 
 struct ParallelParams {
-    std::vector<std::shared_ptr<BranchDescriptor>> branches;
-    ttnn::MeshDevice* mesh_device = nullptr;  // Required for device operation infrastructure
+    std::vector<BranchDescriptor> branches;  // Value semantics with shared ownership internally
+    ttnn::MeshDevice* mesh_device = nullptr;
 };
 
 // Empty inputs - actual tensors are in BranchDescriptors
 struct ParallelInputs {};
 
 // =============================================================================
-// BranchDescriptor - Abstract interface for type-erased branches
-// =============================================================================
-
-struct BranchDescriptor {
-    virtual ~BranchDescriptor() = default;
-
-    CoreRangeSet core_range;
-
-    BranchDescriptor() = default;
-    explicit BranchDescriptor(const CoreRangeSet& cores) : core_range(cores) {}
-
-    virtual std::vector<const Tensor*> get_input_tensors() const = 0;
-    virtual std::vector<TensorSpec> get_output_specs() const = 0;
-    virtual std::vector<Tensor> make_output_tensors() const = 0;
-    virtual void check_on_cache_hit() const = 0;
-    virtual void check_on_cache_miss() const = 0;
-
-    // Direct contribution: adds this branch's kernels/CBs/semaphores to the program
-    // Uses the branch's core_range to restrict execution to specific cores
-    virtual void add_to_program(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) = 0;
-
-    // Override runtime arguments for this branch
-    virtual void update_runtime_args(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) = 0;
-
-    // Returns whether shared variables have been initialized
-    virtual bool has_shared_variables() const = 0;
-
-    // Type information for hashing
-    virtual const std::type_info& type_info() const = 0;
-
-    // Get a human-readable name for this branch's operation (for profiling)
-    virtual std::string operation_name() const = 0;
-};
-
-// =============================================================================
-// Branch<DeviceOp> - User-facing branch specification
+// Branch<DeviceOp> - User-facing branch specification (for C++ variadic API)
 // =============================================================================
 
 /**
@@ -108,7 +217,6 @@ struct has_add_to<
         std::declval<typename Factory::cached_program_t::tensor_return_value_t&>(),
         std::declval<const std::optional<CoreRangeSet>&>()))>> : std::true_type {};
 
-// Simpler trait that just checks for the method signature we expect
 template <typename Factory, typename OpAttrs, typename TensorArgs, typename TensorReturn, typename = void>
 struct supports_add_to : std::false_type {};
 
@@ -126,80 +234,64 @@ struct supports_add_to<
         std::declval<const std::optional<CoreRangeSet>&>()))>> : std::true_type {};
 
 // =============================================================================
-// TypedBranchDescriptor - Internal implementation
+// Model<DeviceOp> - Implementation of the type-erased interface
 // =============================================================================
 
 template <typename DeviceOp>
-struct TypedBranchDescriptor : BranchDescriptor {
+struct BranchDescriptor::Model final : BranchDescriptor::Concept {
     using operation_attributes_t = typename DeviceOp::operation_attributes_t;
     using tensor_args_t = typename DeviceOp::tensor_args_t;
     using tensor_return_value_t = typename DeviceOp::tensor_return_value_t;
     using program_factory_t = typename DeviceOp::program_factory_t;
     using spec_return_value_t = typename DeviceOp::spec_return_value_t;
 
-    operation_attributes_t op_attributes;
-    tensor_args_t tensor_args;
+    CoreRangeSet core_range_;
+    operation_attributes_t op_attributes_;
+    tensor_args_t tensor_args_;
 
     // Type-erased storage for per-branch shared variables
-    // Populated by add_to_program(), used by update_runtime_args()
     std::any shared_variables_;
 
     // Index of which variant in program_factory_t was selected
     size_t selected_factory_index_ = 0;
 
-    TypedBranchDescriptor(const Branch<DeviceOp>& branch) :
-        BranchDescriptor{branch.cores}, op_attributes(branch.op_attrs), tensor_args(branch.tensor_args) {}
+    Model(const CoreRangeSet& cores, const operation_attributes_t& attrs, const tensor_args_t& args) :
+        core_range_(cores), op_attributes_(attrs), tensor_args_(args) {}
 
-    TypedBranchDescriptor(const CoreRangeSet& cores, const operation_attributes_t& attrs, const tensor_args_t& args) :
-        BranchDescriptor{cores}, op_attributes(attrs), tensor_args(args) {}
+    const CoreRangeSet& core_range() const override { return core_range_; }
 
-    std::vector<const Tensor*> get_input_tensors() const override { return extract_tensors_impl(tensor_args); }
+    std::vector<const Tensor*> get_input_tensors() const override { return extract_tensors_impl(tensor_args_); }
 
     std::vector<TensorSpec> get_output_specs() const override {
-        auto specs = compute_specs_for_device_op(op_attributes, tensor_args);
+        auto specs = compute_specs_for_device_op(op_attributes_, tensor_args_);
         return flatten_specs(specs);
     }
 
-private:
-    // Helper to invoke DeviceOp's output specs computation
-    // (separated to avoid pattern matching by legacy detection script)
-    static spec_return_value_t compute_specs_for_device_op(
-        const operation_attributes_t& attrs, const tensor_args_t& args) {
-        return DeviceOp::compute_output_specs(attrs, args);
-    }
-
-public:
     std::vector<Tensor> make_output_tensors() const override {
-        auto result = DeviceOp::create_output_tensors(op_attributes, tensor_args);
+        auto result = DeviceOp::create_output_tensors(op_attributes_, tensor_args_);
         return flatten_tensors(result);
     }
 
-    void check_on_cache_hit() const override { DeviceOp::validate_on_program_cache_hit(op_attributes, tensor_args); }
-    void check_on_cache_miss() const override { DeviceOp::validate_on_program_cache_miss(op_attributes, tensor_args); }
+    void check_on_cache_hit() const override { DeviceOp::validate_on_program_cache_hit(op_attributes_, tensor_args_); }
+    void check_on_cache_miss() const override {
+        DeviceOp::validate_on_program_cache_miss(op_attributes_, tensor_args_);
+    }
 
     void add_to_program(tt::tt_metal::Program& program, std::vector<Tensor>& outputs) override {
         auto tensor_return = unflatten_outputs(outputs);
-        auto factory_variant = DeviceOp::select_program_factory(op_attributes, tensor_args);
+        auto factory_variant = DeviceOp::select_program_factory(op_attributes_, tensor_args_);
         selected_factory_index_ = factory_variant.index();
 
         std::visit(
             [&](auto&& factory) {
                 using FactoryType = std::decay_t<decltype(factory)>;
 
-                // Check if this factory supports add_to() for direct contribution
                 if constexpr (
                     supports_add_to<FactoryType, operation_attributes_t, tensor_args_t, tensor_return_value_t>::value) {
-                    // Direct contribution - add kernels/CBs directly to the shared program
-                    auto shared_vars = factory.add_to(
-                        program,
-                        op_attributes,
-                        tensor_args,
-                        tensor_return,
-                        core_range);  // Pass the branch's core range
+                    auto shared_vars =
+                        factory.add_to(program, op_attributes_, tensor_args_, tensor_return, core_range_);
                     shared_variables_ = std::move(shared_vars);
                 } else {
-                    // Fallback: factory doesn't support add_to(), use create() and we have a problem
-                    // In this case, we create a separate program and cannot merge
                     TT_FATAL(
                         false,
                         "Factory {} does not support add_to() for parallel composition. "
@@ -209,7 +301,6 @@ public:
             },
             factory_variant);
 
-        // Put the potentially-modified tensor(s) back into the outputs vector
         reflatten_outputs(outputs, tensor_return);
     }
 
@@ -219,14 +310,12 @@ public:
         }
 
         auto tensor_return = unflatten_outputs(outputs);
-        auto factory_variant = DeviceOp::select_program_factory(op_attributes, tensor_args);
+        auto factory_variant = DeviceOp::select_program_factory(op_attributes_, tensor_args_);
 
-        // Visit the same factory variant that was used in add_to_program
         visit_factory_at_index(factory_variant, selected_factory_index_, [&](auto&& factory) {
             using FactoryType = std::decay_t<decltype(factory)>;
             using SharedVarsType = typename FactoryType::shared_variables_t;
 
-            // Check if factory has the direct override method
             if constexpr (requires {
                               factory.override_runtime_arguments(
                                   std::declval<tt::tt_metal::Program&>(),
@@ -238,7 +327,7 @@ public:
                 auto* shared_vars_ptr = std::any_cast<SharedVarsType>(&shared_variables_);
                 TT_FATAL(shared_vars_ptr != nullptr, "Shared variables type mismatch");
                 factory.override_runtime_arguments(
-                    program, *shared_vars_ptr, op_attributes, tensor_args, tensor_return);
+                    program, *shared_vars_ptr, op_attributes_, tensor_args_, tensor_return);
             } else {
                 static_assert(
                     false,
@@ -247,7 +336,6 @@ public:
             }
         });
 
-        // Put the potentially-modified tensor(s) back into the outputs vector
         reflatten_outputs(outputs, tensor_return);
     }
 
@@ -255,13 +343,24 @@ public:
 
     const std::type_info& type_info() const override { return typeid(DeviceOp); }
 
-    std::string operation_name() const override {
-        // Use tt::stl::get_type_name for a clean, demangled type name
-        return std::string(tt::stl::get_type_name<DeviceOp>());
+    std::string operation_name() const override { return std::string(tt::stl::get_type_name<DeviceOp>()); }
+
+    tt::stl::hash::hash_t to_hash() const override {
+        // Hash the operation type and core range
+        tt::stl::hash::hash_t h = typeid(DeviceOp).hash_code();
+        for (const auto& range : core_range_.ranges()) {
+            h = tt::stl::hash::hash_objects(
+                h, range.start_coord.x, range.start_coord.y, range.end_coord.x, range.end_coord.y);
+        }
+        return h;
     }
 
 private:
-    // Helper to visit a variant at a specific index
+    static spec_return_value_t compute_specs_for_device_op(
+        const operation_attributes_t& attrs, const tensor_args_t& args) {
+        return DeviceOp::compute_output_specs(attrs, args);
+    }
+
     template <typename Variant, typename Func>
     static void visit_factory_at_index(Variant& v, size_t target_index, Func&& func) {
         size_t current_index = 0;
@@ -351,7 +450,6 @@ private:
         }
     }
 
-    // Put tensors back into the vector after unflatten_outputs
     void reflatten_outputs(std::vector<Tensor>& v, tensor_return_value_t& result) {
         if constexpr (std::is_same_v<tensor_return_value_t, Tensor>) {
             if (v.empty()) {
@@ -377,12 +475,26 @@ private:
 };
 
 // =============================================================================
-// Helper to convert Branch<DeviceOp> to shared_ptr<BranchDescriptor>
+// BranchDescriptor::make<DeviceOp>() implementation
 // =============================================================================
 
 template <typename DeviceOp>
-std::shared_ptr<BranchDescriptor> make_descriptor(const Branch<DeviceOp>& branch) {
-    return std::make_shared<TypedBranchDescriptor<DeviceOp>>(branch);
+BranchDescriptor BranchDescriptor::make(
+    const CoreRangeSet& cores,
+    const typename DeviceOp::operation_attributes_t& op_attrs,
+    const typename DeviceOp::tensor_args_t& tensor_args) {
+    BranchDescriptor result;
+    result.impl_ = std::make_shared<Model<DeviceOp>>(cores, op_attrs, tensor_args);
+    return result;
+}
+
+// =============================================================================
+// Helper to convert Branch<DeviceOp> to BranchDescriptor
+// =============================================================================
+
+template <typename DeviceOp>
+BranchDescriptor make_descriptor(const Branch<DeviceOp>& branch) {
+    return BranchDescriptor::make<DeviceOp>(branch.cores, branch.op_attrs, branch.tensor_args);
 }
 
 // =============================================================================
@@ -391,7 +503,7 @@ std::shared_ptr<BranchDescriptor> make_descriptor(const Branch<DeviceOp>& branch
 //
 // Usage in an operation's branch() method:
 //
-//   static std::shared_ptr<BranchDescriptor> branch(
+//   static BranchDescriptor branch(
 //       const Tensor& input, float epsilon, const CoreRangeSet& cores, ...) {
 //       return ttnn::experimental::prim::create_branch<LayerNormDeviceOperation>(
 //           cores,
@@ -401,11 +513,11 @@ std::shared_ptr<BranchDescriptor> make_descriptor(const Branch<DeviceOp>& branch
 //   }
 //
 template <typename DeviceOp>
-std::shared_ptr<BranchDescriptor> create_branch(
+BranchDescriptor create_branch(
     const CoreRangeSet& cores,
     const typename DeviceOp::operation_attributes_t& op_attrs,
     const typename DeviceOp::tensor_args_t& tensor_args) {
-    return std::make_shared<TypedBranchDescriptor<DeviceOp>>(cores, op_attrs, tensor_args);
+    return BranchDescriptor::make<DeviceOp>(cores, op_attrs, tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -418,7 +530,6 @@ using ttnn::experimental::prim::create_branch;
 using ttnn::experimental::prim::make_descriptor;
 using ttnn::experimental::prim::ParallelParams;
 using ttnn::experimental::prim::supports_add_to;
-using ttnn::experimental::prim::TypedBranchDescriptor;
 }  // namespace ttnn::operations::experimental
 
 // Additional convenience alias for easier access
@@ -427,40 +538,31 @@ using ttnn::experimental::prim::BranchDescriptor;
 using ttnn::experimental::prim::create_branch;
 }  // namespace ttnn::parallel_internal
 
-// Custom fmt::formatter for BranchDescriptor shared_ptr to show operation names in profiler
+// Custom fmt::formatter for BranchDescriptor to show operation names in profiler
 template <>
-struct fmt::formatter<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>> {
+struct fmt::formatter<ttnn::experimental::prim::BranchDescriptor> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(const std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>& branch, FormatContext& ctx) const {
-        if (branch) {
-            return fmt::format_to(ctx.out(), "{}", branch->operation_name());
-        }
-        return fmt::format_to(ctx.out(), "<null>");
+    auto format(const ttnn::experimental::prim::BranchDescriptor& branch, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", branch.operation_name());
     }
 };
 
 // Custom formatter for the branches vector to show as a list of operation names
 template <>
-struct fmt::formatter<std::vector<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>>> {
+struct fmt::formatter<std::vector<ttnn::experimental::prim::BranchDescriptor>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
-    auto format(
-        const std::vector<std::shared_ptr<ttnn::experimental::prim::BranchDescriptor>>& branches,
-        FormatContext& ctx) const {
+    auto format(const std::vector<ttnn::experimental::prim::BranchDescriptor>& branches, FormatContext& ctx) const {
         auto out = ctx.out();
         out = fmt::format_to(out, "[");
         for (size_t i = 0; i < branches.size(); ++i) {
             if (i > 0) {
                 out = fmt::format_to(out, ", ");
             }
-            if (branches[i]) {
-                out = fmt::format_to(out, "{}", branches[i]->operation_name());
-            } else {
-                out = fmt::format_to(out, "<null>");
-            }
+            out = fmt::format_to(out, "{}", branches[i].operation_name());
         }
         return fmt::format_to(out, "]");
     }

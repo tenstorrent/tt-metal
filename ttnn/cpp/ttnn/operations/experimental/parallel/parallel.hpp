@@ -29,17 +29,17 @@ struct ExecuteParallel {
     //   )
     template <typename... Branches>
     static ParallelReturnType invoke(Branches&&... branches) {
-        std::vector<std::shared_ptr<BranchDescriptor>> branch_vec;
+        std::vector<BranchDescriptor> branch_vec;
         branch_vec.reserve(sizeof...(branches));
         (branch_vec.push_back(make_descriptor(std::forward<Branches>(branches))), ...);
         return invoke_impl(std::move(branch_vec));
     }
 
-    // Vector overload for dynamic number of branches
-    static ParallelReturnType invoke(std::vector<std::shared_ptr<BranchDescriptor>> branches);
+    // Vector overload for dynamic number of branches (value semantics)
+    static ParallelReturnType invoke(std::vector<BranchDescriptor> branches);
 
     // Implementation
-    static ParallelReturnType invoke_impl(std::vector<std::shared_ptr<BranchDescriptor>> branches);
+    static ParallelReturnType invoke_impl(std::vector<BranchDescriptor> branches);
 };
 
 }  // namespace ttnn::operations::experimental
@@ -85,10 +85,10 @@ constexpr auto parallel = ttnn::register_operation<"ttnn::parallel", ttnn::opera
 // );
 // ```
 //
-// Example 3: Dynamic number of branches
+// Example 3: Dynamic number of branches (value semantics)
 //
 // ```cpp
-// std::vector<std::shared_ptr<BranchDescriptor>> branches;
+// std::vector<BranchDescriptor> branches;
 // for (size_t i = 0; i < num_branches; ++i) {
 //     branches.push_back(ttnn::experimental::prim::make_descriptor(
 //         ttnn::branch<LN>{core_sets[i], attrs[i], args[i]}));

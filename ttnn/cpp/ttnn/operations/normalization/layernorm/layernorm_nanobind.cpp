@@ -9,7 +9,6 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
@@ -163,6 +162,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()});
 
     // Add branch() method for parallel execution support
+    // Returns BranchDescriptor by value (move semantics)
     py_operation.def(
         "branch",
         [](const std::decay_t<decltype(ttnn::layer_norm)>& /*self*/,
