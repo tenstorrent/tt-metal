@@ -82,7 +82,8 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
 
     const uint32_t batch_seq = batch_size * seq_size;
     const auto& reduction_size = operation_attributes.reduction_size;
-    const ttnn::Shape output_reduced_shape{1, 1, std::ceil(batch_seq / reduction_size), num_local_experts};
+    const uint32_t reduced_rows = (batch_seq + reduction_size - 1) / reduction_size;
+    const ttnn::Shape output_reduced_shape{1, 1, reduced_rows, num_local_experts};
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(MemoryConfig());
     TensorSpec output_mapping_spec(

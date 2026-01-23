@@ -473,9 +473,14 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
 void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
+    const uint32_t num_links = operation_attributes.num_links;
+    const uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
+
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
@@ -485,6 +490,7 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
 
+        uint32_t tokens_per_core_start = 0;
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
@@ -494,6 +500,8 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             reader_runtime_args.at(3) = output_tensor.buffer()->address();
             reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            reader_runtime_args.at(6) = tokens_per_core_start;
+            reader_runtime_args.at(7) = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
@@ -502,6 +510,10 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(7) = reader_runtime_args.at(6);
+            writer_runtime_args.at(8) = reader_runtime_args.at(7);
+
+            tokens_per_core_start = reader_runtime_args.at(7);
         }
     }
 }

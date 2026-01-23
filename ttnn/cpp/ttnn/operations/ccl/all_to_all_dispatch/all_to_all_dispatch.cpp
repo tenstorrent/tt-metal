@@ -71,14 +71,20 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
 
         auto alignment = mesh_device->allocator()->get_alignment(memory_config_.buffer_type());
         auto num_banks = mesh_device->allocator()->get_num_banks(memory_config_.buffer_type());
-        total_size_bytes +=
+        const auto output_bytes =
             std::accumulate(specs.begin(), specs.end(), 0u, [alignment, num_banks](size_t acc, const auto& spec) {
                 return acc + spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
             });
+        total_size_bytes += output_bytes;
     }
     uint32_t available_l1_space =
         mesh_device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes;
     if (available_l1_space < total_size_bytes) {
+        if (!optional_output_tensors.has_value() && memory_config_.buffer_type() == tt::tt_metal::BufferType::L1) {
+            // L1 output doesn't fit; fall back to DRAM to avoid buffer overruns.
+            memory_config_ = ttnn::DRAM_MEMORY_CONFIG;
+            total_size_bytes = std::accumulate(cb_sizes.begin(), cb_sizes.end(), 0u);
+        }
         impl = AllToAllDispatchDeviceOperation::AllToAllTransferType::PageByPage;
     }
 

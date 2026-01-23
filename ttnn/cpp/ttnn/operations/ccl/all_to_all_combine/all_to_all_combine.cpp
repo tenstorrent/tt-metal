@@ -53,6 +53,32 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
                 .metadata_tensor = expert_metadata_tensor,
                 .optional_output_tensor = optional_output_tensor,
             });
+        if (memory_config_.buffer_type() == tt::tt_metal::BufferType::L1) {
+            auto alignment = mesh_device->allocator()->get_alignment(memory_config_.buffer_type());
+            auto num_banks = mesh_device->allocator()->get_num_banks(memory_config_.buffer_type());
+            const auto required_bytes = output_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+            const auto available_l1_space =
+                mesh_device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes;
+            if (required_bytes > available_l1_space) {
+                // L1 output doesn't fit; fall back to DRAM to avoid buffer overruns.
+                memory_config_ = ttnn::DRAM_MEMORY_CONFIG;
+                output_spec = AllToAllCombineDeviceOperation::compute_output_specs(
+                    AllToAllCombineDeviceOperation::operation_attributes_t{
+                        .output_mem_config = memory_config_,
+                        .axis = axis,
+                        .num_links = num_links_,
+                        .topology = topology_,
+                        .locally_reduced = locally_reduced,
+                        .output_shard_dim = shard_dim,
+                    },
+                    AllToAllCombineDeviceOperation::tensor_args_t{
+                        .input_tensor = input_tensor,
+                        .mapping_tensor = expert_mapping_tensor,
+                        .metadata_tensor = expert_metadata_tensor,
+                        .optional_output_tensor = optional_output_tensor,
+                    });
+            }
+        }
         // currently full only supports tile layout
         ttnn::SmallVector<uint32_t> output_shape;
         output_shape.reserve(output_spec.logical_shape().rank());

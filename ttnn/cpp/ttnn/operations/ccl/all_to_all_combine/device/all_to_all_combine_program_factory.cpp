@@ -158,7 +158,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         subdevice_cores.size(),
         num_links);
 
-    // perform work-split across cores
+    // perform work-split across cores (iterate over global tokens)
     uint32_t tokens_per_device = batch_size * seq_size;
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
     uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
@@ -210,6 +210,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
+    const uint32_t axis_group = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    uint32_t local_tokens_per_device = tokens_per_device;
+    if (operation_attributes.output_shard_dim == 1) {
+        local_tokens_per_device = (batch_size / axis_group) * seq_size;
+    } else if (operation_attributes.output_shard_dim == 2) {
+        local_tokens_per_device = batch_size * (seq_size / axis_group);
+    }
+
     std::vector<uint32_t> writer_compile_time_args = {
         metadata_cb_id,
         local_experts_cb_id,
@@ -217,6 +225,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         data_cb_id,
         batch_size,
         seq_size,
+        local_tokens_per_device,
         selected_experts_k,
         experts_per_device,
         num_devices,
@@ -315,9 +324,17 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
 void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    const auto& metadata_tensor = tensor_args.metadata_tensor;
+    const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
+    const uint32_t batch_size = metadata_shape[1];
+    const uint32_t seq_size = metadata_shape[2];
+    const uint32_t tokens_per_device = batch_size * seq_size;
+    const uint32_t num_links = operation_attributes.num_links;
+    const uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
+
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto & coord = range.start_coord();
         TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
@@ -327,6 +344,7 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
         const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
         const auto& cores = shared_variables.cores;
 
+        uint32_t tokens_per_core_start = 0;
         for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
@@ -334,10 +352,16 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.input_tensor.buffer()->address();
+            reader_runtime_args.at(3) = tokens_per_core_start;
+            reader_runtime_args.at(4) = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
 
             writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(3) = reader_runtime_args.at(3);
+            writer_runtime_args.at(4) = reader_runtime_args.at(4);
+
+            tokens_per_core_start = reader_runtime_args.at(4);
         }
     }
 }

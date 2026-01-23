@@ -50,19 +50,20 @@ void kernel_main() {
     constexpr uint32_t data_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t batch_size = get_compile_time_arg_val(4);
     constexpr uint32_t seq_size = get_compile_time_arg_val(5);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(6);
-    constexpr uint32_t num_local_experts = get_compile_time_arg_val(7);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(8);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(9);
-    constexpr uint32_t data_size_bytes = get_compile_time_arg_val(10);  // hidden dim * datum size
-    constexpr uint32_t alignment = get_compile_time_arg_val(11);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
-    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
-    constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
-    constexpr auto output_args = TensorAccessorArgs<18>();
+    constexpr uint32_t local_tokens_per_device = get_compile_time_arg_val(6);
+    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(7);
+    constexpr uint32_t num_local_experts = get_compile_time_arg_val(8);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(9);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(10);
+    constexpr uint32_t data_size_bytes = get_compile_time_arg_val(11);  // hidden dim * datum size
+    constexpr uint32_t alignment = get_compile_time_arg_val(12);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(18);
+    constexpr auto output_args = TensorAccessorArgs<19>();
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -148,13 +149,13 @@ void kernel_main() {
                 const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
 
                 // figure out output page index, noc address.
-                const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(t, k);
+                const uint32_t output_page_idx = detail::get_output_page_idx<local_tokens_per_device>(t, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
                     linearized_mesh_coord,
-                    tokens_per_device,
+                    local_tokens_per_device,
                     mesh_rows,
                     mesh_cols,
                     replicate_axis>(t);
