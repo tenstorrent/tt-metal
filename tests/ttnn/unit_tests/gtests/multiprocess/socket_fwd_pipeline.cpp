@@ -123,7 +123,24 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
         {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
         {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
         {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
+
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
+        {.tray_id = 2, .entry_node_asic_location = 1, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 3},
+        {.tray_id = 2, .entry_node_asic_location = 3, .exit_node_asic_location = 7},
+        {.tray_id = 4, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+        {.tray_id = 3, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 2},
+        {.tray_id = 3, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
+        {.tray_id = 1, .entry_node_asic_location = 6, .exit_node_asic_location = 1},
     };
 
     std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
