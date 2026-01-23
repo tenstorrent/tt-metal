@@ -707,17 +707,19 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         (1, 384, 1, 90, 160, "upsample3d", None),  # decoder.up_blocks.0.upsamplers.0
         (1, 384, 2, 180, 320, "upsample3d", None),  # decoder.up_blocks.1.upsamplers.0
         (1, 192, 4, 360, 640, "upsample2d", None),  # decoder.up_blocks.2.upsamplers.0
+        (1, 192, 4, 720, 1280, "downsample2d", None),  # decoder.up_blocks.3.upsamplers.0
     ],
     ids=[
         "upsample_0",
         "upsample_1",
         "upsample_2",
+        "downsample_2",
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
+    "mesh_shape, h_axis, w_axis",
     [
         ((1, 1), 0, 1),
         ((2, 4), 0, 1),
@@ -734,12 +736,15 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
         "1x4_h1_w0",
         "4x8_h0_w1",
     ],
-    indirect=["mesh_device"],
+    # indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cache_len, mean, std, h_axis, w_axis):
+def test_wan_resample(
+    mesh_device, mesh_shape, B, dim, T, H, W, mode, upsample_out_dim, cache_len, mean, std, h_axis, w_axis
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanResample as TorchWanResample
 
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
     torch_dtype = torch.float32
     torch_model = TorchWanResample(
         dim=dim,
@@ -747,6 +752,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
         upsample_out_dim=upsample_out_dim,
     )
     torch_model.eval()
+    print(f"torch_model: {torch_model}")
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = VaeHWParallelConfig(
@@ -818,6 +824,8 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
     tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
+    logger.info(f"torch_output shape: {torch_output.shape}")
+    logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.008)
 

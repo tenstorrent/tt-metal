@@ -778,7 +778,7 @@ class WanResample:
         self.mesh_device = mesh_device
         upsample_out_dim = upsample_out_dim or dim // 2
 
-        assert mode in ["upsample2d", "upsample3d"]
+        assert mode in ["upsample2d", "upsample3d", "downsample2d", "downsample3d"]
 
         self.conv = WanConv2d(
             in_channels=dim,

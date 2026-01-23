@@ -11,6 +11,7 @@ import pytest
 import ttnn
 from ....utils.test import line_params, ring_params
 import PIL
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -67,8 +68,16 @@ def test_pipeline_inference(
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
     )
     # Test parameters
-    prompt = "The cat in the hat runs up the hill to the house."
+    prompt = "The cat in the hat runs up the hill to the house"
     image = PIL.Image.open("./prompt_image.png").resize((width, height))
+    # image = image.transpose(PIL.Image.Transpose.FLIP_LEFT_RIGHT)
+    if "A" in image.mode:
+        print("The image has an alpha channel.")
+    else:
+        print("The image does not have an alpha channel.")
+
+    # image = image.convert("RGB")
+    image.save("prompt_image_rgb.png")
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
@@ -88,6 +97,21 @@ def test_pipeline_inference(
         dynamic_load=dynamic_load,
         topology=topology,
     )
+
+    if False:
+        results = pipeline.decode_latents(pipeline.scheduler.timesteps, output_type="np")
+        for t_idx, result in enumerate(results):
+            logger.info(f"Decoding timestep {t_idx} of {len(results)}")
+            for i, frame in enumerate(result):
+                frame.save(f"vid_frames/wan_output_frame_{i}.png")
+
+            try:
+                export_to_video(result, "wan_output_video_debug.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_debug.mp4")
+            except AttributeError as e:
+                print(f"AttributeError: {e}")
+            input("Press Enter to continue...")
+        return
 
     # Run inference
     with torch.no_grad():
@@ -123,8 +147,17 @@ def test_pipeline_inference(
     # Remove batch dimension
     frames = frames[0]
 
+    if isinstance(frames[0], np.ndarray):
+        frames = [PIL.Image.fromarray((frame * 255).astype(np.uint8)) for frame in frames]
+
+    # elif isinstance(frames[0], PIL.Image.Image):
+    #    frames = [np.array(frame) for frame in frames]
+
+    for i, frame in enumerate(frames):
+        frame.save(f"vid_frames/wan_output_frame_{i}.png")
+
     try:
         export_to_video(frames, "wan_output_video.mp4", fps=16)
+        print(f"✓ Saved video to: wan_output_video.mp4")
     except AttributeError as e:
         print(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")

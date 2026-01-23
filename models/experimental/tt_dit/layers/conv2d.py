@@ -291,7 +291,7 @@ class Conv2d(Module):
                 input_width=w,
                 conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
                 compute_config=self.compute_config,
-                slice_config=slice_config,
+                # slice_config=slice_config,
                 return_output_dim=True,
             )
         except RuntimeError as e:
