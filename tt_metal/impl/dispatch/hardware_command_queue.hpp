@@ -43,11 +43,6 @@ struct TraceDescriptor;
 
 namespace tt::tt_metal {
 
-struct ReadBufferDescriptor;
-struct ReadEventDescriptor;
-struct ReadCoreDataDescriptor;
-using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 class HWCommandQueue {
 public:
