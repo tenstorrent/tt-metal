@@ -86,6 +86,7 @@ pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_unet3d_e2e_d
 - Torch model: `models/demos/unet_3d/torch_impl/model.py`
 - Runner entry point: `models/demos/unet_3d/runner/performant_runner.py`
 - Default config: `models/demos/unet_3d/configs/test_confocal_boundary.json`
+- Input size: We are choosing [32, 32, 64] (for the single batch run) since it is the most we can fit in the L1 memory of the N300s device during model running.
 
 ## Workarounds
 - 3D op handling: This model uses natively 3D ops (for example, `max_pool3d` and `upsample`). As a temporary
