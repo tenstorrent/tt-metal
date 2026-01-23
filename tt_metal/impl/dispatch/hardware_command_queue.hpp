@@ -33,7 +33,7 @@ class HWCommandQueue {
 public:
     HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index);
 
-    ~HWCommandQueue();
+    ~HWCommandQueue() = default;
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const;
 
