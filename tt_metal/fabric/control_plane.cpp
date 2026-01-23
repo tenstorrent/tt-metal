@@ -2702,6 +2702,7 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
     std::size_t serialized_table_size = 0;
     std::vector<uint8_t> serialized_connections;
     if (my_rank == CONTROLLER_RANK) {
+        std::cout << "Forwarding intermesh connections from controller to all hosts" << std::endl;
         for (const auto& hostname : physical_system_descriptor_->get_all_hostnames()) {
             if (hostname == my_host) {
                 continue;
@@ -2720,6 +2721,7 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
         }
+        std::cout << "Finished forwarding intermesh connections from controller to all hosts" << std::endl;
     } else {
         distributed_context.recv(
             tt::stl::Span<std::byte>(

@@ -131,6 +131,22 @@ def generate_supported_rank_bindings(host_vector):
         13: {"bh-glx-c02u02": 1},
         14: {"bh-glx-c02u08": 3},
         15: {"bh-glx-c02u08": 1},
+        16: {"bh-glx-c05u08": 2},
+        17: {"bh-glx-c05u08": 4},
+        18: {"bh-glx-c05u02": 2},
+        19: {"bh-glx-c05u02": 4},
+        20: {"bh-glx-c05u02": 3},
+        21: {"bh-glx-c05u02": 1},
+        22: {"bh-glx-c05u08": 3},
+        23: {"bh-glx-c05u08": 1},
+        24: {"bh-glx-c06u08": 2},
+        25: {"bh-glx-c06u08": 4},
+        26: {"bh-glx-c06u02": 2},
+        27: {"bh-glx-c06u02": 4},
+        28: {"bh-glx-c06u02": 3},
+        29: {"bh-glx-c06u02": 1},
+        30: {"bh-glx-c06u08": 3},
+        31: {"bh-glx-c06u08": 1},
     }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
@@ -215,6 +231,86 @@ def generate_supported_rank_bindings(host_vector):
             "mesh_id": 15,
             "mesh_host_rank": 0,
         },
+        {
+            "rank": 16,
+            "mesh_id": 16,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 17,
+            "mesh_id": 17,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 18,
+            "mesh_id": 18,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 19,
+            "mesh_id": 19,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 20,
+            "mesh_id": 20,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 21,
+            "mesh_id": 21,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 22,
+            "mesh_id": 22,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 23,
+            "mesh_id": 23,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 24,
+            "mesh_id": 24,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 25,
+            "mesh_id": 25,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 26,
+            "mesh_id": 26,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 27,
+            "mesh_id": 27,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 28,
+            "mesh_id": 28,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 29,
+            "mesh_id": 29,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 30,
+            "mesh_id": 30,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 31,
+            "mesh_id": 31,
+            "mesh_host_rank": 0,
+        },
     ]
 
     mapping_file = "tray_to_pcie_device_mapping.yaml"
@@ -233,5 +329,14 @@ def generate_supported_rank_bindings(host_vector):
 
 
 if __name__ == "__main__":
-    host_vector = ["bh-glx-c01u08", "bh-glx-c01u02", "bh-glx-c02u08", "bh-glx-c02u02"]
+    host_vector = [
+        "bh-glx-c01u08",
+        "bh-glx-c01u02",
+        "bh-glx-c02u08",
+        "bh-glx-c02u02",
+        "bh-glx-c05u08",
+        "bh-glx-c05u02",
+        "bh-glx-c06u08",
+        "bh-glx-c06u02",
+    ]
     generate_supported_rank_bindings(host_vector)

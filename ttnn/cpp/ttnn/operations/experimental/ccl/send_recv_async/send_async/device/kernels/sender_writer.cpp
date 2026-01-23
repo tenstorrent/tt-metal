@@ -73,7 +73,7 @@ void kernel_main() {
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
-    for (int i = 0; i < 5000000; i++) {
+    for (int i = 0; i < 500000000; i++) {
         socket_reserve_pages(sender_socket, 1);
         cb_wait_front(data_cb_id, 1);
 

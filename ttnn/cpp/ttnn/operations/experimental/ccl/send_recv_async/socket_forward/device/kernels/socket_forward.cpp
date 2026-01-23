@@ -87,7 +87,7 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<false>(
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
-    for (int i = 0; i < 5000000; i++) {
+    for (int i = 0; i < 500000000; i++) {
         socket_reserve_pages(send_socket, 1);
         socket_wait_for_pages(recv_socket, 1);
         auto l1_read_addr = recv_socket.read_ptr;
