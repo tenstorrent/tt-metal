@@ -175,46 +175,46 @@ def generate_supported_rank_bindings(host_vector):
             "mesh_id": 7,
             "mesh_host_rank": 0,
         },
-        # {
-        #     "rank": 8,
-        #     "mesh_id": 8,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 9,
-        #     "mesh_id": 9,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 10,
-        #     "mesh_id": 10,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 11,
-        #     "mesh_id": 11,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 12,
-        #     "mesh_id": 12,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 13,
-        #     "mesh_id": 13,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 14,
-        #     "mesh_id": 14,
-        #     "mesh_host_rank": 0,
-        # },
-        # {
-        #     "rank": 15,
-        #     "mesh_id": 15,
-        #     "mesh_host_rank": 0,
-        # },
+        {
+            "rank": 8,
+            "mesh_id": 8,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 9,
+            "mesh_id": 9,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 10,
+            "mesh_id": 10,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 11,
+            "mesh_id": 11,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 12,
+            "mesh_id": 12,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 13,
+            "mesh_id": 13,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 14,
+            "mesh_id": 14,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 15,
+            "mesh_id": 15,
+            "mesh_host_rank": 0,
+        },
     ]
 
     mapping_file = "tray_to_pcie_device_mapping.yaml"
