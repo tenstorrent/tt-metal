@@ -166,16 +166,16 @@ class TtEncoder:
         B = B_lidar
 
         if B_ref != B_lidar:
-            reference_points_torch = ttnn.to_torch(reference_points)
             if B_ref > B_lidar:
-                reference_points_torch = reference_points_torch[:, :B_lidar, :, :]
+                reference_points = ttnn.slice(
+                    reference_points, [0, 0, 0, 0], [D, B_lidar, num_query, reference_points.shape[3]]
+                )
             elif B_ref < B_lidar:
-                last_batch = reference_points_torch[:, -1:, :, :]
-                last_batch = last_batch.expand(-1, B_lidar - B_ref, -1, -1)
-                reference_points_torch = torch.cat([reference_points_torch, last_batch], dim=1)
-            reference_points = ttnn.from_torch(
-                reference_points_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
+                last_batch = ttnn.slice(
+                    reference_points, [0, B_ref - 1, 0, 0], [D, B_ref, num_query, reference_points.shape[3]]
+                )
+                last_batch = ttnn.repeat(last_batch, (1, B_lidar - B_ref, 1, 1))
+                reference_points = ttnn.concat([reference_points, last_batch], dim=1)
 
         reference_points = ttnn.unsqueeze(reference_points, 2)
         reference_points = ttnn.repeat(reference_points, (1, 1, num_cam, 1, 1))
