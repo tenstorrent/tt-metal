@@ -249,6 +249,11 @@ def run_matmul_reduce_scatter_galaxy_impl(
     logger.info(f"Matmul+ReduceScatter Galaxy: rs_input_shape={rs_input_shape}, mm_weights_shape={mm_weights_shape}")
     logger.info(f"Num devices: {num_devices}, Scatter dim: {rs_scatter_dim}")
 
+    # Get mesh shape from device
+    mesh_shape = mesh_device.shape
+    num_rows = mesh_shape[0]  # 8 for Galaxy
+    num_cols = mesh_shape[1]  # 4 for Galaxy
+
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
 
@@ -258,6 +263,9 @@ def run_matmul_reduce_scatter_galaxy_impl(
         input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
         torch_input_tensor_list.append(input_tensors)
 
+        # For Galaxy (8x4 mesh):
+        # - Replicate across rows (dim 0) - same data on all 8 rows
+        # - Shard across columns (dim 1) - scatter across 4 devices per column
         input_tensor_mesh = ttnn.from_torch(
             mm_input_tensor,
             device=mesh_device,
@@ -267,7 +275,7 @@ def run_matmul_reduce_scatter_galaxy_impl(
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
                 ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(num_rows, num_cols)
                 ),
             ),
         )
@@ -384,14 +392,21 @@ def run_matmul_reduce_scatter_galaxy_impl(
             logger.info(f"Done iteration {i}")
 
     # Validate
+    # For Galaxy (8x4 mesh): data is replicated across 8 rows, scattered across 4 columns
+    # We validate by checking one row's worth of data (4 devices in a column)
+    total_devices = num_rows * num_cols
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_output_list[i]
         torch_mm_out_tensor = torch_matmul_output_list[i]
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        tt_mm_out = torch.sum(torch.stack(torch.chunk(tt_mm_out, num_devices, 3)), dim=0)
-        eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
+        # Output has all 32 devices concatenated. Extract just one row (4 devices) worth
+        # Each row has num_cols (4) devices, so take the first row's data
+        tt_mm_out_per_row = torch.chunk(tt_mm_out, num_rows, 3)[0]  # First row's 4 devices
+        # Sum the 4 partial results from each device in the row (column scatter)
+        tt_mm_out_summed = torch.sum(torch.stack(torch.chunk(tt_mm_out_per_row, num_cols, 3)), dim=0)
+        eq, output = comp_pcc(tt_mm_out_summed, torch_mm_out_tensor)
         logger.info(f"Matmul PCC: {output}, iteration {i}")
         assert eq, f"{i} FAILED mm: {output}"
 
@@ -401,7 +416,9 @@ def run_matmul_reduce_scatter_galaxy_impl(
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
         tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+        # Extract one row's worth of reduce_scatter output (4 devices)
+        tt_rs_out_per_row = torch.chunk(tt_rs_out, num_rows, 3)[0]
+        eq, output = comp_pcc(tt_rs_out_per_row, torch_rs_out)
         logger.info(f"ReduceScatter PCC: {output}, iteration {i}")
         assert eq, f"{i} FAILED rs: {output}"
 
@@ -419,58 +436,23 @@ def run_matmul_reduce_scatter_galaxy_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
     [
-        # ==================== Llama 70B actual dimensions ====================
+        # ==================== Llama 70B dimensions for Galaxy ====================
+        # Galaxy: 8x4 mesh, scatter along columns (4 devices per column)
         # Llama 70B: dim=8192, hidden_dim=28672
-        # FF1/FF3: weights [8192, 28672], output [seq, 28672] -> RS -> [seq, 896] (28672/32)
-        # Galaxy 70B decode (M=32)
-        (32, 3, [1, 1, 8192, 28672], [1, 1, 32, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # Per-column: hidden_dim/4 = 7168 per device after scatter
+        # Galaxy 70B decode (M=32) - scatter across 4 devices in column
+        (4, 3, [1, 1, 8192, 7168], [1, 1, 32, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # Galaxy 70B prefill (M=128)
-        (
-            32,
-            3,
-            [1, 1, 8192, 28672],
-            [1, 1, 128, 28672],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            False,
-        ),
+        (4, 3, [1, 1, 8192, 7168], [1, 1, 128, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # ==================== Scaled dimensions ====================
-        # Scaled: dim=4096, hidden_dim=14336 (half of 70B)
-        (32, 3, [1, 1, 4096, 14336], [1, 1, 32, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (
-            32,
-            3,
-            [1, 1, 4096, 14336],
-            [1, 1, 128, 14336],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            False,
-        ),
-        (
-            32,
-            3,
-            [1, 1, 4096, 14336],
-            [1, 1, 256, 14336],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            False,
-        ),
+        # Scaled: dim=4096, hidden_dim=3584 per device (14336/4)
+        (4, 3, [1, 1, 4096, 3584], [1, 1, 32, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 4096, 3584], [1, 1, 128, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 4096, 3584], [1, 1, 256, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # ==================== Smaller test dimensions ====================
-        (32, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (32, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (32, 3, [1, 1, 8192, 2048], [1, 1, 512, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 8192, 2048], [1, 1, 512, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
     ],
     ids=[
         "llama70b_decode_32",
@@ -496,7 +478,14 @@ def run_matmul_reduce_scatter_galaxy_impl(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 23887872}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "trace_region_size": 23887872,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
 )
@@ -552,41 +541,18 @@ def test_matmul_reduce_scatter_galaxy_check(
 @pytest.mark.parametrize(
     "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
     [
-        # ==================== Llama 70B actual dimensions ====================
-        # Galaxy 70B decode (M=32)
-        (32, 3, [1, 1, 8192, 28672], [1, 1, 32, 28672], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # ==================== Llama 70B dimensions for Galaxy ====================
+        # Galaxy: 8x4 mesh, scatter along columns (4 devices per column)
+        # Galaxy 70B decode (M=32) - scatter across 4 devices
+        (4, 3, [1, 1, 8192, 7168], [1, 1, 32, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # Galaxy 70B prefill (M=128)
-        (
-            32,
-            3,
-            [1, 1, 8192, 28672],
-            [1, 1, 128, 28672],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            False,
-        ),
+        (4, 3, [1, 1, 8192, 7168], [1, 1, 128, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # ==================== Scaled dimensions ====================
-        (32, 3, [1, 1, 4096, 14336], [1, 1, 32, 14336], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (
-            32,
-            3,
-            [1, 1, 4096, 14336],
-            [1, 1, 128, 14336],
-            2,
-            3,
-            ttnn.TILE_LAYOUT,
-            5,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            False,
-        ),
+        (4, 3, [1, 1, 4096, 3584], [1, 1, 32, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 4096, 3584], [1, 1, 128, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
         # ==================== Smaller test dimensions ====================
-        (32, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (32, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (4, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
     ],
     ids=[
         "llama70b_decode_32",
@@ -610,7 +576,14 @@ def test_matmul_reduce_scatter_galaxy_check(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 23887872}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "trace_region_size": 23887872,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
 )
