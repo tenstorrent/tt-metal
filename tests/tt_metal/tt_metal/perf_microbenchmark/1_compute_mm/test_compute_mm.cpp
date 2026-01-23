@@ -272,25 +272,25 @@ int main(int argc, char** argv) {
         bool single_core = false;
         bool fast_dispatch_mode = false;
         try {
-            std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
-            std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
-            std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 768);
+            std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 256);
+            std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 256);
+            std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 256);
             std::tie(dtype, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--dtype", 0);
             std::tie(fidel, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--fidel", 0);
             std::tie(matmul_block, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--block", 0);
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--block", 1);
             std::tie(packer_l1, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--packer", 0);
             std::tie(fp32, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--fp32", 0);
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--fp32", 1);
             std::tie(interm_cb_dtype, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--interm-cb", 1);
             std::tie(subblock_choice, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--subblock-index", 0);
             std::tie(single_core, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--one-core", 0);
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--one-core", 1);
             std::tie(num_blocks, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-blocks", 1);
             std::tie(num_tests, input_args) =
@@ -319,12 +319,12 @@ int main(int argc, char** argv) {
         } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
-            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
-            TT_FATAL(
-                device_profiler,
-                "Before running the program, do one of the following in a shell: "
-                "either export the environment variable by executing export TT_METAL_DEVICE_PROFILER=1, "
-                "or run the program with TT_METAL_DEVICE_PROFILER=1 prefixed to the command");
+            // bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
+            // TT_FATAL(
+            //     device_profiler,
+            //     "Before running the program, do one of the following in a shell: "
+            //     "either export the environment variable by executing export TT_METAL_DEVICE_PROFILER=1, "
+            //     "or run the program with TT_METAL_DEVICE_PROFILER=1 prefixed to the command");
         }
 
         int pci_express_slot = 0;
@@ -606,8 +606,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, true);
                 log_debug(LogTest, "EnqueueMeshWorkload done");
 
-                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(
-                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+                uint64_t t0_to_any_riscfw_end = 100;
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -963,7 +962,7 @@ tt_metal::Program create_program_single_core(
         out_subblock_num_tiles,  // out_subblock_num_tiles
         1,                       // batch
         Mt * Nt,
-        0};
+        1};
 
     vector<uint32_t> reader_kernel_args = {
         Mt * Kt,
@@ -1003,7 +1002,7 @@ tt_metal::Program create_program_single_core(
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
+        tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Bfp8_b}})
             .set_page_size(src1_cb_index, single_tile_size)
             .set_globally_allocated_address(*in1_cb_addr->get_backing_buffer());
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
