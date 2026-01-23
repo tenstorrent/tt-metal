@@ -312,22 +312,18 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
-    # AdamW Fused Optimizer
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/adamw_fused.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/adamw_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_fused/device/adamw_fused_program_factory.cpp
-    # AdamW Full Precision Optimizer
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/adamw_full_precision.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/adamw_full_precision.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/device/adamw_full_precision_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/device/adamw_full_precision_device_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/device/adamw_full_precision_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/device/adamw_full_precision_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw_full_precision/device/adamw_full_precision_program_factory.cpp
+    # AdamW Optimizer (consolidated: supports both half and full precision)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_full_precision.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_half_precision_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_half_precision_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_full_precision_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_full_precision_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

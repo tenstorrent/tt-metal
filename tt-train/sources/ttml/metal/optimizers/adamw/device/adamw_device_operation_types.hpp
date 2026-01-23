@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
-namespace ttml::metal::optimizers::adamw_fused::device {
+namespace ttml::metal::optimizers::adamw::device {
 
 struct operation_attributes_t {
     float lr{};
@@ -34,4 +34,4 @@ struct tensor_args_t {
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
-}  // namespace ttml::metal::optimizers::adamw_fused::device
+}  // namespace ttml::metal::optimizers::adamw::device
