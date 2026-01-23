@@ -25,10 +25,15 @@ on:
           - BH-LoudBox
           - topology-6u
         description: "Runner Type Label"
-      commit-range:
+      search-mode:
         required: true
+        type: boolean
+        default: false
+        description: "Search for failure boundary automatically (goes back in time: 1 day, 2 days, 4 days, etc.)"
+      commit-range:
+        required: false
         type: string
-        description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678)"
+        description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678). Required if search-mode is false."
       test-script:
         required: true
         type: string
@@ -250,41 +255,60 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Parse commit range from combined input
+          SEARCH_MODE='${{ inputs.search-mode }}'
           COMMIT_RANGE='${{ inputs.commit-range }}'
-          IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
 
-          # Validate parsed values
-          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
-            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+          # Validate that either search-mode is enabled OR commit-range is provided
+          if [ "$SEARCH_MODE" != "true" ] && [ -z "$COMMIT_RANGE" ]; then
+            echo "ERROR: Either search-mode must be enabled or commit-range must be provided"
             exit 1
           fi
 
-          echo "✓ Parsed good commit: $GOOD_COMMIT"
-          echo "✓ Parsed bad commit: $BAD_COMMIT"
+          # If search mode is disabled, validate commit range
+          if [ "$SEARCH_MODE" != "true" ]; then
+            # Parse commit range from combined input
+            IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
 
-          # Validate that commits exist
-          if ! git cat-file -e "$GOOD_COMMIT^{commit}" 2>/dev/null; then
-            echo "ERROR: Good commit does not exist: $GOOD_COMMIT"
-            exit 1
+            # Validate parsed values
+            if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
+              echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+              exit 1
+            fi
+
+            echo "✓ Parsed good commit: $GOOD_COMMIT"
+            echo "✓ Parsed bad commit: $BAD_COMMIT"
+
+            # Validate that commits exist
+            if ! git cat-file -e "$GOOD_COMMIT^{commit}" 2>/dev/null; then
+              echo "ERROR: Good commit does not exist: $GOOD_COMMIT"
+              exit 1
+            fi
+
+            if ! git cat-file -e "$BAD_COMMIT^{commit}" 2>/dev/null; then
+              echo "ERROR: Bad commit does not exist: $BAD_COMMIT"
+              exit 1
+            fi
+
+            echo "✓ Both commits exist in repository"
+
+            # Validate that good commit is an ancestor of bad commit
+            if ! git merge-base --is-ancestor "$GOOD_COMMIT" "$BAD_COMMIT" 2>/dev/null; then
+              echo "ERROR: Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
+              echo "This means the good commit does not come before the bad commit in git history."
+              echo "Please verify your commit range."
+              exit 1
+            fi
+
+            echo "✓ Good commit is an ancestor of bad commit"
+
+            # Export parsed values as outputs for next step
+            echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
+            echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+          else
+            echo "✓ Search mode enabled - will find commit range automatically"
+            echo "good-commit=" >> $GITHUB_OUTPUT
+            echo "bad-commit=" >> $GITHUB_OUTPUT
           fi
-
-          if ! git cat-file -e "$BAD_COMMIT^{commit}" 2>/dev/null; then
-            echo "ERROR: Bad commit does not exist: $BAD_COMMIT"
-            exit 1
-          fi
-
-          echo "✓ Both commits exist in repository"
-
-          # Validate that good commit is an ancestor of bad commit
-          if ! git merge-base --is-ancestor "$GOOD_COMMIT" "$BAD_COMMIT" 2>/dev/null; then
-            echo "ERROR: Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
-            echo "This means the good commit does not come before the bad commit in git history."
-            echo "Please verify your commit range."
-            exit 1
-          fi
-
-          echo "✓ Good commit is an ancestor of bad commit"
 
           # Validate timeout and attempts
           TIMEOUT='${{ inputs.timeout }}'
@@ -342,9 +366,177 @@ jobs:
           echo ""
           echo "All inputs validated successfully"
 
-          # Export parsed values as outputs for next step
-          echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
-          echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+      - name: Search for Failure Boundary
+        if: ${{ inputs.search-mode == true }}
+        id: search-boundary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
+        run: |
+          set -euo pipefail
+          trap 'git checkout -' EXIT  # Return to original branch/commit on exit
+
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/test_single_commit.sh ./build_bisect/
+          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
+          chmod +x ./build_bisect/test_single_commit.sh
+          chmod +x ./build_bisect/download_artifacts.sh
+
+          TIMEOUT='${{ inputs.timeout }}'
+          ATTEMPTS='${{ inputs.attempts }}'
+
+          # Determine which script to run based on test-script input
+          SCRIPT_PATH=""
+          TEST_SCRIPT='${{ inputs.test-script }}'
+
+          if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
+            SCRIPT_PATH="/work/bisect_gist_script.sh"
+          else
+            cat > /work/bisect_command_script.sh << 'EOF'
+          #!/bin/bash
+          set -eo pipefail
+          ${{ inputs.test-script }}
+          EOF
+            chmod +x /work/bisect_command_script.sh
+            SCRIPT_PATH="/work/bisect_command_script.sh"
+          fi
+
+          # Build test arguments
+          declare -a test_args
+          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
+            test_args+=(--tracy)
+          fi
+          if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
+            test_args+=(--nd-mode)
+          fi
+          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
+            test_args+=(--artifact-mode)
+          fi
+
+          # Start from HEAD (current commit)
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          echo "Starting search from current commit: $CURRENT_COMMIT"
+
+          # Test current commit first
+          echo "::group::Testing current commit $CURRENT_COMMIT"
+          if ./build_bisect/test_single_commit.sh "$CURRENT_COMMIT" "$SCRIPT_PATH" "$TIMEOUT" "$ATTEMPTS" "${test_args[@]}" 2>&1; then
+            CURRENT_RESULT=0  # Good
+            echo "Current commit PASSES"
+          else
+            CURRENT_RESULT=$?
+            if [ $CURRENT_RESULT -eq 2 ]; then
+              echo "Current commit SKIPPED"
+            else
+              echo "Current commit FAILS"
+            fi
+          fi
+          echo "::endgroup::"
+
+          # If current commit passes, we're done (no failure to find)
+          if [ $CURRENT_RESULT -eq 0 ]; then
+            echo "Current commit passes - no failure detected. Nothing to bisect."
+            echo "good-commit=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
+            echo "bad-commit=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
+            echo "search-complete=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Current commit fails, so we need to find when it started failing
+          # We'll search backwards to find the oldest commit that passes
+          # The bad commit for bisect will be the current commit (most recent failure)
+          OLDEST_GOOD_COMMIT=""
+
+          # Exponential backoff: 1 day, 2 days, 4 days, 8 days, etc.
+          DAYS_BACK=1
+          MAX_DAYS_BACK=365  # Safety limit: don't go back more than a year
+
+          while [ $DAYS_BACK -le $MAX_DAYS_BACK ]; do
+            echo "::group::Searching $DAYS_BACK days back"
+
+            # Find a commit from N days ago
+            TARGET_DATE=$(date -d "$DAYS_BACK days ago" -Iseconds 2>/dev/null || date -v-${DAYS_BACK}d +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "")
+
+            if [ -z "$TARGET_DATE" ]; then
+              echo "ERROR: Could not calculate target date"
+              exit 1
+            fi
+
+            # Find the first commit before or at the target date
+            TARGET_COMMIT=$(git log --until="$TARGET_DATE" --format="%H" -n 1 2>/dev/null || echo "")
+
+            if [ -z "$TARGET_COMMIT" ]; then
+              echo "No commit found $DAYS_BACK days back"
+              if [ -n "$OLDEST_GOOD_COMMIT" ]; then
+                echo "Stopping search - already found a good commit"
+                break
+              else
+                echo "Continuing to search further back..."
+                DAYS_BACK=$((DAYS_BACK * 2))
+                echo "::endgroup::"
+                continue
+              fi
+            fi
+
+            echo "Testing commit from $DAYS_BACK days ago: $TARGET_COMMIT"
+
+            # Test this commit
+            if ./build_bisect/test_single_commit.sh "$TARGET_COMMIT" "$SCRIPT_PATH" "$TIMEOUT" "$ATTEMPTS" "${test_args[@]}" 2>&1; then
+              TEST_RESULT=0  # Good
+              echo "Commit $TARGET_COMMIT PASSES"
+              # Update oldest good commit (keep the oldest one we've found)
+              if [ -z "$OLDEST_GOOD_COMMIT" ] || git merge-base --is-ancestor "$OLDEST_GOOD_COMMIT" "$TARGET_COMMIT" 2>/dev/null; then
+                OLDEST_GOOD_COMMIT="$TARGET_COMMIT"
+              fi
+              # We found a good commit - this means we've crossed the boundary
+              # The failure started somewhere between this good commit and the current commit
+              echo "Found good commit - failure boundary identified, stopping search"
+              echo "::endgroup::"
+              break
+            else
+              TEST_RESULT=$?
+              if [ $TEST_RESULT -eq 2 ]; then
+                echo "Commit $TARGET_COMMIT SKIPPED, continuing search"
+              else
+                echo "Commit $TARGET_COMMIT FAILS, continuing search backwards"
+              fi
+            fi
+
+            echo "::endgroup::"
+
+            # Exponential backoff: double the days
+            DAYS_BACK=$((DAYS_BACK * 2))
+          done
+
+          # If we didn't find a good commit, use repository root as fallback
+          if [ -z "$OLDEST_GOOD_COMMIT" ]; then
+            echo "WARNING: Did not find a good commit within $MAX_DAYS_BACK days"
+            echo "The failure may have existed for longer than expected."
+            OLDEST_COMMIT=$(git rev-list --max-parents=0 HEAD | head -1)
+            echo "Using repository root as good commit: $OLDEST_COMMIT"
+            OLDEST_GOOD_COMMIT="$OLDEST_COMMIT"
+          fi
+
+          # Use current commit as the bad commit (most recent failure)
+          OLDEST_BAD_COMMIT="$CURRENT_COMMIT"
+
+          # Validate that good commit is an ancestor of bad commit
+          if ! git merge-base --is-ancestor "$OLDEST_GOOD_COMMIT" "$OLDEST_BAD_COMMIT" 2>/dev/null; then
+            echo "ERROR: Good commit ($OLDEST_GOOD_COMMIT) is not an ancestor of bad commit ($OLDEST_BAD_COMMIT)"
+            echo "This should not happen. Please check the search logic."
+            exit 1
+          fi
+
+          echo "════════════════════════════════════════════════════════════════"
+          echo "Search complete!"
+          echo "Good commit (oldest without failure): $OLDEST_GOOD_COMMIT"
+          echo "Bad commit (oldest with failure): $OLDEST_BAD_COMMIT"
+          echo "════════════════════════════════════════════════════════════════"
+
+          echo "good-commit=$OLDEST_GOOD_COMMIT" >> $GITHUB_OUTPUT
+          echo "bad-commit=$OLDEST_BAD_COMMIT" >> $GITHUB_OUTPUT
+          echo "search-complete=true" >> $GITHUB_OUTPUT
 
       - name: Run Git Bisect
         shell: bash
@@ -361,9 +553,21 @@ jobs:
           chmod +x ./build_bisect/tt_bisect.sh
           chmod +x ./build_bisect/download_artifacts.sh
 
-          # Use parsed values from validation step
-          GOOD_COMMIT='${{ steps.validate.outputs.good-commit }}'
-          BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
+          # Use commits from search-boundary step if search-mode is enabled, otherwise from validate step
+          SEARCH_MODE='${{ inputs.search-mode }}'
+          if [ "$SEARCH_MODE" == "true" ]; then
+            GOOD_COMMIT='${{ steps.search-boundary.outputs.good-commit }}'
+            BAD_COMMIT='${{ steps.search-boundary.outputs.bad-commit }}'
+
+            # If search found that current commit passes, skip bisect
+            if [ "$GOOD_COMMIT" == "$BAD_COMMIT" ]; then
+              echo "No failure detected - skipping bisect"
+              exit 0
+            fi
+          else
+            GOOD_COMMIT='${{ steps.validate.outputs.good-commit }}'
+            BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
+          fi
           TIMEOUT='${{ inputs.timeout }}'
           ATTEMPTS='${{ inputs.attempts }}'
 
