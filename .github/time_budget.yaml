@@ -100,4 +100,4 @@ models:
   perf:
     wh_llmbox: 685
   demo:
-    wh_llmbox: 1130
+    wh_llmbox: 1100
