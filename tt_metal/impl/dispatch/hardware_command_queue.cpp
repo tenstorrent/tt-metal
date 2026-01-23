@@ -80,15 +80,7 @@ HWCommandQueue::HWCommandQueue(
     cq_shared_state_(std::move(cq_shared_state)),
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
-    device_(device),
-    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(
-        MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
-    prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
-    prefetcher_cache_manager_size_(
-        1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
-    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
-        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
+    device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
     uint16_t channel =
@@ -259,11 +251,7 @@ void HWCommandQueue::read_completion_queue() {
                     },
                     read_descriptor);
             }
-            {
-                std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
-                this->num_completed_completion_q_reads_ += num_events_to_read;
-                this->reads_processed_cv_.notify_one();
-            }
+            this->num_completed_completion_q_reads_ += num_events_to_read;
         } else if (this->exit_condition_) {
             return;
         }
@@ -287,17 +275,5 @@ void HWCommandQueue::terminate() {
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
-
-std::pair<bool, size_t> HWCommandQueue::query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) {
-    auto result = prefetcher_cache_manager_->get_cache_offset(pgm_id, lengthB);
-    TT_FATAL(
-        result.has_value(),
-        "Prefetcher cache query failed. Cache size: {}, requested: {}",
-        this->prefetcher_cache_manager_->get_cache_sizeB(),
-        lengthB);
-    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
-}
-
-void HWCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
 
 }  // namespace tt::tt_metal

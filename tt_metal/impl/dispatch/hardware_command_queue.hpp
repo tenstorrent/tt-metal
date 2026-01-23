@@ -30,7 +30,6 @@
 #include "worker_config_buffer.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
-#include "ringbuffer_cache.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -100,27 +99,14 @@ private:
     std::condition_variable reader_thread_cv_;
     std::mutex reader_thread_cv_mutex_;
 
-    std::condition_variable reads_processed_cv_;
-    std::mutex reads_processed_cv_mutex_;
     CoreType get_dispatch_core_type();
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
-
-    const uint32_t prefetcher_dram_aligned_block_size_;
-    const uint64_t prefetcher_cache_sizeB_;
-    const uint32_t prefetcher_dram_aligned_num_blocks_;
-    const uint32_t prefetcher_cache_manager_size_;
-    // The prefetcher cache manager is used to track the state of the prefetcher cache.
-    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
 
     void read_completion_queue();
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
-
-    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB);
-
-    void reset_prefetcher_cache_manager();
 
     void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
