@@ -51,13 +51,14 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
-    // TOOD: Add fused ternary op support in kernel
-    // const uint32_t in4_addr = get_arg_val<uint32_t>(argidx++);
-    // const uint32_t in5_addr = get_arg_val<uint32_t>(argidx++);
-    // #ifdef FUSE_TERNARY
-    // const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
-    // #endif
+
+#ifdef FUSE_TERNARY
+    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
+    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+#endif  // FUSE_TERNARY
+
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<22>();
@@ -74,16 +75,33 @@ void kernel_main() {
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
+
 #ifdef FUSE_TERNARY
+// Calculate offset for ternary_a_args - must account for FUSE_BIAS and potentially FUSE_AG
+#if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
+// If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
 #ifdef FUSE_BIAS
-    constexpr auto in4_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+    // After in2, then in3, then ternary
+    constexpr uint32_t ternary_a_args_cta_offset =
+        in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS() * 2;
 #else
-    constexpr auto in4_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    // After outputs, then in3, then ternary
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>() +
+        tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS();
 #endif
-    const auto in4_reader = TensorAccessor(in4_args, in4_addr, in4_tile_size);
-    constexpr auto in5_args = TensorAccessorArgs<in4_args.next_compile_time_args_offset()>();
-    const auto in5_reader = TensorAccessor(in5_args, in5_addr, in5_tile_size);
+#else
+// No FUSE_AG, same as dm_in1_sender_out
+#ifdef FUSE_BIAS
+    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
+#else
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
 #endif
+#endif
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+#endif  // FUSE_TERNARY
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
@@ -98,9 +116,13 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
+
+    DPRINT << "Running dm_in0_sender kernel" << ENDL();
+
 #ifdef FUSE_TERNARY
-    constexpr uint32_t cb_id_in4 = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_in5 = tt::CBIndex::c_6;
+    DPRINT << "FUSE_TERNARY enabled in dm_in0_sender" << ENDL();
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
 #endif
 
 #ifdef FUSE_AG
@@ -290,6 +312,12 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 cb_push_back(cb_id_in2, N_block_tiles);
+            }
+#endif
+
+#ifdef FUSE_TERNARY
+            if constexpr (!is_output_writer) {
+                // TODO: Add fused addcmul tensor reading support
             }
 #endif
 
