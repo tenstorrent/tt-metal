@@ -9,7 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
+
+# from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     get_mesh_mappers,
@@ -31,7 +32,7 @@ def run_yolov8s(
     res,
     model_location_generator=None,
 ):
-    disable_persistent_kernel_cache()
+    # disable_persistent_kernel_cache()
 
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
