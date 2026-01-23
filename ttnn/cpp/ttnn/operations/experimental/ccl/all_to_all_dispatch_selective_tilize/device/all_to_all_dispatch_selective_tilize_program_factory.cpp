@@ -235,6 +235,14 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // auto combine_and_matmul_core_range_set =
     // operation_attributes.matmul_core_range_set.merge(operation_attributes.combine_core_range_set)
 
+    /*
+     * Create semaphores for signalling to MM and UT cores that the metadata has arrived
+     */
+    auto matmul_metadata_ready_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, operation_attributes.matmul_core_range_set.value(), INVALID);
+    auto untilize_metadata_ready_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, operation_attributes.combine_core_range_set.value(), INVALID);
+
     // Get the bounding box of tilizer cores for multicast from drain tilizer to non-drain tilizers
     // Used for E-D table computed signal
     auto tilizer_bbox = selective_tilize_core_range_set.bounding_box();
@@ -479,17 +487,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"tilizer_mcast_start_y", (uint32_t)tilizer_mcast_start_physical.y},
         {"tilizer_mcast_end_x", (uint32_t)tilizer_mcast_end_physical.x},
         {"tilizer_mcast_end_y", (uint32_t)tilizer_mcast_end_physical.y},
-        {"matmul_mcast_start_x", (uint32_t)matmul_mcast_start_physical.x},
-        {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
-        {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
-        {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
-        {"combine_mcast_start_x", (uint32_t)combine_mcast_start_physical.x},
-        {"combine_mcast_start_y", (uint32_t)combine_mcast_start_physical.y},
-        {"combine_mcast_end_x", (uint32_t)combine_mcast_end_physical.x},
-        {"combine_mcast_end_y", (uint32_t)combine_mcast_end_physical.y},
         {"num_tilizer_cores", num_tilizer_cores},
-        {"num_mm_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
-        {"num_combine_cores", operation_attributes.combine_core_range_set.value().num_cores()},
         {"max_tiles_per_chunk", max_tiles_per_chunk},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
         {"e_t_buffer_ready_semaphore_id", e_t_buffer_ready_semaphore_id},
@@ -498,6 +496,22 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"drain_core_noc_x", (uint32_t)drain_core_physical.x},
         {"drain_core_noc_y", (uint32_t)drain_core_physical.y},
         {"expert_activation_output_page_size", detail::get_page_size_st(expert_activation_output_tensor)},
+
+        // Multicast coordinates for signalling MM cores
+        {"matmul_mcast_start_x", (uint32_t)matmul_mcast_start_physical.x},
+        {"matmul_mcast_start_y", (uint32_t)matmul_mcast_start_physical.y},
+        {"matmul_mcast_end_x", (uint32_t)matmul_mcast_end_physical.x},
+        {"matmul_mcast_end_y", (uint32_t)matmul_mcast_end_physical.y},
+        {"num_mm_cores", operation_attributes.matmul_core_range_set.value().num_cores()},
+        {"matmul_metadata_ready_semaphore_id", matmul_metadata_ready_semaphore_id},
+
+        // Multicast coordinates for signalling UT cores
+        {"untilize_mcast_start_x", (uint32_t)combine_mcast_start_physical.x},
+        {"untilize_mcast_start_y", (uint32_t)combine_mcast_start_physical.y},
+        {"untilize_mcast_end_x", (uint32_t)combine_mcast_end_physical.x},
+        {"untilize_mcast_end_y", (uint32_t)combine_mcast_end_physical.y},
+        {"num_untilize_cores", operation_attributes.combine_core_range_set.value().num_cores()},
+        {"untilize_metadata_ready_semaphore_id", untilize_metadata_ready_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};
