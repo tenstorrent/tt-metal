@@ -19,7 +19,6 @@ import torch
 
 import ttnn
 
-# Models will be imported dynamically based on task_mode
 from models.experimental.patchtsmixer.tt.model_processing import (
     preprocess_embedding_proj,
     preprocess_gated_attention,
@@ -462,16 +461,27 @@ def run_benchmark(
         tt_predictions = []
         ttnn_time = 0
 
+        # Warm-up run to compile kernels
+        batch = torch.from_numpy(samples[0:batch_size])
+        batch_tt = ttnn.from_torch(batch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        _ = tt_model(batch_tt, dtype=ttnn.bfloat16)
+        ttnn.synchronize_device(device)
+
         for i in range(0, len(samples), batch_size):
             batch = torch.from_numpy(samples[i : i + batch_size])
 
-            # Convert torch tensor to TTNN tensor
+            # Convert torch tensor to TTNN tensor (outside timing)
             batch_tt = ttnn.from_torch(batch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
+            # Time only device execution
+            ttnn.synchronize_device(device)
             start = time.time()
             tt_out = tt_model(batch_tt, dtype=ttnn.bfloat16)
-            tt_out_torch = ttnn.to_torch(tt_out).squeeze(2).float().numpy()
+            ttnn.synchronize_device(device)
             ttnn_time += time.time() - start
+
+            # Convert back to torch (outside timing)
+            tt_out_torch = ttnn.to_torch(tt_out).squeeze(2).float().numpy()
 
             tt_predictions.append(tt_out_torch)
 
