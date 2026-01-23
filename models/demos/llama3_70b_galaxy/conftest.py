@@ -13,7 +13,7 @@ def ensure_gc():
 
 @pytest.fixture(autouse=True)
 def ensure_devices(ensure_devices_tg):
-    pass
+    print("ensure_devices skipped")
 
 
 @pytest.fixture
