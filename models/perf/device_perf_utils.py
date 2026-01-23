@@ -188,11 +188,6 @@ def run_device_perf_detailed(
     clear_profiler_runtime_artifacts()
 
     results = {}
-    for d_col in duration_cols:
-        results[f"AVG {d_col}"] = 0
-        results[f"MIN {d_col}"] = float("inf")
-        results[f"MAX {d_col}"] = -float("inf")
-        results[f"STD {d_col}"] = 0
 
     if device_analysis_types is None:
         device_analysis_types = ["device_kernel_duration"]
@@ -224,6 +219,7 @@ def run_device_perf_detailed(
 
     else:
         for op in r.keys():
+            results[op] = {}
             for d_col in duration_cols:
                 results[op][f"AVG {d_col}"] = r[op][f"AVG {d_col}"]
                 results[op][f"MIN {d_col}"] = r[op][f"MIN {d_col}"]
@@ -231,6 +227,7 @@ def run_device_perf_detailed(
                 results[op][f"STD {d_col}"] = r[op][f"STD {d_col}"]
 
             for col, d_col in zip(cols, duration_cols):
+                post_processed_results[op][col] = {}
                 post_processed_results[op][col]["AVG"] = results[op][f"AVG {d_col}"]
                 post_processed_results[op][col]["MIN"] = results[op][f"MIN {d_col}"]
                 post_processed_results[op][col]["MAX"] = results[op][f"MAX {d_col}"]
