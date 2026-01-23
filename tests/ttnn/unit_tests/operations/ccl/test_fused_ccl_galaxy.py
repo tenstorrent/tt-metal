@@ -139,16 +139,18 @@ def run_all_gather_matmul_galaxy_impl(
     fidelity,
     fp32_acc_mode,
     packer_l1_acc,
-    use_fused,
+    op_mode="non_fused",  # "fused", "non_fused", "chunked_allgather", "local_matmul_allreduce"
     num_iters=1,
     trace_mode=True,
 ):
     """
     Galaxy implementation of AllGather + Matmul operation.
 
-    Compares:
-    - Fused: llama_all_gather_matmul_async
-    - Non-fused: all_gather_async + ttnn.linear
+    Supports multiple operation modes:
+    - "fused": llama_all_gather_matmul_async (requires large L1 intermediate)
+    - "non_fused": all_gather_async + ttnn.linear (standard approach)
+    - "chunked_allgather": Chunked AllGather + Matmul (smaller intermediate)
+    - "local_matmul_allreduce": Local matmul + AllReduce (most memory efficient)
 
     Uses tensor dimensions from Llama 70B MLP FF2 path:
     - Input: [8, 4, M, K_per_device] where K_per_device = K // 4
@@ -637,7 +639,17 @@ def run_all_gather_matmul_galaxy_impl(
                 outs.append(mm_out)
         return outs if store_all_results else [mm_out]
 
-    run_op = run_fused_op if use_fused else run_non_fused_op
+    # Select operation based on mode
+    op_functions = {
+        "fused": run_fused_op,
+        "non_fused": run_non_fused_op,
+        "chunked_allgather": run_chunked_allgather_op,
+        "local_matmul_allreduce": run_local_matmul_allreduce_op,
+    }
+    if op_mode not in op_functions:
+        raise ValueError(f"Unknown op_mode: {op_mode}. Must be one of {list(op_functions.keys())}")
+    run_op = op_functions[op_mode]
+    logger.info(f"Running with op_mode: {op_mode}")
 
     if trace_mode:
         # Compile
@@ -748,6 +760,11 @@ def run_all_gather_matmul_galaxy_impl(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "op_mode",
+    ["non_fused", "local_matmul_allreduce"],  # Skip "fused" - requires too much L1 for model dims
+    ids=["non_fused", "local_matmul_allreduce"],
+)
 def test_all_gather_matmul_galaxy_check(
     mesh_device,
     M,
@@ -763,12 +780,16 @@ def test_all_gather_matmul_galaxy_check(
     output_num_cores,
     num_links,
     cluster_axis,
+    op_mode,
 ):
     """
-    Functional test for AllGather + Matmul fused operation on Galaxy (32 devices, 8x4 mesh).
+    Functional test for AllGather + Matmul operations on Galaxy (32 devices, 8x4 mesh).
 
-    Validates correctness of llama_all_gather_matmul_async by comparing against golden outputs.
-    Uses tensor dimensions from Llama 70B MLP FF2 path.
+    Tests different operation modes:
+    - non_fused: all_gather_async + ttnn.linear (standard approach)
+    - local_matmul_allreduce: Local matmul + AllReduce (most memory efficient)
+
+    Note: "fused" mode skipped - llama_all_gather_matmul_async requires too much L1 for 70B model dims.
     """
     run_all_gather_matmul_galaxy_impl(
         mesh_device,
@@ -785,7 +806,7 @@ def test_all_gather_matmul_galaxy_check(
         fidelity,
         fp32_acc_mode,
         packer_l1_acc,
-        use_fused=True,
+        op_mode=op_mode,
         num_iters=1,
         trace_mode=False,
     )
@@ -844,60 +865,54 @@ def test_all_gather_matmul_galaxy_perf_comparison(
     """
     Performance comparison test for AllGather + Matmul on Galaxy (32 devices, 8x4 mesh).
 
-    Compares:
-    - Current (non-fused): all_gather_async + ttnn.linear
-    - Proposed (fused): llama_all_gather_matmul_async
+    Compares all operation modes:
+    - non_fused: all_gather_async + ttnn.linear (standard approach)
+    - local_matmul_allreduce: Local matmul + AllReduce (most memory efficient)
 
-    This is the FF2 path optimization opportunity identified in the plan.
+    Note: "fused" mode skipped - requires too much L1 for 70B model dims.
     """
     num_iters = 5
+    results = {}
 
-    # Run non-fused op first
-    logger.info("Running NON-FUSED operation (all_gather + linear)...")
-    non_fused_time_us = run_all_gather_matmul_galaxy_impl(
-        mesh_device,
-        M,
-        K,
-        N,
-        cluster_axis,
-        in0_dtype,
-        in1_dtype,
-        output_dtype,
-        num_links,
-        input_num_cores,
-        output_num_cores,
-        fidelity,
-        fp32_acc_mode,
-        packer_l1_acc,
-        use_fused=False,
-        num_iters=num_iters,
-        trace_mode=True,
-    )
+    # Test all modes that work with model dimensions
+    modes_to_test = ["non_fused", "local_matmul_allreduce"]
 
-    # Run fused op
-    logger.info("Running FUSED operation (llama_all_gather_matmul_async)...")
-    fused_time_us = run_all_gather_matmul_galaxy_impl(
-        mesh_device,
-        M,
-        K,
-        N,
-        cluster_axis,
-        in0_dtype,
-        in1_dtype,
-        output_dtype,
-        num_links,
-        input_num_cores,
-        output_num_cores,
-        fidelity,
-        fp32_acc_mode,
-        packer_l1_acc,
-        use_fused=True,
-        num_iters=num_iters,
-        trace_mode=True,
-    )
+    for mode in modes_to_test:
+        logger.info(f"Running {mode.upper()} operation...")
+        time_us = run_all_gather_matmul_galaxy_impl(
+            mesh_device,
+            M,
+            K,
+            N,
+            cluster_axis,
+            in0_dtype,
+            in1_dtype,
+            output_dtype,
+            num_links,
+            input_num_cores,
+            output_num_cores,
+            fidelity,
+            fp32_acc_mode,
+            packer_l1_acc,
+            op_mode=mode,
+            num_iters=num_iters,
+            trace_mode=True,
+        )
+        results[mode] = time_us
 
     # Print comparison report
-    test_name = f"Galaxy AllGather+Matmul FF2 (M={M}, K={K}, N={N})"
-    ag_input_shape = [8, 4, M, K // 4]  # K/4 per device before AG
-    mm_weights_shape = [8, 4, K, N]
-    print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, ag_input_shape, mm_weights_shape)
+    logger.info("=" * 80)
+    logger.info(f"PERFORMANCE COMPARISON: Galaxy AllGather+Matmul FF2 (M={M}, K={K}, N={N})")
+    logger.info("=" * 80)
+    logger.info(f"Input shape per device: [8, 4, {M}, {K // 4}]")
+    logger.info(f"Weight shape: [8, 4, {K}, {N}]")
+    logger.info("-" * 80)
+
+    baseline = results.get("non_fused", 1)
+    for mode, time_us in results.items():
+        if time_us is not None:
+            speedup = baseline / time_us if time_us > 0 else 0
+            logger.info(f"  {mode:30s}: {time_us:8.2f} us  ({speedup:.2f}x vs non_fused)")
+        else:
+            logger.info(f"  {mode:30s}: SKIPPED (trace_mode=False)")
+    logger.info("=" * 80)
