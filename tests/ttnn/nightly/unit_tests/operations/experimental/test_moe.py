@@ -35,7 +35,7 @@ def create_torch_input(L, in0_num_cores, E, M, K):
         K: Input dimension
 
     Returns:
-        torch_input: Tensor of shape (L, in0_num_cores, E, M, K)
+        torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
     """
     # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
     # le_val = 1
@@ -55,8 +55,8 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     #         torch_input[..., i] = 0.25
     #     else:
     #         torch_input[..., i] = -0.25
-    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
-    torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
+    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
+    torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
 
@@ -302,7 +302,7 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
         each_shard.append(tt_output[ring_pos, :, :, : num_tiles * ttnn.TILE_SIZE])
 
     result = torch.cat(each_shard, dim=-1)
-    assert result.shape == (E, M, K)
+    assert result.shape == (2, M, K)
     return result
 
 
@@ -360,15 +360,15 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     # Define tensor shapes - same for both accuracy and performance testing
-    input_shape = (in0_num_cores, E, M, K)
+    input_shape = (in0_num_cores, 2, M, K)
 
     in0_shard_spec = ttnn.ShardSpec(
         grid=in0_core_range_set,
-        shard_shape=(E * M, K),  # Your shard dimensions
+        shard_shape=(2 * M, K),  # Your shard dimensions
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    # Each core gets a copy of the original (E * M, K) input
+    # Each core gets a copy of the original (2 * M, K) input
     input_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
     )
@@ -529,6 +529,7 @@ def run_test_moe(device, M, K, N, check_accuracy, dump_outputs):
 
 SHAPE2TIME = {
     (32, 7168, 2048, 2, 1): 280.0,
+    # (32, 7168, 2048, 3, 1): 420.0,
 }
 
 
