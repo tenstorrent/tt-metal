@@ -497,6 +497,10 @@ def run_matmul_reduce_scatter_galaxy_impl(
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.skip(
+    reason="matmul_reduce_scatter_async doesn't support 2D mesh topologies. "
+    "The fused op requires 1D mesh (like T3K). Use test_fused_ccl_t3k.py for fused op testing."
+)
 def test_matmul_reduce_scatter_galaxy_check(
     mesh_device,
     num_devices,
@@ -595,6 +599,10 @@ def test_matmul_reduce_scatter_galaxy_check(
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.skip(
+    reason="matmul_reduce_scatter_async doesn't support 2D mesh topologies. "
+    "The fused op requires 1D mesh (like T3K). Use test_fused_ccl_t3k.py for fused op testing."
+)
 def test_matmul_reduce_scatter_galaxy_perf_comparison(
     mesh_device,
     num_devices,
