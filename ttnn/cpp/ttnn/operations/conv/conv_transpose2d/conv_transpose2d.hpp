@@ -12,15 +12,16 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
-namespace ttnn::operations::conv::conv_transpose2d {
+namespace ttnn {
 
 using ttnn::prim::Conv2dConfig;
 using ttnn::prim::Conv2dSliceConfig;
 
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
-using ResultWithOptions = std::variant<
+using ConvTranspose2dResult =
+    std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+using ConvTranspose2dResultWithOptions = std::variant<
     ttnn::Tensor,
     std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>,
     std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
@@ -29,15 +30,7 @@ using ResultWithOptions = std::variant<
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-}  // namespace ttnn::operations::conv::conv_transpose2d
-
-namespace ttnn {
-
-using operations::conv::conv_transpose2d::Conv2dConfig;
-using operations::conv::conv_transpose2d::Conv2dSliceConfig;
-using operations::conv::conv_transpose2d::ResultWithOptions;
-
-ResultWithOptions conv_transpose2d(
+ConvTranspose2dResultWithOptions conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
