@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
@@ -90,29 +89,28 @@ def test_cross_attention_transformer_text_inference(
             or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
         }
 
-    model_args.n_layers = 1
-    model_args.vision_num_cross_attention_layers = 1
+    # model_args.n_layers = 1
+    # model_args.vision_num_cross_attention_layers = 1
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
-    model_args.multiple_of = 1
-    reference_model_meta = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
-    reference_model_meta.setup_cache(model_args.max_batch_size, kv_cache_dtype)
-    reference_model_meta.load_state_dict(partial_state_dict_meta, strict=False)
+    # model_args.multiple_of = 1
+    # reference_model_meta = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
+    # reference_model_meta.setup_cache(model_args.max_batch_size, kv_cache_dtype)
+    # reference_model_meta.load_state_dict(partial_state_dict_meta, strict=False)
 
     model_repo_name = os.getenv("HF_MODEL")
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(model_repo_name)
     config._attn_implementation = "sdpa"
     config.text_config._attn_implementation = "sdpa"
-    config.text_config.num_hidden_layers = 2
-    config.text_config.cross_attention_layers = [0]  # [3,8]
+    # config.text_config.num_hidden_layers = 2
+    # config.text_config.cross_attention_layers = [0]
     reference_model = MllamaForCausalLM.from_pretrained(model_repo_name, torch_dtype="auto", config=config)  # (config)
     reference_model.to(torch.bfloat16)
     reference_model.eval()
-    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    # partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, "")
+
     add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
     partial_state_dict = add_prefix(
         load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.language_model."),
@@ -125,25 +123,24 @@ def test_cross_attention_transformer_text_inference(
     )
     partial_state_dict.update(lm_head_weights)
     weights_remover = lambda d, sub: {k: v for k, v in d.items() if not (isinstance(k, str) and sub in k)}
-    # partial_state_dict = weights_remover(partial_state_dict,"vision_model")
-    # partial_state_dict = weights_remover(partial_state_dict,"multi_modal_projector")
-    import re
 
-    for k in partial_state_dict.keys():
-        found = re.search(r"\d+", k)
-        if found:
-            if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
-                partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
+    # import re
 
-    rename = lambda k: (
-        k.replace(".layers.0.", ".layers.1.")
-        if ".layers.0." in k
-        else k.replace(".layers.3.", ".layers.0.")
-        if ".layers.3." in k
-        else k
-    )
+    # for k in partial_state_dict.keys():
+    #     found = re.search(r"\d+", k)
+    #     if found:
+    #         if int(k[found.start() : found.end()]) in [i for i in range(40) if i not in (0, 3)]:
+    #             partial_state_dict = weights_remover(partial_state_dict, k[found.start() : found.end()])
 
-    partial_state_dict = {rename(k): v for k, v in partial_state_dict.items()}
+    # rename = lambda k: (
+    #     k.replace(".layers.0.", ".layers.1.")
+    #     if ".layers.0." in k
+    #     else k.replace(".layers.3.", ".layers.0.")
+    #     if ".layers.3." in k
+    #     else k
+    # )
+
+    # partial_state_dict = {rename(k): v for k, v in partial_state_dict.items()}
 
     reference_model.load_state_dict(partial_state_dict, strict=False)
     torch.manual_seed(41)
@@ -170,29 +167,16 @@ def test_cross_attention_transformer_text_inference(
     """
     Test compute_xattn_kv_cache
     """
-    xattn_caches = torch.stack(
-        [layer.compute_xattn_kv_cache(vision_tokens) for layer in reference_model_meta.cross_attention_layers]
-    )
-    # with torch.no_grad():
-    #     T = reference_model.forward(
-    #         torch.ones((batch, text_seq_len), dtype=torch.long),
-    #         attention_mask=None,
-    #         cross_attention_states=vision_tokens.to(torch.bfloat16),
-    #         cross_attention_mask=None,
-    #         full_text_row_masked_out_mask=None,
-    #         use_cache=True,  # to also get past_key_values
-    #         output_hidden_states=False,
-    #         output_attentions=False,
-    #         return_dict=True,
-    #     )
-    # unstack layers
-    pt_xattn_cache_chunks = torch.chunk(xattn_caches, len(reference_model_meta.cross_attention_layers), dim=0)
-    # unstack k/v
-    pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
-    pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
-    pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
-    ]
+    # xattn_caches = torch.stack(
+    #     [layer.compute_xattn_kv_cache(vision_tokens) for layer in reference_model_meta.cross_attention_layers]
+    # )
+    # pt_xattn_cache_chunks = torch.chunk(xattn_caches, len(reference_model_meta.cross_attention_layers), dim=0)
+    # # unstack k/v
+    # pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
+    # pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
+    # pt_xattn_cache_chunks = [
+    #     x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
+    # ]
     # pt_xattn_cache_chunks = [
     #     kv
     #     for i in reference_model.model.cross_attention_layers
@@ -251,33 +235,30 @@ def test_cross_attention_transformer_text_inference(
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        h = reference_model_meta.get_partially_trainable_embedding(tokens[:, position_ids])
         Emb = reference_model.get_input_embeddings()
-        hh = Emb(tokens[:, position_ids])
+        h = Emb(tokens[:, position_ids])
 
         TEXT_ONLY = False
-        # cache_position = torch.arange(seq_len, device=device) # prefill
-        # cache_position = torch.tensor([past_key_values[0][0].shape[-2]], device=device)
-        logits = get_ref_model_logits(
-            i,
-            position_ids,
-            h,
-            xattn_mask,
-            full_text_mask,
-            xattn_caches,
-            text_only_inference=TEXT_ONLY,
-        )
+
+        # logits = get_ref_model_logits(
+        #     i,
+        #     position_ids,
+        #     h,
+        #     xattn_mask,
+        #     full_text_mask,
+        #     xattn_caches,
+        #     text_only_inference=TEXT_ONLY,
+        # )
         if mode == "prefill":
             T = reference_model.forward(
-                # input_ids=tokens[:, position_ids],
                 attention_mask=None,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
                 cross_attention_states=vision_tokens.to(torch.bfloat16),
                 cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
                 full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
-                inputs_embeds=hh,
+                inputs_embeds=h,
                 use_cache=True,  # to also get past_key_values
-                cache_position=torch.arange(seq_len),  # torch.tensor([T.past_key_values[0][0].shape[-2]]),
+                cache_position=position_ids,  # torch.arange(seq_len),  # torch.tensor([T.past_key_values[0][0].shape[-2]]),
                 output_hidden_states=False,
                 output_attentions=False,
                 return_dict=True,
@@ -289,13 +270,11 @@ def test_cross_attention_transformer_text_inference(
             ]
         else:
             T = reference_model.forward(
-                # input_ids=tokens[:, position_ids],
                 attention_mask=None,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
-                # cross_attention_states= vision_tokens.to(torch.bfloat16),
                 cross_attention_mask=xattn_mask.squeeze(1).to(torch.bfloat16),
                 full_text_row_masked_out_mask=full_text_mask.to(torch.bfloat16),
-                inputs_embeds=hh,
+                inputs_embeds=h,
                 past_key_values=T.past_key_values,
                 use_cache=True,  # to also get past_key_values
                 cache_position=torch.tensor([T.past_key_values[0][0].shape[-2]]),
