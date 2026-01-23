@@ -20,6 +20,12 @@ try:  # pragma: no cover - exercised implicitly when TT-NN is installed
     import ttnn as _ttnn  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - CPU-only development environment
     _ttnn = None
+else:  # pragma: no cover - validate we imported the real TTNN package
+    # When running from the tt-metal repo without installing the python package, `import ttnn`
+    # can resolve to the top-level `ttnn/` source directory as a namespace package, which is not
+    # the runtime module and does not expose APIs like `from_torch`. Treat that as unavailable.
+    if not hasattr(_ttnn, "from_torch"):
+        _ttnn = None
 
 
 ttnn = _ttnn  # re-export for convenience inside MaskFormer modules
