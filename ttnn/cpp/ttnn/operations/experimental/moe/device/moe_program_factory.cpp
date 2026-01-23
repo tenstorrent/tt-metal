@@ -31,37 +31,33 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
-    // Create CBs for the program
     // CBs used in the MOE operation
     /*
-        ----------------------------------------------------------------------------
-        |     Name       |   CB Index    |   Dtype    | Tiles/CB |  Total size (B) |
-        ----------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     |    14*6  |      48384      |
-        | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  |    224*2 |      917504     |
-        | cb_c2w_rdy     | CBIndex::c_2  | Bfp4_b     |    1     |      576        |
-        | cb_w2c_rdy     | CBIndex::c_3  | Bfp4_b     |    1     |      576        |
-        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  |    6*2   |      24576      |
-        | cb_c2w_out     | CBIndex::c_5  | Float16_b  |    2*2   |      8192       |
-        | cb_w2s_out     | CBIndex::c_6  | Float16_b  |    2     |      4096       |
-        ---------------------------------------------------------------------------
+        ------------------------------------------------------------------------------------
+        |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
+        ------------------------------------------------------------------------------------
+        | cb_r2c_w0      | CBIndex::c_0  | Bfp4_b     | true  |    14*6  |      48384      |
+        | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224*2 |      917504     |
+        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
+        | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
+        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*12  |      147456     |
+        ------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in and cb_c2w_out are handled separately as they are sharded CBs
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, 14 * 3 * 2},
-        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Bfp4_b, 1},
-        {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 6 * 2},
-        {"cb_c2w_out", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 2 * 2},
+    // Note: cb_s2c_in is handled separately as it is sharded CB
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
+        {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
+        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 12},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
 
     // Create CBs
-    for (const auto& [name, index, data_format, tiles_per_cb] : cb_specs0) {
-        const uint32_t bytes_per_tile = tt::tile_size(data_format);
+    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : cb_specs0) {
+        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
@@ -69,15 +65,18 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     }
 
     // Create sharded CBs
-    // TODO(nsoraba): Add tile.get_tile_size(data_format) instead of hardcoding the tiles per CB
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, tt::tt_metal::Buffer*>>
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
         sharded_cb_specs = {
-            {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, 224 * 2, tensor_args.input_tensor.buffer()},
-            {"cb_w2s_out", tt::CBIndex::c_6, tt::DataFormat::Float16_b, 2, tensor_args.output_tensor.buffer()}};
+            {"cb_s2c_in",
+             tt::CBIndex::c_1,
+             tt::DataFormat::Float16_b,
+             true,
+             224 * 2,
+             tensor_args.input_tensor.buffer()}};
 
-    for (const auto& [name, index, data_format, tiles_per_cb, p_buffer] : sharded_cb_specs) {
-        const uint32_t bytes_per_tile = tt::tile_size(data_format);
+    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
+        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile)
                                    .set_globally_allocated_address(*p_buffer);
@@ -105,8 +104,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
@@ -115,8 +114,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
@@ -213,7 +212,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
 
-        log_info(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
+        log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
     return cached_program_t{
@@ -235,8 +234,6 @@ void MoEProgramFactory::override_runtime_arguments(
     // Update sharded circular buffer addresses
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, shared_variables.cb_handles_sharded["cb_c2w_out"], *tensor_args.output_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
     // Runtime args layout: [3] = w0_w1_tensor address, [5] = w2_tensor address

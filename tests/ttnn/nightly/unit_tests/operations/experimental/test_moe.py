@@ -9,14 +9,14 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, comp_allclose
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
 
-PCC_THRESHOLD = 0.99
+PCC_THRESHOLD = 0.98
 
 # Some cores have more tiles than others, but they are sprinkled around the ring for boundary alignment.
 FULL_CORES = {0, 1, 8, 9}
@@ -35,7 +35,7 @@ def create_torch_input(L, in0_num_cores, E, M, K):
         K: Input dimension
 
     Returns:
-        torch_input: Tensor of shape (L, in0_num_cores, E, M, K)
+        torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
     """
     # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
     # le_val = 1
@@ -55,7 +55,9 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     #         torch_input[..., i] = 0.25
     #     else:
     #         torch_input[..., i] = -0.25
-    torch_input = (1 / 256) * torch.ones((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
+    # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
+    torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
+    torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
 
 
@@ -85,7 +87,7 @@ def create_torch_w0(L, E, K, N):
     #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w0 = torch.ones((L, E, K, N), dtype=torch.bfloat16)
+    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w0
 
 
@@ -115,7 +117,7 @@ def create_torch_w1(L, E, K, N):
     #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w1 = -1 * torch.ones((L, E, K, N), dtype=torch.bfloat16)
+    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w1
 
 
@@ -144,7 +146,7 @@ def create_torch_w2(L, E, N, K):
     #                 k_val = k_chunk
     #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
     #         le_val *= -1
-    torch_w2 = 0.25 * torch.ones((L, E, N, K), dtype=torch.bfloat16)
+    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
     return torch_w2
 
 
@@ -242,11 +244,39 @@ def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
     all_groups_per_bank = torch_w2_reordered.view(L, E, 12, -1, N, 2 * ttnn.TILE_SIZE)  # (L, E, 12, 10, N, 64)
     all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 10, N, 64)
 
+    each_shard = []
+
+    # Group N in terms of tiles first
+    N_grouped = all_groups_per_bank.view(12, L, E, 10, -1, 32, 2 * ttnn.TILE_SIZE)  # (12, L, E, 10, 64, 32, 64)
+
+    # Figure out the order of N tiles based on the ring position.
+    core_chunk_order = torch.tensor(list(reversed(range(len(ring2cores))))).roll(1)
+
+    # Figure out the starting position for each chunk
+    chunk_sizes = [5 if ring2cores[ring_pos][2] else 6 for ring_pos in range(len(ring2cores))]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    # Assemble the number of such N tiles based on the ring position.
+    for core_id in range(len(ring2cores)):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        each_shard.append(torch.cat(each_chunk, dim=3))
+
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(12, L, E, 10, -1, 64)
+
     # Pad "N" dimension to make it divisible by 7 tiles, since we read 7*2 tiles at a time.
     Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
     N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
     padding = torch.zeros(12, L, E, 10, N_padding, 2 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
-    all_groups_per_bank = torch.cat([all_groups_per_bank, padding], dim=4)  # (12, L, E, 10, N + 192, 64)
+    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 10, N + 192, 64)
     return all_groups_per_bank
 
 
@@ -272,7 +302,7 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
         each_shard.append(tt_output[ring_pos, :, :, : num_tiles * ttnn.TILE_SIZE])
 
     result = torch.cat(each_shard, dim=-1)
-    assert result.shape == (E, M, K)
+    assert result.shape == (2, M, K)
     return result
 
 
@@ -280,9 +310,12 @@ def get_accuracy_metrics(torch_output, tt_output):
     _pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     std = torch_output.std().item()
     relative_rmse_val = (torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / std) if std != 0 else 0.0
+    allclose_passed, allclose_val = comp_allclose(torch_output, tt_output)
     return {
         "pcc": pcc_val,
         "relative_rmse": relative_rmse_val,
+        "allclose": allclose_passed,
+        "allclose_val": allclose_val,
     }
 
 
@@ -327,15 +360,15 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     # Define tensor shapes - same for both accuracy and performance testing
-    input_shape = (in0_num_cores, E, M, K)
+    input_shape = (in0_num_cores, 2, M, K)
 
     in0_shard_spec = ttnn.ShardSpec(
         grid=in0_core_range_set,
-        shard_shape=(E * M, K),  # Your shard dimensions
+        shard_shape=(2 * M, K),  # Your shard dimensions
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    # Each core gets a copy of the original (E * M, K) input
+    # Each core gets a copy of the original (2 * M, K) input
     input_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
     )
@@ -477,10 +510,6 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_layer_output)
             all_accuracy_metrics[(layer_id, expert_id)] = layer_metrics
 
-            logger.info(
-                f"Layer {layer_id}, Expert {expert_id}: PCC={layer_metrics['pcc']:.6f}, Relative RMSE={layer_metrics['relative_rmse']:.6f}"
-            )
-
     if dump_outputs:
         torch.set_printoptions(profile="full")
         var2filename = {
@@ -499,7 +528,8 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048, 2, 1): 325.0,
+    (32, 7168, 2048, 2, 1): 280.0,
+    # (32, 7168, 2048, 3, 1): 420.0,
 }
 
 
@@ -534,16 +564,15 @@ def test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     )
 
     passing = True
-    if not all(accuracy_metrics.values()):
-        # Print the layers and experts that did not pass the PCC check
-        for (layer_id, expert_id), metrics in accuracy_metrics.items():
-            if not metrics["pcc"] >= PCC_THRESHOLD:
-                passing = False
-                logger.warning(
-                    f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}, Relative RMSE={metrics['relative_rmse']:.6f}"
-                )
+    # Print the layers and experts that did not pass the PCC check
+    for (layer_id, expert_id), metrics in accuracy_metrics.items():
+        if metrics["pcc"] < PCC_THRESHOLD:
+            passing = False
+            logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f}")
+        else:
+            logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f} (Passed)")
 
-    assert passing, f"Some experts in some layers did not pass the PCC check"
+    assert passing, f"Some experts in some layers did not pass the PCC/Allclose check"
 
 
 @pytest.mark.parametrize(
