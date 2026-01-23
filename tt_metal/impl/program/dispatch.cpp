@@ -2516,7 +2516,9 @@ uint32_t program_base_addr_on_core(
 
 // MeshWorkloadImpl version - supports both CQs and not having CQs
 uint32_t program_base_addr_on_core(
-    distributed::MeshWorkloadImpl& mesh_workload, distributed::MeshDevice* mesh_device, HalProgrammableCoreType programmable_core_type) {
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType programmable_core_type) {
     const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices

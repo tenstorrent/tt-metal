@@ -33,7 +33,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
-
 namespace tt::tt_metal {
 
 using namespace tt;

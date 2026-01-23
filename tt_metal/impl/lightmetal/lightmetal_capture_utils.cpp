@@ -22,8 +22,8 @@
 // namespace tt::tt_metal {
 
 // void LightMetalCompareToCapture(
-//     HWCommandQueue& cq, const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, void* dst)
-//     { LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+//     HWCommandQueue& cq, const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, void*
+//     dst) { LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
 //     // If dst ptr is not provided, just allocate temp space for rd return capture/usage.
 //     std::vector<uint32_t> rd_data_tmp;

@@ -41,7 +41,6 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 
-
 namespace tt::tt_metal {
 
 using std::map;
