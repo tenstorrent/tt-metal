@@ -10,6 +10,7 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 
 #ifdef ARCH_QUASAR
 extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
