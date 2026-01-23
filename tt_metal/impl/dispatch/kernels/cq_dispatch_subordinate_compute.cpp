@@ -34,8 +34,8 @@ void MAIN {
     uint32_t last_counts[num_streams_to_monitor] = {0};
 
     // Pointer to perf telemetry config for reading terminate flag
-    volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_config =
-        reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+    volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_config =
+        reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 
     // Main loop: runs until dispatch_s signals terminate
     while (perf_telemetry_config->telemetry_state != TELEMETRY_STATE_TERMINATE) {

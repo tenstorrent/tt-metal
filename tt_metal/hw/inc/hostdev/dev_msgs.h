@@ -86,13 +86,23 @@ enum TelemetryState : uint32_t {
     TELEMETRY_STATE_TERMINATE = 2,  // Signal to terminate the kernel
 };
 
-// Perf telemetry configuration for D2H socket streaming
-// Placed before profiler_msg_t in mailboxes_t, using space freed from profiler control_vector reduction
-struct perf_telemetry_config_t {
+// Telemetry data payload - 16 bytes, PCIe write aligned
+struct telemetry_timestamp_t {
+    uint32_t time_hi;  // High 32 bits of timestamp
+    uint32_t time_lo;  // Low 32 bits of timestamp
+    uint32_t id;       // Telemetry event ID
+    uint32_t header;   // Event header/metadata
+};
+
+// Perf telemetry message for D2H socket streaming
+// Placed after profiler_msg_t in mailboxes_t to allow for expansion
+struct perf_telemetry_msg_t {
     volatile uint32_t config_buffer_addr;      // Address of D2H socket config buffer in L1
     volatile uint32_t telemetry_state;         // Current telemetry state (TelemetryState enum)
     volatile uint32_t telemetry_core_noc_xy;   // NOC XY encoding of telemetry core (for remote terminate)
     volatile uint32_t telemetry_mailbox_addr;  // Mailbox address on telemetry core (for remote terminate)
+    struct telemetry_timestamp_t kernel_start;  // Device kernel start time
+    struct telemetry_timestamp_t kernel_end;    // Device kernel stop time
 };
 
 // Messages for host to tell brisc to go
@@ -408,9 +418,9 @@ struct mailboxes_t {
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
-    struct perf_telemetry_config_t perf_telemetry;  // 16 bytes, uses space freed from profiler control_vector
-    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)        // CODEGEN:skip
-        profiler_msg_t profiler;                    // Now 16 bytes smaller (control_vector reduced from 32 to 28)
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
+        profiler_msg_t profiler;
+    struct perf_telemetry_msg_t perf_telemetry;  // Placed after profiler to allow for expansion
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().

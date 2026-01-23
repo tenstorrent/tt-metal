@@ -55,8 +55,8 @@ constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
 
 // Pointer to perf telemetry config in mailbox (for setting terminate flag)
-volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;

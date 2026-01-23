@@ -1285,8 +1285,8 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     uint32_t perf_telemetry_offset =
         factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::perf_telemetry);
-    uint32_t config_buffer_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
-        dev_msgs::perf_telemetry_config_t::Field::config_buffer_addr);
+    uint32_t config_buffer_addr_offset =
+        factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::config_buffer_addr);
 
     uint32_t perf_telemetry_mailbox_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset +
@@ -1315,14 +1315,14 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         uint32_t telemetry_noc_xy = hal.noc_xy_encoding(telemetry_virtual.x, telemetry_virtual.y);
 
         // Calculate offsets for telemetry_core_noc_xy and telemetry_mailbox_addr fields
-        uint32_t telemetry_core_noc_xy_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
-            dev_msgs::perf_telemetry_config_t::Field::telemetry_core_noc_xy);
-        uint32_t telemetry_mailbox_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
-            dev_msgs::perf_telemetry_config_t::Field::telemetry_mailbox_addr);
+        uint32_t telemetry_core_noc_xy_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+            dev_msgs::perf_telemetry_msg_t::Field::telemetry_core_noc_xy);
+        uint32_t telemetry_mailbox_addr_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+            dev_msgs::perf_telemetry_msg_t::Field::telemetry_mailbox_addr);
 
         // Calculate mailbox address for telemetry_state field on telemetry core
-        uint32_t telemetry_state_offset = factory.offset_of<dev_msgs::perf_telemetry_config_t>(
-            dev_msgs::perf_telemetry_config_t::Field::telemetry_state);
+        uint32_t telemetry_state_offset =
+            factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::telemetry_state);
         uint32_t telemetry_core_state_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset +
             telemetry_state_offset;

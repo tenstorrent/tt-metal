@@ -82,7 +82,6 @@ struct TimestampedDataSize<TS_DATA_16B> {
 };
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
-// Reduced from 32 to 28 - freed space used by perf_telemetry_config_t in mailboxes_t
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 28;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;

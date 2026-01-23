@@ -15,8 +15,8 @@
 constexpr uint32_t perf_telemetry_page_size = 64;
 
 // Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
-volatile tt_l1_ptr perf_telemetry_config_t* perf_telemetry_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_config_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
+volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr perf_telemetry_msg_t*>(GET_MAILBOX_ADDRESS_DEV(perf_telemetry));
 
 // Telemetry socket state
 static SocketSenderInterface perf_telemetry_socket;
