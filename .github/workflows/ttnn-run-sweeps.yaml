@@ -838,6 +838,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        RUNNER_LABEL: ${{ matrix.test-group.runner_label }}
         LOGURU_LEVEL: ${{ inputs.log-level }}
         TT_LOGGER_LEVEL: ${{ inputs.log-level }}
         GITHUB_ACTIONS: true
@@ -977,6 +978,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}

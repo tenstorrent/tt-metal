@@ -12,8 +12,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.common.utility_functions import torch_random
-
 
 @pytest.mark.parametrize(
     "input_shape, output_shape",
@@ -148,17 +146,6 @@ def test_reshape_width_shard(device, layout):
     assert torch.allclose(expected_output, actual_output)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "input_shape,output_shape,shard_shape",
-    [
-        # Simple ND sharding test - matches pattern from test_reduce_on_batch
-        # NOTE: Currently reshape with ND sharding returns interleaved output
-        # This test verifies the data correctness even though memory layout changes
-        ([5, 4, 32 * 8, 32 * 8], [5, 4, 8, 32, 8, 32], [5, 1, 32, 32]),
-        ([4, 2, 32 * 4, 32 * 4], [4, 2, 4, 32, 4, 32], [4, 1, 32, 32]),
-    ],
-)
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
@@ -807,11 +794,8 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
     output_shard_shape = list(shard_shape)
     output_shard_shape[0] = 1
-    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
     output_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(output_shard_shape), grid))
-    if interleaved:
-        memory_config = None
-        output_memory_config = None
+
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )

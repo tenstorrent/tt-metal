@@ -61,7 +61,7 @@ void bind_sdpa_windowed(nb::module_& mod) {
                const ttnn::Tensor& cu_window_seqlens,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<SDPAProgramConfig> program_config,
+               const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
                     input_tensor_q,
