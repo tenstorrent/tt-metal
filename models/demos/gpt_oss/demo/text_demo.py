@@ -247,7 +247,7 @@ def prepare_gpt_oss_generator_args(
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts (128k prompt)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
             1,  # data_parallel
             128,  # batch_size (32 per row, but only 1 real user per row)
             1,  # repeat_batches
