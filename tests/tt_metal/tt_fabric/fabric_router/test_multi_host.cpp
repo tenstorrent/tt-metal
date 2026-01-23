@@ -896,6 +896,8 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
@@ -915,10 +917,8 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     control_plane.print_routing_tables();
 
     // Test Z direction functionality
-    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
-    EXPECT_EQ(
-        control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
-        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+    // Verify routing_direction_to_eth_direction returns Z direction for Z
+    EXPECT_EQ(control_plane.routing_direction_to_eth_direction(RoutingDirection::Z), eth_chan_directions::Z);
 
     // Verify get_forwarding_eth_chans_to_chip can handle Z direction for intermesh connections
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
@@ -971,13 +971,11 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
                 control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, RoutingDirection::Z);
             z_channel_count += z_direction_chans.size();
 
-            // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
+            // Verify that get_eth_chan_direction returns Z direction for Z channels
             for (const auto& chan : z_direction_chans) {
                 bool is_valid_chan = (chan == 0 || chan == 1 || chan == 6 || chan == 7);
                 EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
-                EXPECT_EQ(
-                    control_plane.get_eth_chan_direction(fabric_node_id, chan),
-                    static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+                EXPECT_EQ(control_plane.get_eth_chan_direction(fabric_node_id, chan), eth_chan_directions::Z);
             }
         }
     }

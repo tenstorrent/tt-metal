@@ -154,6 +154,18 @@ For multi-host tests, use `tt-run` with the appropriate cluster and rank binding
      tests/tt_metal/tt_fabric/golden_mapping_files/TestClosetBox3PodTTSwitchControlPlaneInit.yaml
   ```
 
+- `T3K2x2AssignZDirectionControlPlaneInit` (world_size=2):
+  ```bash
+  tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x2_cluster_desc_mapping.yaml \
+         --rank-binding tests/tt_metal/distributed/config/t3k_2x2_assign_z_direction_rank_bindings.yaml \
+         --mpi-args "--tag-output --allow-run-as-root" \
+         ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
+         --gtest_filter="MultiHost.T3K2x2AssignZDirectionControlPlaneInit"
+
+  cp generated/fabric/asic_to_fabric_node_mapping_rank_1_of_2.yaml \
+     tests/tt_metal/tt_fabric/golden_mapping_files/T3K2x2AssignZDirectionControlPlaneInit.yaml
+  ```
+
 3. **Verify the changes** by reviewing the diff:
    ```bash
    git diff tests/tt_metal/tt_fabric/golden_mapping_files/<GoldenFileName>.yaml
@@ -178,6 +190,7 @@ The following tests generate and compare ASIC mapping files:
 - `TestBigMesh2x4ControlPlaneInit` (4 hosts)
 - `TestBHQB4x4ControlPlaneInit` (4 hosts)
 - `TestClosetBox3PodTTSwitchControlPlaneInit` (3 hosts)
+- `T3K2x2AssignZDirectionControlPlaneInit` (2 hosts)
 
 ## File Naming Convention
 
