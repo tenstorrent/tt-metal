@@ -17,7 +17,9 @@ void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/common.h"
-void kernel_main() { core_agnostic_main(); }
+namespace NAMESPACE {
+void MAIN { core_agnostic_main(); }
+}  // namespace NAMESPACE
 #else
 #include "api/dataflow/dataflow_api.h"
 void kernel_main() { core_agnostic_main(); }

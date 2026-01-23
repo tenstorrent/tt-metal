@@ -11,7 +11,8 @@
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
 #endif
     uint32_t wait_cycles = get_arg_val<uint32_t>(0);
 #if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)

@@ -11,7 +11,8 @@ extern uint32_t __stack_base[];
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
-void kernel_main() {
+namespace NAMESPACE {
+void MAIN {
 #else
 void kernel_main() {
 #endif
@@ -25,4 +26,5 @@ void kernel_main() {
         *point = 0;
 }
 #if defined(COMPILE_FOR_TRISC)
+}  // namespace NAMESPACE
 #endif
