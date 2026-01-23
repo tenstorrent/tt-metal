@@ -861,9 +861,6 @@ void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_clo
 
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
             auto& cq = dev->command_queue(cq_id);
-            if (cq.sysmem_manager().get_bypass_mode()) {
-                cq.record_end();
-            }
             cq.terminate();
         }
     }
