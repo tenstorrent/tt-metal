@@ -11,6 +11,7 @@
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "rotary_embedding.hpp"
 
 namespace ttml::modules {
 
@@ -76,6 +77,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const uint32_t token_position = kv_cache->get_cache_position();
 
     if (m_embedding) {
+        // Cast to RotaryEmbedding for the token_position overload
         query_with_heads = (*m_embedding)(query_with_heads, token_position);
         key_with_heads = (*m_embedding)(key_with_heads, token_position);
     }

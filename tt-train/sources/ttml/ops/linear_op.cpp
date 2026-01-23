@@ -113,8 +113,7 @@ autograd::TensorPtr linear_op(
         ttnn_linear_backward(tensor, weight, bias, out);
     };
 
-    auto links = autograd::get_links(weight, tensor, bias);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

@@ -30,13 +30,13 @@ private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
     uint32_t m_num_groups{};
+
+public:
     std::shared_ptr<ModuleBase> m_q_linear;
     std::shared_ptr<ModuleBase> m_kv_linear;
     std::shared_ptr<ModuleBase> m_out_linear;
     std::shared_ptr<ModuleBase> m_dropout;
     std::shared_ptr<RotaryEmbedding> m_embedding;
-
-public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(

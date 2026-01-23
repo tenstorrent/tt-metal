@@ -235,8 +235,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             value->add_grad(dL_dV);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }
@@ -366,8 +365,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
             value->add_grad(grad_v);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }

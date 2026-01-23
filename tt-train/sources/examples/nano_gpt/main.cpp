@@ -24,6 +24,7 @@
 #include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "models/lora/lora_model.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -110,6 +111,8 @@ struct TrainingConfig {
     std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
+    bool print_model_summary = false;
+    std::optional<std::string> lora_config_path;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -135,6 +138,12 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
+    config.print_model_summary = training_config["print_model_summary"].as<bool>(config.print_model_summary);
+
+    auto lora_config_node = training_config["lora_config"];
+    if (lora_config_node) {
+        config.lora_config_path = lora_config_node.as<std::string>();
+    }
 
     return config;
 }
@@ -290,6 +299,91 @@ inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, c
 
 }  // namespace
 
+void print_model_summary(Model &model, bool tp = false) {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+
+    auto contains = [](const std::string &str, const std::string &substr) {
+        return str.find(substr) != std::string::npos;
+    };
+
+    auto parameters = get_model_parameters(model);
+
+    uint64_t total_trainable_params = 0;
+    uint64_t total_non_trainable_params = 0;
+
+    std::vector<std::tuple<std::string, std::string, uint64_t, bool>> param_info;
+
+    // Collect parameter information
+    for (const auto &[name, tensor_ptr] : parameters) {
+        auto tensor = tensor_ptr->get_value();
+        auto shape = tensor.logical_shape();
+        auto params_in_tensor = tensor.logical_volume();
+
+        // Adjust for tensor parallel if needed
+        if (tp && (contains(name, "fc") || contains(name, "linear"))) {
+            params_in_tensor *= num_devices;
+        }
+
+        bool is_trainable = tensor_ptr->get_requires_grad();
+
+        if (is_trainable) {
+            total_trainable_params += params_in_tensor;
+        } else {
+            total_non_trainable_params += params_in_tensor;
+        }
+
+        // Format shape string
+        std::string shape_str = "[";
+        for (size_t i = 0; i < shape.rank(); ++i) {
+            if (i > 0)
+                shape_str += ", ";
+            shape_str += std::to_string(shape[i]);
+        }
+        shape_str += "]";
+
+        param_info.emplace_back(name, shape_str, params_in_tensor, is_trainable);
+    }
+
+    // Print header
+    fmt::print("\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("Model Summary\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("{:<55} {:<30} {:<20} {:<15}\n", "Layer Name", "Shape", "Parameters", "Trainable");
+    fmt::print("{}\n", std::string(120, '-'));
+
+    // Print trainable parameters
+    fmt::print("\nTrainable Parameters:\n");
+    fmt::print("{}\n", std::string(120, '-'));
+    for (const auto &[name, shape_str, params, is_trainable] : param_info) {
+        if (is_trainable) {
+            fmt::print("{:<55} {:<30} {:<20} {:<15}\n", name, shape_str, params, "Yes");
+        }
+    }
+
+    // Print non-trainable parameters
+    bool has_non_trainable = total_non_trainable_params > 0;
+    if (has_non_trainable) {
+        fmt::print("\nNon-Trainable Parameters:\n");
+        fmt::print("{}\n", std::string(120, '-'));
+        for (const auto &[name, shape_str, params, is_trainable] : param_info) {
+            if (!is_trainable) {
+                fmt::print("{:<55} {:<30} {:<20} {:<15}\n", name, shape_str, params, "No");
+            }
+        }
+    }
+
+    // Print summary
+    fmt::print("\n");
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("Total trainable parameters: {}\n", total_trainable_params);
+    fmt::print("Total non-trainable parameters: {}\n", total_non_trainable_params);
+    fmt::print("Total parameters: {}\n", total_trainable_params + total_non_trainable_params);
+    fmt::print("{}\n", std::string(120, '='));
+    fmt::print("\n");
+}
+
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
@@ -321,6 +415,11 @@ int main(int argc, char **argv) {
     TrainingConfig training_config = parse_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
+
+    std::optional<ttml::models::LoRAConfig> lora_config;
+    if (training_config.lora_config_path.has_value()) {
+        lora_config = ttml::models::LoRAConfig::from_yaml(YAML::LoadFile(*training_config.lora_config_path));
+    }
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
@@ -375,6 +474,24 @@ int main(int argc, char **argv) {
     fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
     fmt::print("Scheduler type {}\n", training_config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
+    if (lora_config.has_value()) {
+        fmt::print("LoRA configuration loaded from: {}\n", *training_config.lora_config_path);
+        fmt::print("  Rank (r): {}\n", lora_config->r);
+        fmt::print("  Alpha: {}\n", lora_config->lora_alpha);
+        fmt::print("  Dropout: {}\n", lora_config->lora_dropout);
+        fmt::print("  Bias trainable: {}\n", lora_config->is_bias_trainable);
+        if (lora_config->target_modules.has_value()) {
+            fmt::print("  Target modules: [");
+            for (size_t i = 0; i < lora_config->target_modules->size(); ++i) {
+                if (i > 0)
+                    fmt::print(", ");
+                fmt::print("{}", (*lora_config->target_modules)[i]);
+            }
+            fmt::print("]\n");
+        } else {
+            fmt::print("  Target modules: all\n");
+        }
+    }
     auto sequence_length =
         std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
@@ -557,6 +674,15 @@ int main(int argc, char **argv) {
         model->load_from_safetensors(safetensors_path);
         fmt::print("Model loaded from safetensors\n");
     }
+
+    // Load model parameters if in eval mode and model path exists
+    if (!safetensors_path.empty() && !model_config.model_path.empty() &&
+        std::filesystem::exists(model_config.model_path)) {
+        fmt::print("Loading model parameters\n");
+        load_model_parameters(model_config.model_path, model, model_config.model_type);
+        fmt::print("Model loaded\n");
+    }
+
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
@@ -567,14 +693,6 @@ int main(int argc, char **argv) {
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
-    }
-
-    // Load model parameters if in eval mode and model path exists
-    if (!safetensors_path.empty() && !model_config.model_path.empty() &&
-        std::filesystem::exists(model_config.model_path)) {
-        fmt::print("Loading model parameters\n");
-        load_model_parameters(model_config.model_path, model, model_config.model_type);
-        fmt::print("Model loaded\n");
     }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
@@ -591,6 +709,16 @@ int main(int argc, char **argv) {
         fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
     } else {
         fmt::println("Remote optimizer configured!");
+    }
+
+    // Wrap model with LoRA if config is provided
+    if (lora_config.has_value()) {
+        fmt::print("Wrapping model with LoRA adaptation layers\n");
+        model = std::make_shared<ttml::models::LoraModel>(model, *lora_config, model->get_name() + "_lora");
+    }
+
+    if (training_config.print_model_summary) {
+        print_model_summary(model, device_config.enable_tp);
     }
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));

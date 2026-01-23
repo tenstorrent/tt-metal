@@ -34,7 +34,6 @@ protected:
     void register_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
     void register_module(const ModuleBasePtr& module_ptr, const std::string& name);
     void override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
-    void override_module(const ModuleBasePtr& module_ptr, const std::string& name);
 
 public:
     ModuleBase() = default;
@@ -46,6 +45,10 @@ public:
 
     [[nodiscard]] const std::string& get_name() const;
     [[nodiscard]] serialization::NamedParameters parameters() const;
+    [[nodiscard]] const std::map<std::string, ModuleBasePtr>& named_modules() const;
+    [[nodiscard]] const std::map<std::string, autograd::TensorPtr>& named_tensors() const;
+
+    [[nodiscard]] ModuleBasePtr override_module(const std::string& name, const ModuleBasePtr& module_ptr);
 
     void train();
     void eval();
