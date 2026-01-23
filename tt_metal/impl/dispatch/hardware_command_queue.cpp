@@ -5,81 +5,30 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include <event.hpp>
-// Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
-// MUST REMOVE
-#include <tt-metalium/program.hpp>
-#include "sub_device_types.hpp"
-#include "trace/trace_buffer.hpp"
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <algorithm>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
-#include "buffers/dispatch.hpp"
 #include "cq_shared_state.hpp"
-#include "device/dispatch.hpp"
-#include "dispatch/device_command.hpp"
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch/host_runtime_commands.hpp"
-#include "event/dispatch.hpp"
-#include "hal_types.hpp"
-#include <tt-logger/tt-logger.hpp>
-#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
-#include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include "data_collection.hpp"
-#include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
-#include <tt-metalium/graph_tracking.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
-namespace {
-
-// Binds a device worker/reader thread to a CPU core, determined using round-robin.
-void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu_core_for_worker, &cpuset);
-    int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
-    if (rc) {
-        log_warning(
-            tt::LogMetal,
-            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
-            rc);
-    }
-}
-
-}  // namespace
 
 HWCommandQueue::HWCommandQueue(
     IDevice* device,
     std::shared_ptr<CQSharedState> cq_shared_state,
     uint32_t id,
-    NOC /*noc_index*/,
-    uint32_t completion_queue_reader_core) :
+    NOC /*noc_index*/) :
     id_(id),
-
-    completion_queue_reader_core_(completion_queue_reader_core),
     manager_(device->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),
-    num_entries_in_completion_q_(0),
-    num_completed_completion_q_reads_(0),
     device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
@@ -103,12 +52,6 @@ HWCommandQueue::HWCommandQueue(
     }
     this->virtual_enqueue_program_dispatch_core_ =
         device_->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
-
-    this->exit_condition_ = false;
-    std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
-    this->completion_queue_thread_ = std::move(completion_queue_thread);
-    // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread_, this->completion_queue_reader_core_);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -121,101 +64,12 @@ void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
 
-HWCommandQueue::~HWCommandQueue() {
-    ZoneScopedN("HWCommandQueue_destructor");
-    if (this->exit_condition_) {
-        this->completion_queue_thread_.join();  // We errored out already prior
-    } else {
-        TT_ASSERT(
-            this->issued_completion_q_reads_.empty(),
-            "There should be no reads in flight after closing our completion queue thread");
-        TT_ASSERT(
-            this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_,
-            "There shouldn't be any commands in flight after closing our completion queue thread. Num uncompleted "
-            "commands: {}",
-            this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_);
-        this->set_exit_condition();
-        this->completion_queue_thread_.join();
-    }
-}
-
-void HWCommandQueue::increment_num_entries_in_completion_q() {
-    // Increment num_entries_in_completion_q and inform reader thread
-    // that there is work in the completion queue to process
-    std::lock_guard lock(this->reader_thread_cv_mutex_);
-    this->num_entries_in_completion_q_++;
-    this->reader_thread_cv_.notify_one();
-}
-
-void HWCommandQueue::set_exit_condition() {
-    std::lock_guard lock(this->reader_thread_cv_mutex_);
-    this->exit_condition_ = true;
-    this->reader_thread_cv_.notify_one();
-}
+HWCommandQueue::~HWCommandQueue() = default;
 
 IDevice* HWCommandQueue::device() { return this->device_; }
 
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-}
-
-void HWCommandQueue::read_completion_queue() {
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
-    while (true) {
-        uint32_t num_events_to_read = 0;
-        {
-            std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex_);
-            this->reader_thread_cv_.wait(lock, [this] {
-                return this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_ or
-                       this->exit_condition_;
-            });
-            if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-                num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
-            }
-        }
-        if (num_events_to_read > 0) {
-            ZoneScopedN("CompletionQueueReader");
-            for (uint32_t i = 0; i < num_events_to_read; i++) {
-                ZoneScopedN("CompletionQueuePopulated");
-                auto read_descriptor = *(this->issued_completion_q_reads_.pop());
-                {
-                    ZoneScopedN("CompletionQueueWait");
-                    this->manager_.completion_queue_wait_front(
-                        this->id_, this->exit_condition_);  // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
-                }
-                if (this->exit_condition_) {  // Early exit
-                    return;
-                }
-
-                std::visit(
-                    ttsl::overloaded{
-                        [&, this](const ReadBufferDescriptor& read_descriptor) {
-                            ZoneScopedN("CompletionQueueReadData");
-                            buffer_dispatch::copy_completion_queue_data_into_user_space(
-                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
-                        },
-                        [&, this](ReadEventDescriptor& read_descriptor) {
-                            ZoneScopedN("CompletionQueueReadEvent");
-                            event_dispatch::read_events_from_completion_queue(
-                                read_descriptor, mmio_device_id, this->device_->id(), channel, id_, manager_);
-                        },
-                        [&, this](const ReadCoreDataDescriptor& read_descriptor) {
-                            ZoneScopedN("CompletionQueueReadCoreData");
-                            device_dispatch::read_core_data_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
-                        },
-                        [](std::monostate) {},
-                    },
-                    read_descriptor);
-            }
-            this->num_completed_completion_q_reads_ += num_events_to_read;
-        } else if (this->exit_condition_) {
-            return;
-        }
-    }
 }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
