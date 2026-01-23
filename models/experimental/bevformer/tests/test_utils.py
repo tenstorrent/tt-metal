@@ -576,7 +576,6 @@ def compute_error_statistics(torch_tensor: torch.Tensor, ttnn_tensor, tensor_nam
     error_data = _compute_error_tensors(torch_flat, ttnn_flat)
     abs_error = error_data["abs_error"]
     rel_error = error_data["rel_error"]
-    torch_abs = error_data["torch_abs"]
 
     # Pearson Correlation Coefficient
     pcc = torch.corrcoef(torch.stack([torch_flat, ttnn_flat]))[0, 1].item()
@@ -983,7 +982,7 @@ def save_comparison_report(
             print_detailed_comparison(torch_tensor, ttnn_tensor, tensor_name, show_histograms=True)
 
             # Tolerance checking
-            passed, results = check_with_tolerances(torch_tensor, ttnn_tensor, tensor_name=tensor_name, **kwargs)
+            check_with_tolerances(torch_tensor, ttnn_tensor, tensor_name=tensor_name, **kwargs)
 
             # Restore stdout
             sys.stdout = original_stdout
@@ -994,7 +993,6 @@ def save_comparison_report(
         logger.error(f"Error saving comparison report: {e}")
 
 
-# Legacy compatibility functions
 def check_with_pcc(torch_tensor: torch.Tensor, ttnn_tensor, pcc: float = 0.99) -> Tuple[bool, str]:
     """
     Legacy PCC checking function for backward compatibility.

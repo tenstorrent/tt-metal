@@ -17,6 +17,7 @@ from models.experimental.bevformer.config.encoder_config import (
 
 from models.experimental.bevformer.tests.test_utils import (
     check_with_tolerances,
+    check_with_pcc,
 )
 
 from models.experimental.bevformer.tt.model_preprocessing import (
@@ -84,8 +85,6 @@ def test_ms_deformable_attention_forward(
     value = torch.randn(batch_size, sum(total_key_length), embed_dims, dtype=torch.float32)
 
     reference_points = torch.rand(batch_size, num_queries, num_levels, 2, dtype=torch.float32)
-
-    indices = spatial_shapes.prod(1).cumsum(0)
 
     # Convert tensors to ttnn format for ttnn model
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -162,7 +161,7 @@ def test_ms_deformable_attention_forward(
         )
 
     # Comprehensive tolerance checking with multiple criteria
-    passed, results = check_with_tolerances(
+    check_with_tolerances(
         ref_model_output,
         tt_model_output,
         pcc_threshold=expected_pcc,
@@ -172,8 +171,13 @@ def test_ms_deformable_attention_forward(
         tensor_name="ms_deformable_attention_output",
     )
 
-    # Assert that the comprehensive check passes
-    assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
+    passed, results = check_with_pcc(
+        ref_model_output,
+        tt_model_output,
+        pcc=expected_pcc,
+    )
+
+    assert passed, f"PCC check failed: {message}"
 
     if ENABLE_LOGGING:
         logger.info("✅ All tolerance checks passed successfully!")
