@@ -70,7 +70,7 @@ The standard ViT processes many images in parallel for maximum throughput (image
 ### Running the High-Res ViT tests
 
 ```sh
-pytest --disable-warnings models/demos/blackhole/vit/tests/test_ttnn_optimized_sharded_vit_hiRes_bh.py
+pytest --disable-warnings models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_hiRes_bh.py
 ```
 
 This runs a sweep over sequence sizes (1024, 2048, 3072) and hidden dimensions (512, 1024, 1536, 2304) at batch=1.
@@ -80,7 +80,7 @@ This runs a sweep over sequence sizes (1024, 2048, 3072) and hidden dimensions (
 This Performance test measures e2e model runtime,  measures samples/sec for all 12 configurations:
 
 ```sh
-pytest --disable-warnings models/demos/blackhole/vit/tests/test_demo_vit_hiRes_ttnn_inference_perf_e2e_2cq_trace.py
+pytest --disable-warnings models/demos/vision/classification/vit/blackhole/tests/test_demo_vit_hiRes_ttnn_inference_perf_e2e_2cq_trace.py
 ```
 
 

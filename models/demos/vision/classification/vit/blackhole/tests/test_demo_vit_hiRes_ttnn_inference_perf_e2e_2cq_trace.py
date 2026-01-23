@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
-from models.demos.blackhole.vit.tests.vit_hiRes_test_infra import create_test_infra
+from models.demos.vision.classification.vit.blackhole.tests.vit_hiRes_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 

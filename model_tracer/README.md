@@ -27,7 +27,7 @@ The following models have been traced and their configurations are available in 
 | microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
-| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py` |
+| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
 | stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |

@@ -8,7 +8,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup
-from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_hiRes_bh as ttnn_optimized_sharded_vit
+from models.demos.vision.classification.vit.blackhole.tt import (
+    ttnn_optimized_sharded_vit_hiRes_bh as ttnn_optimized_sharded_vit,
+)
 
 
 class VitHiResTestInfra:
