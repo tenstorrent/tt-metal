@@ -172,9 +172,12 @@ def run_all_gather_matmul_galaxy_impl(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # Create semaphores
+    # Create semaphores - need 2 semaphores per iteration for all_gather_async
     num_buffers = 8
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
+    # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers * 2)
+    ]
 
     # Memory configs - use PREFETCHER_NOC1_GRID to avoid overlap with intermediate cores (3,0)-(3,3)
     # RING_CRS pattern from existing tests - uses cores in columns 1,2,5,6 only (24 cores)
@@ -388,13 +391,14 @@ def run_all_gather_matmul_galaxy_impl(
         """Run non-fused: all_gather_async + ttnn.linear."""
         outs = []
         for i in range(n_iters):
-            # AllGather
+            # AllGather - requires 2 semaphores passed as a list
+            sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
                 dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
-                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
                 memory_config=ag_output_mem_config,
                 topology=all_gather_topology,
                 num_links=num_links,
