@@ -220,7 +220,8 @@ void MAIN {
                     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                 }
 
-                // TODO implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels as well
+                // TODO # 27845: implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels
+                // as well
                 constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
                 max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR, is_large_kernel>(
                     data_dst_idx, index_dst_idx, chunk);
@@ -256,7 +257,6 @@ void MAIN {
 
             // Only push to compute_tmp_idx_cb_id if there's a next iteration that will consume it
             // This prevents leaving stale data in the CB between program runs when using caching
-            // TODO is this necessary to avoid caching problems when run_twice is enabled?
             bool is_last_iteration = (n == num_out_sticks_this_core - 1) && last_c_block;
             if (!is_last_iteration) {
                 cb_reserve_back(compute_tmp_idx_cb_id, 1);
@@ -273,7 +273,6 @@ void MAIN {
     }
 
     // This prevents leaving stale data in the CB between program runs when using caching
-    // TODO is this necessary to avoid caching problems when run_twice is enabled?
     cb_pop_front(in_scalar_cb_id_0, 1);
     cb_pop_front(right_inc_cb_id, 1);
     cb_pop_front(down_left_wrap_inc_cb_id, 1);
