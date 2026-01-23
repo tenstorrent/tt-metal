@@ -171,7 +171,6 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            ag_memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
         )

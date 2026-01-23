@@ -450,6 +450,9 @@ class TT_CCL:
         Creates double buffered intermediate tensors for fused all_gather + matmul operation.
 
         For FF2 path: all_gather output shape is [8, 4, 32, 3584] (gathered hidden_dim)
+
+        The fused llama_all_gather_matmul_async requires the intermediate buffer to be sharded
+        across cluster_shape[cluster_axis] cores (4 cores for axis=1).
         """
         persistent_buffers = [[], []]
 
@@ -458,9 +461,25 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 1 (FF2 path gathers along this axis)
         cluster_axis = 1
-        # FF2 intermediate buffer: all_gather output with full hidden_dim (3584 for llama70b)
-        buffer_mem_cfg = self.model_config["FF2_IN_RING_MEMCFG"]
         hidden_dim = 3584 if not self.is_qwen else 3200
+
+        # Fused all_gather_matmul requires intermediate buffer sharded across cluster_shape[cluster_axis] cores
+        # Use cores (3,0) to (3,3) - 4 cores matching the gather dimension
+        intermediate_num_cores = cluster_shape[cluster_axis]  # 4 cores
+        intermediate_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, intermediate_num_cores - 1))]
+        )
+        # Shard width = hidden_dim / num_cores, rounded up to tile size
+        shard_width = ((hidden_dim + intermediate_num_cores - 1) // intermediate_num_cores + 31) // 32 * 32
+        intermediate_mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_core_range_set,
+                [M, shard_width],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         for _ in range(self.num_cbs):
             tt_buffer = ttnn.from_torch(
@@ -468,7 +487,7 @@ class TT_CCL:
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
-                memory_config=buffer_mem_cfg,
+                memory_config=intermediate_mem_cfg,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
             persistent_buffers[cluster_axis].append(tt_buffer)
@@ -910,7 +929,6 @@ class TT_CCL:
         compute_kernel_config=None,
         dtype=None,
         program_config=None,
-        ag_memory_config=None,
         mm_memory_config=None,
         global_cb=None,
     ):
@@ -923,6 +941,10 @@ class TT_CCL:
         persistent_interim_buffer = self.all_gather_matmul_buffers[cluster_axis][
             self.all_gather_matmul_buffer_idx[cluster_axis]
         ]
+
+        # Use intermediate buffer's memory config for ag_memory_config
+        # The fused op requires ag_memory_config to match the intermediate buffer's sharding
+        ag_memory_config = persistent_interim_buffer.memory_config()
 
         ttnn_tensor_out = ttnn.experimental.llama_all_gather_matmul_async(
             input_tensor,
