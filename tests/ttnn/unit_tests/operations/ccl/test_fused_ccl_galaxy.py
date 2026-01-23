@@ -534,7 +534,10 @@ def run_all_gather_matmul_galaxy_impl(
         # Warmup
         for _ in range(3):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            if sub_device_stall_group:
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            else:
+                ttnn.synchronize_device(mesh_device)
 
         # Timed run
         num_perf_runs = 10
@@ -542,7 +545,10 @@ def run_all_gather_matmul_galaxy_impl(
         start_time = time.perf_counter()
         for _ in range(num_perf_runs):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            if sub_device_stall_group:
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            else:
+                ttnn.synchronize_device(mesh_device)
         end_time = time.perf_counter()
         signpost("stop")
 
