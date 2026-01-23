@@ -31,14 +31,6 @@ enum class WaitMode {
 };
 
 /**
- * @brief Whether to pop tiles after processing
- */
-enum class PopMode {
-    POP,    // pop tiles after processing
-    NO_POP  // leave tiles in CB (for reuse)
-};
-
-/**
  * @brief Streaming policy - processes tiles one at a time
  *
  * Wait: per-tile, Pop: yes
@@ -47,7 +39,7 @@ enum class PopMode {
  */
 struct StreamingPolicy {
     static constexpr WaitMode wait = WaitMode::PER_TILE;
-    static constexpr PopMode pop = PopMode::POP;
+    static constexpr bool pop = true;
 };
 
 /**
@@ -58,7 +50,7 @@ struct StreamingPolicy {
  */
 struct StreamingBatchedPolicy {
     static constexpr WaitMode wait = WaitMode::PER_BATCH;
-    static constexpr PopMode pop = PopMode::POP;
+    static constexpr bool pop = true;
 };
 
 /**
@@ -69,7 +61,7 @@ struct StreamingBatchedPolicy {
  */
 struct PreloadedPolicy {
     static constexpr WaitMode wait = WaitMode::NONE;
-    static constexpr PopMode pop = PopMode::NO_POP;
+    static constexpr bool pop = false;
 };
 
 /**
@@ -80,7 +72,7 @@ struct PreloadedPolicy {
  */
 struct PersistentPolicy {
     static constexpr WaitMode wait = WaitMode::UPFRONT;
-    static constexpr PopMode pop = PopMode::NO_POP;
+    static constexpr bool pop = false;
 };
 
 // =============================================================================

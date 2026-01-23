@@ -538,7 +538,7 @@ ALWI void reduce(
             }
 
             // PreloadedPolicy or PersistentPolicy: update batch offset
-            if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
+            if constexpr (!InputPolicy::pop) {
                 batch_offset += tiles_per_batch;
             }
         }
@@ -618,7 +618,7 @@ ALWI void reduce(
                 }
 
                 // PreloadedPolicy or PersistentPolicy: update index offset
-                if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
+                if constexpr (!InputPolicy::pop) {
                     index_offset += stride;
                 }
             }
@@ -722,7 +722,7 @@ ALWI void reduce(
                 }
             }
             // Update batch_offset for indexed modes (PreloadedPolicy and PersistentPolicy)
-            if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
+            if constexpr (!InputPolicy::pop) {
                 batch_offset += tiles_per_batch;
             }
         }
