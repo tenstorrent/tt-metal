@@ -110,10 +110,11 @@ def test_decode(
     tt_outs, tt_intermediates, names, names_intermediates = tt_encoder.decode(
         device, scores_ttnn, pos_offsets_ttnn, dim_offsets_ttnn, ang_offsets_ttnn, grid_ttnn
     )
+
     tt_objects = tt_encoder.create_objects(*tt_outs)
 
     # visualize smooth and mp
-    for i, (ref, tt, name) in enumerate(zip(ref_intermediates, tt_intermediates, names_intermediates)):
+    for i, (ref, tt, name) in enumerate(zip(ref_intermediates[2:], tt_intermediates, names_intermediates)):
         if name in ["peaks", "max_inds"]:
             continue
         logger.warning(f"Visualizing output {i} {name}")
@@ -151,8 +152,9 @@ def test_decode(
     for ref_out, tt_out, pcc, name in zip(
         ref_outs, tt_outs, (pcc_peaks, pcc_scores, pcc_positions, pcc_dimensions, pcc_angles), names
     ):
-        tt_out = tt_out.to(torch.float32)
-        ref_out = ref_out.to(torch.float32)
+        # results don't come in the same order so we need to align them
+        tt_out = tt_out.to(torch.float32).sort(0)[0]
+        ref_out = ref_out.to(torch.float32).sort(0)[0]
         tt_out = tt_out.reshape(ref_out.shape)
         passed, pcc = check_with_pcc(ref_out, tt_out, pcc)
         abs, rel = get_abs_and_relative_error(ref_out, tt_out)
