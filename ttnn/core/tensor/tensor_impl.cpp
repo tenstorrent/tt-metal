@@ -767,15 +767,14 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
-    Tensor& device_tensor,
     const std::byte* src,
+    Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
-    TT_FATAL(
-        device_tensor.storage_type() == StorageType::DEVICE, "copy_to_device to non-device tensor is not supported!");
+    TT_FATAL(is_device_tensor(device_tensor), "copy_to_device to non-device tensor is not supported!");
     TT_FATAL(queue.device()->num_devices() == 1, "copy_to_device only supports single device mesh");
     std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
-            .host_data(static_cast<void*>(const_cast<std::byte*>(src)))
+            .host_data(const_cast<std::byte*>(src))
             .region(region)};
     queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
 }

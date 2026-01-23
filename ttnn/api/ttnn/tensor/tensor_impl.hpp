@@ -116,8 +116,8 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
 void copy_to_device(
     distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const void* src,
+    const std::byte* src,
+    Tensor& device_tensor,
     const std::optional<BufferRegion>& region = std::nullopt);
 
 // ======================================================================================
