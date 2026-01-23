@@ -58,7 +58,7 @@ void wait_for_static_connection_to_ready(
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, uint8_t MemoryOpt>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
@@ -79,15 +79,27 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
-        connection_worker_info_ptr,
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        get_stream_scratch_register_address(connection_handshake_address),
-//        static_cast<uint32_t>(connection_handshake_address),
-        0 /* unused, sender_sync_noc_cmd_buf */,
-        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
-    sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
-    connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
+    if constexpr(MemoryOpt < 1U) {
+    
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+            connection_worker_info_ptr,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<volatile uint32_t*>(connection_handshake_address),
+            0 /* unused, sender_sync_noc_cmd_buf */,
+            tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+        }
+    else {
+
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+            connection_worker_info_ptr,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<volatile uint32_t* const>(connection_handshake_address),
+            0 /* unused, sender_sync_noc_cmd_buf */,
+            tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+
+            sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
+            connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
+    }
 
     channel_connection_established = false;
 }
@@ -178,7 +190,7 @@ void kernel_main() {
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL, 0U>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
             full_size_channel_connection_established[i],
@@ -186,13 +198,13 @@ void kernel_main() {
             BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
             channel_base_address,
             connection_info_address,
-            i, //connection_handshake_address,
+            get_stream_scratch_register_address(i), //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]});
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL, 0U>(
             &header_only_channels[i],
             &header_only_channel_worker_interfaces[i],
             header_only_channel_connection_established[i],
@@ -200,7 +212,7 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             channel_base_address,
             connection_info_address,
-            i, //connection_handshake_address,
+            get_stream_scratch_register_address(i), //connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]});
     }

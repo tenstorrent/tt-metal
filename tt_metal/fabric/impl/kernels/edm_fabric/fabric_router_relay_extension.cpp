@@ -182,7 +182,7 @@ void setup_channel(
     new (worker_interface_ptr) tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        get_stream_scratch_register_address(connection_handshake_address), //reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+        reinterpret_cast<volatile uint32_t*>(connection_handshake_address), //reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
         NUM_BUFFERS);  //
 
@@ -523,7 +523,7 @@ void kernel_main() {
         BUFFER_SIZE_BYTES,
         channel_base_address,
         connection_info_address,
-        0UL, //connection_handshake_address,
+        get_stream_scratch_register_address(0UL), //connection_handshake_address,
         sender_flow_control_address,
         StreamId{channel_stream_id});
 

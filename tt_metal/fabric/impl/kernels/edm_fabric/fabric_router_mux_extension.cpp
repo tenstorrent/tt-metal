@@ -121,7 +121,7 @@ void wait_for_static_connection_to_ready(
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, uint8_t MemoryOpt>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
@@ -142,15 +142,23 @@ void setup_channel(
     auto connection_worker_info_ptr =
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
+    if constexpr(MemoryOpt < 1U) {
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+            connection_worker_info_ptr,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<volatile uint32_t*>(connection_handshake_address),
+            0 /* unused, sender_sync_noc_cmd_buf */,
+            is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);
+    }
+    else {
+        new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+            connection_worker_info_ptr,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
+            0 /* unused, sender_sync_noc_cmd_buf */,
+            is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);        
+    }
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
-        connection_worker_info_ptr,
-        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
-        get_stream_scratch_register_address(connection_handshake_address),
-//        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
-        0 /* unused, sender_sync_noc_cmd_buf */,
-        is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  
-    
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
@@ -278,7 +286,7 @@ void kernel_main() {
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_WORKER>(
+        setup_channel<NUM_BUFFERS_WORKER, 0U>(
             &worker_channels[i],
             &worker_channel_interfaces[i],
             worker_channel_connection_established[i],
@@ -286,7 +294,7 @@ void kernel_main() {
             BUFFER_SIZE_WORKER,
             worker_channel_base_address,
             worker_connection_info_address,
-            i, //worker_connection_handshake_address,
+            get_stream_scratch_register_address(i), //worker_connection_handshake_address,
             worker_flow_control_address,
             StreamId{worker_stream_ids[i]},
             worker_is_persistent[i] == 1);
@@ -299,15 +307,15 @@ void kernel_main() {
     size_t router_flow_control_address = flow_control_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
 
     for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_ROUTER>(
+        setup_channel<NUM_BUFFERS_ROUTER, 0U>(
             &router_channels[i],
             &router_channel_interfaces[i],
             router_channel_connection_established[i],
-            i,
+            NUM_WORKER_CHANNELS + i,
             BUFFER_SIZE_ROUTER,
             router_channel_base_address,
             router_connection_info_address,
-            i, //router_connection_handshake_address,
+            get_stream_scratch_register_address(i), //router_connection_handshake_address,
             router_flow_control_address,
             StreamId{router_stream_ids[i]},
             router_is_persistent[i] == 1);

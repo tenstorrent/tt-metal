@@ -593,7 +593,7 @@ struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
-        connection_live_semaphore(0U),
+        connection_live_semaphore(nullptr),
         sender_sync_noc_cmd_buf(write_at_cmd_buf) {
         }
 
@@ -606,7 +606,7 @@ struct EdmChannelWorkerInterface {
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
-        uint32_t connection_live_semaphore,
+        volatile uint32_t* connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
         worker_location_info_ptr(worker_location_info_ptr),
@@ -677,23 +677,21 @@ struct EdmChannelWorkerInterface {
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
         //return get_connection_live_semaphore() ==
-        return *((uint32_t*)connection_live_semaphore) ==
+        return *(connection_live_semaphore) ==
             tt::tt_fabric::connection_interface::close_connection_request_value;
     }
 
     FORCE_INLINE uint32_t get_connection_live_semaphore() const {
-        //return read_stream_scratch_register(connection_live_semaphore);
-        return *((uint32_t*)connection_live_semaphore);
+        return *(connection_live_semaphore);
     }
 
     FORCE_INLINE void set_connection_live_semaphore(uint32_t const value) const {
-        //write_stream_scratch_register(connection_live_semaphore, value);
-        *((uint32_t*)connection_live_semaphore) = value;
+        *(connection_live_semaphore) = value;
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
-    uint32_t connection_live_semaphore;
+    volatile uint32_t* connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
@@ -717,7 +715,7 @@ struct StaticSizedSenderChannelWorkerInterface
     StaticSizedSenderChannelWorkerInterface(
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
-        uint32_t connection_live_semaphore,
+        volatile uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value,
         uint32_t read_counter_update_src_address = 0) :
