@@ -233,6 +233,7 @@ Each participating core will use its CBs to store required tiles of matrices ``A
 Similarly, reader, compute, and writer kernels need to be created on all cores, and this is also achieved simply by passing
 ``all_cores`` to the function creating kernels.
 
+
 Set Per-Core Runtime Arguments
 ------------------------------
 
@@ -246,6 +247,10 @@ All kernel arguments that need to be different between cores must be passed as r
 Arguments that are the same for all cores can be passed as either compile-time arguments or runtime arguments.
 As discussed in Lab 1, the decision to use compile-time arguments vs. runtime arguments is based on a tradeoff between potential
 performance benefit from using compile-time arguments vs. kernels having to be recompiled for each core.
+
+To set runtime arguments, you will need to iterate over all core ranges in ``core_group_1`` and then iterate over all cores
+in the range and set the runtime arguments for each core. Similarly, you may need to iterate over all core ranges in
+``core_group_2`` to set different amount of work per core.
 
 
 Inspecting and Choosing Cores
@@ -457,8 +462,8 @@ The overall approach can be summarized by the following pseudo-code:
 
    // For every K-block:
    for (b in 0 .. num_k_blocks) {
-       Load A_slab(b) into CB0 // Size: M_block_tiles * K_block_tiles.
-       Load B_slab(b) into CB1 // Size: K_block_tiles * N_block_tiles.
+       Ensure that A_slab(b) is in CB0 // Size: M_block_tiles * K_block_tiles.
+       Ensure that B_slab(b) is in CB1 // Size: K_block_tiles * N_block_tiles.
        // For every output tile (i,j) in this C_block:
        for (i in 0 .. M_block_tiles) {
            for (j in 0 .. N_block_tiles) {
@@ -613,6 +618,41 @@ Steps
 
 #. Modify the compute kernel to use the intermediate buffer to reload and update partial results.
    Remember that ``tile_regs_acquire`` sets all the tiles in the destination register array to 0.
+   There are also several new things to consider:
+   
+   * When you call ``mm_init``, one of the arguments is the output circular buffer index.
+     Given that matrix multiplication results will be written into either the output or intermediate
+     buffers, you can use either of the two circular buffer indices in call to ``mm_init``.
+     This is because ``mm_init`` uses the output circular buffer index only to determine output data
+     format related parameters, which are the same for both the output and intermediate buffers.
+   * An efficient way to accumulate partial results is to use the destination register array.
+     Recall that the ``matmul_tiles`` function adds to the existing values in the destination register
+     rather than overwriting existing content. Therefore, if partial sum is first loaded into
+     the destination register, ``matmul_tiles`` will also accumulate the result into the destination
+     register in one operation.
+   * Storing partial results into the intermediate CB is done in the same manner as storing
+     the final results into the output buffer. However, loading data from the intermediate buffer
+     into the destination register requires a new operation: ``copy_tile(in_cb_id, in_tile_index, dst_tile_index)``,
+     defined in ``tt_metal/include/compute_kernel_api/tile_move_copy.h``.
+     This operation copies a tile from the intermediate CB to the destination register array
+     at specified index.
+     Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
+     to set up the Tensix engine for copy operation. Since the compute kernel code will alternate
+     between copying data and multiplying tiles, after the copy operaiton completes, we
+     need to call ``mm_init_short(in0_cb_id, in1_cb_id)`` to set up the Tensix Engine for
+     multiplication again.
+     Observe that we are calling ``_short`` versions of the initialization functions
+     (both ``mm_init_short`` and ``copy_tile_to_dst_init_short``), which are faster
+     than the full versions. The first call to ``mm_init`` performs more initialization steps that are no
+     longer needed in subsequent calls, and these operations are in common to both the copy and multiplication
+     operations, which is why ``_short`` versions are sufficient for later calls.
+     For optimal performance, **make sure to call these initalization functions only when required**.
+   * When writing to or reading from the intermediate CB, make sure that the ``cb_wait_front`` and
+     ``cb_reserve_back`` calls use appropriate number of tiles, given that the intermediate CB
+     is used to store a whole block of partial results.
+   * Don't forget to call ``cb_pop_front`` for the intermediate CB after reading all the tiles
+     from it to free up space for the next iteration.
+   
 
 #. Modify the code that sets runtime arguments to pass appropriate parameters for the kernels.
    Note that in this case it is not required to use the ``split_work_to_cores`` function,
