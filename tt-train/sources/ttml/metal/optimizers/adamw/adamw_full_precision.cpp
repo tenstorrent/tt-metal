@@ -6,9 +6,9 @@
 
 #include "device/adamw_device_operation.hpp"
 
-namespace ttml::metal::optimizers::adamw {
+namespace ttml::metal {
 
-ttnn::Tensor AdamWFullPrecisionOptimizer::invoke(
+ttnn::Tensor adamw_full_precision(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -40,4 +40,4 @@ ttnn::Tensor AdamWFullPrecisionOptimizer::invoke(
         step);
 }
 
-}  // namespace ttml::metal::optimizers::adamw
+}  // namespace ttml::metal
