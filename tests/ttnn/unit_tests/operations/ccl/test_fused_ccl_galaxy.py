@@ -479,12 +479,26 @@ def run_all_gather_matmul_galaxy_impl(
         )
         tt_input_chunks.append(tt_input_chunk)
 
-    # Create chunked weight tensors - slice along K_gathered dimension
+    # Create chunked weight tensors - must match interleaved layout from all_gather
+    # After all_gather of input chunk c from 4 devices along cluster_axis=1:
+    #   - Positions [0:K_chunk_per_device] contain device 0's chunk c
+    #   - Positions [K_chunk_per_device:2*K_chunk_per_device] contain device 1's chunk c
+    #   - etc.
+    # The weight rows must be arranged to match this interleaved layout.
+    num_devices_on_axis = cluster_shape[cluster_axis]  # 4
     tt_weight_chunks = []
     for c in range(num_chunks):
-        chunk_start = c * K_chunk_gathered
-        chunk_end = (c + 1) * K_chunk_gathered
-        in1_chunk = in1_tensor[:, :, chunk_start:chunk_end, :].contiguous()
+        # Gather weight rows from each device's portion to match interleaved all_gather layout
+        weight_slices = []
+        for device_idx in range(num_devices_on_axis):
+            # Device i's K range in full weight is [i*K_per_device : (i+1)*K_per_device]
+            # Chunk c within that range is [i*K_per_device + c*K_chunk_per_device : i*K_per_device + (c+1)*K_chunk_per_device]
+            device_K_start = device_idx * K_per_device
+            chunk_K_start = device_K_start + c * K_chunk_per_device
+            chunk_K_end = device_K_start + (c + 1) * K_chunk_per_device
+            weight_slices.append(in1_tensor[:, :, chunk_K_start:chunk_K_end, :])
+        # Concatenate slices to match interleaved layout: [dev0_chunk | dev1_chunk | dev2_chunk | dev3_chunk]
+        in1_chunk = torch.cat(weight_slices, dim=2).contiguous()
         tt_weight_chunk = ttnn.from_torch(
             in1_chunk,
             device=mesh_device,
