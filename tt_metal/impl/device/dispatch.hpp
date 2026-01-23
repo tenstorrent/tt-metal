@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "dispatch/hardware_command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
