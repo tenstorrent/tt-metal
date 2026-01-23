@@ -224,6 +224,12 @@ struct UntilizeConfig : UntilizeConfigBase {
     static constexpr uint32_t input_cb = ExtractInputCB<InputCBT>::value;
     static constexpr uint32_t output_cb = ExtractOutputCB<OutputCBT>::value;
     static constexpr UntilizeFlags flags = Flags;
+
+    // Static validations
+    static_assert(width_in_tiles > 0, "width_in_tiles must be greater than 0");
+    static_assert(input_cb <= 31, "input_cb must be in range 0-31");
+    static_assert(output_cb <= 31, "output_cb must be in range 0-31");
+    static_assert(input_cb != output_cb, "input_cb and output_cb must be different circular buffers");
 };
 
 /**
@@ -256,6 +262,12 @@ struct TilizeConfig : TilizeConfigBase {
     static constexpr uint32_t output_cb = ExtractOutputCB<OutputCBT>::value;
     static constexpr TilizeFlags flags = Flags;
     static constexpr uint32_t previous_cb = ExtractPreviousCB<PreviousCBT>::value;
+
+    // Static validations
+    static_assert(input_cb <= 31, "input_cb must be in range 0-31");
+    static_assert(output_cb <= 31, "output_cb must be in range 0-31");
+    static_assert(previous_cb <= 31, "previous_cb must be in range 0-31");
+    static_assert(input_cb != output_cb, "input_cb and output_cb must be different circular buffers");
 };
 
 // =============================================================================
