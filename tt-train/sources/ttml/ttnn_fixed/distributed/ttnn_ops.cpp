@@ -84,7 +84,7 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim)
 }
 
 tt::tt_metal::Tensor ring_shift(
-    const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis, bool forward) {
+    const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis, RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
@@ -122,6 +122,7 @@ tt::tt_metal::Tensor ring_shift(
         {tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 0)},
     };
 
+    const bool forward = (direction == RingShiftDirection::Forward);
     for (auto sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         const uint32_t idx = sender_coord[cluster_axis_value];
         const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;

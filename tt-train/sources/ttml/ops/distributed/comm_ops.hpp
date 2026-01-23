@@ -5,6 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
 
@@ -13,6 +14,8 @@ autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_back
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor);
 autograd::TensorPtr ring_shift(
-    const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis = std::nullopt, bool forward = true);
+    const autograd::TensorPtr& tensor,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    ttnn_fixed::distributed::RingShiftDirection direction = ttnn_fixed::distributed::RingShiftDirection::Forward);
 
 }  // namespace ttml::ops::distributed
