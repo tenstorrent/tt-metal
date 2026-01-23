@@ -657,7 +657,7 @@ class FusedResblock:
             runtime_args=runtime_args,
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=FusedResblock.DEFAULT_MATH_FIDELITY,
-                math_approx_mode=False,
+                math_approx_mode=True,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 dst_full_sync_en=fp32_dest_acc_en,
             ),
