@@ -302,14 +302,54 @@ def run_test_forward_pass_decoder2d(
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
-        (DecoderBlock1D, None, 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, None, 3, run_test_forward_pass_decoder1d),
-        (DecoderBlock1D, "model.layers.0", 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, "model.layers.3", 3, run_test_forward_pass_decoder1d),
-        (DecoderBlock2D, None, 0, run_test_forward_pass_decoder2d),
-        (MoEDecoderBlock2D, None, 3, run_test_forward_pass_decoder2d),
-        (DecoderBlock2D, "model.layers.0", 0, run_test_forward_pass_decoder2d),
-        (MoEDecoderBlock2D, "model.layers.3", 3, run_test_forward_pass_decoder2d),
+        pytest.param(
+            DecoderBlock1D, None, 0, run_test_forward_pass_decoder1d, marks=pytest.mark.requires_device(["TG"])
+        ),
+        pytest.param(
+            MoEDecoderBlock1D, None, 3, run_test_forward_pass_decoder1d, marks=pytest.mark.requires_device(["TG"])
+        ),
+        pytest.param(
+            DecoderBlock1D,
+            "model.layers.0",
+            0,
+            run_test_forward_pass_decoder1d,
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        pytest.param(
+            MoEDecoderBlock1D,
+            "model.layers.3",
+            3,
+            run_test_forward_pass_decoder1d,
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        pytest.param(
+            DecoderBlock2D,
+            None,
+            0,
+            run_test_forward_pass_decoder2d,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        pytest.param(
+            MoEDecoderBlock2D,
+            None,
+            3,
+            run_test_forward_pass_decoder2d,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        pytest.param(
+            DecoderBlock2D,
+            "model.layers.0",
+            0,
+            run_test_forward_pass_decoder2d,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        pytest.param(
+            MoEDecoderBlock2D,
+            "model.layers.3",
+            3,
+            run_test_forward_pass_decoder2d,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
     ],
 )
 @pytest.mark.parametrize(
