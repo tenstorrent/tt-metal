@@ -3,16 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt_stl/assert.hpp>
-#include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include <tt_stl/assert.hpp>
+#include "tt-metalium/allocator.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include <optional>
 #include <tuple>
@@ -20,14 +22,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-/**
- * @brief Checks if a given unsigned integer is a power of two.
- *
- * @param n The unsigned integer to check
- * @return true if n is a power of two (1, 2, 4, 8, 16, ...), false otherwise
- */
-bool isPowerOfTwo(uint32_t n) { return n != 0 && (n & (n - 1)) == 0; }
-
 /**
  * @brief Selects the optimal program factory (single-core vs multi-core) for TopK execution
  *
@@ -76,7 +70,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
     multicore_supported &= (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
     // Dimension size must be a power of two for bitonic sort
-    multicore_supported &= isPowerOfTwo(input_shape[args.dim]);
+    multicore_supported &= is_power_of_two(input_shape[args.dim]);
 
     // Apply requirement #3: K value limitation for multi-core optimization
     multicore_supported &= (args.k <= 64);
