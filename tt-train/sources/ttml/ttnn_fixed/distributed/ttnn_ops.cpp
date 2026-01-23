@@ -6,15 +6,12 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
-
-using tt::tt_metal::distributed::MeshCoordinateRange;
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -110,7 +107,10 @@ tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim,
 
 tt::tt_metal::Tensor ring_shift(
     const tt::tt_metal::Tensor& tensor, std::optional<uint32_t> cluster_axis, bool forward) {
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_ptr = ttml::autograd::ctx().get_device_ptr();
+    auto& ctx = ttml::autograd::ctx();
+    auto& socket_manager = ctx.get_socket_manager();
+    auto distributed_ctx = ctx.get_distributed_context();
+    auto mesh_device_ptr = ctx.get_device_ptr();
     const auto mesh_shape = mesh_device_ptr->shape();
 
     TT_FATAL(
@@ -129,19 +129,22 @@ tt::tt_metal::Tensor ring_shift(
         return tensor;
     }
 
-    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> send_recv_logical_coord = {
-        {tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 1)},
-    };
+    auto output_tensor = ttnn::empty_like(tensor);
 
-    // we need to perform the ring shift in two stages as send is blocking and will hang
-    // if the tensor is larger than the socket fifo size.
-    // TBD: create a fused ring shift ccl.
+    const uint32_t num_devices = mesh_shape.mesh_size();
+
+    // Build connections for even->odd and odd->even transfers separately
+    // This two-phase approach avoids deadlock since send is blocking
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
     std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
-    even_to_odd_connections.reserve(send_recv_logical_coord.size() * mesh_device_ptr->num_devices() / 2);
-    odd_to_even_connections.reserve(send_recv_logical_coord.size() * mesh_device_ptr->num_devices() / 2);
+    even_to_odd_connections.reserve(num_devices / 2);
+    odd_to_even_connections.reserve(num_devices / 2);
 
-    for (auto sender_coord : MeshCoordinateRange(mesh_shape)) {
+    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> send_recv_logical_coord = {
+        {tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 0)},
+    };
+
+    for (auto sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         const uint32_t idx = sender_coord[cluster_axis_value];
         const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
 
@@ -156,31 +159,18 @@ tt::tt_metal::Tensor ring_shift(
         }
     }
 
-    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
-    socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
-    socket_mem_config.fifo_size = 128U * 1024U;  // 128KB FIFO
+    // For intra-mesh, we use same distributed context and rank (same host)
+    core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    auto send_through_sockets = [&](const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
-                                    const tt::tt_metal::Tensor& input_tensor,
-                                    tt::tt_metal::Tensor& output_tensor) {
-        tt::tt_metal::distributed::SocketConfig config{};
-        config.socket_mem_config = socket_mem_config;
-        config.socket_connection_config = connections;
+    // Phase 1: Even positions send, odd positions receive
+    core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
+    socket_manager.send(tensor, inter_host_params, even_to_odd_params);
+    output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
 
-        auto [send_socket, recv_socket] =
-            tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device_ptr, mesh_device_ptr, config);
-
-        ttnn::experimental::send_async(input_tensor, send_socket);
-        ttnn::experimental::recv_async(output_tensor, recv_socket);
-        tt::tt_metal::distributed::Synchronize(
-            mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
-    };
-
-    auto output_tensor = ttnn::empty_like(tensor);
-    // Phase 1: Even → Odd (even sends, odd receives)
-    send_through_sockets(even_to_odd_connections, tensor, output_tensor);
-    // Phase 2: Odd → Even (odd sends, even receives)
-    send_through_sockets(odd_to_even_connections, tensor, output_tensor);
+    // Phase 2: Odd positions send, even positions receive
+    core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
+    socket_manager.send(tensor, inter_host_params, odd_to_even_params);
+    output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 
     return output_tensor;
 }
