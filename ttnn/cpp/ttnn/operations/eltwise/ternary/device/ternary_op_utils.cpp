@@ -105,6 +105,18 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterNoBcastTernary}},
 
+    // TTT configurations for ADDCDIV
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcdiv, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastAddcdiv, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastAddcdiv, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcdiv, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcdiv, KernelName::WriterNoBcastTernary}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
@@ -173,6 +185,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ComputeNoBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul_sfpu.cpp");
         case KernelName::ComputeBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul_sfpu_bcast.cpp");
         case KernelName::ComputeRowBcastAddcmul:
+            return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu_rowbcast.cpp" : "ternary_addcmul_sfpu.cpp");
+        case KernelName::ComputeNoBcastAddcdiv: return fmt::format(compute, root, "ternary_addcmul_sfpu.cpp");
+        case KernelName::ComputeBcastAddcdiv: return fmt::format(compute, root, "ternary_addcmul_sfpu_bcast.cpp");
+        case KernelName::ComputeRowBcastAddcdiv:
             return fmt::format(compute, root, is_fpu ? "ternary_addcmul_fpu_rowbcast.cpp" : "ternary_addcmul_sfpu.cpp");
         default: __builtin_unreachable();
     }
@@ -284,6 +300,11 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcmul_tile<DataFormat::Float32>"
                                                                            : "addcmul_tile<DataFormat::Float16_b>";
+            break;
+        case TernaryOpType::ADDCDIV:
+            defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
+                                                                           : "addcdiv_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }
