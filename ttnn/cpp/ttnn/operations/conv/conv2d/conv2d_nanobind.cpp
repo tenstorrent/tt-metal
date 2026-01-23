@@ -18,6 +18,7 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
@@ -30,10 +31,7 @@
 namespace ttnn::operations::conv::conv2d {
 
 void bind_conv2d(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::conv2d,
-        R"doc(
+    const auto* doc = R"doc(
         Applies a 2D convolution over an input signal composed of several input planes.
 
         Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region. For more information, refer to `CNNs on Tenstorrent Architectures <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_ tech report.
@@ -151,53 +149,15 @@ void bind_conv2d(nb::module_& mod) {
                   - TILE
                 * - BFLOAT8_B
                   - TILE
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::conv2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               const std::optional<const ttnn::Tensor>& bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const Conv2dSliceConfig>& slice_config_,
-               bool return_output_dim,
-               bool return_weights_and_bias) -> ResultWithOptions {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    slice_config_,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
+        )doc";
+
+    ttnn::bind_function(
+        mod,
+        "conv2d",
+        "ttnn.conv2d",
+        doc,
+        ttnn::overload_t(
+            &ttnn::conv2d,
             nb::kw_only(),
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -219,7 +179,7 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("slice_config") = nb::none(),
             nb::arg("return_output_dim") = false,
-            nb::arg("return_weights_and_bias") = false});
+            nb::arg("return_weights_and_bias") = false));
 
     mod.def(
         "prepare_conv_weights",
