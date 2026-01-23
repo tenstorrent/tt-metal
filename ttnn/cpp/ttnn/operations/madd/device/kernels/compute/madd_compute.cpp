@@ -29,11 +29,15 @@ void MAIN {
 
         DPRINT << "Reading tile A from CB " << cb_srcA_index << ENDL();
         cb_wait_front(cb_srcA_index, 1);
+#ifdef DEBUG_PRINT_ENABLED
         tt::compute::common::print_full_tile(cb_srcA_index, 0, false);
-
+#endif
         DPRINT << "Reading tile B from CB " << cb_srcB_index << ENDL();
         cb_wait_front(cb_srcB_index, 1);
+
+#ifdef DEBUG_PRINT_ENABLED
         tt::compute::common::print_full_tile(cb_srcB_index, 0, false);
+#endif
         tile_regs_acquire();  // math core acquires dst, init dsts to zero
         mul_tiles(cb_srcA_index, cb_srcB_index, 0, 0, dst0);
         tile_regs_commit();
@@ -43,7 +47,9 @@ void MAIN {
 
         DPRINT << "Reading tile C from CB " << cb_srcC_index << ENDL();
         cb_wait_front(cb_srcC_index, 1);
+#ifdef DEBUG_PRINT_ENABLED
         tt::compute::common::print_full_tile(cb_srcC_index, 0, false);
+#endif
         // tile_regs_acquire();
         // // d0 = d0 + c
         // add_tiles_init_with_dt(dst0, cb_srcC_index);
@@ -58,7 +64,9 @@ void MAIN {
         pack_tile(dst0, cb_out_index, 0);  // Pack
         tile_regs_release();               // Pack
 
+#ifdef DEBUG_PRINT_ENABLED
         tt::compute::common::print_full_tile(cb_out_index, 0, false);
+#endif
         cb_push_back(cb_out_index, 1);  // Pack
     }
 }  // MAIN
