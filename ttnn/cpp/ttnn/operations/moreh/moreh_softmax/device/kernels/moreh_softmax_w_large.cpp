@@ -98,7 +98,7 @@ void MAIN {
 #ifdef LOG
         // compute log(sum) - pop tile after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,
@@ -112,7 +112,7 @@ void MAIN {
 #else
         // compute 1/sum(exp(x)) - pop tile after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,

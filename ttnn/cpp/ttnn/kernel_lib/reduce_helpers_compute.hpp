@@ -62,20 +62,8 @@ namespace compute_kernel_lib {
 
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
-/**
- * @brief Input mode for reduce operations (DEPRECATED - use policy structs instead)
- *
- * STREAMING: One-at-a-time mode - waits/pops each tile individually (default)
- *            Safe for numerical precision, compatible with any CB size.
- * STREAMING_BATCHED: Batched mode - waits for all tiles in row/batch, indexed access, pops all
- *                    Optimal performance when tiles are pre-loaded in CB.
- * PRELOADED: All tiles already present in CB, accessed via indexing (caller manages wait/pop)
- * PERSISTENT: Wait for all tiles upfront, indexed access, NO pop (tiles persist for reuse)
- */
-enum class ReduceInputMode { STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT };
-
 // =============================================================================
-// Input Policy Structs (preferred over ReduceInputMode enum)
+// Input Policy Structs - control how input tiles are synchronized and consumed
 // =============================================================================
 
 namespace policies {
@@ -190,37 +178,6 @@ struct NoInitPolicy {
 };
 
 }  // namespace policies
-
-// Type trait to detect if a type is an input policy struct
-template <typename T>
-struct is_input_policy : std::false_type {};
-
-template <>
-struct is_input_policy<policies::StreamingPolicy> : std::true_type {};
-template <>
-struct is_input_policy<policies::StreamingBatchedPolicy> : std::true_type {};
-template <>
-struct is_input_policy<policies::PreloadedPolicy> : std::true_type {};
-template <>
-struct is_input_policy<policies::PersistentPolicy> : std::true_type {};
-
-template <typename T>
-inline constexpr bool is_input_policy_v = is_input_policy<T>::value;
-
-// Helper to convert ReduceInputMode enum to policy-equivalent constexpr values
-template <ReduceInputMode mode>
-struct InputModeToPolicy {
-    static constexpr policies::WaitMode wait =
-        (mode == ReduceInputMode::STREAMING)
-            ? policies::WaitMode::PER_TILE
-            : ((mode == ReduceInputMode::STREAMING_BATCHED)
-                   ? policies::WaitMode::PER_BATCH
-                   : ((mode == ReduceInputMode::PERSISTENT) ? policies::WaitMode::UPFRONT : policies::WaitMode::NONE));
-
-    static constexpr policies::PopMode pop =
-        (mode == ReduceInputMode::STREAMING || mode == ReduceInputMode::STREAMING_BATCHED) ? policies::PopMode::POP
-                                                                                           : policies::PopMode::NO_POP;
-};
 
 /**
  * @brief Data format reconfiguration mode for reduce operations
@@ -491,15 +448,16 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * this function. The function will wait for it automatically when InitPolicy::init is true.
  *
  * IMPORTANT - REDUCE_COL DATA LAYOUT:
- * - STREAMING mode: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
- * - STREAMING_BATCHED mode: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
- * - PRELOADED/PERSISTENT mode: Tiles in standard row-major order (batch_offset + ht*stride + wt).
+ * - StreamingPolicy: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
+ * - StreamingBatchedPolicy: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
+ * - PreloadedPolicy/PersistentPolicy: Tiles in standard row-major order (batch_offset + ht*stride + wt).
  * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
- * INPUT MODES: See ReduceInputMode enum for detailed mode descriptions.
- * - Use STREAMING_BATCHED for optimal performance when wait/pop are symmetric with TileGrid.
- * - Use PRELOADED for asymmetric wait/pop (e.g., padding where you wait/pop more than TileGrid).
- * - Use PERSISTENT for softmax patterns where tiles are reused in subsequent operations.
+ * INPUT POLICIES: Control how input tiles are synchronized and consumed.
+ * - StreamingPolicy (default): Process tiles one at a time, safe for any CB size.
+ * - StreamingBatchedPolicy: Optimal when wait/pop are symmetric with TileGrid.
+ * - PreloadedPolicy: Caller manages wait/pop (e.g., padding where you wait/pop more than TileGrid).
+ * - PersistentPolicy: Tiles persist for reuse (ideal for softmax pattern).
  *
  * POST-REDUCE OPERATIONS:
  * - post_reduce_op callback receives dst_idx parameter indicating which DEST register to operate on
@@ -509,7 +467,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
- * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
+ * @tparam InputPolicy Input handling policy - defaults to policies::StreamingPolicy
+ *         Available policies: StreamingPolicy, StreamingBatchedPolicy, PreloadedPolicy, PersistentPolicy
  * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
  * @tparam InitPolicy Init/uninit lifecycle policy - defaults to policies::InitBothPolicy
  *         Available policies: InitBothPolicy, InitOnlyPolicy, UninitOnlyPolicy, NoInitPolicy
@@ -521,9 +480,8 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  * @param ocb Output circular buffer for reduced tiles
  * @param grid Tile grid dimensions (rows x cols x batches)
  *             Use TileGrid::of(r, c, b), TileGrid::row(c), TileGrid::col(r), or TileGrid::single()
- * @param layout Tile memory layout specification for PRELOADED/PERSISTENT modes (default: contiguous)
+ * @param layout Tile memory layout specification for PreloadedPolicy/PersistentPolicy (default: contiguous)
  *               Use TileLayout::with_row_stride(stride) for custom row spacing.
- *               Only used when input_mode is PRELOADED or PERSISTENT.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -546,29 +504,29 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
  *       compute_kernel_lib::TileGrid::single());
  *
  * @example
- *   // PRELOADED mode: caller manages wait/pop, with custom stride between rows
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+ *   // PreloadedPolicy: caller manages wait/pop, with custom stride between rows
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy>(
  *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileGrid::of(Ht, Wt, NC),
  *       compute_kernel_lib::TileLayout::with_row_stride(input_stride));
  *
  * @example
- *   // PERSISTENT mode: tiles persist for reuse (ideal for softmax pattern)
+ *   // PersistentPolicy: tiles persist for reuse (ideal for softmax pattern)
  *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
  *   compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW,
- *                              compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+ *                              compute_kernel_lib::policies::PersistentPolicy>(
  *       cb_values, cb_scaler, cb_max, compute_kernel_lib::TileGrid::of(Ht, Wt));
  *   // cb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
- *   // STREAMING_BATCHED mode (optimal when tiles already in CB, symmetric wait/pop)
+ *   // StreamingBatchedPolicy (optimal when tiles already in CB, symmetric wait/pop)
  *   // Library waits for all Wt tiles per row, processes them, then pops all Wt tiles
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
  *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileGrid::of(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   // Use InitOnlyPolicy since lambda calls reduce_uninit() before recip
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy,
  *       compute_kernel_lib::ReduceDataFormatReconfig::BOTH,
  *       compute_kernel_lib::policies::InitOnlyPolicy>(
  *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileGrid::row(Wt),
@@ -596,7 +554,7 @@ ALWI void reload_accumulator_if_needed(uint32_t icb, uint32_t icb_scaler, const 
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    typename InputPolicy = policies::StreamingPolicy,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
     typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
@@ -644,20 +602,20 @@ ALWI void reduce(
         const uint32_t tiles_per_batch = Ht * stride;
         const uint32_t total_tiles = tiles_per_batch * num_batches;
 
-        // PRELOADED: bulk reserve output upfront
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk reserve output upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_reserve_back(ocb, num_batches);
         }
 
-        // PERSISTENT: wait for all tiles upfront
-        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+        // PersistentPolicy: wait for all tiles upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::UPFRONT) {
             cb_wait_front(icb, total_tiles);
         }
 
         uint32_t batch_offset = 0;
         for (uint32_t nc = 0; nc < num_batches; ++nc) {
-            // STREAMING_BATCHED: wait for all tiles upfront
-            if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+            // StreamingBatchedPolicy: wait for all tiles per batch
+            if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                 cb_wait_front(icb, tiles_per_batch);
             }
 
@@ -670,52 +628,48 @@ ALWI void reduce(
             const uint32_t dst_idx = get_dst_index(accum);
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    if constexpr (input_mode == ReduceInputMode::STREAMING) {
+                    if constexpr (InputPolicy::wait == policies::WaitMode::PER_TILE) {
                         // One-at-a-time: wait/pop per tile
                         cb_wait_front(icb, onetile);
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, 0, 0, dst_idx);
                         cb_pop_front(icb, onetile);
-                    } else if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                    } else if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                         // Batched: use indexed access
                         uint32_t tile_idx = ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, tile_idx, 0, dst_idx);
-                    } else {  // PRELOADED or PERSISTENT: indexed access
+                    } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, tile_idx, 0, dst_idx);
                     }
                 }
             }
-            // STREAMING/STREAMING_BATCHED/PERSISTENT: reserve per-batch
-            if constexpr (
-                input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                input_mode == ReduceInputMode::PERSISTENT) {
+            // Not PreloadedPolicy: reserve per-batch
+            if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                 cb_reserve_back(ocb, onetile);
             }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(get_dst_index(accum), ocb);
             tile_regs_release();
-            if constexpr (
-                input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                input_mode == ReduceInputMode::PERSISTENT) {
+            if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                 cb_push_back(ocb, onetile);
             }
 
-            // STREAMING_BATCHED: pop all tiles after processing
-            if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+            // StreamingBatchedPolicy: pop all tiles after processing
+            if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                 cb_pop_front(icb, tiles_per_batch);
             }
 
-            // PRELOADED or PERSISTENT: update batch offset
-            if constexpr (input_mode == ReduceInputMode::PRELOADED || input_mode == ReduceInputMode::PERSISTENT) {
+            // PreloadedPolicy or PersistentPolicy: update batch offset
+            if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
                 batch_offset += tiles_per_batch;
             }
         }
 
-        // PRELOADED: bulk push output at end
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk push output at end
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_push_back(ocb, num_batches);
         }
     } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
@@ -726,21 +680,21 @@ ALWI void reduce(
         const uint32_t total_outputs = Ht * num_batches;
         const uint32_t total_tiles = Ht * stride * num_batches;
 
-        // PRELOADED: bulk reserve output upfront
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk reserve output upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_reserve_back(ocb, total_outputs);
         }
 
-        // PERSISTENT: wait for all tiles upfront
-        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+        // PersistentPolicy: wait for all tiles upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::UPFRONT) {
             cb_wait_front(icb, total_tiles);
         }
 
         uint32_t index_offset = 0;
         for (uint32_t nc = 0; nc < num_batches; ++nc) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                // STREAMING_BATCHED: wait for entire row upfront
-                if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                // StreamingBatchedPolicy: wait for entire row upfront
+                if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                     cb_wait_front(icb, Wt);
                 }
 
@@ -752,16 +706,16 @@ ALWI void reduce(
 
                 const uint32_t dst_idx = get_dst_index(accum);
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    if constexpr (input_mode == ReduceInputMode::STREAMING) {
+                    if constexpr (InputPolicy::wait == policies::WaitMode::PER_TILE) {
                         // One-at-a-time: wait/pop per tile
                         cb_wait_front(icb, onetile);
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler, 0, 0, dst_idx);
                         cb_pop_front(icb, onetile);
-                    } else if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                    } else if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                         // Batched: use indexed access
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, wt, 0, dst_idx);
-                    } else {  // PRELOADED or PERSISTENT: indexed access
+                    } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                             icb, icb_scaler, wt + index_offset, 0, dst_idx);
                     }
@@ -771,44 +725,40 @@ ALWI void reduce(
                 // User's lambda can include reduce_uninit() if needed before custom ops
                 post_reduce_op(dst_idx);
 
-                // STREAMING/STREAMING_BATCHED/PERSISTENT: reserve per-row to avoid deadlock
-                if constexpr (
-                    input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                    input_mode == ReduceInputMode::PERSISTENT) {
+                // Not PreloadedPolicy: reserve per-row to avoid deadlock
+                if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                     cb_reserve_back(ocb, onetile);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst_idx, ocb);
                 tile_regs_release();
-                if constexpr (
-                    input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                    input_mode == ReduceInputMode::PERSISTENT) {
+                if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                     cb_push_back(ocb, onetile);
                 }
 
-                // STREAMING_BATCHED: pop all tiles after processing
-                if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                // StreamingBatchedPolicy: pop all tiles after processing
+                if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                     cb_pop_front(icb, Wt);
                 }
 
-                // PRELOADED or PERSISTENT: update index offset
-                if constexpr (input_mode == ReduceInputMode::PRELOADED || input_mode == ReduceInputMode::PERSISTENT) {
+                // PreloadedPolicy or PersistentPolicy: update index offset
+                if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
                     index_offset += stride;
                 }
             }
         }
 
-        // PRELOADED: bulk push output at end
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk push output at end
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_push_back(ocb, total_outputs);
         }
     } else {
         // =================================================================
         // REDUCE_COL: H reduction - each column -> 1 output tile (Wt outputs per batch)
         // Need chunking due to DEST register limits
-        // STREAMING: Tiles arrive in N C W_skip H W_chunk order (chunked by chunk_size)
-        // PRELOADED: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
+        // StreamingPolicy: Tiles arrive in N C W_skip H W_chunk order (chunked by chunk_size)
+        // PreloadedPolicy: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
         // =================================================================
 
         // Auto-detect chunk size from DEST register capacity
@@ -819,13 +769,13 @@ ALWI void reduce(
         const uint32_t total_outputs = Wt * num_batches;
         const uint32_t total_tiles = tiles_per_batch * num_batches;
 
-        // PRELOADED: bulk reserve output upfront
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk reserve output upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_reserve_back(ocb, total_outputs);
         }
 
-        // PERSISTENT: wait for all tiles upfront
-        if constexpr (input_mode == ReduceInputMode::PERSISTENT) {
+        // PersistentPolicy: wait for all tiles upfront
+        if constexpr (InputPolicy::wait == policies::WaitMode::UPFRONT) {
             cb_wait_front(icb, total_tiles);
         }
 
@@ -836,8 +786,8 @@ ALWI void reduce(
                 uint32_t current_chunk = chunk_end - wt;
                 uint32_t tiles_in_chunk = Ht * current_chunk;
 
-                // STREAMING_BATCHED: wait for entire chunk upfront
-                if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                // StreamingBatchedPolicy: wait for entire chunk upfront
+                if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                     cb_wait_front(icb, tiles_in_chunk);
                 }
 
@@ -851,18 +801,18 @@ ALWI void reduce(
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accum);
                     for (uint32_t i = wt; i < chunk_end; ++i) {
-                        if constexpr (input_mode == ReduceInputMode::STREAMING) {
+                        if constexpr (InputPolicy::wait == policies::WaitMode::PER_TILE) {
                             // One-at-a-time: wait/pop per tile
                             cb_wait_front(icb, onetile);
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                                 icb, icb_scaler, 0, 0, dst_idx);
                             cb_pop_front(icb, onetile);
-                        } else if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                        } else if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                             // Batched: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                                 icb, icb_scaler, tile_idx, 0, dst_idx);
-                        } else {  // PRELOADED or PERSISTENT: indexed access
+                        } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim, enforce_fp32_accumulation>(
                                 icb, icb_scaler, tile_idx, 0, dst_idx);
@@ -880,34 +830,30 @@ ALWI void reduce(
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < current_chunk; ++i) {
-                    // STREAMING/STREAMING_BATCHED/PERSISTENT: reserve/push per output tile
-                    if constexpr (
-                        input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                        input_mode == ReduceInputMode::PERSISTENT) {
+                    // Not PreloadedPolicy: reserve/push per output tile
+                    if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                         cb_reserve_back(ocb, onetile);
                     }
                     pack_tile(base_dst + i, ocb);
-                    if constexpr (
-                        input_mode == ReduceInputMode::STREAMING || input_mode == ReduceInputMode::STREAMING_BATCHED ||
-                        input_mode == ReduceInputMode::PERSISTENT) {
+                    if constexpr (InputPolicy::wait != policies::WaitMode::NONE) {
                         cb_push_back(ocb, onetile);
                     }
                 }
                 tile_regs_release();
 
-                // STREAMING_BATCHED: pop all tiles after processing
-                if constexpr (input_mode == ReduceInputMode::STREAMING_BATCHED) {
+                // StreamingBatchedPolicy: pop all tiles after processing
+                if constexpr (InputPolicy::wait == policies::WaitMode::PER_BATCH) {
                     cb_pop_front(icb, tiles_in_chunk);
                 }
             }
-            // Update batch_offset for indexed modes (PRELOADED and PERSISTENT)
-            if constexpr (input_mode == ReduceInputMode::PRELOADED || input_mode == ReduceInputMode::PERSISTENT) {
+            // Update batch_offset for indexed modes (PreloadedPolicy and PersistentPolicy)
+            if constexpr (InputPolicy::pop == policies::PopMode::NO_POP) {
                 batch_offset += tiles_per_batch;
             }
         }
 
-        // PRELOADED: bulk push output at end
-        if constexpr (input_mode == ReduceInputMode::PRELOADED) {
+        // PreloadedPolicy: bulk push output at end
+        if constexpr (InputPolicy::wait == policies::WaitMode::NONE) {
             cb_push_back(ocb, total_outputs);
         }
     }
@@ -938,7 +884,7 @@ ALWI void reduce(
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
-    ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    typename InputPolicy = policies::StreamingPolicy,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
     typename InitPolicy = policies::InitBothPolicy,
     typename AccumT = NoAccumulation,
@@ -949,7 +895,7 @@ ALWI void reduce(
     TileLayout layout = TileLayout::contiguous(),
     AccumT accum = AccumT{},
     PostReduceOp post_reduce_op = PostReduceOp{}) {
-    reduce<reduce_type, reduce_dim, input_mode, reconfig, InitPolicy, AccumT, PostReduceOp>(
+    reduce<reduce_type, reduce_dim, InputPolicy, reconfig, InitPolicy, AccumT, PostReduceOp>(
         cbs.input, cbs.scaler, cbs.output, grid, layout, accum, post_reduce_op);
 }
 

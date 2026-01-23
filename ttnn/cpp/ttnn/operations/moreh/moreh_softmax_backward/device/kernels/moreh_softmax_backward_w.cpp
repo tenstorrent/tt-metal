@@ -38,7 +38,7 @@ void MAIN {
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
             compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
                     cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::TileGrid::row(Wt - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
@@ -81,7 +81,7 @@ void MAIN {
 
         // step 2, compute sum(y * dy)
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::StreamingBatchedPolicy>(
                 cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileGrid::row(Wt));
 
         // step 3, compute final result

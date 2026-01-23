@@ -272,7 +272,7 @@ void normalize_scores(
     const uint32_t cb_normalized_scores) {
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     // PERSISTENT mode: waits for tile internally, no pop (tile persists for broadcast multiply)
-    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PersistentPolicy>(
         cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate, compute_kernel_lib::TileGrid::single());
 
     // 2. Add epsilon to intermediate results

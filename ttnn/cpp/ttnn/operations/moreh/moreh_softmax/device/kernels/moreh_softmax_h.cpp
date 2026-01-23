@@ -40,7 +40,7 @@ void MAIN {
                 cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::single());
         } else {
             compute_kernel_lib::
-                reduce<PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+                reduce<PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::policies::PersistentPolicy>(
                     cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
@@ -106,7 +106,7 @@ void MAIN {
 #ifdef LOG
         // log(sum) - pop tiles after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::policies::StreamingBatchedPolicy>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,
@@ -120,7 +120,7 @@ void MAIN {
 #else
         // 1/sum - keep tiles for subsequent multiplication
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::policies::PersistentPolicy>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,

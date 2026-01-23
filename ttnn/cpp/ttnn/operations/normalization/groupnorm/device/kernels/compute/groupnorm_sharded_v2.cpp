@@ -242,7 +242,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::TileGrid::single());
                 cb_reserve_back(cb_ex, 1);
@@ -337,7 +337,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::TileGrid::single());
                 cb_reserve_back(cb_ex, 1);

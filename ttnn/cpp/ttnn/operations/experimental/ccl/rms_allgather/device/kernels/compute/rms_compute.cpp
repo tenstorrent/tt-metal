@@ -129,7 +129,7 @@ void MAIN {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
         cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::TileGrid::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
@@ -147,7 +147,7 @@ void MAIN {
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::ReduceInputMode::STREAMING,
+            compute_kernel_lib::policies::StreamingPolicy,
             compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
             cb_ex_external2,
             cb_scaler_global,
@@ -174,7 +174,7 @@ void MAIN {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::ReduceInputMode::STREAMING,
+                compute_kernel_lib::policies::StreamingPolicy,
                 compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                 cb_stats, post_cb_scaler_global, cb_var, compute_kernel_lib::TileGrid::row(num_distributed_blocks));
 

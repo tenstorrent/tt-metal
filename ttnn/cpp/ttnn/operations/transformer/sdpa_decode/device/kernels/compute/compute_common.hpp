@@ -78,7 +78,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     compute_kernel_lib::reduce<
         pool_type,
         reduce_dim,
-        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         in0_cb,
         scale_cb,

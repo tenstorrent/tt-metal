@@ -314,7 +314,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    compute_kernel_lib::policies::PreloadedPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_x, cb_scaler, cb_ex_partial, compute_kernel_lib::TileGrid::of(out_block_h_actual, block_w));
                 cb_pop_front(cb_x, out_block_hw_normal);
@@ -327,7 +327,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,
                     cb_scaler_global,
@@ -443,7 +443,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    compute_kernel_lib::policies::PreloadedPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_xmm, cb_scaler, cb_ex2_partial, compute_kernel_lib::TileGrid::of(out_block_h_actual, block_w));
                 cb_pop_front(cb_xmm, out_block_hw_normal);
@@ -454,7 +454,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,
                     cb_scaler_global,

@@ -54,7 +54,7 @@ void MAIN {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_COL,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::policies::StreamingPolicy,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     intermed_cb_id0, scalar_cb_id, intermed_cb_id1, compute_kernel_lib::TileGrid::single());  // 1 x B
             }

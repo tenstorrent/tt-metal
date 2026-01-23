@@ -145,7 +145,7 @@ void MAIN {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         cb_in,
         cb_scaler,
@@ -255,7 +255,7 @@ void MAIN {
     compute_kernel_lib::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::policies::PreloadedPolicy,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         cb_xmm2,
         cb_scaler,

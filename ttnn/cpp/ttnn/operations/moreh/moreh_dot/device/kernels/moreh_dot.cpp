@@ -37,7 +37,7 @@ void MAIN {
         compute_kernel_lib::reduce<
             REDUCE_OP,
             REDUCE_DIM,
-            compute_kernel_lib::ReduceInputMode::STREAMING,
+            compute_kernel_lib::policies::StreamingPolicy,
             compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
             tt::CBIndex::c_24,
             tt::CBIndex::c_2,

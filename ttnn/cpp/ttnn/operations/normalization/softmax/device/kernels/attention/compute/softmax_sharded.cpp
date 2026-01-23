@@ -15,7 +15,7 @@ template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
-    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy>(
         cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileGrid::row(block_w));
 
     // calculate x-max(x)
@@ -203,18 +203,17 @@ void MAIN {
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         cb_wait_front(cb_exps, block_w);
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-                cb_exps,
-                cb_bcast_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::TileGrid::row(block_w),
-                compute_kernel_lib::TileLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t) {
-                    recip_tile_init();
-                    recip_tile(0);
-                });
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::policies::PreloadedPolicy>(
+            cb_exps,
+            cb_bcast_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::TileGrid::row(block_w),
+            compute_kernel_lib::TileLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t) {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(cb_exps, cb_recipsumexps);
