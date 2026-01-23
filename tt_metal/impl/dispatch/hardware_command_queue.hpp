@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "buffer.hpp"
-#include "cq_shared_state.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
@@ -36,11 +35,7 @@ namespace tt::tt_metal {
 
 class HWCommandQueue {
 public:
-    HWCommandQueue(
-        IDevice* device,
-        std::shared_ptr<CQSharedState> cq_shared_state,
-        uint32_t id,
-        NOC noc_index);
+    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index);
 
     ~HWCommandQueue();
 
@@ -61,9 +56,6 @@ public:
 private:
     uint32_t id_;
     SystemMemoryManager& manager_;
-
-    // Shared across all CommandQueue instances for a Device.
-    std::shared_ptr<CQSharedState> cq_shared_state_;
 
     IDevice* device_;
 

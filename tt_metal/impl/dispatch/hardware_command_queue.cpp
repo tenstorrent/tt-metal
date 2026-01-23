@@ -5,7 +5,6 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include "cq_shared_state.hpp"
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
@@ -21,15 +20,8 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-HWCommandQueue::HWCommandQueue(
-    IDevice* device,
-    std::shared_ptr<CQSharedState> cq_shared_state,
-    uint32_t id,
-    NOC /*noc_index*/) :
-    id_(id),
-    manager_(device->sysmem_manager()),
-    cq_shared_state_(std::move(cq_shared_state)),
-    device_(device) {
+HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) :
+    id_(id), manager_(device->sysmem_manager()), device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
     uint16_t channel =
