@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "adamw_fused_program_factory.hpp"
+#include "adamw_half_precision_program_factory.hpp"
 
 #include <common/TracyQueue.hpp>
 #include <cstdint>
@@ -11,21 +11,21 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "adamw_fused_device_operation_types.hpp"
+#include "adamw_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace {
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_fused/device/kernels/dataflow/"
-    "reader_adamw_fused_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/"
+    "reader_adamw.cpp";
 
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_fused/device/kernels/dataflow/"
-    "writer_adamw_fused_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/"
+    "writer_adamw.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_fused/device/kernels/compute/adamw_fused_kernel.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/compute/adamw_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
@@ -66,13 +66,13 @@ constexpr auto kMaxExpAvgSqCbIndex = tt::CBIndex::c_26;
 
 }  // namespace
 
-namespace ttml::metal::optimizers::adamw_fused::device {
+namespace ttml::metal::optimizers::adamw::device {
 
 /**
  *   Helper struct to hold references to all kernels we create,
  *        used during runtime argument setup.
  */
-struct AdamWFusedKernels {
+struct AdamWHalfPrecisionKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute_group_1;
@@ -83,9 +83,9 @@ struct AdamWFusedKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-void assign_per_core_runtime_args(
+void assign_per_core_runtime_args_half_precision(
     tt::tt_metal::Program& program,
-    const AdamWFusedKernels& kernels,
+    const AdamWHalfPrecisionKernels& kernels,
     const tt::tt_metal::Buffer* param_buffer,
     const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* exp_avg_buffer,
@@ -207,7 +207,7 @@ void assign_per_core_runtime_args(
     }
 }
 
-AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
+AdamWHalfPrecisionProgramFactory::cached_program_t AdamWHalfPrecisionProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -342,7 +342,7 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     defines["AMSGRAD"] = amsgrad ? "1" : "0";
     defines["STOCH_ROUND"] = stochastic_rounding ? "1" : "0";
 
-    AdamWFusedKernels kernels{};
+    AdamWHalfPrecisionKernels kernels{};
 
     std::vector<uint32_t> reader_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
@@ -393,7 +393,7 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
 
-    assign_per_core_runtime_args(
+    assign_per_core_runtime_args_half_precision(
         program,
         kernels,
         param_buffer,
@@ -424,27 +424,27 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
 
     return cached_program_t{
         std::move(program),
-        {/* adamw_fused_reader_kernel_id  = */ kernels.reader,
-         /* adamw_fused_writer_kernel_id  = */ kernels.writer,
-         /* adamw_fused_kernel_group_1_id = */ kernels.compute_group_1,
-         /* adamw_fused_kernel_group_2_id = */ kernels.compute_group_2,
+        {/* reader_kernel_id  = */ kernels.reader,
+         /* writer_kernel_id  = */ kernels.writer,
+         /* compute_kernel_group_1_id = */ kernels.compute_group_1,
+         /* compute_kernel_group_2_id = */ kernels.compute_group_2,
          /* core_group_1              = */ core_group_1,
          /* core_group_2              = */ core_group_2,
          /* num_cores                 = */ num_cores,
          /* num_cores_y               = */ num_cores_y}};
 }
 
-void AdamWFusedProgramFactory::override_runtime_arguments(
+void AdamWHalfPrecisionProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
-    auto& adamw_fused_reader_kernel_id = shared_variables.reader_kernel_id;
-    auto& adamw_fused_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& adamw_fused_compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
-    auto& adamw_fused_compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
+    auto& reader_kernel_id = shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = shared_variables.writer_kernel_id;
+    auto& compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
+    auto& compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
     auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
@@ -468,12 +468,12 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, adamw_fused_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, adamw_fused_writer_kernel_id);
-    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, adamw_fused_compute_kernel_group_1_id);
-    [[maybe_unused]] auto& compute_group_2_runtime_args =
-        core_group_2.ranges().empty() ? compute_group_1_runtime_args
-                                      : GetRuntimeArgs(program, adamw_fused_compute_kernel_group_2_id);
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, compute_kernel_group_1_id);
+    [[maybe_unused]] auto& compute_group_2_runtime_args = core_group_2.ranges().empty()
+                                                              ? compute_group_1_runtime_args
+                                                              : GetRuntimeArgs(program, compute_kernel_group_2_id);
 
     float one_minus_beta1 = 1.0f - beta1;
     float one_minus_beta2 = 1.0f - beta2;
@@ -549,4 +549,4 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::optimizers::adamw_fused::device
+}  // namespace ttml::metal::optimizers::adamw::device

@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "adamw_full_precision_device_operation_types.hpp"
+#include "adamw_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::optimizers::adamw_full_precision::device {
+namespace ttml::metal::optimizers::adamw::device {
 
 struct AdamWFullPrecisionProgramFactory {
     struct shared_variables_t {
@@ -34,4 +34,4 @@ struct AdamWFullPrecisionProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttml::metal::optimizers::adamw_full_precision::device
+}  // namespace ttml::metal::optimizers::adamw::device

@@ -1,26 +1,32 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "adamw_full_precision_device_operation.hpp"
+#include "adamw_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
 
 #include "adamw_full_precision_program_factory.hpp"
+#include "adamw_half_precision_program_factory.hpp"
 
-namespace ttml::metal::optimizers::adamw_full_precision::device {
+namespace ttml::metal::optimizers::adamw::device {
 
-AdamWFullPrecisionDeviceOperation::program_factory_t AdamWFullPrecisionDeviceOperation::select_program_factory(
+AdamWDeviceOperation::program_factory_t AdamWDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return AdamWFullPrecisionProgramFactory{};
+    // Select program factory based on parameter dtype
+    if (tensor_args.param.dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        return AdamWHalfPrecisionProgramFactory{};
+    } else {
+        return AdamWFullPrecisionProgramFactory{};
+    }
 }
 
-void AdamWFullPrecisionDeviceOperation::validate_on_program_cache_hit(
+void AdamWDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-void AdamWFullPrecisionDeviceOperation::validate_on_program_cache_miss(
+void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor,
                            const std::string& name,
@@ -28,7 +34,7 @@ void AdamWFullPrecisionDeviceOperation::validate_on_program_cache_miss(
                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "AdamW Full Precision optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
+            "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
 
@@ -67,48 +73,67 @@ void AdamWFullPrecisionDeviceOperation::validate_on_program_cache_miss(
     const auto& exp_avg_sq = tensor_args.exp_avg_sq;
     const auto& max_exp_avg_sq = tensor_args.max_exp_avg_sq;
 
-    // fp32 tensors (master weights and momentum buffers)
-    check_tensor(param, "Parameter (Master Weights)", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
-    // bf16 gradient
+    // Determine the precision mode based on param dtype
+    const auto param_dtype = param.dtype();
+    const bool is_half_precision = (param_dtype == tt::tt_metal::DataType::BFLOAT16);
+
+    // Validate param dtype is either bf16 or fp32
+    TT_FATAL(
+        param_dtype == tt::tt_metal::DataType::BFLOAT16 || param_dtype == tt::tt_metal::DataType::FLOAT32,
+        "Parameter tensor must be BFLOAT16 or FLOAT32, but got '{}'",
+        enchantum::to_string(param_dtype));
+
+    // Stochastic rounding is only valid for half precision (bf16) mode
+    TT_FATAL(
+        !args.stochastic_rounding || is_half_precision,
+        "Stochastic rounding is only supported with BFLOAT16 parameters. "
+        "Got stochastic_rounding=true with parameter dtype '{}'",
+        enchantum::to_string(param_dtype));
+
+    // Validate all tensors
+    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, param_dtype);
+    // Gradient is always bf16
     check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    // fp32 momentum buffers
-    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
-    check_tensor(
-        exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
+    // Optimizer states must match param dtype
+    check_tensor(exp_avg, "Exponential Average Buffer", tt::tt_metal::Layout::TILE, param_dtype);
+    check_tensor(exp_avg_sq, "Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
 
     if (max_exp_avg_sq.has_value()) {
         check_tensor(
-            max_exp_avg_sq.value(),
-            "Max Exponential Average Squared Buffer",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::FLOAT32);
+            max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
 }
 
-AdamWFullPrecisionDeviceOperation::spec_return_value_t AdamWFullPrecisionDeviceOperation::compute_output_specs(
+AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param.tensor_spec();
 }
 
-AdamWFullPrecisionDeviceOperation::tensor_return_value_t AdamWFullPrecisionDeviceOperation::create_output_tensors(
+AdamWDeviceOperation::tensor_return_value_t AdamWDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param;
 }
 
-ttsl::hash::hash_t AdamWFullPrecisionDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;
     const auto& param_logical_shape = param_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     auto amsgrad = args.amsgrad;
+    auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<AdamWFullPrecisionDeviceOperation>(
-        amsgrad, max_exp_avg_sq_initialized, program_factory.index(), param_tensor.dtype(), param_logical_shape);
+    auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        program_factory.index(),
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> AdamWFullPrecisionDeviceOperation::invoke(
+std::tuple<operation_attributes_t, tensor_args_t> AdamWDeviceOperation::invoke(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
@@ -122,6 +147,7 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWFullPrecisionDeviceOperat
     float epsilon,
     float weight_decay,
     bool amsgrad,
+    bool stochastic_rounding,
     uint32_t step) {
     return {
         operation_attributes_t{
@@ -133,6 +159,7 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWFullPrecisionDeviceOperat
             .epsilon = epsilon,
             .weight_decay = weight_decay,
             .amsgrad = amsgrad,
+            .stochastic_rounding = stochastic_rounding,
             .step = step,
         },
         tensor_args_t{
@@ -144,4 +171,4 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWFullPrecisionDeviceOperat
         }};
 }
 
-}  // namespace ttml::metal::optimizers::adamw_full_precision::device
+}  // namespace ttml::metal::optimizers::adamw::device

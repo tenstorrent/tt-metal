@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "adamw_full_precision.hpp"
 
-#include "device/adamw_full_precision_device_operation.hpp"
+#include "device/adamw_device_operation.hpp"
 
-namespace ttml::metal::optimizers::adamw_full_precision {
+namespace ttml::metal::optimizers::adamw {
 
 ttnn::Tensor AdamWFullPrecisionOptimizer::invoke(
     const ttnn::Tensor& param_in,
@@ -22,7 +22,7 @@ ttnn::Tensor AdamWFullPrecisionOptimizer::invoke(
     const float epsilon,
     const float weight_decay,
     const uint32_t step) {
-    return ttnn::prim::ttml_adamw_full_precision(
+    return ttnn::prim::ttml_adamw(
         param_in,
         grad,
         exp_avg,
@@ -36,7 +36,8 @@ ttnn::Tensor AdamWFullPrecisionOptimizer::invoke(
         epsilon,
         weight_decay,
         max_exp_avg_sq.has_value(),
+        false,  // stochastic_rounding disabled for full precision
         step);
 }
 
-}  // namespace ttml::metal::optimizers::adamw_full_precision
+}  // namespace ttml::metal::optimizers::adamw

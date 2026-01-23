@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,22 +10,21 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "adamw_full_precision_device_operation_types.hpp"
+#include "adamw_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace {
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_full_precision/device/kernels/dataflow/"
-    "reader_adamw_full_precision_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/"
+    "reader_adamw.cpp";
 
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_full_precision/device/kernels/dataflow/"
-    "writer_adamw_full_precision_interleaved_start_id.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/"
+    "writer_adamw.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/adamw_full_precision/device/kernels/compute/"
-    "adamw_full_precision_kernel.cpp";
+    "tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/compute/adamw_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
@@ -34,16 +33,15 @@ constexpr uint32_t kExpAvgAddrIdx = 2U;
 constexpr uint32_t kExpAvgSqAddrIdx = 3U;
 constexpr uint32_t kMaxExpAvgSqAddrIdx = 4U;
 // compute runtime args
-constexpr uint32_t kComputeLrIdx = 0U;
-constexpr uint32_t kComputeBeta1Idx = 1U;
-constexpr uint32_t kComputeBeta2Idx = 2U;
-constexpr uint32_t kComputeEpsilonIdx = 3U;
-constexpr uint32_t kComputeWeightDecayIdx = 4U;
-constexpr uint32_t kComputeStepSizeIdx = 5U;
-constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 6U;
-constexpr uint32_t kComputeOneMinusBeta1Idx = 7U;
-constexpr uint32_t kComputeOneMinusBeta2Idx = 8U;
-constexpr uint32_t kComputeDecayFactorIdx = 9U;
+constexpr uint32_t kComputeBeta1Idx = 0U;
+constexpr uint32_t kComputeBeta2Idx = 1U;
+constexpr uint32_t kComputeEpsilonIdx = 2U;
+constexpr uint32_t kComputeStepSizeIdx = 3U;
+constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 4U;
+constexpr uint32_t kComputeOneMinusBeta1Idx = 5U;
+constexpr uint32_t kComputeOneMinusBeta2Idx = 6U;
+constexpr uint32_t kComputeDecayFactorIdx = 7U;
+constexpr uint32_t kComputeSeedIdx = 8U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 constexpr uint32_t kExpAvgAddrIdxOut = 1U;
@@ -67,7 +65,7 @@ constexpr auto kMaxExpAvgSqCbIndex = tt::CBIndex::c_26;
 
 }  // namespace
 
-namespace ttml::metal::optimizers::adamw_full_precision::device {
+namespace ttml::metal::optimizers::adamw::device {
 
 /**
  *   Helper struct to hold references to all kernels we create,
@@ -84,7 +82,7 @@ struct AdamWFullPrecisionKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-void assign_per_core_runtime_args(
+void assign_per_core_runtime_args_full_precision(
     tt::tt_metal::Program& program,
     const AdamWFullPrecisionKernels& kernels,
     const tt::tt_metal::Buffer* param_buffer,
@@ -132,8 +130,7 @@ void assign_per_core_runtime_args(
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Reader kernel: (param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr, lr, beta1, beta2,
-        // epsilon, weight_decay, number_of_tiles, offset_in_tiles)
+        // Reader kernel
         SetRuntimeArgs(
             program,
             kernels.reader,
@@ -146,43 +143,40 @@ void assign_per_core_runtime_args(
              num_tiles_per_core,
              num_tiles_written});
 
-        // Compute kernel:
+        // Compute kernel (seed=0 for full precision, no stochastic rounding)
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(
                 program,
                 kernels.compute_group_1,
                 core,
-                {std::bit_cast<uint32_t>(lr),
-                 std::bit_cast<uint32_t>(beta1),
+                {std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay),
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
                  std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor)});
+                 std::bit_cast<uint32_t>(decay_factor),
+                 0U});  // seed=0, stochastic rounding disabled
         } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(
                 program,
                 kernels.compute_group_2,
                 core,
-                {std::bit_cast<uint32_t>(lr),
-                 std::bit_cast<uint32_t>(beta1),
+                {std::bit_cast<uint32_t>(beta1),
                  std::bit_cast<uint32_t>(beta2),
                  std::bit_cast<uint32_t>(epsilon),
-                 std::bit_cast<uint32_t>(weight_decay),
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
                  std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor)});
+                 std::bit_cast<uint32_t>(decay_factor),
+                 0U});  // seed=0, stochastic rounding disabled
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Writer kernel: (param_out_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr, number_of_tiles,
-        // offset_in_tiles)
+        // Writer kernel
         SetRuntimeArgs(
             program,
             kernels.writer,
@@ -309,6 +303,7 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
 
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = amsgrad ? "1" : "0";
+    defines["STOCH_ROUND"] = "0";  // No stochastic rounding for full precision
 
     AdamWFullPrecisionKernels kernels{};
 
@@ -328,7 +323,7 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
-    // 4) Create compute kernels for fused adamw full precision
+    // 4) Create compute kernels for full precision adamw
     // -------------------------------------------------------------------------
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::UnpackToDestFp32);
@@ -361,7 +356,7 @@ AdamWFullPrecisionProgramFactory::cached_program_t AdamWFullPrecisionProgramFact
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
 
-    assign_per_core_runtime_args(
+    assign_per_core_runtime_args_full_precision(
         program,
         kernels,
         param_buffer,
@@ -469,28 +464,26 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
         }
         if (core_group_1.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
-            runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
             runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
             runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            runtime_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
         } else if (core_group_2.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
-            runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
             runtime_args[kComputeBeta1Idx] = std::bit_cast<uint32_t>(beta1);
             runtime_args[kComputeBeta2Idx] = std::bit_cast<uint32_t>(beta2);
             runtime_args[kComputeEpsilonIdx] = std::bit_cast<uint32_t>(epsilon);
-            runtime_args[kComputeWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
             runtime_args[kComputeStepSizeIdx] = std::bit_cast<uint32_t>(step_size);
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            runtime_args[kComputeSeedIdx] = 0U;  // No stochastic rounding
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
@@ -506,4 +499,4 @@ void AdamWFullPrecisionProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::optimizers::adamw_full_precision::device
+}  // namespace ttml::metal::optimizers::adamw::device

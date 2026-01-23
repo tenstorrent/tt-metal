@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::optimizers::adamw_full_precision {
+namespace ttml::metal::optimizers::adamw {
 
 struct AdamWFullPrecisionOptimizer {
     static ttnn::Tensor invoke(
@@ -24,4 +24,5 @@ struct AdamWFullPrecisionOptimizer {
         const float weight_decay,
         const uint32_t step);
 };
-}  // namespace ttml::metal::optimizers::adamw_full_precision
+
+}  // namespace ttml::metal::optimizers::adamw
