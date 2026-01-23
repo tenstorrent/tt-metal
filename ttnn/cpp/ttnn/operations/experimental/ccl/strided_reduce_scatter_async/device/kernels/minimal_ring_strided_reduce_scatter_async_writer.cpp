@@ -335,12 +335,11 @@ void kernel_main() {
                             noc_async_writes_flushed();
                         }
                         DPRINT << "====================================" << ENDL();
-
-                        if (direction) {
-                            slice_idx--;
-                        } else {
-                            slice_idx++;
-                        }
+                    }
+                    if (direction) {
+                        slice_idx--;
+                    } else {
+                        slice_idx++;
                     }
                 }
                 // Reset the global semaphore before the round

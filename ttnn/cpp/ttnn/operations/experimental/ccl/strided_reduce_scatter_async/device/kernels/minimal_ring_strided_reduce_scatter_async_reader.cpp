@@ -147,14 +147,13 @@ void kernel_main() {
                     actual_slice_idx =
                         slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
                 }
+                const bool do_reduce = i != 0;
+                uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                 DPRINT << "actual_slice_idx: " << actual_slice_idx << ENDL();
                 for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
                     uint32_t input_row_offset = start_row_offset + input_tensor_Wt * (m_block_iter * mm_block_ht);
                     DPRINT << "m_block_iter: " << m_block_iter << ENDL();
                     DPRINT << "input_row_offset: " << input_row_offset << ENDL();
-
-                    const bool do_reduce = i != 0;
-                    uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
                     const uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
                     uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
@@ -172,8 +171,10 @@ void kernel_main() {
                         // uint32_t chunk_piece_tile_width = 1;
                         uint32_t tiles_to_read_in_current_direction = chunk_width / 2;
                         uint32_t direction_offset = direction ? 0 : chunk_width / 2;
-                        // DPRINT << "input_tile_id_start: " << input_tile_id_start << ENDL();
-                        // DPRINT << "direction_offset: " << direction_offset << ENDL();
+                        DPRINT << "tiles_to_read_in_current_direction: " << tiles_to_read_in_current_direction
+                               << ENDL();
+                        DPRINT << "direction_offset: " << direction_offset << ENDL();
+                        DPRINT << "input_row_offset: " << input_row_offset << ENDL();
 
                         cb_reserve_back(cb_in0, tile_granularity);
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
@@ -207,19 +208,17 @@ void kernel_main() {
                         }
                         DPRINT << "--------------------------------" << ENDL();
                     }
-
-                    // Next slice idx
-                    if (direction) {
-                        slice_idx--;
-                    } else {
-                        slice_idx++;
-                    }
-
-                    if (do_reduce && (i == (ring_size - 1))) {
-                        // Reset the semaphore before the next batch
-                        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-                        sem_target = 0;
-                    }
+                }
+                if (do_reduce && (i == (ring_size - 1))) {
+                    // Reset the semaphore before the next batch
+                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+                    sem_target = 0;
+                }
+                // Next slice idx
+                if (direction) {
+                    slice_idx--;
+                } else {
+                    slice_idx++;
                 }
             }
         }
