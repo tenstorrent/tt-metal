@@ -504,6 +504,99 @@ def test_batched_mm_wkv_b1(device):
 
 
 @skip_for_blackhole("Deepseek tests target Wormhole")
+def test_matmul_batched_hs_dram_sharded_config(device):
+    """
+    Simple test for MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.
+    Uses L1 width-sharded in0 and DRAM width-sharded in1.
+    """
+    torch.manual_seed(0)
+
+    # Simple dimensions: M=32, K=128, N=384 (divisible by 12 DRAM banks)
+    m, k, n = 32, 128, 384
+    tile_h, tile_w = 32, 32
+    num_dram_banks = 12
+
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+
+    # Create torch tensors
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    # in0: L1 width-sharded (shard K across 4 cores)
+    in0_core_grid = ttnn.CoreGrid(y=1, x=4)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        in0_shape,
+        core_grid=in0_core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    print("Created in0_t")
+    print(f"in0_memory_config: {in0_memory_config}")
+    print(in0_t.is_sharded())
+
+    # in1: DRAM width-sharded across 12 banks
+    in1_shard_shape = [k, n // num_dram_banks]
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    # Output: L1 width-sharded
+    out_core_grid = ttnn.CoreGrid(y=1, x=4)
+    out_memory_config = ttnn.create_sharded_memory_config(
+        [1, 1, m, n],
+        core_grid=out_core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Program config
+    in0_block_w = k // 4 // tile_w  # K per core / tile_w = 32 / 32 = 1
+    per_core_M = m // tile_h  # 32 / 32 = 1
+    per_core_N = n // 4 // tile_w  # N per core / tile_w = 96 / 32 = 3
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fused_activation=None,
+    )
+
+    # Run matmul
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=out_memory_config,
+        dtype=ttnn.bfloat16,
+    )
+
+    # Validate
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    expected_pcc = 0.99
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(f"Batched HS DRAM Sharded test: {pcc_message}")
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+
+@skip_for_blackhole("Deepseek tests target Wormhole")
 def test_batched_mm_wkv_b2(device):
     """
     Test batched matmul with L1 width-sharded input0 and DRAM sharded input1.

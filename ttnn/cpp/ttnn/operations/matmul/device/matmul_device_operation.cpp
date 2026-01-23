@@ -78,6 +78,9 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 return MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory{};
+            } else if constexpr (
+                std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                return MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory{};
             } else {
                 TT_THROW("Unknown program config type");
             }
@@ -603,6 +606,63 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     input_tensor_b.memory_config().memory_layout());
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
+                                     operations::matmul::
+                                         MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                TT_FATAL(
+                    input_tensor_a.is_sharded(),
+                    "Input tensor A must be sharded for batched DRAM sharded program config");
+                TT_FATAL(
+                    attributes.output_mem_config.is_sharded(),
+                    "Output memory config must be sharded for batched DRAM sharded program config");
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Input A memory layout must be WIDTH_SHARDED, got: {}",
+                    input_tensor_a.memory_config().memory_layout());
+                TT_FATAL(
+                    input_tensor_a.memory_config().buffer_type() == attributes.output_mem_config.buffer_type(),
+                    "Input A and output buffer types must match, got input: {} vs output: {}",
+                    input_tensor_a.memory_config().buffer_type(),
+                    attributes.output_mem_config.buffer_type());
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == attributes.output_mem_config.memory_layout(),
+                    "Input A and output memory layouts must match, got input: {} vs output: {}",
+                    input_tensor_a.memory_config().memory_layout(),
+                    attributes.output_mem_config.memory_layout());
+                TT_FATAL(
+                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+                    "Input A shard orientation must be ROW_MAJOR, got: {}",
+                    input_tensor_a.shard_spec().value().orientation);
+                const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+                const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
+                uint32_t per_core_M = program_config.per_core_M;
+                auto shard_shape = input_tensor_a.shard_spec().value().shape;
+
+                // No padding
+                TT_FATAL(M == per_core_M, "M ({}) must equal per_core_M ({})", M, per_core_M);
+                TT_FATAL(M == 1, "currently only support in0 tensor height of tile height");
+                TT_FATAL(
+                    per_core_M == (shard_shape[0] / in0_tile.get_height()),
+                    "per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",
+                    per_core_M,
+                    (shard_shape[0] / in0_tile.get_height()));
+                TT_FATAL(
+                    K % program_config.in0_block_w == 0,
+                    "K ({}) must be divisible by in0_block_w ({})",
+                    K,
+                    program_config.in0_block_w);
+                TT_FATAL(
+                    (shard_shape[1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
+                    "shard_shape[1] / in0_tile.get_width() ({}) must be divisible by in0_block_w ({})",
+                    (shard_shape[1] / in0_tile.get_width()),
+                    program_config.in0_block_w);
+
+                // tensor in1
+                TT_FATAL(
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+                    "Input B memory layout must be WIDTH_SHARDED, got: {}",
+                    input_tensor_b.memory_config().memory_layout());
+            } else if constexpr (std::is_same_v<
+                                     ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
                 check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
@@ -1035,6 +1095,44 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     TT_FATAL(
                         K % per_core_K == 0,
                         "in DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
+                        "per_core_K: {}.",
+                        K,
+                        per_core_K);
+
+                    TT_FATAL(
+                        per_core_N % tile_width_ratio == 0,
+                        "per_core_N must be divisible by override output tile width");
+
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                    uint32_t num_cores = num_blocks_x * num_blocks_y;
+                    auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+                    CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
+                    ShardSpec shard_spec = ShardSpec{
+                        all_cores,
+                        {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
+                        ShardOrientation::ROW_MAJOR};
+                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(
+                            attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
+                } else if constexpr (std::is_same_v<
+                                         ProgramConfigType,
+                                         operations::matmul::
+                                             MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                    const auto M =
+                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                    const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
+                    const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+
+                    uint32_t per_core_M = program_config.per_core_M;
+                    uint32_t per_core_N = program_config.per_core_N;
+                    uint32_t per_core_K = input_tensor_a.shard_spec().value().shape[1] / in0_tile.get_width();
+
+                    TT_FATAL(
+                        K % per_core_K == 0,
+                        "in batched DRAM sharded Matmul we don't have support for un-even sharding currently. K: {}, "
                         "per_core_K: {}.",
                         K,
                         per_core_K);
