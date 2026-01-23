@@ -96,7 +96,7 @@ void append_routing_plane_connection_manager_rt_args(
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<RoutingDirection>& attemped_directions,
+    const std::vector<RoutingDirection>& attempted_directions,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,

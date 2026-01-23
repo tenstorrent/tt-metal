@@ -265,7 +265,7 @@ void append_fabric_connection_rt_args(
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<RoutingDirection>& attemped_directions,
+    const std::vector<RoutingDirection>& attempted_directionss,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
@@ -277,20 +277,16 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 
     std::vector<FabricNodeId> dst_nodes;
     std::unordered_set<RoutingDirection> used_directions;
-    for (int i = 0; i < attemped_directions.size(); i++) {
+    for (int i = 0; i < attempted_directionss.size(); i++) {
         TT_FATAL(
-            !used_directions.contains(attemped_directions[i]),
+            !used_directions.contains(attempted_directionss[i]),
             "Multiple ethernet cores in the same direction ({}) are not currently supported. "
             "This restriction will be removed in a future update when proper multi-core routing is implemented.",
-            attemped_directions[i]);
+            attempted_directionss[i]);
 
-        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, attemped_directions[i]);
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, attempted_directionss[i]);
 
         if (!neighbors.empty()) {
-            // TT_FATAL(
-            //     neighbors.size() == 1,
-            //     "Multiple neighbours ({}) found in direction ({}) of src node ({}) {} {}.",
-            //     neighbors.size(), attemped_directions[i], src_fabric_node_id, neighbors[0], neighbors[1]);
             dst_nodes.push_back(FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]));
         }
     }
