@@ -19,9 +19,10 @@ constexpr uint32_t perf_telemetry_page_size = 64;
 constexpr uint32_t telemetry_timestamp_size = 2 * sizeof(telemetry_timestamp_t);  // 32 bytes
 
 // Compile-time defines set by host:
-// DISPATCH_CORE_NOC_X - NOC X coordinate of dispatch_s core
-// DISPATCH_CORE_NOC_Y - NOC Y coordinate of dispatch_s core
-// DISPATCH_DATA_ADDR  - Address of kernel_start in dispatch_s's L1 mailbox
+// DISPATCH_CORE_NOC_X  - NOC X coordinate of dispatch_s core
+// DISPATCH_CORE_NOC_Y  - NOC Y coordinate of dispatch_s core
+// DISPATCH_DATA_ADDR_A - Address of kernel_start_a in dispatch_s's L1 mailbox
+// DISPATCH_DATA_ADDR_B - Address of kernel_start_b in dispatch_s's L1 mailbox
 
 // Pointer to perf telemetry config in mailbox (for reading config_buffer_addr)
 volatile tt_l1_ptr perf_telemetry_msg_t* perf_telemetry_mailbox =
@@ -82,17 +83,23 @@ bool perf_telemetry_init() {
 
 // Push one page of telemetry data from L1 buffer to host via D2H socket
 // Uses Brisc NOC 0 command buffer 0
+// buffer_a: true to read from buffer A, false to read from buffer B
 // Returns: true if data was sent, false otherwise
-__attribute__((noinline)) bool perf_telemetry_push() {
+__attribute__((noinline)) bool perf_telemetry_push(bool buffer_a) {
     // Try to init if not already initialized
     if (!perf_telemetry_init()) {
         return false;
     }
 
-    // Read 32 bytes from dispatch core's kernel_start to our kernel_start
-    uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_DATA_ADDR);
-    uint32_t local_kernel_start_addr = reinterpret_cast<uint32_t>(&perf_telemetry_mailbox->kernel_start);
-    noc_async_read(dispatch_noc_addr, local_kernel_start_addr, telemetry_timestamp_size);
+    // Check if L1 data buffer is available
+    if (perf_telemetry_l1_data_addr == 0) {
+        return false;
+    }
+
+    // Read 32 bytes from dispatch core's kernel_start_a or kernel_start_b into socket's L1 data buffer
+    uint32_t dispatch_data_addr = buffer_a ? DISPATCH_DATA_ADDR_A : DISPATCH_DATA_ADDR_B;
+    uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, dispatch_data_addr);
+    noc_async_read(dispatch_noc_addr, perf_telemetry_l1_data_addr, telemetry_timestamp_size);
     noc_async_read_barrier();
 
     // Initialize NOC for PCIe writes (using command buffer 0)
@@ -105,10 +112,10 @@ __attribute__((noinline)) bool perf_telemetry_push() {
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
                               static_cast<uint64_t>(perf_telemetry_host_write_ptr);
 
-    // Write data from kernel_start location to PCIe-mapped host memory
-    // Sends 64 bytes: kernel_start (16B) + kernel_end (16B) + 32B padding after
+    // Write data from socket's L1 data buffer to PCIe-mapped host memory
+    // Sends 64 bytes: kernel_start (16B) + kernel_end (16B) + 32B padding
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_0, local_kernel_start_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
+        NOC_0, perf_telemetry_l1_data_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
 
     // Update host write pointer with wrap-around
     perf_telemetry_host_write_ptr += perf_telemetry_page_size;
@@ -140,9 +147,15 @@ void kernel_main() {
                 // Wait for initialization - skip this iteration
                 continue;
 
-            case TELEMETRY_STATE_PUSH:
-                // Push telemetry data, then go back to idle
-                perf_telemetry_push();
+            case TELEMETRY_STATE_PUSH_A:
+                // Push telemetry data from buffer A, then go back to idle
+                perf_telemetry_push(true);
+                perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_IDLE;
+                break;
+
+            case TELEMETRY_STATE_PUSH_B:
+                // Push telemetry data from buffer B, then go back to idle
+                perf_telemetry_push(false);
                 perf_telemetry_mailbox->telemetry_state = TELEMETRY_STATE_IDLE;
                 break;
 

@@ -1365,7 +1365,8 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
         // Calculate dispatch_s core location for NOC read
         uint32_t dispatch_core_noc_x = 0;
         uint32_t dispatch_core_noc_y = 0;
-        uint32_t dispatch_data_addr = 0;
+        uint32_t dispatch_data_addr_a = 0;
+        uint32_t dispatch_data_addr_b = 0;
         if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
             const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
             CoreCoord dispatch_s_virtual = ref_device->virtual_core_from_logical_core(
@@ -1373,18 +1374,23 @@ void MeshDeviceImpl::init_perf_telemetry_socket(const std::shared_ptr<MeshDevice
             dispatch_core_noc_x = dispatch_s_virtual.x;
             dispatch_core_noc_y = dispatch_s_virtual.y;
 
-            // Address of kernel_start in dispatch_s's L1 mailbox
-            uint32_t kernel_start_offset =
-                factory.offset_of<dev_msgs::perf_telemetry_msg_t>(dev_msgs::perf_telemetry_msg_t::Field::kernel_start);
-            dispatch_data_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
-                                 perf_telemetry_offset + kernel_start_offset;
+            // Address of kernel_start_a and kernel_start_b in dispatch_s's L1 mailbox
+            uint32_t kernel_start_a_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                dev_msgs::perf_telemetry_msg_t::Field::kernel_start_a);
+            uint32_t kernel_start_b_offset = factory.offset_of<dev_msgs::perf_telemetry_msg_t>(
+                dev_msgs::perf_telemetry_msg_t::Field::kernel_start_b);
+            uint32_t mailbox_base =
+                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + perf_telemetry_offset;
+            dispatch_data_addr_a = mailbox_base + kernel_start_a_offset;
+            dispatch_data_addr_b = mailbox_base + kernel_start_b_offset;
         }
 
         // Create kernel on the telemetry core (dataflow kernel) with compile-time defines
         DataMovementConfig telemetry_config;
         telemetry_config.defines["DISPATCH_CORE_NOC_X"] = std::to_string(dispatch_core_noc_x);
         telemetry_config.defines["DISPATCH_CORE_NOC_Y"] = std::to_string(dispatch_core_noc_y);
-        telemetry_config.defines["DISPATCH_DATA_ADDR"] = std::to_string(dispatch_data_addr);
+        telemetry_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
+        telemetry_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
         CreateKernel(telemetry_program, telemetry_kernel_path, telemetry_core, telemetry_config);
 
         // Compile the program with force_slow_dispatch to bypass dispatch core check

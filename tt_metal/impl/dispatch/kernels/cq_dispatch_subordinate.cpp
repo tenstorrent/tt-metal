@@ -380,16 +380,25 @@ void kernel_main() {
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
+    bool use_buffer_a = true;  // Ping-pong buffer selector
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         {
             DeviceZoneScopedN("SET-telem-push");
+            // Signal telemetry core to push the OTHER buffer (the one we just finished)
             if (perf_telemetry_mailbox->telemetry_core_noc_xy != 0) {
-                uint64_t telemetry_terminate_addr = get_noc_addr_helper(
+                uint64_t telemetry_push_addr = get_noc_addr_helper(
                     perf_telemetry_mailbox->telemetry_core_noc_xy, perf_telemetry_mailbox->telemetry_mailbox_addr);
-                dispatch_s_noc_inline_dw_write(telemetry_terminate_addr, TELEMETRY_STATE_PUSH, my_noc_index);
+                // Signal to push the buffer we're NOT currently writing to
+                TelemetryState push_state = use_buffer_a ? TELEMETRY_STATE_PUSH_B : TELEMETRY_STATE_PUSH_A;
+                dispatch_s_noc_inline_dw_write(telemetry_push_addr, push_state, my_noc_index);
             }
-            record_timestamp(&perf_telemetry_mailbox->kernel_start);
+            // Record start timestamp into current buffer
+            if (use_buffer_a) {
+                record_timestamp(&perf_telemetry_mailbox->kernel_start_a);
+            } else {
+                record_timestamp(&perf_telemetry_mailbox->kernel_start_b);
+            }
         }
         {
             DeviceZoneScopedN("GET_CMD");
@@ -416,7 +425,13 @@ void kernel_main() {
                 break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
-        record_timestamp(&perf_telemetry_mailbox->kernel_end);
+        // Record end timestamp into current buffer, then toggle
+        if (use_buffer_a) {
+            record_timestamp(&perf_telemetry_mailbox->kernel_end_a);
+        } else {
+            record_timestamp(&perf_telemetry_mailbox->kernel_end_b);
+        }
+        use_buffer_a = !use_buffer_a;  // Toggle ping-pong buffer
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);

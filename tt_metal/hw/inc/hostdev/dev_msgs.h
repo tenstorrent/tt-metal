@@ -79,11 +79,12 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
-// Telemetry state enum for D2H socket streaming kernel
+// Telemetry state enum for D2H socket streaming kernel (ping-pong buffering)
 enum TelemetryState : uint32_t {
     TELEMETRY_STATE_IDLE = 0,       // Waiting for initialization, skip iteration
-    TELEMETRY_STATE_PUSH = 1,       // Actively pushing telemetry data
-    TELEMETRY_STATE_TERMINATE = 2,  // Signal to terminate the kernel
+    TELEMETRY_STATE_PUSH_A = 1,     // Push telemetry data from buffer A
+    TELEMETRY_STATE_PUSH_B = 2,     // Push telemetry data from buffer B
+    TELEMETRY_STATE_TERMINATE = 3,  // Signal to terminate the kernel
 };
 
 // Telemetry data payload - 16 bytes, PCIe write aligned
@@ -94,15 +95,19 @@ struct telemetry_timestamp_t {
     uint32_t header;   // Event header/metadata
 };
 
-// Perf telemetry message for D2H socket streaming
+// Perf telemetry message for D2H socket streaming (ping-pong buffering)
 // Placed after profiler_msg_t in mailboxes_t to allow for expansion
 struct perf_telemetry_msg_t {
     volatile uint32_t config_buffer_addr;      // Address of D2H socket config buffer in L1
     volatile uint32_t telemetry_state;         // Current telemetry state (TelemetryState enum)
     volatile uint32_t telemetry_core_noc_xy;   // NOC XY encoding of telemetry core (for remote terminate)
     volatile uint32_t telemetry_mailbox_addr;  // Mailbox address on telemetry core (for remote terminate)
-    struct telemetry_timestamp_t kernel_start;  // Device kernel start time
-    struct telemetry_timestamp_t kernel_end;    // Device kernel stop time
+    // Ping-pong buffer A
+    struct telemetry_timestamp_t kernel_start_a;  // Device kernel start time (buffer A)
+    struct telemetry_timestamp_t kernel_end_a;    // Device kernel stop time (buffer A)
+    // Ping-pong buffer B
+    struct telemetry_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
+    struct telemetry_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
 };
 
 // Messages for host to tell brisc to go
