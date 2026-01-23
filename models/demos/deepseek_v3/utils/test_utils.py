@@ -297,7 +297,6 @@ def run_reference_with_attention(
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
     mask = None
-    dtype = torch.bfloat16
 
     # For sequences longer than the chunk size, use chunked processing.
     # Auto-cap chunk size so the causal mask stays within a safe memory budget.
@@ -327,8 +326,8 @@ def run_reference_with_attention(
                 mask = torch.triu(
                     torch.full(
                         (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                        torch.finfo(dtype).min,
-                        dtype=dtype,
+                        float("-inf"),
+                        dtype=torch.bfloat16,
                         device="cpu",
                     ),
                     diagonal=1,
@@ -337,26 +336,26 @@ def run_reference_with_attention(
                 mask = torch.triu(
                     torch.full(
                         (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                        torch.finfo(dtype).min,
-                        dtype=dtype,
+                        float("-inf"),
+                        dtype=torch.bfloat16,
                     ),
                     diagonal=1,
                 )
 
         if layer_idx is not None:
             input_cache = transformers_cache_single_layer_from_torch(
-                torch.empty((batch_size, 1, 0, dim), dtype=dtype), layer_idx
+                torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16), layer_idx
             )
         else:
             input_cache = transformers_cache_from_torch(
-                tuple(torch.empty((batch_size, 1, 0, dim), dtype=dtype) for _ in range(num_layers))
+                tuple(torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16) for _ in range(num_layers))
             )
     else:
         assert mode == "decode"
         position_ids = position_ids_or_seq_lens.unsqueeze(1)
         max_position_id = position_ids.max().item()
 
-        mask = torch.full((batch_size, 1, 1, max_position_id + 1), torch.finfo(dtype).min, dtype=dtype)
+        mask = torch.full((batch_size, 1, 1, max_position_id + 1), float("-inf"), dtype=torch.bfloat16)
         for mask_row, position_id in zip(mask, position_ids_or_seq_lens):
             mask_row[:, :, :position_id] = 0.0
         mask[:, :, :, -1] = 0.0
@@ -364,11 +363,14 @@ def run_reference_with_attention(
         cache_gen_function = torch.zeros if zeroed_cache else torch.randn
         if layer_idx is not None:
             input_cache = transformers_cache_single_layer_from_torch(
-                cache_gen_function((batch_size, 1, max_position_id, dim), dtype=dtype), layer_idx
+                cache_gen_function((batch_size, 1, max_position_id, dim), dtype=torch.bfloat16), layer_idx
             )
         else:
             input_cache = transformers_cache_from_torch(
-                tuple(cache_gen_function((batch_size, 1, max_position_id, dim), dtype=dtype) for _ in range(num_layers))
+                tuple(
+                    cache_gen_function((batch_size, 1, max_position_id, dim), dtype=torch.bfloat16)
+                    for _ in range(num_layers)
+                )
             )
 
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
@@ -423,7 +425,7 @@ def run_reference_with_attention(
                 # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
                 mask_chunk = torch.full(
                     (batch_size, 1, chunk_size_actual, kv_seq_len),
-                    torch.finfo(torch.bfloat16).min,
+                    float("-inf"),
                     dtype=torch.bfloat16,
                     device=device,
                 )
