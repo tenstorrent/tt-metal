@@ -55,10 +55,10 @@ if [[ "$DEVICE_TYPE" == "galaxy" ]]; then
     TEST_FILE="tests/ttnn/unit_tests/operations/ccl/test_fused_ccl_galaxy.py"
     case "$TEST_TYPE" in
         "check")
-            TEST_FUNC="test_matmul_reduce_scatter_galaxy_check"
+            TEST_FUNC="test_all_gather_matmul_galaxy_check"
             ;;
         "perf")
-            TEST_FUNC="test_matmul_reduce_scatter_galaxy_perf_comparison"
+            TEST_FUNC="test_all_gather_matmul_galaxy_perf_comparison"
             ;;
         "all")
             TEST_FUNC=""  # Run all tests in file

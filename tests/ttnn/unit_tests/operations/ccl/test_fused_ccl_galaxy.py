@@ -3,17 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Galaxy (TG) tests for fused CCL operations (Matmul+ReduceScatter)
+Galaxy (TG) tests for fused CCL operations - Performance Comparison
 
-These tests validate fused CCL operations on Galaxy (32 devices, 8x4 mesh) using tensor dimensions
-that match the Llama 70B model patterns.
+This file tests the optimization opportunities identified for Galaxy Llama 70B:
 
-Fused ops tested:
-- ttnn.experimental.matmul_reduce_scatter_async (Matmul + ReduceScatter)
+1. FF2 path (AllGather + Matmul):
+   - Current: line_all_gather + ttnn.linear
+   - Proposed: llama_all_gather_matmul_async (fused)
 
-Performance comparison mode:
-- Runs both fused and non-fused operations
-- Reports speedup/slowdown of fused vs non-fused
+The tests compare fused vs non-fused operations and generate performance reports.
+
+Galaxy uses these fused APIs which support 2D mesh (8x4) via cluster_axis parameter:
+- ttnn.experimental.llama_all_gather_matmul_async (AllGather + Matmul)
+- ttnn.experimental.llama_rs_matmul (ReduceScatter + Matmul)
 """
 
 import torch
@@ -24,6 +26,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tracy import signpost
 
 
 def create_global_semaphores(mesh_device, cores, initial_value, num_buffers=3):
@@ -80,603 +83,591 @@ def print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, rs
 
 
 # =============================================================================
-# Test: Matmul + ReduceScatter (Galaxy version of ff1/ff3 path)
+# CoreRangeSet definitions for Galaxy (from test_llama_all_gather_matmul.py)
+# =============================================================================
+
+SUB_DEVICE_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+    ]
+)
+MCAST_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+    ]
+)
+MCAST_NUM_CORES = 60
+HOP_GRID = ttnn.CoreRangeSet([])
+MAX_DST_TILES = 8
+
+
+def round_up(a, b):
+    """Round up a to the nearest multiple of b."""
+    return b * math.ceil(a / b)
+
+
+def num_cores_to_rectangle_grid(num_cores, device):
+    """Find a rectangular core grid size, given an number of cores."""
+    x = device.compute_with_storage_grid_size().x
+    while x > 0 and num_cores % x != 0:
+        x -= 1
+    if x == 0:
+        return None
+    y = num_cores // x
+    return (x, y)
+
+
+# =============================================================================
+# Test: AllGather + Matmul (Galaxy FF2 path optimization)
 # =============================================================================
 
 
-def run_matmul_reduce_scatter_galaxy_impl(
+def run_all_gather_matmul_galaxy_impl(
     mesh_device,
-    num_devices,
-    rs_input_shape,
-    mm_shard_dim,
-    rs_scatter_dim,
+    M,
+    K,
+    N,
+    cluster_axis,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
     num_links,
-    mm_weights_shape,
-    rs_input_dtype,
-    layout,
-    matmul_weights_dtype,
-    max_in0_block_w,
-    use_bias,
-    mem_config_input,
-    mem_config_rs,
-    mem_config_mm,
-    rs_topology,
-    use_non_fused,
-    mem_config_weights=None,
+    input_num_cores,
+    output_num_cores,
+    fidelity,
+    fp32_acc_mode,
+    packer_l1_acc,
+    use_fused,
     num_iters=1,
-    enable_trace=True,
+    trace_mode=True,
 ):
     """
-    Galaxy implementation of Matmul + ReduceScatter fused operation.
+    Galaxy implementation of AllGather + Matmul operation.
 
-    Uses tensor dimensions from Llama 70B MLP ff1/ff3 path.
-    Galaxy mesh: (8, 4) = 32 devices with FABRIC_1D topology.
+    Compares:
+    - Fused: llama_all_gather_matmul_async
+    - Non-fused: all_gather_async + ttnn.linear
+
+    Uses tensor dimensions from Llama 70B MLP FF2 path:
+    - Input: [8, 4, M, K_per_device] where K_per_device = K // 4
+    - Weight: [8, 4, K, N]
+    - Output: [8, 4, M, N]
     """
-    torch.manual_seed(0)
+    cluster_shape = (8, 4)
 
-    tile = (32, 32)
+    # Only run on unharvested TG
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Not TG! Requires 7x10 grid")
 
-    # Set the default config
-    if mem_config_weights is None:
-        mem_config_weights = mem_config_rs
+    storage_grid = num_cores_to_rectangle_grid(output_num_cores, mesh_device)
+    if storage_grid is None:
+        pytest.skip(f"Could not find a rectangle grid for num_cores: {output_num_cores}")
 
-    # Set up sub-device
-    ccl_sub_device_crs, worker_sub_device_id, sub_device_stall_group = setup_sub_device(mesh_device)
+    # Setup fabric
+    all_gather_topology = ttnn.Topology.Linear
+
+    worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # Create semaphores
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    num_buffers = 8
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
 
-    # Create persistent output buffers
-    logger.info("Creating persistent buffers")
-    rs_num_batches = rs_input_shape[0]
-    single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[2] //= rs_num_batches
-    persistent_intermediate_buffers = [
-        ttnn.from_torch(
-            torch.zeros(single_batch_input_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
-    rs_output_shape = rs_input_shape[:]
-    rs_output_shape[3] //= num_devices
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(rs_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
-    logger.info("Done creating persistent buffers")
+    logger.info(f"AllGather+Matmul Galaxy: M={M}, K={K}, N={N}")
 
-    # Get mesh shape from device for proper tensor mapping
-    mesh_shape = mesh_device.shape
-    num_rows = mesh_shape[0]  # 8 for Galaxy
-    num_cols = mesh_shape[1]  # 4 for Galaxy
+    # Input shapes
+    K_per_device = K // cluster_shape[cluster_axis]
+    K_per_device_per_shard = round_up(math.ceil(K_per_device / input_num_cores), ttnn.TILE_SIZE)
+    in0_shape = [*cluster_shape, M, K_per_device]
+    in1_shape = [*cluster_shape, K, N]
 
-    # Matmul weight setup
-    # For Galaxy (8x4 mesh): replicate weights across rows, shard across columns
-    # This matches the input tensor mapping
-    weights_tensor = torch.randn(mm_weights_shape).bfloat16()
-    weight_tt = ttnn.from_torch(
-        weights_tensor,
-        dtype=matmul_weights_dtype,
-        layout=layout,
-        device=mesh_device,
-        memory_config=mem_config_weights,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig(
-                [ttnn.PlacementReplicate(), ttnn.PlacementShard(mm_shard_dim)], ttnn.MeshShape(num_rows, num_cols)
-            ),
+    K_per_shard = round_up(math.ceil(K / output_num_cores), ttnn.TILE_SIZE)
+    N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
+    N_padded = N_per_shard * output_num_cores
+
+    logger.info(f"K_per_shard {K_per_shard}, N_per_shard {N_per_shard}, N_padded {N_padded}")
+
+    # Program config for matmul
+    in0_block_h = M // ttnn.TILE_SIZE
+    in0_block_w = K // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
+    while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+        in0_block_w -= 1
+
+    out_block_h = M // ttnn.TILE_SIZE
+    out_block_w = N_padded // output_num_cores // ttnn.TILE_SIZE
+
+    num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+    num_blocks_x = (N_padded // ttnn.TILE_SIZE - 1) // out_block_w + 1
+    num_blocks_total = num_blocks_y * num_blocks_x
+
+    if num_blocks_total != output_num_cores:
+        pytest.skip(f"num_blocks_total {num_blocks_total} != output_num_cores {output_num_cores}")
+
+    out_subblock_h = 1
+    out_subblock_w = MAX_DST_TILES
+    while out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+
+    logger.debug(f"in0 block h w {in0_block_h} {in0_block_w}")
+    logger.debug(f"out block h w {out_block_h} {out_block_w}")
+    logger.debug(f"out subblock h w {out_subblock_h} {out_subblock_w}")
+
+    # Memory configs
+    input_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 0), input_num_cores, SUB_DEVICE_CRS, row_wise=True
+    )
+    output_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 0), output_num_cores, SUB_DEVICE_CRS, row_wise=True
+    )
+
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            input_core_range_set,
+            [M, K_per_device_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
 
-    if use_bias:
-        bias_tensor_padded = torch.randn([1, 1, 1, rs_input_shape[3]]).float()
-        bias_tensor_scaled = bias_tensor_padded * (1 / num_devices)
-        bias_tt = ttnn.from_torch(
-            bias_tensor_scaled,
-            dtype=matmul_weights_dtype,
-            layout=layout,
-            device=mesh_device,
-            memory_config=mem_config_weights,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            tile=ttnn.Tile(tile),
-        )
-    else:
-        bias_tt = None
-        bias_tensor_padded = None
-
-    # Configs for ttnn.matmul
-    # For large tensors, we need to adjust the grid to avoid L1 overflow
-    M_tiles = rs_input_shape[2] // 32
-    N_tiles = rs_input_shape[3] // 32
-
-    # Galaxy has 7x10 grid on unharvested devices
-    if N_tiles > 400:  # Very large N (like 28672 -> 896 tiles)
-        core_grid = (7, 4)
-        per_core_M = max(1, math.ceil(M_tiles / core_grid[1]))
-        per_core_N = max(1, math.ceil(N_tiles / core_grid[0]))
-        if per_core_M * per_core_N > 64:
-            logger.info(
-                f"Large tensor detected: M_tiles={M_tiles}, N_tiles={N_tiles}, per_core_M*N={per_core_M * per_core_N}"
-            )
-            logger.info(f"Skipping this test configuration - L1 memory would overflow")
-            cleanup_sub_device(mesh_device)
-            pytest.skip(f"Tensor too large for L1: per_core_M={per_core_M}, per_core_N={per_core_N}")
-        else:
-            in0_block_w = min(max_in0_block_w, mm_weights_shape[2] // num_devices // 32 // core_grid[0])
-            in0_block_w = max(1, in0_block_w)
-            out_block_w = max(1, per_core_N // 2)
-            program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=core_grid,
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=per_core_M,
-                per_core_N=per_core_N,
-                out_block_w=out_block_w,
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=False,
-            )
-    else:
-        core_grid = (7, 6)
-        in0_block_w = min(max_in0_block_w, mm_weights_shape[2] // num_devices // 32 // core_grid[0])
-        in0_block_w = max(1, in0_block_w)
-        per_core_M = max(1, math.ceil(M_tiles / core_grid[1]))
-        per_core_N = max(1, math.ceil(N_tiles / core_grid[0]))
-        out_block_w = max(1, per_core_N // 2)
-
-        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=core_grid,
-            in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            out_block_w=out_block_w,
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+    in1_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [K, N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
 
-    # MM input setup
-    logger.info(f"Matmul+ReduceScatter Galaxy: rs_input_shape={rs_input_shape}, mm_weights_shape={mm_weights_shape}")
-    logger.info(f"Num devices: {num_devices}, Scatter dim: {rs_scatter_dim}")
+    # Intermediate shapes for AllGather
+    intermediate_num_cores = cluster_shape[cluster_axis]
+    intermediate_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 3))])
+    intermediate_shape = [*cluster_shape, M, K_per_device * cluster_shape[cluster_axis]]
+    interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
 
-    tt_input_tensor_mesh_list = []
-    torch_input_tensor_list = []
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [M, interemediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    ag_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [M, interemediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    mm_output_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [M, N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
-    for i in range(num_iters):
-        mm_input_shape = [rs_input_shape[0], 1, rs_input_shape[2], mm_weights_shape[2]]
-        mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
-        input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
-        torch_input_tensor_list.append(input_tensors)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=storage_grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=HOP_GRID,
+        num_global_cb_receivers=24,
+        untilize_out=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
+    )
 
-        # For Galaxy (8x4 mesh):
-        # - Replicate across rows (dim 0) - same data on all 8 rows
-        # - Shard across columns (dim 1) - scatter across 4 devices per column
-        input_tensor_mesh = ttnn.from_torch(
-            mm_input_tensor,
+    # Create input tensors
+    logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
+    in0_tensor = torch.randn(in0_shape)
+    tt_input_tensor = ttnn.from_torch(
+        in0_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in0_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    in1_tensor = torch.randn(in1_shape)
+    tt_in1_tensor = ttnn.from_torch(
+        in1_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in1_dtype,
+        memory_config=in1_sharded_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    # Intermediate tensors
+    intermediate_tensor = torch.zeros(intermediate_shape)
+    tt_intermediate_tensors = []
+    for i in range(num_buffers):
+        tt_intermediate_tensor = ttnn.from_torch(
+            intermediate_tensor,
             device=mesh_device,
-            layout=layout,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_input,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(num_rows, num_cols)
-                ),
-            ),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=in0_dtype,
+            memory_config=intermediate_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
-        tt_input_tensor_mesh_list.append(input_tensor_mesh)
+        tt_intermediate_tensors.append(tt_intermediate_tensor)
 
-    # Compute golden outputs
-    torch_reduce_scatter_output_list = []
-    torch_matmul_output_list = []
+    # Compute golden
+    output_tensor_goldens_list = []
     for i in range(num_iters):
-        matmul_input = torch.cat(torch_input_tensor_list[i], dim=3)
-        if use_bias:
-            matmul_output = torch.matmul(matmul_input, weights_tensor) + bias_tensor_padded
-        else:
-            matmul_output = torch.matmul(matmul_input, weights_tensor)
-        scatter_output = torch.chunk(matmul_output, num_devices, rs_scatter_dim)
-        torch_reduce_scatter_output_list.append(scatter_output)
-        torch_matmul_output_list.append(matmul_output)
+        golden_Ashape = list(intermediate_shape)
+        golden_Ashape[cluster_axis] = 1
+        golden_A = in0_tensor.transpose(-2, cluster_axis).reshape(golden_Ashape).squeeze(cluster_axis)
+        golden_A = golden_A.unsqueeze(cluster_axis).repeat(1, intermediate_num_cores, 1, 1)
+        output_tensor_goldens_list.append(golden_A @ in1_tensor)
 
-    # Run operation
-    tt_reduce_scatter_output_list = []
-    tt_matmul_output_list = []
-
-    def run_op(i):
-        if use_non_fused:
-            tt_matmul_out_tensor = ttnn.linear(
-                tt_input_tensor_mesh_list[i],
-                weight_tt,
-                bias=bias_tt,
-                memory_config=mem_config_mm,
+    def run_fused_op(n_iters, store_all_results=True):
+        """Run fused llama_all_gather_matmul_async."""
+        outs = []
+        for i in range(n_iters):
+            out = ttnn.experimental.llama_all_gather_matmul_async(
+                tt_input_tensor,
+                tt_in1_tensor,
+                tt_intermediate_tensors[i % num_buffers],
+                dim=3,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                ag_memory_config=ag_output_mem_config,
+                mm_memory_config=mm_output_sharded_mem_config,
+                topology=all_gather_topology,
+                num_links=num_links,
+                subdevice_id=worker_sub_device_id,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                dtype=output_dtype,
             )
-            tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_matmul_out_tensor,
-                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]],
-                dim=rs_scatter_dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
+            if not trace_mode:
+                ttnn.synchronize_device(mesh_device)
+            if store_all_results:
+                outs.append(out)
+        return outs if store_all_results else [out]
+
+    def run_non_fused_op(n_iters, store_all_results=True):
+        """Run non-fused: all_gather_async + ttnn.linear."""
+        outs = []
+        for i in range(n_iters):
+            # AllGather
+            ag_out = ttnn.experimental.all_gather_async(
+                tt_input_tensor,
+                dim=3,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                memory_config=ag_output_mem_config,
+                topology=all_gather_topology,
                 num_links=num_links,
-                memory_config=mem_config_rs,
-                topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
             )
-        else:
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = ttnn.experimental.matmul_reduce_scatter_async(
-                tt_input_tensor_mesh_list[i],
-                weight_tt,
-                persistent_intermediate_buffer=persistent_intermediate_buffers[i],
-                persistent_output_buffer=persistent_output_buffers[i],
-                dim=rs_scatter_dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                reduce_scatter_core_grid_offset=(0, 6),
-                bias=bias_tt,
-                num_links=num_links,
-                memory_config_rs=mem_config_rs,
-                topology=rs_topology,
-                subdevice_id=worker_sub_device_id,
-                memory_config_mm=mem_config_mm,
+            # Matmul
+            mm_out = ttnn.linear(
+                ag_out,
+                tt_in1_tensor,
+                memory_config=mm_output_sharded_mem_config,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                dtype=output_dtype,
             )
-        return tt_matmul_out_tensor, tt_reduce_scatter_output_tensor
+            if not trace_mode:
+                ttnn.synchronize_device(mesh_device)
+            if store_all_results:
+                outs.append(mm_out)
+        return outs if store_all_results else [mm_out]
 
-    if enable_trace:
-        # Compile the op
-        for i in range(num_iters):
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
-        logger.info("Done compiling Op")
+    run_op = run_fused_op if use_fused else run_non_fused_op
 
-        # Capture the trace
+    if trace_mode:
+        # Compile
+        logger.info("Compiling model")
+        tt_outs = run_op(num_iters, store_all_results=True)
+
+        # Capture trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for i in range(num_iters):
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
-            tt_matmul_output_list.append(tt_matmul_out_tensor)
+        tt_outs = run_op(num_iters, store_all_results=True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        logger.info("Done capturing trace")
 
-        # Warmup trace execution
+        # Warmup
         for _ in range(3):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-        # Timed trace execution
+        # Timed run
         num_perf_runs = 10
+        signpost("start")
         start_time = time.perf_counter()
         for _ in range(num_perf_runs):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         end_time = time.perf_counter()
+        signpost("stop")
 
         total_time_us = (end_time - start_time) * 1e6
         avg_time_per_run_us = total_time_us / num_perf_runs
         avg_time_per_iter_us = avg_time_per_run_us / num_iters
 
-        mode_str = "NON-FUSED (linear + reduce_scatter)" if use_non_fused else "FUSED (matmul_reduce_scatter_async)"
+        mode_str = "FUSED (llama_all_gather_matmul_async)" if use_fused else "NON-FUSED (all_gather + linear)"
         logger.info(f"=== PERFORMANCE ({mode_str}) ===")
         logger.info(f"Total time for {num_perf_runs} runs: {total_time_us:.2f} us")
         logger.info(f"Avg time per run ({num_iters} iters): {avg_time_per_run_us:.2f} us")
         logger.info(f"Avg time per iteration: {avg_time_per_iter_us:.2f} us")
-        logger.info(f"rs_input_shape={rs_input_shape}, mm_weights_shape={mm_weights_shape}")
 
-        # Release trace
         ttnn.release_trace(mesh_device, trace_id)
     else:
         avg_time_per_iter_us = None
-        for i in range(num_iters):
-            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
-            tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
-            tt_matmul_output_list.append(tt_matmul_out_tensor)
-
-            logger.info("Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info("Done op")
-            logger.info(f"Done iteration {i}")
+        signpost("start")
+        tt_outs = run_op(num_iters, store_all_results=True)
+        signpost("stop")
 
     # Validate
-    # For Galaxy (8x4 mesh): data is replicated across 8 rows, scattered across 4 columns
-    # We validate by checking one row's worth of data (4 devices in a column)
-    total_devices = num_rows * num_cols
-    for i in range(num_iters):
-        tt_mm_out_tensor = tt_matmul_output_list[i]
-        torch_mm_out_tensor = torch_matmul_output_list[i]
+    def validate(tt_out_tensor, output_tensor):
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            row_index = i // cluster_shape[1]
+            col_index = i % cluster_shape[1]
+            output_tensor_ = output_tensor[row_index, col_index]
+            tt_output_tensor = t.cpu().to_torch().squeeze(0).squeeze(0)
+            eq, output = comp_pcc(tt_output_tensor, output_tensor_)
+            assert eq, f"{i} FAILED: {output}"
+        logger.info(f"PCC output is: {output}")
 
-        tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
-        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        # Output has all 32 devices concatenated. Extract just one row (4 devices) worth
-        # Each row has num_cols (4) devices, so take the first row's data
-        tt_mm_out_per_row = torch.chunk(tt_mm_out, num_rows, 3)[0]  # First row's 4 devices
-        # Sum the 4 partial results from each device in the row (column scatter)
-        tt_mm_out_summed = torch.sum(torch.stack(torch.chunk(tt_mm_out_per_row, num_cols, 3)), dim=0)
-        eq, output = comp_pcc(tt_mm_out_summed, torch_mm_out_tensor)
-        logger.info(f"Matmul PCC: {output}, iteration {i}")
-        assert eq, f"{i} FAILED mm: {output}"
+    for tensor_index in range(len(tt_outs)):
+        validate(tt_outs[tensor_index], output_tensor_goldens_list[tensor_index])
 
-        tt_rs_out_tensor = tt_reduce_scatter_output_list[i]
-        torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
-        torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
 
-        tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        # Extract one row's worth of reduce_scatter output (4 devices)
-        tt_rs_out_per_row = torch.chunk(tt_rs_out, num_rows, 3)[0]
-        eq, output = comp_pcc(tt_rs_out_per_row, torch_rs_out)
-        logger.info(f"ReduceScatter PCC: {output}, iteration {i}")
-        assert eq, f"{i} FAILED rs: {output}"
-
-    cleanup_sub_device(mesh_device)
-    logger.info("Matmul+ReduceScatter Galaxy test completed successfully")
-
+    logger.info("AllGather+Matmul Galaxy test completed successfully")
     return avg_time_per_iter_us
 
 
 # =============================================================================
-# Pytest Test Cases for Galaxy (8x4 mesh, 32 devices)
+# Pytest Test Cases for Galaxy AllGather + Matmul (FF2 path optimization)
 # =============================================================================
 
 
 @pytest.mark.parametrize(
-    "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
+    "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
-        # ==================== Llama 70B dimensions for Galaxy ====================
-        # Galaxy: 8x4 mesh, scatter along columns (4 devices per column)
-        # Llama 70B: dim=8192, hidden_dim=28672
-        # Per-column: hidden_dim/4 = 7168 per device after scatter
-        # Galaxy 70B decode (M=32) - scatter across 4 devices in column
-        (4, 3, [1, 1, 8192, 7168], [1, 1, 32, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # ==================== Llama 70B FF2 dimensions for Galaxy ====================
+        # FF2 path: Input from FF1 output (hidden_dim) -> w2 -> output (dim)
+        # Galaxy 70B: hidden_dim=28672, dim=8192
+        # K (AG input) = hidden_dim/4 = 7168 per device (gathered to 28672)
+        # N (output) = dim = 8192
+        # Galaxy 70B decode (M=32)
+        (32, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
         # Galaxy 70B prefill (M=128)
-        (4, 3, [1, 1, 8192, 7168], [1, 1, 128, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (128, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
         # ==================== Scaled dimensions ====================
-        # Scaled: dim=4096, hidden_dim=3584 per device (14336/4)
-        (4, 3, [1, 1, 4096, 3584], [1, 1, 32, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 4096, 3584], [1, 1, 128, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 4096, 3584], [1, 1, 256, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # Scaled: hidden_dim=14336, dim=4096
+        (32, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        (128, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
         # ==================== Smaller test dimensions ====================
-        (4, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 8192, 2048], [1, 1, 512, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (32, 2048, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        (128, 2048, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "llama70b_decode_32",
-        "llama70b_prefill_128",
-        "scaled_decode_32",
-        "scaled_prefill_128",
-        "scaled_prefill_256",
-        "small_decode_32",
-        "small_prefill_128",
-        "small_prefill_512",
+        "llama70b_ff2_decode_32",
+        "llama70b_ff2_prefill_128",
+        "scaled_ff2_decode_32",
+        "scaled_ff2_prefill_128",
+        "small_ff2_decode_32",
+        "small_ff2_prefill_128",
     ],
 )
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("cluster_axis", [1])  # Scatter across columns (4 devices)
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_mm, mem_config_rs",
+    "device_params",
     [
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
     ],
-)
-@pytest.mark.parametrize(
-    "device_params, rs_topology",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "trace_region_size": 23887872,
-            },
-            ttnn.Topology.Linear,
-        ),
-    ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.skip(
-    reason="matmul_reduce_scatter_async doesn't support 2D mesh topologies. "
-    "The fused op requires 1D mesh (like T3K). Use test_fused_ccl_t3k.py for fused op testing."
-)
-def test_matmul_reduce_scatter_galaxy_check(
+def test_all_gather_matmul_galaxy_check(
     mesh_device,
-    num_devices,
+    M,
+    K,
+    N,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    fp32_acc_mode,
+    packer_l1_acc,
+    input_num_cores,
+    output_num_cores,
     num_links,
-    mm_weights_shape,
-    rs_input_shape,
-    mm_shard_dim,
-    rs_scatter_dim,
-    layout,
-    use_bias,
-    matmul_weights_dtype,
-    max_in0_block_w,
-    rs_input_dtype,
-    mem_config_mm,
-    mem_config_input,
-    mem_config_rs,
-    rs_topology,
+    cluster_axis,
 ):
     """
-    Functional test for Matmul + ReduceScatter fused operation on Galaxy (32 devices, 8x4 mesh).
+    Functional test for AllGather + Matmul fused operation on Galaxy (32 devices, 8x4 mesh).
 
-    Validates correctness of fused op by comparing against golden PyTorch outputs.
-    Uses tensor dimensions from Llama 70B MLP ff1/ff3 path.
+    Validates correctness of llama_all_gather_matmul_async by comparing against golden outputs.
+    Uses tensor dimensions from Llama 70B MLP FF2 path.
     """
-    # Run fused op (correctness check only)
-    run_matmul_reduce_scatter_galaxy_impl(
+    run_all_gather_matmul_galaxy_impl(
         mesh_device,
-        num_devices,
-        rs_input_shape,
-        mm_shard_dim,
-        rs_scatter_dim,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
         num_links,
-        mm_weights_shape,
-        rs_input_dtype,
-        layout,
-        matmul_weights_dtype,
-        max_in0_block_w,
-        use_bias,
-        mem_config_input,
-        mem_config_rs,
-        mem_config_mm,
-        rs_topology=rs_topology,
-        enable_trace=False,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        use_fused=True,
         num_iters=1,
-        use_non_fused=False,
+        trace_mode=False,
     )
 
 
 @pytest.mark.parametrize(
-    "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
+    "M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, fp32_acc_mode, packer_l1_acc, input_num_cores, output_num_cores",
     [
-        # ==================== Llama 70B dimensions for Galaxy ====================
-        # Galaxy: 8x4 mesh, scatter along columns (4 devices per column)
-        # Galaxy 70B decode (M=32) - scatter across 4 devices
-        (4, 3, [1, 1, 8192, 7168], [1, 1, 32, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        # ==================== Llama 70B FF2 dimensions for Galaxy ====================
+        # Galaxy 70B decode (M=32)
+        (32, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
         # Galaxy 70B prefill (M=128)
-        (4, 3, [1, 1, 8192, 7168], [1, 1, 128, 7168], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (128, 28672, 8192, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
         # ==================== Scaled dimensions ====================
-        (4, 3, [1, 1, 4096, 3584], [1, 1, 32, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 4096, 3584], [1, 1, 128, 3584], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        # ==================== Smaller test dimensions ====================
-        (4, 3, [1, 1, 8192, 2048], [1, 1, 32, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
-        (4, 3, [1, 1, 8192, 2048], [1, 1, 128, 2048], 2, 3, ttnn.TILE_LAYOUT, 5, ttnn.bfloat16, ttnn.bfloat16, False),
+        (32, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
+        (128, 14336, 4096, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, 10, 24),
     ],
     ids=[
-        "llama70b_decode_32",
-        "llama70b_prefill_128",
-        "scaled_decode_32",
-        "scaled_prefill_128",
-        "small_decode_32",
-        "small_prefill_128",
+        "llama70b_ff2_decode_32",
+        "llama70b_ff2_prefill_128",
+        "scaled_ff2_decode_32",
+        "scaled_ff2_prefill_128",
     ],
 )
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("cluster_axis", [1])  # Scatter across columns (4 devices)
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_mm, mem_config_rs",
+    "device_params",
     [
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
     ],
-)
-@pytest.mark.parametrize(
-    "device_params, rs_topology",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-                "trace_region_size": 23887872,
-            },
-            ttnn.Topology.Linear,
-        ),
-    ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.skip(
-    reason="matmul_reduce_scatter_async doesn't support 2D mesh topologies. "
-    "The fused op requires 1D mesh (like T3K). Use test_fused_ccl_t3k.py for fused op testing."
-)
-def test_matmul_reduce_scatter_galaxy_perf_comparison(
+def test_all_gather_matmul_galaxy_perf_comparison(
     mesh_device,
-    num_devices,
+    M,
+    K,
+    N,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    fp32_acc_mode,
+    packer_l1_acc,
+    input_num_cores,
+    output_num_cores,
     num_links,
-    mm_weights_shape,
-    rs_input_shape,
-    mm_shard_dim,
-    rs_scatter_dim,
-    layout,
-    use_bias,
-    matmul_weights_dtype,
-    max_in0_block_w,
-    rs_input_dtype,
-    mem_config_mm,
-    mem_config_input,
-    mem_config_rs,
-    rs_topology,
+    cluster_axis,
 ):
     """
-    Performance comparison test for Matmul + ReduceScatter on Galaxy (32 devices, 8x4 mesh).
+    Performance comparison test for AllGather + Matmul on Galaxy (32 devices, 8x4 mesh).
 
-    Runs both fused and non-fused operations and generates a comparison report showing
-    the speedup/slowdown of the fused operation.
+    Compares:
+    - Current (non-fused): all_gather_async + ttnn.linear
+    - Proposed (fused): llama_all_gather_matmul_async
+
+    This is the FF2 path optimization opportunity identified in the plan.
     """
     num_iters = 5
 
     # Run non-fused op first
-    logger.info("Running NON-FUSED operation (linear + reduce_scatter)...")
-    non_fused_time_us = run_matmul_reduce_scatter_galaxy_impl(
+    logger.info("Running NON-FUSED operation (all_gather + linear)...")
+    non_fused_time_us = run_all_gather_matmul_galaxy_impl(
         mesh_device,
-        num_devices,
-        rs_input_shape,
-        mm_shard_dim,
-        rs_scatter_dim,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
         num_links,
-        mm_weights_shape,
-        rs_input_dtype,
-        layout,
-        matmul_weights_dtype,
-        max_in0_block_w,
-        use_bias,
-        mem_config_input,
-        mem_config_rs,
-        mem_config_mm,
-        rs_topology=rs_topology,
-        enable_trace=True,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        use_fused=False,
         num_iters=num_iters,
-        use_non_fused=True,
+        trace_mode=True,
     )
 
     # Run fused op
-    logger.info("Running FUSED operation (matmul_reduce_scatter_async)...")
-    fused_time_us = run_matmul_reduce_scatter_galaxy_impl(
+    logger.info("Running FUSED operation (llama_all_gather_matmul_async)...")
+    fused_time_us = run_all_gather_matmul_galaxy_impl(
         mesh_device,
-        num_devices,
-        rs_input_shape,
-        mm_shard_dim,
-        rs_scatter_dim,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        in1_dtype,
+        output_dtype,
         num_links,
-        mm_weights_shape,
-        rs_input_dtype,
-        layout,
-        matmul_weights_dtype,
-        max_in0_block_w,
-        use_bias,
-        mem_config_input,
-        mem_config_rs,
-        mem_config_mm,
-        rs_topology=rs_topology,
-        enable_trace=True,
+        input_num_cores,
+        output_num_cores,
+        fidelity,
+        fp32_acc_mode,
+        packer_l1_acc,
+        use_fused=True,
         num_iters=num_iters,
-        use_non_fused=False,
+        trace_mode=True,
     )
 
     # Print comparison report
-    test_name = f"Galaxy Matmul+ReduceScatter (M={rs_input_shape[2]}, N={rs_input_shape[3]})"
-    print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, rs_input_shape, mm_weights_shape)
+    test_name = f"Galaxy AllGather+Matmul FF2 (M={M}, K={K}, N={N})"
+    ag_input_shape = [8, 4, M, K // 4]  # K/4 per device before AG
+    mm_weights_shape = [8, 4, K, N]
+    print_perf_comparison_report(test_name, fused_time_us, non_fused_time_us, ag_input_shape, mm_weights_shape)
