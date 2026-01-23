@@ -175,26 +175,6 @@ class TTSpatialCrossAttention:
                 logger.warning("No valid points found in SCA, returning residual")
             return inp_residual
 
-        # Save indices to files for visualization
-        import os
-
-        os.makedirs("./sca_indices_output", exist_ok=True)
-        for cam_idx, index_tensor in enumerate(indexes):
-            index_torch = ttnn.to_torch(index_tensor)
-            save_path = f"./sca_indices_output/camera_{cam_idx}_tt_indices.pth"
-            torch.save(index_torch, save_path)
-
-        # Save metadata
-        metadata = {
-            "num_cameras": len(indexes),
-            "batch_size": bs,
-            "num_queries": num_queries,
-            "max_len": max_len,
-            "implementation": "tt",
-            "description": "Valid query indices for TT BEVFormer spatial cross attention",
-        }
-        torch.save(metadata, "./sca_indices_output/metadata_tt.pth")
-
         if ENABLE_LOGGING:
             logger.info("SCA Valid Query Detection Complete")
 

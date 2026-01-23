@@ -177,7 +177,7 @@ def test_ms_deformable_attention_forward(
         pcc=expected_pcc,
     )
 
-    assert passed, f"PCC check failed: {message}"
+    assert passed, f"PCC check failed: {results}"
 
     if ENABLE_LOGGING:
         logger.info("✅ All tolerance checks passed successfully!")
