@@ -9,6 +9,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
+#include "api/debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -134,17 +135,17 @@ void MAIN {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            silu_tile_init();
-            silu_tile(0);
 
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-
-            // fill_tile_init();
-            // fill_tile(0, float(1.0/256.0f));
             tile_regs_commit();
-
             tile_regs_wait();
+
+            PACK(TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK));
+            PACK(silu_tile_init());
+            PACK(silu_tile(0));
+
+            PACK(mul_binary_tile_init());
+            PACK(mul_binary_tile(0, 1, 0));
+
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/i);
             tile_regs_release();
         }
