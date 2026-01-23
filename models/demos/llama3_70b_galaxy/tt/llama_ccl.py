@@ -465,13 +465,11 @@ class TT_CCL:
         # Create persistent buffers for cluster axis 1 (FF2 path gathers along this axis)
         cluster_axis = 1
 
-        # K_per_device is the width per device before all_gather
-        # For Llama 70B: hidden_size/4 = 14336/4 = 3584
-        # For Qwen: hidden_size/4 = 12800/4 = 3200
-        K_per_device = 3584 if not self.is_qwen else 3200
-
-        # After all_gather, the gathered width = K_per_device * num_devices_in_gather_dim
-        gathered_width = K_per_device * cluster_shape[cluster_axis]  # 3584 * 4 = 14336
+        # The gathered width (K) is the full dimension after all_gather
+        # For Llama 70B FF2: K = 3584 (hidden_size/4 after column parallelism)
+        # For Qwen: K = 3200
+        # K_per_device = K / cluster_shape[cluster_axis] = 3584 / 4 = 896
+        gathered_width = 3584 if not self.is_qwen else 3200  # This is K, the full gathered dim
 
         # Fused all_gather_matmul requires intermediate buffer sharded across cluster_shape[cluster_axis] cores
         # Use cores (4,0) to (4,3) - column 4 is NOT in sub_core_grids so it won't conflict with other ops
