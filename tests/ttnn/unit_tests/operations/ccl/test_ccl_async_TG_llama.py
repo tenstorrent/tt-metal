@@ -824,7 +824,7 @@ def test_all_reduce_tg_llama(
     warmup_iters,
     trace_mode,
     function_level_defaults,
-    ensure_devices_tg,
+    # ensure_devices_tg,
 ):
     profiler = BenchmarkProfiler()
 
@@ -1045,7 +1045,7 @@ def test_llama_all_gather_matmul(
     num_iters,
     trace_mode,
     function_level_defaults,
-    ensure_devices_tg,
+    # ensure_devices_tg,
 ):
     run_llama_all_gather_matmul_impl(
         mesh_device,
