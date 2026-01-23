@@ -94,6 +94,7 @@ class TT_CCL:
 
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+        self.all_gather_matmul_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
@@ -102,6 +103,7 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
+            self.all_gather_matmul_buffers = self.get_all_gather_matmul_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
@@ -120,6 +122,7 @@ class TT_CCL:
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+        self.all_gather_matmul_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
@@ -439,6 +442,36 @@ class TT_CCL:
             memory_config=buffer_mem_cfg,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
+
+        return persistent_buffers
+
+    def get_all_gather_matmul_buffers(self):
+        """
+        Creates double buffered intermediate tensors for fused all_gather + matmul operation.
+
+        For FF2 path: all_gather output shape is [8, 4, 32, 3584] (gathered hidden_dim)
+        """
+        persistent_buffers = [[], []]
+
+        cluster_shape = (8, 4)
+        M = 32
+
+        # Create persistent buffers for cluster axis 1 (FF2 path gathers along this axis)
+        cluster_axis = 1
+        # FF2 intermediate buffer: all_gather output with full hidden_dim (3584 for llama70b)
+        buffer_mem_cfg = self.model_config["FF2_IN_RING_MEMCFG"]
+        hidden_dim = 3584 if not self.is_qwen else 3200
+
+        for _ in range(self.num_cbs):
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((*cluster_shape, M, hidden_dim)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=buffer_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
 
@@ -862,6 +895,62 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out, w3_out
+
+    def all_gather_matmul(
+        self,
+        # Input tensor (to be gathered)
+        input_tensor,
+        # Matmul weight
+        weight_tensor,
+        # AllGather config
+        dim=3,
+        cluster_axis=1,
+        num_links=3,
+        # Matmul config
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        ag_memory_config=None,
+        mm_memory_config=None,
+        global_cb=None,
+        use_noc1_only=False,
+    ):
+        """
+        Fused AllGather + Matmul operation using llama_all_gather_matmul_async.
+
+        Replaces separate line_all_gather + ttnn.linear for better performance.
+        Used for FF2 path in decode mode.
+        """
+        persistent_interim_buffer = self.all_gather_matmul_buffers[cluster_axis][
+            self.all_gather_matmul_buffer_idx[cluster_axis]
+        ]
+
+        ttnn_tensor_out = ttnn.experimental.llama_all_gather_matmul_async(
+            input_tensor,
+            weight_tensor,
+            persistent_interim_buffer,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            ag_memory_config=ag_memory_config,
+            mm_memory_config=mm_memory_config,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            num_links=num_links,
+            subdevice_id=self.worker_sub_device_id,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            global_cb=global_cb,
+            use_noc1_only=use_noc1_only,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.all_gather_matmul_buffer_idx[cluster_axis] = (
+            self.all_gather_matmul_buffer_idx[cluster_axis] + 1
+        ) % self.num_cbs
+
+        return ttnn_tensor_out
 
     def llama_rs_create_heads(
         self,

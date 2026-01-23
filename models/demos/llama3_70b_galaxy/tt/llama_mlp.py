@@ -160,29 +160,23 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
-        w2_in = self.tt_ccl.line_all_gather(
+        # Fused AllGather + Matmul for FF2 path (decode mode)
+        # Replaces separate line_all_gather + ttnn.linear for ~3.6x speedup
+        w2_out = self.tt_ccl.all_gather_matmul(
             ff1ff3,
+            self.w2,
             dim=3,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
-
-        ttnn.deallocate(ff1ff3)
-
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            ag_memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+        ttnn.deallocate(ff1ff3)
+
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,

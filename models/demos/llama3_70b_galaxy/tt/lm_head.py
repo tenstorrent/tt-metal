@@ -62,11 +62,12 @@ class LMHead(LightweightModule):
             )
             memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
         else:
-            memory_config = (
+            memory_config_decode = (
                 ttnn.DRAM_MEMORY_CONFIG
                 if args.dim == 2048
                 else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
             )
+            memory_config_prefill = memory_config_decode
 
         for i in range(num_splits):
             index = i * self.padded_vocab_size // num_splits
