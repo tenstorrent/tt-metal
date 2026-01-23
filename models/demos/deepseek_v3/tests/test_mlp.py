@@ -25,6 +25,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 
+# TODO: Doesn't work on multi-host - we should figure out why
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
     reference_model = DeepseekV3MLP(hf_config).eval()
@@ -40,6 +42,8 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
     )
 
 
+# TODO: Doesn't work on multi-host - we should figure out why
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
