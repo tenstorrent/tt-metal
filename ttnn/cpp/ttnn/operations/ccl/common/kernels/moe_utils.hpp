@@ -46,8 +46,8 @@ PolarState polar_state;
 struct MuxSyncCoreArgs {
     static constexpr uint16_t is_sync_core_arg_offset = 1;
     static constexpr uint16_t termination_sync_address_arg_offset = 10;
-    static constexpr uint16_t termination_master_noc_x_arg_offset = 2;
-    static constexpr uint16_t termination_master_noc_y_arg_offset = 3;
+    static constexpr uint16_t termination_master_noc_x_arg_offset = 15;
+    static constexpr uint16_t termination_master_noc_y_arg_offset = 16;
 
 public:
     const bool is_sync_core;
@@ -62,25 +62,28 @@ public:
         termination_master_noc_y(get_arg_val<uint32_t>(arg_idx + termination_master_noc_y_arg_offset)) {};
 };
 
-struct MuxConnectionBaseArgs {
+// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
+template <uint32_t RtArgIncrement, uint32_t MxXRtOffset, uint32_t MxYRtOffset>
+struct MuxBaseArgsImpl {
 private:
-    static constexpr uint16_t fabric_mux_x_arg_offset = 2;
-    static constexpr uint16_t fabric_mux_y_arg_offset = 3;
+    static constexpr uint16_t fabric_mux_x_arg_offset = MxXRtOffset;
+    static constexpr uint16_t fabric_mux_y_arg_offset = MxYRtOffset;
 
 protected:
-    // 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
-    static constexpr uint32_t all_rt_arg_count = 17;
+    static constexpr uint32_t all_rt_arg_count = RtArgIncrement;
 
 public:
     const uint8_t fabric_mux_x;
     const uint8_t fabric_mux_y;
 
-    MuxConnectionBaseArgs(const uint32_t arg_idx) :
+    MuxBaseArgsImpl(const uint32_t arg_idx) :
         fabric_mux_x(get_arg_val<uint32_t>(arg_idx + fabric_mux_x_arg_offset)),
         fabric_mux_y(get_arg_val<uint32_t>(arg_idx + fabric_mux_y_arg_offset)) {};
 
     static void increment(uint32_t& arg_idx) { arg_idx += all_rt_arg_count; };
 };
+// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
+using MuxConnectionBaseArgs = MuxBaseArgsImpl<17, 2, 3>;
 
 template <size_t MuxStatusAddress>
 struct MuxConnectionStatusArgs : MuxConnectionBaseArgs {
@@ -142,11 +145,14 @@ public:
             get_semaphore(get_arg_val<uint32_t>(arg_idx + local_buffer_index_address_arg_offset))) {};
 };
 
+// 2 RT args per mux worker from ttnn::operations::ccl::moe::detail::add_termination_master_rt_args
+using MuxDisconnectionBaseArgs = MuxBaseArgsImpl<2, 0, 1>;
+
 template <size_t TerminationSignalAddress>
-struct MuxTerminationArgs : MuxConnectionBaseArgs {
+struct MuxTerminationArgs : MuxDisconnectionBaseArgs {
     static constexpr size_t fabric_mux_termination_signal_address = TerminationSignalAddress;
 
-    MuxTerminationArgs(const uint32_t arg_idx) : MuxConnectionBaseArgs(arg_idx) {};
+    MuxTerminationArgs(const uint32_t arg_idx) : MuxDisconnectionBaseArgs(arg_idx) {};
 };
 
 template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
@@ -154,9 +160,26 @@ inline void open_direction_connections_async(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
     uint32_t rt_args_idx) {
-    for (uint32_t i = 0; i < Size; i++) {
+    for (uint32_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             MuxConnectionArgs<MuxNumBuffersPerChannel, MuxChannelBufferSize, MuxStatusAddress> args(rt_args_idx);
+
+            // DPRINT << "args.fabric_mux_x: " << (uint32_t) args.fabric_mux_x <<
+            //                 " args.fabric_mux_y: " << (uint32_t) args.fabric_mux_y <<
+            //                 " args.fabric_mux_channel_id: " <<(uint32_t) args.fabric_mux_channel_id <<
+            //                 " args.fabric_mux_num_buffers_per_channel: " <<(uint32_t)
+            //                 args.fabric_mux_num_buffers_per_channel<< " args.fabric_mux_channel_buffer_size_bytes: "
+            //                 <<(uint32_t) args.fabric_mux_channel_buffer_size_bytes<< "
+            //                 args.fabric_mux_channel_base_address: " <<(uint32_t) args.fabric_mux_channel_base_address
+            //                 << " args.fabric_mux_connection_info_address: " <<(uint32_t)
+            //                 args.fabric_mux_connection_info_address<< " args.fabric_mux_connection_handshake_address:
+            //                 " <<(uint32_t) args.fabric_mux_connection_handshake_address<< "
+            //                 args.fabric_mux_flow_control_address: "<< (uint32_t)
+            //                 args.fabric_mux_flow_control_address<< " args.fabric_mux_buffer_index_address:
+            //                 "<<(uint32_t) args.fabric_mux_buffer_index_address<< " args.local_flow_control_address:
+            //                 "<<(uint32_t) args.local_flow_control_address << " args.local_teardown_address: "
+            //                 <<(uint32_t) args.local_teardown_address<< " args.local_buffer_index_address: "
+            //                 <<(uint32_t) args.local_buffer_index_address<<"\n";
 
             connections[i] = tt::tt_fabric::build_connection_to_fabric_endpoint<MuxNumBuffersPerChannel>(
                 args.fabric_mux_x,
@@ -186,6 +209,9 @@ inline void open_direction_connections_barrier(
     for (uint32_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
+
+            DPRINT << "OPENING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+                   << "\n";
 
             tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 args.fabric_mux_x,
@@ -246,7 +272,7 @@ inline void close_direction_connections(
     }
 }
 
-template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress>
+template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress, size_t NumMuxWorkers = 0>
 inline void close_direction_connections(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
@@ -259,15 +285,22 @@ inline void close_direction_connections(
     }
 
     if (is_sync_core) {
+        // fast forward past the normal mux rt args to the list of coordinates needed by termination master
         for (uint32_t i = 0; i < Size; ++i) {
             if (directions[i]) {
-                MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
-
-                tt::tt_fabric::fabric_endpoint_terminate(
-                    args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
-
-                args.increment(arg_idx);
+                MuxConnectionBaseArgs::increment(arg_idx);
             }
+        }
+        for (uint32_t i = 0; i < NumMuxWorkers; ++i) {
+            MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
+
+            DPRINT << "CLOSING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+                   << "\n";
+
+            tt::tt_fabric::fabric_endpoint_terminate(
+                args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
+
+            args.increment(arg_idx);
         }
     }
 }
