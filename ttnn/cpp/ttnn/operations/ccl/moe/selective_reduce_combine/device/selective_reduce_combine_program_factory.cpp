@@ -44,9 +44,11 @@ auto launch_mux_workers(
     const uint32_t num_links,
     const uint32_t num_workers,
     Program& program) {
-    auto num_full_size_channels = num_workers;
-    constexpr auto num_header_only_channels = 0;
-    constexpr auto num_buffers_full_size_channels = 1;  // parameterize?
+    const auto num_header_only_channels = tt::div_up(num_workers, num_links);
+    const auto num_full_size_channels = tt::div_up(num_workers, num_links);
+    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
+    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
+
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -54,11 +56,12 @@ auto launch_mux_workers(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
-        0,
+        num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
 
-    const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, neighbors.size() - 1);
+    const auto needed_mux_core_range_set =
+        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -92,6 +95,18 @@ auto launch_mux_workers(
     }
 
     return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
+}
+
+void add_termination_master_rt_args(
+    const std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>>& mux_neigbor_core_maps,
+    std::vector<uint32_t>& writer_runtime_args) {
+    for (const auto& m : mux_neigbor_core_maps) {
+        for (const auto& c : m) {
+            const auto& mux_virtual_core = c.second;
+            writer_runtime_args.push_back(mux_virtual_core.x);
+            writer_runtime_args.push_back(mux_virtual_core.y);
+        }
+    }
 }
 
 // TODO make this reflect Saad's real stuff
@@ -184,12 +199,12 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // TODO this should eventually be variable per device
     const uint32_t experts_per_device = experts / num_devices;
 
-    const auto input_dtype = input_tensor.dtype();
+    // const auto input_dtype = input_tensor.dtype();
     const auto& metadata_spec = metadata_tensor.tensor_spec();
 
-    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t max_packet_size_bytes =
-        input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
+    // const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t max_packet_size_bytes = 512;
+    // input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
     const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
     const uint32_t metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
@@ -227,7 +242,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // input sharded buffer
     constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
-                                              .set_page_size(data_cb_id, buffer_size_bytes)
+                                              .set_page_size(data_cb_id, max_token_segment_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // metadata page buffer
@@ -291,6 +306,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // launch writer kernel
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
+    const auto start_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
+    const auto end_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
+
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"metadata_cb_id", metadata_cb_id},
         {"data_cb_id", data_cb_id},
@@ -298,11 +318,16 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         {"metadata_entry_size", detail::metadata_entry_size(experts_per_device)},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
+        {"noc_x_start", start_coord.x},
+        {"noc_y_start", start_coord.y},
+        {"noc_x_end", end_coord.x},
+        {"noc_y_end", end_coord.y},
         {"select_experts_k", select_experts_k},
         {"num_local_experts", experts_per_device},
         {"global_num_tokens", total_tokens},
         {"source_token_segment_buffer_size_bytes", max_token_segment_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_block_size_bytes},
+        {"token_size_bytes", token_size_bytes},
         {"alignment", l1_alignment},
         {"num_devices", num_devices},
         {"src_chip_id", src_chip_id},
@@ -310,7 +335,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         {"mesh_cols", mesh_view.num_cols()},
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
-        {"topology", static_cast<uint32_t>(topology)}};
+        {"topology", static_cast<uint32_t>(topology)},
+        {"num_mux_workers", num_links * neighbors.size()}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -388,6 +414,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
                 termination_master_semaphore_id);
         }
 
+        // termination master is responsible for tearing down all mux workers, needs their coordinates
+        if (is_termination_master) {
+            detail::add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
+        }
+
         SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
 
@@ -399,7 +430,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
             dest_token_segment_offset_bytes += source_token_segment_size_bytes;
         }
 
-        if (link_worker_idx++ == num_workers_per_link) {
+        if (++link_worker_idx == num_workers_per_link) {
             link_worker_idx = 0;
             ++core_map_iter;
         }

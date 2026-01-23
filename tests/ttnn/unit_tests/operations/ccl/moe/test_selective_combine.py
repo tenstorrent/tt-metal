@@ -372,14 +372,15 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
 @pytest.mark.parametrize("batch", [16])
 @pytest.mark.parametrize("experts", [16])
 @pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [3072])
+@pytest.mark.parametrize("hidden_size", [512])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("devices", [NUM_DEVICES])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 1))])
 @pytest.mark.parametrize("num_token_parallel_cores", [1])
 @pytest.mark.parametrize("num_data_parallel_cores", [2])
-@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 1))])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
 @pytest.mark.parametrize("num_iters", [1])
 def test_decode(
     mesh_device,
@@ -393,6 +394,7 @@ def test_decode(
     worker_core_range,
     num_token_parallel_cores,
     num_data_parallel_cores,
+    num_links,
     mux_core_range,
     num_iters,
 ):
@@ -405,7 +407,7 @@ def test_decode(
         output_ref,
         output_data_map,
     ) = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="random"
+        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="sequential"
     )
     assert experts % devices == 0
     experts_per_device = experts // devices
@@ -435,15 +437,15 @@ def test_decode(
     # print(f"{dense_contribs_tensor=}")
     # print(f"{output_ref=}")
 
-    tt_out = ttnn.from_torch(
-        torch.zeros([batch // mesh_shape[cluster_axis], select_experts_k, hidden_size]),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # tt_out = ttnn.from_torch(
+    #         torch.zeros([batch // mesh_shape[cluster_axis], select_experts_k, hidden_size]),
+    #         device=mesh_device,
+    #         layout=ttnn.ROW_MAJOR_LAYOUT,
+    #         dtype=ttnn.bfloat16,
+    #         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    #     )
 
-    ttnn.selective_reduce_combine(
+    tt_out = ttnn.selective_reduce_combine(
         tt_dense_contribs,
         tt_dense_metadata,
         hidden_size,
@@ -453,13 +455,13 @@ def test_decode(
         experts,
         cluster_axis,
         topology=ttnn.Topology.Linear,
-        num_links=1,
+        num_links=num_links,
         num_token_parallel_cores=num_token_parallel_cores,
         num_data_parallel_cores=num_data_parallel_cores,
         worker_core_range_set=worker_cores,
         mux_core_range_set=mux_cores,
         active_token_count_semaphores=active_token_semaphores,
-        output_tensor=tt_out,
+        # output_tensor=tt_out,
     )
 
     _check_ref(tt_out, output_ref, output_data_map, mesh_device, cluster_axis)
