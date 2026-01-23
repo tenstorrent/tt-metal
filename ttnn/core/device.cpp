@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
+#include "ttnn/inspector/inspector.hpp"
 
 namespace ttnn {
 
@@ -15,8 +16,11 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t num_command_queues,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     size_t worker_l1_size) {
-    return MeshDevice::create_unit_mesh(
+    auto mesh_device = MeshDevice::create_unit_mesh(
         device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, {}, worker_l1_size);
+
+    inspector::register_inspector_rpc();
+    return mesh_device;
 }
 
 void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
