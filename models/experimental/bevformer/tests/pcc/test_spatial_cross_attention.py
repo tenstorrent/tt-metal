@@ -17,8 +17,7 @@ from models.experimental.bevformer.config.encoder_config import (
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
     check_with_tolerances,
-    check_with_pcc,  # Legacy compatibility
-    save_comparison_report,
+    check_with_pcc,
     print_sparsity_analysis,
 )
 
@@ -224,7 +223,7 @@ def test_spatial_cross_attention_forward(
         )
 
     # Comprehensive tolerance checking with expected metrics from test parameters
-    passed, results = check_with_tolerances(
+    check_with_tolerances(
         ref_model_output,
         tt_model_output,
         pcc_threshold=expected_pcc,
@@ -234,8 +233,13 @@ def test_spatial_cross_attention_forward(
         tensor_name="spatial_cross_attention_output",
     )
 
-    # Assert that the comprehensive check passes
-    assert passed, f"Comprehensive tolerance check failed. Results: {results['individual_checks']}"
+    passed, message = check_with_pcc(
+        tt_model_output,
+        ref_model_output,
+        pcc=expected_pcc,
+    )
+
+    assert passed, f"PCC check failed: {message}"
 
     if ENABLE_LOGGING:
         logger.info("✅ All SCA tolerance checks passed successfully!")

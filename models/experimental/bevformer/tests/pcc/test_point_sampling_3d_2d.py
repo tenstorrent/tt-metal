@@ -24,6 +24,7 @@ from models.experimental.bevformer.config.encoder_config import (
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
     check_with_tolerances,
+    check_with_pcc,
 )
 
 from loguru import logger
@@ -332,7 +333,7 @@ def test_point_sampling_3d_to_2d(
         )
 
     # Check with expected tolerances from test parameters
-    points_passed, points_results = check_with_tolerances(
+    check_with_tolerances(
         torch_ref_points_cam,
         ttnn_ref_points_cam_torch,
         pcc_threshold=expected_pcc,
@@ -342,7 +343,7 @@ def test_point_sampling_3d_to_2d(
         tensor_name="projected_reference_points",
     )
 
-    mask_passed, mask_results = check_with_tolerances(
+    check_with_tolerances(
         torch_bev_mask.float(),
         ttnn_bev_mask_torch.float(),
         pcc_threshold=0.996,
@@ -352,12 +353,21 @@ def test_point_sampling_3d_to_2d(
         tensor_name="validity_mask",
     )
 
-    # At least one should pass (prefer points accuracy over mask accuracy)
-    assert points_passed or mask_passed, (
-        f"Both point sampling comparisons failed.\n"
-        f"Points: {points_results['individual_checks']}\n"
-        f"Mask: {mask_results['individual_checks']}"
+    points_passed, points_message = check_with_pcc(
+        torch_ref_points_cam,
+        ttnn_ref_points_cam_torch,
+        expected_pcc,
     )
+
+    assert points_passed, f"PCC check for projected_reference_points failed: {points_message}"
+
+    mask_passed, mask_message = check_with_pcc(
+        torch_bev_mask.float(),
+        ttnn_bev_mask_torch.float(),
+        0.996,
+    )
+
+    assert mask_passed, f"PCC check for validity_mask failed: {mask_message}"
 
     if points_passed:
         if ENABLE_LOGGING:
