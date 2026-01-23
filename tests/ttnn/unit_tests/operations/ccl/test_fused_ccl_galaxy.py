@@ -173,7 +173,7 @@ def run_all_gather_matmul_galaxy_impl(
     sub_device_stall_group = None
     sub_device_manager = None
 
-    if use_fused:
+    if op_mode == "fused":
         worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
         worker_sub_device_id = ttnn.SubDeviceId(0)
         sub_device_stall_group = [worker_sub_device_id]
@@ -186,7 +186,7 @@ def run_all_gather_matmul_galaxy_impl(
     # Create 2x semaphores for all_gather_async (which requires 2 semaphores)
     semaphore_cores = (
         SUB_DEVICE_CRS
-        if use_fused
+        if op_mode == "fused"
         else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))})  # 7x10 = 70 cores
     )
     ccl_semaphore_handles = [
@@ -527,64 +527,50 @@ def run_all_gather_matmul_galaxy_impl(
 
     def run_chunked_allgather_op(n_iters, store_all_results=True):
         """
-        Run chunked AllGather + Matmul approach (smaller intermediate buffer).
+        Run chunked AllGather + Matmul approach.
 
-        Instead of: all_gather(all K) -> matmul(gathered, full_W)
-        This does: for each chunk: all_gather(chunk) -> matmul(chunk, W_chunk) -> accumulate
+        This is functionally equivalent to non_fused (full AllGather + full Matmul)
+        but serves as a baseline for testing the pattern.
 
-        This keeps the AllGather pattern but with smaller intermediate buffers:
-        - Intermediate buffer: [M, K_per_device] = [32, 3584] instead of [32, 14336]
-        - Trade-off: multiple AllGather + Matmul iterations instead of one
+        Pattern:
+        1. AllGather: [M, K_per_device] -> [M, K_gathered] (full gather)
+        2. Matmul with full weight matrix
 
-        Mathematically:
-        [A0|A1|A2|A3] @ W = A0 @ W0 + A1 @ W1 + A2 @ W2 + A3 @ W3
-        where each A_i comes from device i via AllGather, and W_i is the corresponding weight slice.
+        Note: For true memory savings with chunked processing, you would need:
+        - Multiple smaller AllGathers (not supported in current API)
+        - Or use local_matmul_allreduce which avoids the large intermediate entirely
+
+        The local_matmul_allreduce approach is mathematically equivalent:
+        [A0|A1|A2|A3] @ [W0;W1;W2;W3] = A0@W0 + A1@W1 + A2@W2 + A3@W3
+        and is more memory efficient.
         """
         outs = []
         dram_interleaved = ttnn.DRAM_MEMORY_CONFIG
-        num_chunks = cluster_shape[cluster_axis]  # 4 chunks for 4 devices
 
         for iter_idx in range(n_iters):
-            # Accumulator for partial results
-            result = None
+            # Step 1: Full AllGather
+            sem_idx = (iter_idx % num_buffers) * 2
+            gathered = ttnn.experimental.all_gather_async(
+                tt_input_tensor,  # [M, K_per_device] per device
+                dim=3,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
+                memory_config=dram_interleaved,
+                topology=all_gather_topology,
+                num_links=num_links,
+            )
+            # gathered shape: [M, K_gathered] = [32, 14336]
 
-            for chunk_idx in range(num_chunks):
-                # Step 1: AllGather this chunk's data from all devices
-                # Each device broadcasts its local input to all others
-                # After this, all devices have the same [M, K_per_device] chunk
-                sem_idx = (iter_idx % num_buffers) * 2
-                chunk_gathered = ttnn.experimental.all_gather_async(
-                    tt_input_tensor,  # [M, K_per_device] per device
-                    dim=3,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    multi_device_global_semaphore=[ccl_semaphore_handles[sem_idx], ccl_semaphore_handles[sem_idx + 1]],
-                    memory_config=dram_interleaved,
-                    topology=all_gather_topology,
-                    num_links=num_links,
-                )
-                # Note: For true chunked AllGather, we'd gather only from device chunk_idx
-                # This simplified version gathers from all then slices (for demonstration)
-
-                # Step 2: Matmul with corresponding weight chunk
-                # For simplicity, using chunked weight tensor where each device has its slice
-                partial_out = ttnn.linear(
-                    chunk_gathered,
-                    tt_in1_tensor_non_fused,  # Full weight - in practice would slice W[chunk*K_per_dev:(chunk+1)*K_per_dev, :]
-                    memory_config=dram_interleaved,
-                    compute_kernel_config=compute_kernel_config,
-                    dtype=output_dtype,
-                    core_grid=ttnn.CoreGrid(y=7, x=10),
-                )
-
-                # Step 3: Accumulate partial results
-                if result is None:
-                    result = partial_out
-                else:
-                    result = ttnn.add(result, partial_out, memory_config=dram_interleaved)
-
-                # Only need one iteration since all_gather already gathers from all devices
-                break  # Remove this break to truly iterate over chunks
+            # Step 2: Matmul with full weight
+            result = ttnn.linear(
+                gathered,
+                tt_in1_tensor_non_fused,
+                memory_config=dram_interleaved,
+                compute_kernel_config=compute_kernel_config,
+                dtype=output_dtype,
+                core_grid=ttnn.CoreGrid(y=7, x=10),
+            )
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -686,7 +672,7 @@ def run_all_gather_matmul_galaxy_impl(
         avg_time_per_run_us = total_time_us / num_perf_runs
         avg_time_per_iter_us = avg_time_per_run_us / num_iters
 
-        mode_str = "FUSED (llama_all_gather_matmul_async)" if use_fused else "NON-FUSED (all_gather + linear)"
+        mode_str = op_mode.upper()
         logger.info(f"=== PERFORMANCE ({mode_str}) ===")
         logger.info(f"Total time for {num_perf_runs} runs: {total_time_us:.2f} us")
         logger.info(f"Avg time per run ({num_iters} iters): {avg_time_per_run_us:.2f} us")
@@ -714,7 +700,7 @@ def run_all_gather_matmul_galaxy_impl(
         validate(tt_outs[tensor_index], output_tensor_goldens_list[tensor_index])
 
     # Only cleanup sub-device if it was set up (fused path)
-    if use_fused:
+    if op_mode == "fused":
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
 
@@ -762,8 +748,8 @@ def run_all_gather_matmul_galaxy_impl(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "op_mode",
-    ["non_fused", "local_matmul_allreduce"],  # Skip "fused" - requires too much L1 for model dims
-    ids=["non_fused", "local_matmul_allreduce"],
+    ["non_fused", "chunked_allgather", "local_matmul_allreduce"],  # Skip "fused" - requires too much L1 for model dims
+    ids=["non_fused", "chunked_allgather", "local_matmul_allreduce"],
 )
 def test_all_gather_matmul_galaxy_check(
     mesh_device,
@@ -875,7 +861,7 @@ def test_all_gather_matmul_galaxy_perf_comparison(
     results = {}
 
     # Test all modes that work with model dimensions
-    modes_to_test = ["non_fused", "local_matmul_allreduce"]
+    modes_to_test = ["non_fused", "chunked_allgather", "local_matmul_allreduce"]
 
     for mode in modes_to_test:
         logger.info(f"Running {mode.upper()} operation...")
