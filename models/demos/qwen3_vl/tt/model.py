@@ -185,6 +185,12 @@ class DropInVisionTransformer(torch.nn.Module):
         self.model_args = model_args
         self.debug = debug
 
+        deepstack_indices = [
+            idx
+            for idx in model_args.hf_config.vision_config.deepstack_visual_indexes
+            if idx < model_args.hf_config.vision_config.depth
+        ]
+        self.deepstack_visual_indexes = deepstack_indices
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
@@ -223,7 +229,7 @@ class DropInVisionTransformer(torch.nn.Module):
         all_pixel_values = pixel_values
         all_grid_thw = grid_thw
         final_outputs = []
-        deepstack_visual_embeds_list = [None] * len(self.model_args.hf_config.vision_config.deepstack_visual_indexes)
+        deepstack_visual_embeds_list = [None] * len(self.deepstack_visual_indexes)
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
