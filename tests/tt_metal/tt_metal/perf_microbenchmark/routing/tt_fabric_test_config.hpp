@@ -461,7 +461,10 @@ private:
     void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_sequential_neighbor_exchange(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        bool is_core_sweeping);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
@@ -474,7 +477,8 @@ private:
     void add_senders_from_pairs(
         ParsedTestConfig& test,
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
-        const ParsedTrafficPatternConfig& base_pattern);
+        const ParsedTrafficPatternConfig& base_pattern,
+        std::optional<CoreCoord> sender_core = std::nullopt);
 
     void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test);
 

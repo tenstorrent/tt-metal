@@ -140,6 +140,7 @@ struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
     bool is_sequential = false;
+    bool is_core_sweeping = false;
 };
 
 struct ParsedTestConfig {

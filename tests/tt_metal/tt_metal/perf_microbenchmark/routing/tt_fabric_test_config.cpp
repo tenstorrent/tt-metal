@@ -857,6 +857,10 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
     // Above ensures the config type is supported before checking if it is sequential
     config.is_sequential = high_level_pattern_is_sequential(detail::high_level_traffic_pattern_mapper.to_enum.at(config.type));
 
+    if (pattern_yaml["is_core_sweeping"]) {
+        config.is_core_sweeping = parse_scalar<bool>(pattern_yaml["is_core_sweeping"]);
+    }
+
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
     }
@@ -1042,6 +1046,20 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                 auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
                 uint32_t num_pairs = static_cast<uint32_t>(neighbor_pairs.size());
                 max_iterations = std::max(max_iterations, num_pairs);
+
+                if (p.is_core_sweeping) {
+                tt:
+                    tt_metal::CoreCoord grid_size = device_info_provider_.get_worker_grid_size();
+                    uint32_t worker_cores_per_device = grid_size.x * grid_size.y;
+                    max_iterations = std::max(max_iterations, num_pairs * worker_cores_per_device);
+
+                    log_warning(
+                        LogTest,
+                        "Core sweep enabled on a high level pattern for test '{}'. This could be a
+                        potentially large number of tests
+                            .",
+                        p_config.name);
+                }
                 log_info(
                     LogTest,
                     "Auto-detected {} iterations for sequential_neighbor_exchange pattern in test '{}'",
@@ -1413,7 +1431,7 @@ void TestConfigBuilder::expand_patterns_into_test(
         } else if (pattern.type == "sequential_all_to_all") {
             expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
         } else if (pattern.type == "sequential_neighbor_exchange") {
-            expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
+            expand_sequential_neighbor_exchange(test, defaults, iteration_idx, pattern.is_core_sweeping);
         } else {
             TT_THROW("Unsupported pattern type: {}", pattern.type);
         }
@@ -1611,12 +1629,16 @@ void TestConfigBuilder::expand_neighbor_exchange(
 }
 
 void TestConfigBuilder::expand_sequential_neighbor_exchange(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+    ParsedTestConfig& test,
+    const ParsedTrafficPatternConfig& base_pattern,
+    uint32_t iteration_idx,
+    bool is_core_sweeping) {
     log_debug(
         LogTest,
-        "Expanding sequential_neighbor_exchange pattern for test: {} (iteration {})",
+        "Expanding sequential_neighbor_exchange pattern for test: {} (iteration {}, core_sweeping={})",
         test.name,
-        iteration_idx);
+        iteration_idx,
+        is_core_sweeping);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
 
     if (neighbor_pairs.empty()) {
@@ -1624,14 +1646,48 @@ void TestConfigBuilder::expand_sequential_neighbor_exchange(
         return;
     }
 
+    // Decode iteration_idx into pair_idx and optionally sender_core_idx
+    uint32_t pair_idx = iteration_idx;
+    std::optional<CoreCoord> sender_core = std::nullopt;
+
+    if (is_core_sweeping) {
+        CoreCoord grid_size = device_info_provider_.get_worker_grid_size();
+        uint32_t cores_per_device = grid_size.x * grid_size.y;
+        pair_idx = iteration_idx / cores_per_device;
+        uint32_t sender_core_idx = iteration_idx % cores_per_device;
+        sender_core = CoreCoord(sender_core_idx % grid_size.x, sender_core_idx / grid_size.x);
+
+        // Append sender core info to test name for clarity
+        detail::append_with_separator(test.parametrized_name, "_", "core", sender_core->x, sender_core->y);
+    }
+
     // Select only the pair for this iteration
-    if (iteration_idx < neighbor_pairs.size()) {
-        const auto& pair = neighbor_pairs[iteration_idx];
+    if (pair_idx < neighbor_pairs.size()) {
+        const auto& pair = neighbor_pairs[pair_idx];
         // Append sender→receiver device IDs to test name for clarity
         detail::append_with_separator(test.parametrized_name, "_", pair.first.chip_id, "to", pair.second.chip_id);
 
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
-        add_senders_from_pairs(test, single_pair, base_pattern);
+        if (is_core_sweeping) {
+            // Create one sender at sender_core with patterns to ALL destination cores
+            CoreCoord grid_size = device_info_provider_.get_worker_grid_size();
+            std::vector<ParsedTrafficPatternConfig> patterns;
+            patterns.reserve(grid_size.x * grid_size.y);
+
+            for (uint32_t y = 0; y < grid_size.y; ++y) {
+                for (uint32_t x = 0; x < grid_size.x; ++x) {
+                    ParsedTrafficPatternConfig pattern = base_pattern;
+                    pattern.destination = ParsedDestinationConfig{.device = pair.second, .core = CoreCoord(x, y)};
+                    pattern.ftype = ChipSendType::CHIP_UNICAST;
+                    patterns.push_back(std::move(pattern));
+                }
+            }
+
+            test.senders.emplace_back(
+                ParsedSenderConfig{.device = pair.first, .core = sender_core, .patterns = std::move(patterns)});
+        } else {
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
+            add_senders_from_pairs(test, single_pair, base_pattern);
+        }
     } else {
         TT_THROW(
             "Iteration index {} exceeds number of available device pairs {} for sequential_neighbor_exchange pattern",
@@ -1786,7 +1842,8 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
 void TestConfigBuilder::add_senders_from_pairs(
     ParsedTestConfig& test,
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
-    const ParsedTrafficPatternConfig& base_pattern) {
+    const ParsedTrafficPatternConfig& base_pattern,
+    std::optional<CoreCoord> sender_core) {
     std::map<FabricNodeId, std::vector<ParsedTrafficPatternConfig>> generated_senders;
 
     for (const auto& pair : pairs) {
@@ -1804,7 +1861,7 @@ void TestConfigBuilder::add_senders_from_pairs(
 
     test.senders.reserve(test.senders.size() + generated_senders.size());
     for (const auto& [src_node, patterns] : generated_senders) {
-        test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
+        test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .core = sender_core, .patterns = patterns});
     }
 }
 
