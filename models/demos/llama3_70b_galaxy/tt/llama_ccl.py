@@ -913,7 +913,6 @@ class TT_CCL:
         ag_memory_config=None,
         mm_memory_config=None,
         global_cb=None,
-        use_noc1_only=False,
     ):
         """
         Fused AllGather + Matmul operation using llama_all_gather_matmul_async.
@@ -932,17 +931,16 @@ class TT_CCL:
             dim=dim,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
+            topology=self.model_config["CCL_TOPOLOGY"],
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=num_links,
             ag_memory_config=ag_memory_config,
             mm_memory_config=mm_memory_config,
-            topology=self.model_config["CCL_TOPOLOGY"],
-            num_links=num_links,
             subdevice_id=self.worker_sub_device_id,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,
             global_cb=global_cb,
-            use_noc1_only=use_noc1_only,
         )
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
