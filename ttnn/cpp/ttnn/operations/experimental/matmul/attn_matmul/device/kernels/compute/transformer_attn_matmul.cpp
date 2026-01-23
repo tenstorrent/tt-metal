@@ -13,6 +13,14 @@
 
 using std::uint32_t;
 
+// SAN: marker — prints a line per thread so each llk:san error can be bracketed against the preceding API call.
+#define SAN_MARK(tag)                         \
+    do {                                      \
+        DEVICE_PRINT_UNPACK("SAN:" tag "\n"); \
+        DEVICE_PRINT_MATH("SAN:" tag "\n");   \
+        DEVICE_PRINT_PACK("SAN:" tag "\n");   \
+    } while (0)
+
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
 void kernel_main() {
@@ -42,7 +50,9 @@ void kernel_main() {
 
     DEVICE_PRINT("KERNEL START\n");
 
+    SAN_MARK("before_mm_init");
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    SAN_MARK("after_mm_init");
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -56,7 +66,9 @@ void kernel_main() {
                         }
                         cb_in1_obj.wait_front(onetile);
 
+                        SAN_MARK("before_matmul_tiles");
                         matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
+                        SAN_MARK("after_matmul_tiles");
 
                         cb_in1_obj.pop_front(onetile);
                     }
@@ -64,11 +76,14 @@ void kernel_main() {
 
                     cb_intermed0_obj.reserve_back(onetile);
                     tile_regs_wait();
+                    SAN_MARK("before_pack_tile");
                     pack_tile(0, cb_intermed0);
+                    SAN_MARK("after_pack_tile");
                     tile_regs_release();
                     cb_intermed0_obj.push_back(onetile);
 
                     // untilize tile and write to CBIndex::c_25 with reconfiguration
+                    SAN_MARK("before_untilize_helper");
                     compute_kernel_lib::untilize<
                         onetile,
                         cb_intermed0,
@@ -76,17 +91,27 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
+                    SAN_MARK("after_untilize_helper");
 
+                    SAN_MARK("before_mm_init_short_with_dt");
                     mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                    SAN_MARK("after_mm_init_short_with_dt");
                 }
                 cb_in0_obj.pop_front(Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
                 // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
+                SAN_MARK("before_tilize_helper");
                 compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
+                SAN_MARK("after_tilize_helper");
 
+                SAN_MARK("before_pack_reconfig");
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
+                SAN_MARK("after_pack_reconfig");
+
+                SAN_MARK("before_mm_block_init_short_with_both_dt");
                 mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);
+                SAN_MARK("after_mm_block_init_short_with_both_dt");
             }
         }
     }
