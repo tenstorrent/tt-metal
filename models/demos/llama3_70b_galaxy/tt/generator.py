@@ -186,11 +186,7 @@ class Generator:
 
         # If batch is 32 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
-        if (
-            batch >= 16
-            and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] == 128
-        ):
+        if batch >= 16 and len(set(prefill_seq_lens)) == 1 and prefill_seq_lens[0] == 128:
             use_batched_prefill = True
 
         if return_logits:
@@ -547,7 +543,7 @@ class Generator:
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
-        self.model.sampling.seed_manager.get_new_values()
+        # self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
