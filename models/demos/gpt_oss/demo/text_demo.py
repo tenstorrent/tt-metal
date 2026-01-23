@@ -187,7 +187,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode, warmup_prefill",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -202,6 +202,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # warmup_prefill
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -216,6 +217,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # warmup_prefill
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -230,9 +232,11 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # warmup_prefill
         ),
         (
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
             1,  # data_parallel
             128,  # batch_size
             1,  # repeat_batches
@@ -244,6 +248,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             True,  # users_row_sharded
             False,  # long_context_mode
+            False,  # warmup_prefill
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
@@ -259,6 +264,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             True,  # users_row_sharded
             True,  # long_context_mode - single user per row gets all page blocks
+            False,  # warmup_prefill
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -341,6 +347,7 @@ def test_gpt_oss_demo(
     enable_prefill_trace,
     users_row_sharded,
     long_context_mode,
+    warmup_prefill,
     is_ci_env,
     state_dict,
 ):
@@ -702,7 +709,7 @@ def test_gpt_oss_demo(
     profiler.end("run")
 
     # Calculate performance metrics for the first batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_prefill_time = profiler.get_duration("compile_prefill") if warmup_prefill else None
     compile_decode_time = profiler.get_duration("compile_decode")
 
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
@@ -733,14 +740,16 @@ def test_gpt_oss_demo(
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
+        "Total compile time": compile_prefill_time + compile_decode_time if warmup_prefill else compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
     # Performance logging (like tt-transformers)
     logger.info("")
     logger.info(f"=== Performance metrics ===")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    logger.info(
+        f"Prefill compile time: {round(compile_prefill_time, 2)}s" if warmup_prefill else "Prefill compile time: N/A"
+    )
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
