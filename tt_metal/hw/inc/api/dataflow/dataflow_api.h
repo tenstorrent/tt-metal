@@ -1554,6 +1554,8 @@ inline void noc_semaphore_set_multicast(
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::SEMAPHORE_SET_MULTICAST,
         src_local_l1_addr,
@@ -1614,6 +1616,8 @@ inline void noc_semaphore_set_multicast_loopback_src(
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
+
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::SEMAPHORE_SET_MULTICAST,
         src_local_l1_addr,
