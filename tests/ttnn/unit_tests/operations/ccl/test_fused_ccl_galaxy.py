@@ -303,7 +303,8 @@ def run_all_gather_matmul_galaxy_impl(
         ),
     )
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    # Program config for fused op (uses gather_in0 with global CB)
+    fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=storage_grid,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -317,6 +318,18 @@ def run_all_gather_matmul_galaxy_impl(
         hop_cores=HOP_GRID,
         num_global_cb_receivers=24,
         untilize_out=False,
+    )
+    # Program config for non-fused op (uses mcast_in0, no global CB)
+    non_fused_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=storage_grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
     )
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
@@ -388,7 +401,7 @@ def run_all_gather_matmul_galaxy_impl(
                 topology=all_gather_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
-                program_config=program_config,
+                program_config=fused_program_config,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
             )
@@ -403,7 +416,7 @@ def run_all_gather_matmul_galaxy_impl(
         outs = []
         for i in range(n_iters):
             # AllGather - requires 2 semaphores passed as a list
-            # Use non_fused_ag_output_mem_config so output is on same grid as weights (required for gather_in0=True)
+            # Use non_fused_ag_output_mem_config so output is on same grid as weights
             sem_idx = (i % num_buffers) * 2
             ag_out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
@@ -416,12 +429,12 @@ def run_all_gather_matmul_galaxy_impl(
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
-            # Matmul
+            # Matmul - uses non_fused_program_config with mcast_in0=True
             mm_out = ttnn.linear(
                 ag_out,
                 tt_in1_tensor,
                 memory_config=mm_output_sharded_mem_config,
-                program_config=program_config,
+                program_config=non_fused_program_config,
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
             )
