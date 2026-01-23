@@ -45,10 +45,6 @@ jobs:
         run: |
           # Define common test configurations as variables
           whisper_test='{"name":"whisper","test_path":"models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30}'
-          falcon7b_wh_test='{"name":"falcon-7b","test_path":"models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/falcon7b_common/demo/input_data.json","timeout":30}'
-          falcon7b_tg_test='{"name":"falcon-7b","test_path":"models/demos/tg/falcon7b/demo_tg.py::test_demo_multichip","test_args":"-k default_mode_1024_stochastic --input-method=json --input-path=models/demos/tg/falcon7b/input_data_tg.json","timeout":30}'
-          falcon7b_t3000_test='{"name":"falcon-7b","test_path":"models/demos/t3000/falcon7b/demo_t3000.py::test_demo_multichip","test_args":"-k \"default_mode_1024_stochastic and -8-\" --input-method=json --input-path=models/demos/t3000/falcon7b/input_data_t3000.json","timeout":30}'
-          falcon40b_test='{"name":"falcon-40b","test_path":"models/demos/t3000/falcon40b/tests/test_demo.py::test_demo","test_args":"","timeout":45}'
           resnet50_wh_test='{"name":"resnet-50","test_path":"models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20}'
           resnet50_ttnn_test='{"name":"resnet-50","test_path":"models/demos/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20}'
           resnet50_bh_test='{"name":"resnet-50","test_path":"models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample","test_args":"","timeout":20}'
@@ -109,10 +105,10 @@ jobs:
           # Define device-compatible standalone models
           case "${{ inputs.device-type }}" in
             n150)
-              standalone_models=$(jq -nc "[$falcon7b_wh_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             n300)
-              standalone_models=$(jq -nc "[$falcon7b_wh_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$resnet50_wh_test,$vit_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             p100)
               standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
@@ -124,7 +120,7 @@ jobs:
               standalone_models=$(jq -nc "[$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-LOUDBOX)
-              standalone_models=$(jq -nc "[$falcon7b_t3000_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-QB2)
               standalone_models=$(jq -nc "[$llama33_70b_text_test,$flux1_dev_test,$wan2_2_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
@@ -133,7 +129,7 @@ jobs:
               standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
               ;;
             WH-6U)
-              standalone_models=$(jq -nc "[$falcon7b_tg_test,$falcon40b_test,$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
+              standalone_models=$(jq -nc "[$resnet50_ttnn_test,$vit_t3000_test,$llama33_70b_text_test,$mamba_2_8b_test,$whisper_test,$stable_diffusion_wh_test,$mobilenet_v2_test,$unet_vgg19_wh_test,$unet_vanilla_test,$segformer_test,$ufld_v2_wh_test,$bert_large_test,$sentence_bert_wh_test]")
               ;;
             BH-6U)
               standalone_models=$(jq -nc "[$llama33_70b_text_test,$whisper_test,$stable_diffusion_bh_test,$resnet50_bh_test,$vit_bh_test,$mobilenet_v2_test,$unet_vgg19_bh_test,$segformer_test,$ufld_v2_bh_test,$bert_large_test,$sentence_bert_bh_test]")
