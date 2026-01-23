@@ -1481,9 +1481,9 @@ class ModelArgs:
     def ccl_topology(self):
         # Use ring on a T3K or 6U galaxy or P300x2 or P150x4/8 submesh
         if ttnn.cluster.get_cluster_type() in [
-            ttnn.cluster.ClusterType.P300x2,
-            ttnn.cluster.ClusterType.P150x4,
-            ttnn.cluster.ClusterType.P150x8,
+            ttnn.cluster.ClusterType.P300_X2,
+            ttnn.cluster.ClusterType.P150_X4,
+            ttnn.cluster.ClusterType.P150_X8,
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
