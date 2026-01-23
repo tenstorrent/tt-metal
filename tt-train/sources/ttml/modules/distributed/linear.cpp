@@ -47,7 +47,7 @@ autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& ten
         does all reduce in backward pass. See similar implementation in fairscale for more details.
         https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
     */
-    x = ops::distributed::all_reduce(x, /* noop_backward */ true, m_shard_dim);
+    x = ops::distributed::all_reduce(x, /* noop_backward */ m_input_is_parallel, m_shard_dim);
     if (m_bias != nullptr) {
         x = ops::add(x, m_bias);
     }
@@ -60,8 +60,8 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
 
     // Determine TP size based on mesh shape and shard_dim
     uint32_t tp_size = static_cast<uint32_t>(device->num_devices());
-    if (m_shard_dim.has_value()) {
-        TT_FATAL(m_shard_dim.value() < mesh_shape.dims(), "Shard dimension must be less than mesh shape dimensions");
+    if (m_shard_dim.has_value() && mesh_shape.dims() == 2) {
+        // For 2D mesh with explicit shard_dim: TP size is mesh dimension specified by shard_dim
         tp_size = mesh_shape[m_shard_dim.value()];
     }
 
@@ -124,10 +124,11 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
 
     // Determine TP size based on mesh shape and shard_dim
     uint32_t tp_size = 1U;
-    if (m_shard_dim.has_value()) {
-        TT_FATAL(m_shard_dim.value() < mesh_shape.dims(), "Shard dimension must be less than mesh shape dimensions");
+    if (m_shard_dim.has_value() && mesh_shape.dims() == 2) {
+        // For 2D mesh with explicit shard_dim: TP size is mesh dimension specified by shard_dim
         tp_size = mesh_shape[m_shard_dim.value()];
     } else {
+        // 1D mesh: use all devices
         tp_size = static_cast<uint32_t>(device->num_devices());
     }
 

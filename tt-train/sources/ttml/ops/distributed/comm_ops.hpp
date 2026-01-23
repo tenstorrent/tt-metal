@@ -8,12 +8,13 @@
 
 namespace ttml::ops::distributed {
 
+// dim: tensor dimension to scatter/gather/reduce across (which tensor dimension will change after the operation)
+// cluster_axis: mesh device shape axis to scatter/gather/reduce across (which parts of the tensor participate in the
+// operation), default is none (all axes)
 autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, bool noop_backward = false, std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis = std::nullopt);
-autograd::TensorPtr ring_shift(
-    const autograd::TensorPtr& tensor, std::optional<uint32_t> cluster_axis = std::nullopt, bool forward = true);
 
 }  // namespace ttml::ops::distributed

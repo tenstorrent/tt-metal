@@ -16,6 +16,7 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32_t> dp_dim = std::nullopt);
 
-void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim = std::nullopt);
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim = std::nullopt);
 
 }  // namespace ttml::core::distributed
