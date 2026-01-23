@@ -455,6 +455,22 @@ def run_all_gather_matmul_galaxy_impl(
         )
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
+    # Buffer tensors for all_reduce (used by local_matmul_allreduce path)
+    # Output shape is [8, 4, M, N] - the result of matmul before reduce
+    allreduce_buffer_shape = [*cluster_shape, M, N]
+    allreduce_buffer_tensor = torch.zeros(allreduce_buffer_shape)
+    tt_allreduce_buffers = []
+    for i in range(num_buffers):
+        tt_allreduce_buffer = ttnn.from_torch(
+            allreduce_buffer_tensor,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=output_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        tt_allreduce_buffers.append(tt_allreduce_buffer)
+
     # Compute golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
@@ -608,12 +624,13 @@ def run_all_gather_matmul_galaxy_impl(
             )
 
             # Step 2: AllReduce to sum partial results across devices
-            sem_idx = (i % num_buffers) * 2
+            # all_reduce_async requires: input, buffer_tensor, cluster_axis, mesh_device, semaphore
             mm_out = ttnn.experimental.all_reduce_async(
                 partial_out,
+                tt_allreduce_buffers[i % num_buffers],  # buffer tensor required
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
-                multi_device_global_semaphore=ccl_semaphore_handles[sem_idx],
+                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                 memory_config=dram_interleaved,
                 topology=all_gather_topology,
                 num_links=num_links,
