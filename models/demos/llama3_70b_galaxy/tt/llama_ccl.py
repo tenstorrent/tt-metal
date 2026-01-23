@@ -103,7 +103,8 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
-            self.all_gather_matmul_buffers = self.get_all_gather_matmul_buffers()
+            # Note: all_gather_matmul_buffers allocated lazily to avoid L1 conflicts
+            self.all_gather_matmul_buffers = None
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
@@ -952,6 +953,10 @@ class TT_CCL:
         Replaces separate line_all_gather + ttnn.linear for better performance.
         Used for FF2 path in decode mode.
         """
+        # Lazy allocation of buffers to avoid L1 conflicts during model initialization
+        if self.all_gather_matmul_buffers is None:
+            self.all_gather_matmul_buffers = self.get_all_gather_matmul_buffers()
+
         persistent_interim_buffer = self.all_gather_matmul_buffers[cluster_axis][
             self.all_gather_matmul_buffer_idx[cluster_axis]
         ]
