@@ -1,21 +1,32 @@
+import inspect
 import json
 from hashlib import md5
 from typing import Callable
 
 import torch
-from safetensors import safe_open
-from safetensors.torch import save_file
 
 import ttnn
 
 
 def compute_func_fingerprint(func: Callable) -> str:
-    code = func.__code__.co_code
-    return md5(code).hexdigest()
+    """
+    Compute a fingerprint for a function/callable.
+
+    For named functions, attempts to use source code for stable fingerprinting.
+    """
+    source = inspect.getsource(func)
+    name = getattr(func, "__name__", "")
+    fingerprint_input = f"{name}:{source}"
+    return md5(fingerprint_input.encode()).hexdigest()
 
 
 def create_manifest(
-    name: str, dtype: ttnn.DataType, layout: ttnn.Layout, schema: int, preprocessor: Callable, postprocessor: Callable
+    name: str,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout,
+    hf_config: dict,
+    preprocessor: Callable,
+    postprocessor: Callable,
 ) -> dict[str, str]:
     """
     The manifest does not use the content of the tensor and only uses the 'name' (i.e. the one in the HF state dict).
@@ -25,7 +36,7 @@ def create_manifest(
         "name": name,
         "dtype": dtype.__name__,
         "layout": layout.__name__,
-        "schema": str(schema),
+        "hf_config": json.dumps(hf_config, sort_keys=True),
         "preprocessor": compute_func_fingerprint(preprocessor),
         "postprocessor": compute_func_fingerprint(postprocessor),
     }
@@ -51,7 +62,7 @@ class InMemoryCacheStorage:
         return key in self.cache
 
     def get(self, key: str) -> ttnn.Tensor:
-        self.cache.get(key)
+        return self.cache[key]
 
 
 # TODO: Implement as Union[InMemoryCacheStorage, OnDiskCacheStorage, RedisCacheStorage, etc.]
@@ -79,13 +90,28 @@ class TensorCache:
         fingerprint = compute_fingerprint(manifest)
 
         if not self.cache_entry_exists_for_fingerprint(fingerprint):
+            if name not in self.state_dict:
+                raise KeyError(
+                    f"Tensor '{name}' not found in state_dict. Available keys: {list(self.state_dict.keys())}"
+                )
             hf_tensor = self.state_dict[name]
             preprocessed_hf_tensor = preprocessor(hf_tensor)
             tensor = ttnn.from_torch(preprocessed_hf_tensor, dtype=dtype, layout=layout)
             tensor = postprocessor(tensor)
             self.storage.set(fingerprint, tensor)
-
-        return self.storage.get(fingerprint)
+            return tensor
+        else:
+            # Validate cached tensor matches requested dtype and layout
+            cached_tensor = self.storage.get(fingerprint)
+            assert cached_tensor.dtype == dtype, (
+                f"Cached tensor dtype mismatch: expected {dtype}, got {cached_tensor.dtype}. "
+                f"This should not happen if fingerprinting is correct."
+            )
+            assert cached_tensor.layout == layout, (
+                f"Cached tensor layout mismatch: expected {layout}, got {cached_tensor.layout}. "
+                f"This should not happen if fingerprinting is correct."
+            )
+            return cached_tensor
 
 
 hf_weights = "model.safetensors"
@@ -93,6 +119,8 @@ hf_config = {"factor": 2}
 
 """
 Initial state_dict is created as a function of the hf_config so we will need to trigger rebuild any persistent caches when the config changes
+"""
+
 """
 tensors = {
     "weight1": torch.zeros((hf_config["factor"] * 128, hf_config["factor"] * 128), dtype=torch.bfloat16),
@@ -112,3 +140,4 @@ cache.get_tensor(
     "weight1", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, preprocessor=lambda x: x * 2
 )  # Should be a cache miss
 cache.get_tensor("weight1", dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)  # SHould be a cache miss
+"""
