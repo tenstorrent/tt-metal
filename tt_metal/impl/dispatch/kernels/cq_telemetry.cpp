@@ -89,11 +89,6 @@ __attribute__((noinline)) bool perf_telemetry_push() {
         return false;
     }
 
-    // Check if L1 data buffer is available
-    if (perf_telemetry_l1_data_addr == 0) {
-        return false;
-    }
-
     // Read 32 bytes from dispatch core's kernel_start to our kernel_start
     uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_DATA_ADDR);
     uint32_t local_kernel_start_addr = reinterpret_cast<uint32_t>(&perf_telemetry_mailbox->kernel_start);
@@ -110,9 +105,10 @@ __attribute__((noinline)) bool perf_telemetry_push() {
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(perf_telemetry_data_addr_hi) << 32) |
                               static_cast<uint64_t>(perf_telemetry_host_write_ptr);
 
-    // Write data to PCIe-mapped host memory using PCIe write primitive
+    // Write data from kernel_start location to PCIe-mapped host memory
+    // Sends 64 bytes: kernel_start (16B) + kernel_end (16B) + 32B padding after
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_0, perf_telemetry_l1_data_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
+        NOC_0, local_kernel_start_addr, perf_telemetry_pcie_xy_enc, pcie_dest_addr, perf_telemetry_page_size, 1);
 
     // Update host write pointer with wrap-around
     perf_telemetry_host_write_ptr += perf_telemetry_page_size;
