@@ -847,7 +847,7 @@ class MLA1D(AbstractModule):
         scale = 1.0 / mla_tp_factor
 
         # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
-        
+
         tt_q, tt_kv_nope, tt_kv_rope = cls._fwd_decode_wq_kv_a(
             x,
             cfg,
