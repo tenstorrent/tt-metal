@@ -23,8 +23,10 @@ std::vector<uint32_t> data_parallel_split(
     std::vector<uint32_t> data_parallel_sizes_bytes;
     data_parallel_sizes_bytes.reserve(num_data_parallel_cores);
 
+    const uint32_t max_segment_size_bytes = std::max(max_packet_size_bytes, token_size_bytes / num_data_parallel_cores);
+
     for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
-        const uint32_t token_increment = std::min(token_size_bytes, max_packet_size_bytes);
+        const uint32_t token_increment = std::min(token_size_bytes, max_segment_size_bytes);
         data_parallel_sizes_bytes.push_back(token_increment);
         token_size_bytes-=token_increment;
 
@@ -199,12 +201,12 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // TODO this should eventually be variable per device
     const uint32_t experts_per_device = experts / num_devices;
 
-    // const auto input_dtype = input_tensor.dtype();
+    const auto input_dtype = input_tensor.dtype();
     const auto& metadata_spec = metadata_tensor.tensor_spec();
 
-    // const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t max_packet_size_bytes = 512;
-    // input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t max_packet_size_bytes =
+        input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
     const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
     const uint32_t metadata_page_size_bytes = metadata_spec.compute_page_size_bytes();
@@ -232,17 +234,16 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto needed_worker_core_range_set = select_from_corerangeset(worker_core_range_set, 0, num_worker_cores - 1);
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(needed_worker_core_range_set, num_worker_cores);
 
-    const auto max_token_segment_size_bytes =
-        *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
-    const auto expert_token_segment_block_size_bytes =
-        max_token_segment_size_bytes * total_tokens / num_token_parallel_cores;
-
-    const auto buffer_size_bytes = expert_token_segment_block_size_bytes * experts_per_device;
+    // buffer may be padded
+    const auto token_segment_buffer_size_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    const auto expert_token_segment_buffer_block_size_bytes =
+        token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
+    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
 
     // input sharded buffer
     constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
-                                              .set_page_size(data_cb_id, max_token_segment_size_bytes)
+                                              .set_page_size(data_cb_id, token_segment_buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
 
     // metadata page buffer
@@ -325,8 +326,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         {"select_experts_k", select_experts_k},
         {"num_local_experts", experts_per_device},
         {"global_num_tokens", total_tokens},
-        {"source_token_segment_buffer_size_bytes", max_token_segment_size_bytes},
-        {"source_expert_block_size_bytes", expert_token_segment_block_size_bytes},
+        {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
+        {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
         {"alignment", l1_alignment},
         {"num_devices", num_devices},

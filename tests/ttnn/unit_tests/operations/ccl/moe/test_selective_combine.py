@@ -1,3 +1,4 @@
+import math
 import pdb
 
 import random
@@ -5,6 +6,7 @@ import random
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
@@ -238,7 +240,7 @@ NUM_DEVICES = 8
 @pytest.mark.parametrize("batch", [16])
 @pytest.mark.parametrize("experts", [16])
 @pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [32])
+@pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("devices", [NUM_DEVICES])
@@ -292,9 +294,19 @@ def test_gen_tensors(
     )
 
 
+FABRIC_PACKET_SIZE_BYTES = 4096
+
+
 def _get_tt_sharded_dense_input(
     dense_contribs_tensor, core_range, num_token_parallel_cores, num_data_parallel_cores, device, cluster_axis
 ):
+    hidden0 = dense_contribs_tensor.shape[-1]
+
+    packet_multiple = FABRIC_PACKET_SIZE_BYTES // 2
+    packet_padded_hidden = math.ceil(hidden0 / packet_multiple) * packet_multiple
+    packet_padding = (0, packet_padded_hidden - hidden0)
+    dense_contribs_tensor = F.pad(dense_contribs_tensor, packet_padding)
+
     tt_dense_contribs = ttnn.from_torch(
         dense_contribs_tensor,
         device=device,
@@ -304,6 +316,8 @@ def _get_tt_sharded_dense_input(
     )
 
     shape0 = dense_contribs_tensor.shape
+
+    print(shape0)
 
     local_experts = shape0[0] // ttnn.get_num_devices()
     num_tokens = shape0[1]
@@ -372,14 +386,14 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
 @pytest.mark.parametrize("batch", [16])
 @pytest.mark.parametrize("experts", [16])
 @pytest.mark.parametrize("select_experts_k", [4])
-@pytest.mark.parametrize("hidden_size", [512])
+@pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("devices", [NUM_DEVICES])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 1))])
+@pytest.mark.parametrize("worker_core_range", [((0, 0), (0, 3))])
 @pytest.mark.parametrize("num_token_parallel_cores", [1])
-@pytest.mark.parametrize("num_data_parallel_cores", [2])
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("num_data_parallel_cores", [4])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("mux_core_range", [((1, 0), (1, 3))])
 @pytest.mark.parametrize("num_iters", [1])
 def test_decode(
@@ -407,7 +421,7 @@ def test_decode(
         output_ref,
         output_data_map,
     ) = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="sequential"
+        batch, experts, select_experts_k, hidden_size, seq, mesh_shape, cluster_axis, devices, scheme="random"
     )
     assert experts % devices == 0
     experts_per_device = experts // devices
@@ -437,13 +451,13 @@ def test_decode(
     # print(f"{dense_contribs_tensor=}")
     # print(f"{output_ref=}")
 
-    # tt_out = ttnn.from_torch(
-    #         torch.zeros([batch // mesh_shape[cluster_axis], select_experts_k, hidden_size]),
-    #         device=mesh_device,
-    #         layout=ttnn.ROW_MAJOR_LAYOUT,
-    #         dtype=ttnn.bfloat16,
-    #         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    #     )
+    tt_out = ttnn.from_torch(
+        torch.zeros([batch // mesh_shape[cluster_axis], select_experts_k, hidden_size]),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     tt_out = ttnn.selective_reduce_combine(
         tt_dense_contribs,
@@ -461,7 +475,7 @@ def test_decode(
         worker_core_range_set=worker_cores,
         mux_core_range_set=mux_cores,
         active_token_count_semaphores=active_token_semaphores,
-        # output_tensor=tt_out,
+        output_tensor=tt_out,
     )
 
     _check_ref(tt_out, output_ref, output_data_map, mesh_device, cluster_axis)
