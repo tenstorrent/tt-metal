@@ -642,7 +642,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
         jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
         if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
-            string link_objs = fmt::format("{} {}", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
+            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
             link(out_dir, settings, link_objs);
             if (this->is_fw_) {
                 weaken(out_dir);
