@@ -193,7 +193,7 @@ void matmul_multi_core(
     const uint32_t M,
     const uint32_t N,
     const uint32_t K,
-    const uint32_t core_reduction_factor,
+    const CoreCoord core_grid,
     ProgramState& prog_state) {
     // Calculate the number of tiles along each dimension.
     const uint32_t Mt = M / TILE_HEIGHT;
@@ -216,12 +216,11 @@ void matmul_multi_core(
     // Create output tensor on device (no initialization needed - kernel will write into it).
     Tensor dst_tensor = create_device_tensor(dst_spec, prog_state.mesh_device.get());
 
-    CoreCoord core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
 
-    // Divide y dimension of core grid by core_reduction_factor to get the number of cores to use.
-    core_grid.y /= core_reduction_factor;
-
-    log_info(tt::LogAlways, "Using {} ({} x {}) cores for computation", core_grid.x * core_grid.y, core_grid.x, core_grid.y);
+    CoreCoord max_core_grid = prog_state.mesh_device.get()->compute_with_storage_grid_size();
+    log_info(tt::LogAlways, "Using {} ({} x {}) cores out of available {} ({} x {}) cores",
+        core_grid.x * core_grid.y, core_grid.x, core_grid.y, max_core_grid.x * max_core_grid.y, max_core_grid.x, max_core_grid.y);
+    TT_FATAL(core_grid.x <= max_core_grid.x && core_grid.y <= max_core_grid.y, "Core grid size must be less than or equal to available core grid size.");
 
     uint32_t num_output_tiles = (Mt * Nt);
 
@@ -390,7 +389,7 @@ int main() {
 
         // Initialize program state (includes device creation)
         ProgramState prog_state = init_program();
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, 1, prog_state);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, {10, 10}, prog_state);
 
         log_info(tt::LogAlways, "Output vector of size {}", result_vec.size());
 
