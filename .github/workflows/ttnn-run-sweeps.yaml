@@ -671,9 +671,160 @@ jobs:
       build-wheel: true
       version: "22.04"
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
+
+  generate-master-json-from-db:
+    name: 🗄️ Generate Master JSON from Database
+    runs-on: ubuntu-latest
+    if: github.event.inputs.use_database == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install psycopg2-binary
+
+      - name: Generate JSON from database
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_DATABASE_URL }}
+          MESH_FILTER: ${{ github.event.inputs.mesh_shape }}
+        run: |
+          python << 'PYTHON_SCRIPT'
+          import os
+          import json
+          import psycopg2
+          from urllib.parse import urlparse
+
+          # Parse database URL
+          db_url = os.environ['TTNN_OPS_DATABASE_URL']
+          parsed = urlparse(db_url)
+
+          # Connect to database
+          conn = psycopg2.connect(
+              host=parsed.hostname,
+              port=parsed.port or 5432,
+              database=parsed.path.lstrip('/'),
+              user=parsed.username,
+              password=parsed.password,
+              sslmode='require',
+              connect_timeout=30
+          )
+
+          # Build query to reconstruct the JSON structure
+          mesh_filter = os.environ.get('MESH_FILTER', '')
+
+          query = """
+          WITH filtered_configs AS (
+              SELECT DISTINCT c.id
+              FROM ttnn_ops.ttnn_configuration c
+              JOIN ttnn_ops.ttnn_configuration_mesh cm ON c.id = cm.configuration_id
+              JOIN ttnn_ops.ttnn_mesh_config mc ON cm.mesh_config_id = mc.id
+              WHERE 1=1
+          """
+
+          if mesh_filter:
+              rows, cols = mesh_filter.split('x')
+              query += f" AND mc.mesh_rows = {rows} AND mc.mesh_cols = {cols}"
+
+          query += """
+          )
+          SELECT
+              op.name as operation_name,
+              jsonb_agg(
+                  jsonb_build_object(
+                      'tensor_placements', (
+                          SELECT jsonb_agg(
+                              jsonb_build_object(
+                                  'mesh_rows', mc2.mesh_rows,
+                                  'mesh_cols', mc2.mesh_cols,
+                                  'placement', mc2.placement
+                              )
+                          )
+                          FROM ttnn_ops.ttnn_configuration_mesh cm2
+                          JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
+                          WHERE cm2.configuration_id = c.id
+                      ),
+                      'arguments', (
+                          SELECT jsonb_agg(
+                              jsonb_build_object(
+                                  'name', a.name,
+                                  'value', a.value,
+                                  'value_type', a.value_type
+                              ) ORDER BY a.name
+                          )
+                          FROM ttnn_ops.ttnn_argument a
+                          WHERE a.configuration_id = c.id
+                      ),
+                      'machine_info', jsonb_build_object(
+                          'arch', hw.arch,
+                          'chip_ids', hw.chip_ids,
+                          'tensor_placements', (
+                              SELECT jsonb_agg(
+                                  jsonb_build_object(
+                                      'mesh_rows', mc2.mesh_rows,
+                                      'mesh_cols', mc2.mesh_cols,
+                                      'placement', mc2.placement
+                                  )
+                              )
+                              FROM ttnn_ops.ttnn_configuration_mesh cm2
+                              JOIN ttnn_ops.ttnn_mesh_config mc2 ON cm2.mesh_config_id = mc2.id
+                              WHERE cm2.configuration_id = c.id
+                          )
+                      ),
+                      'models', (
+                          SELECT jsonb_agg(DISTINCT m.name)
+                          FROM ttnn_ops.ttnn_configuration_model conf_m
+                          JOIN ttnn_ops.ttnn_model m ON conf_m.model_id = m.id
+                          WHERE conf_m.configuration_id = c.id
+                      ),
+                      'config_hash', c.config_hash
+                  )
+              ) as configs
+          FROM ttnn_ops.ttnn_configuration c
+          JOIN ttnn_ops.ttnn_operation op ON c.operation_id = op.id
+          JOIN ttnn_ops.ttnn_hardware hw ON c.hardware_id = hw.id
+          WHERE c.id IN (SELECT id FROM filtered_configs)
+          GROUP BY op.name
+          ORDER BY op.name;
+          """
+
+          cursor = conn.cursor()
+          cursor.execute(query)
+          rows = cursor.fetchall()
+
+          # Build the master JSON structure
+          master_json = {}
+          for operation_name, configs_json in rows:
+              master_json[operation_name] = configs_json
+
+          # Write to file
+          output_path = 'model_tracer/traced_operations/ttnn_operations_master.json'
+          os.makedirs(os.path.dirname(output_path), exist_ok=True)
+          with open(output_path, 'w') as f:
+              json.dump(master_json, f, indent=2)
+
+          print(f"✅ Generated {output_path} with {len(master_json)} operations")
+
+          cursor.close()
+          conn.close()
+          PYTHON_SCRIPT
+
+      - name: Upload master JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttnn-operations-master-json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
-    needs: build-artifact
+    needs: [build-artifact, generate-master-json-from-db]
+    if: always() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -700,7 +851,6 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_DATABASE_URL }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -727,6 +877,14 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: 📥 Download database-generated JSON
+        if: github.event.inputs.use_database == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ttnn-operations-master-json
+          path: docker-job/model_tracer/traced_operations/
+
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&
@@ -736,45 +894,21 @@ jobs:
           github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' &&
           matrix.generate_mode == 'all'
         run: |
-          USE_DB_FLAG=""
-          MESH_FLAG=""
-          if [[ "${{ github.event.inputs.use_database }}" == "true" ]]; then
-            USE_DB_FLAG="--use-db"
-            if [[ -n "${{ github.event.inputs.mesh_shape }}" ]]; then
-              MESH_FLAG="--mesh-shape ${{ github.event.inputs.mesh_shape }}"
-            fi
-          fi
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --tag ci-main $USE_DB_FLAG $MESH_FLAG
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
            (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')) &&
           matrix.generate_mode == 'all'
         run: |
-          USE_DB_FLAG=""
-          MESH_FLAG=""
-          if [[ "${{ github.event.inputs.use_database }}" == "true" ]]; then
-            USE_DB_FLAG="--use-db"
-            if [[ -n "${{ github.event.inputs.mesh_shape }}" ]]; then
-              MESH_FLAG="--mesh-shape ${{ github.event.inputs.mesh_shape }}"
-            fi
-          fi
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --tag ci-main $USE_DB_FLAG $MESH_FLAG
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - lead models)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') ||
            (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')) &&
           matrix.generate_mode == 'all'
         run: |
-          USE_DB_FLAG=""
-          MESH_FLAG=""
-          if [[ "${{ github.event.inputs.use_database }}" == "true" ]]; then
-            USE_DB_FLAG="--use-db"
-            if [[ -n "${{ github.event.inputs.mesh_shape }}" ]]; then
-              MESH_FLAG="--mesh-shape ${{ github.event.inputs.mesh_shape }}"
-            fi
-          fi
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main $USE_DB_FLAG $MESH_FLAG
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
           ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *' && github.event.schedule != '0 3 * * *') ||
@@ -782,16 +916,6 @@ jobs:
            (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
         run: |
-          # Set database flags if enabled
-          USE_DB_FLAG=""
-          MESH_FLAG=""
-          if [[ "${{ github.event.inputs.use_database }}" == "true" ]]; then
-            USE_DB_FLAG="--use-db"
-            if [[ -n "${{ github.event.inputs.mesh_shape }}" ]]; then
-              MESH_FLAG="--mesh-shape ${{ github.event.inputs.mesh_shape }}"
-            fi
-          fi
-
           # Determine which modules to skip based on generate_mode
           SKIP_MODULES_FLAG=""
           if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
@@ -811,7 +935,7 @@ jobs:
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG $USE_DB_FLAG $MESH_FLAG
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
