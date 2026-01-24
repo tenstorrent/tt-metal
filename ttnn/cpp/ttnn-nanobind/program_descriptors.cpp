@@ -683,7 +683,55 @@ void py_module_types(nb::module_& mod) {
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def(
+            "merge",
+            &tt::tt_metal::ProgramDescriptor::merge,
+            nb::arg("other"),
+            R"pbdoc(
+                Merge another ProgramDescriptor into this one.
+
+                The core ranges of the two descriptors must not overlap. This operation
+                appends all kernels, semaphores, and circular buffers from the other
+                descriptor into this one.
+
+                Args:
+                    other: The ProgramDescriptor to merge into this one.
+
+                Raises:
+                    RuntimeError: If any kernel core ranges overlap between the two descriptors.
+
+                Example:
+                    >>> desc1 = ttnn.ProgramDescriptor()  # operates on cores (0,0)-(1,1)
+                    >>> desc2 = ttnn.ProgramDescriptor()  # operates on cores (2,2)-(3,3)
+                    >>> desc1.merge(desc2)  # desc1 now contains both operations
+            )pbdoc")
+        .def_static(
+            "merge_descriptors",
+            &tt::tt_metal::ProgramDescriptor::merge_descriptors,
+            nb::arg("descriptors"),
+            R"pbdoc(
+                Static method to merge multiple ProgramDescriptors into a single one.
+
+                The core ranges of all descriptors must not overlap with each other.
+                This returns a new ProgramDescriptor containing all kernels, semaphores,
+                and circular buffers from all input descriptors.
+
+                Args:
+                    descriptors: List of ProgramDescriptors to merge.
+
+                Returns:
+                    A new ProgramDescriptor containing all merged content.
+
+                Raises:
+                    RuntimeError: If any kernel core ranges overlap between any of the descriptors.
+
+                Example:
+                    >>> desc1 = ttnn.ProgramDescriptor()  # operates on cores (0,0)-(1,1)
+                    >>> desc2 = ttnn.ProgramDescriptor()  # operates on cores (2,2)-(3,3)
+                    >>> desc3 = ttnn.ProgramDescriptor()  # operates on cores (4,4)-(5,5)
+                    >>> merged = ttnn.ProgramDescriptor.merge_descriptors([desc1, desc2, desc3])
+            )pbdoc");
 
     nb::class_<tt::tt_metal::experimental::MeshProgramDescriptor>(mod, "MeshProgramDescriptor", R"pbdoc(
         Descriptor for a mesh program.
